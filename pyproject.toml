@@ -232,7 +232,7 @@ lint.select = ["ALL"]
 lint.dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 preview = true                                                    # preview features & checks, use with caution
 src = ["src", "tests/", "scripts/", "docs/", "notebooks/"]
-target-version = "py39"
+target-version = "py38"
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
