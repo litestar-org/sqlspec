@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import MethodType
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Self, Tuple, cast
 
 from sqlspec.types import DriverAdapterProtocol, QueryDataTree, QueryDatum, QueryFn, SQLOperationType
 
@@ -36,9 +36,9 @@ class Queries:
     #
     def _params(
         self,
-        args: list[Any] | tuple[Any],
-        kwargs: dict[str, Any],
-    ) -> list[Any] | tuple[Any] | dict[str, Any]:
+        args: List[Any] | Tuple[Any],
+        kwargs: Dict[str, Any],
+    ) -> List[Any] | Tuple[Any] | Dict[str, Any]:
         """Execute parameter handling."""
         if self._kwargs_only and args:
             msg = "cannot use positional parameters under kwargs_only"
@@ -56,7 +56,7 @@ class Queries:
         sql: str,
         operation: SQLOperationType,
         signature: inspect.Signature | None,
-        floc: tuple[Path | str, int] | None = None,
+        floc: Tuple[Path | str, int] | None = None,
     ) -> QueryFn:
         """Add custom-made metadata to a dynamically generated function."""
         fname, lineno = floc if floc is not None else ("<unknown>", 0)
@@ -174,7 +174,7 @@ class Queries:
             fn.__signature__,
         )
 
-    def _create_methods(self, query_datum: QueryDatum, is_aio: bool) -> list[QueryFn]:
+    def _create_methods(self, query_datum: QueryDatum, is_aio: bool) -> List[QueryFn]:
         """Internal function to feed add_queries."""
         fn = self._make_sync_fn(query_datum)
         if is_aio:
@@ -190,10 +190,10 @@ class Queries:
     # PUBLIC INTERFACE
     #
     @property
-    def available_queries(self) -> list[str]:
+    def available_queries(self) -> List[str]:
         """Returns listing of all the available query methods loaded in this class.
 
-        **Returns:** ``list[str]`` List of dot-separated method accessor names.
+        **Returns:** ``List[str]`` List of dot-separated method accessor names.
         """
         return sorted(self._available_queries)
 
@@ -211,7 +211,7 @@ class Queries:
         setattr(self, query_name, fn)
         self._available_queries.add(query_name)
 
-    def add_queries(self, queries: list[QueryFn]) -> None:
+    def add_queries(self, queries: List[QueryFn]) -> None:
         """Add query methods to `Queries` instance."""
         for fn in queries:
             query_name = fn.__name__.rpartition(".")[2]
@@ -229,7 +229,7 @@ class Queries:
         for child_query_name in child_queries.available_queries:
             self._available_queries.add(f"{child_name}.{child_query_name}")
 
-    def load_from_list(self, query_data: list[QueryDatum]) -> Self:
+    def load_from_list(self, query_data: List[QueryDatum]) -> Self:
         """Load Queries from a list of `QueryDatum`"""
         for query_datum in query_data:
             self.add_queries(self._create_methods(query_datum, self.is_asyncio))

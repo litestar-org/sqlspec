@@ -250,21 +250,6 @@ ban-relative-imports = "all"
 # Tests can use magic values, assertions, and relative imports
 "__init__.py" = ['F401', 'D104']
 "__main__.py" = ["E402"]
-"scripts/*.py" = ["INP001", "S404"]
-"scripts/masker/sqlspec-collection-masker" = [
-  "PYI024",
-  "FA100",
-  "S202",
-  "S311",
-  "UP006",
-  "UP035",
-  "FA102",
-  "EM101",
-  "TRY003",
-  "PLR6301",
-]
-"scripts/post_build.py" = ["ERA001"]
-"scripts/pre_build.py" = ["ERA001"]
 "src/sqlspec/_version.py" = ["UP035", "UP006"]
 "tests/**/*" = [
   "PLR2004",
@@ -281,8 +266,11 @@ ban-relative-imports = "all"
   "FA102",
 ]
 # temp
-"src/sqlspec/lib/db/adapters/*.py" = ["ANN001", "ANN201", "ANN204", "PLR6301"]
-
+"src/sqlspec/adapters/*.py" = ["ANN001", "ANN201", "ANN204", "PLR6301"]
+# 3.8 requirements
+"src/sqlspec/patterns.py" = ["UP035", "UP006", "FIX001"]
+"src/sqlspec/queries.py" = ["UP035", "UP006", "ANN001", "ANN202"]
+"src/sqlspec/types.py" = ["UP035", "UP006"]
 # copyright
 "**/*.py" = ["CPY001"]
 

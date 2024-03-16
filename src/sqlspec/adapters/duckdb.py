@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from sqlspec.adapters.dbapi import GenericAdapter
 from sqlspec.patterns import VAR_REF
 

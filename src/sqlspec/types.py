@@ -1,12 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    NamedTuple,
-    Protocol,
-)
+from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Protocol, Tuple
 
 if TYPE_CHECKING:
     import inspect
@@ -35,7 +30,7 @@ class QueryDatum(NamedTuple):
     sql: str
     record_class: Any = None
     signature: inspect.Signature | None = None
-    floc: tuple[Path | str, int] | None = None
+    floc: Tuple[Path | str, int] | None = None
 
 
 class QueryFn(Protocol):
@@ -47,7 +42,7 @@ class QueryFn(Protocol):
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...  # pragma: no cover
 
 
-QueryDataTree = dict[str, QueryDatum | dict]
+QueryDataTree = Dict[str, QueryDatum | Dict]
 
 
 class SyncDriverAdapterProtocol(Protocol):
@@ -58,7 +53,7 @@ class SyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: list | dict,
+        parameters: List | Dict,
         record_class: Callable | None,
     ) -> list: ...  # pragma: no cover
 
@@ -67,7 +62,7 @@ class SyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: list | dict,
+        parameters: List | Dict,
         record_class: Callable | None,
     ) -> Any | None: ...  # pragma: no cover
 
@@ -76,7 +71,7 @@ class SyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: list | dict,
+        parameters: List | Dict,
     ) -> Any | None: ...  # pragma: no cover
 
     def select_cursor(
@@ -84,7 +79,7 @@ class SyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: list | dict,
+        parameters: List | Dict,
     ) -> AbstractContextManager[Any]: ...  # pragma: no cover
 
     # TODO: Next major version introduce a return? Optional return?
@@ -93,7 +88,7 @@ class SyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: list | dict,
+        parameters: List | Dict,
     ) -> int: ...  # pragma: no cover
 
     # TODO: Next major version introduce a return? Optional return?
@@ -102,7 +97,7 @@ class SyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: list | dict,
+        parameters: List | Dict,
     ) -> int: ...  # pragma: no cover
 
     def insert_returning(
@@ -110,7 +105,7 @@ class SyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: list | dict,
+        parameters: List | Dict,
     ) -> Any | None: ...  # pragma: no cover
 
     def execute_script(self, conn: Any, sql: str) -> str: ...  # pragma: no cover
@@ -124,7 +119,7 @@ class AsyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: list | dict,
+        parameters: List | Dict,
         record_class: Callable | None,
     ) -> list: ...  # pragma: no cover
 
@@ -133,7 +128,7 @@ class AsyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: list | dict,
+        parameters: List | Dict,
         record_class: Callable | None,
     ) -> Any | None: ...  # pragma: no cover
 
@@ -142,7 +137,7 @@ class AsyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: list | dict,
+        parameters: List | Dict,
     ) -> Any | None: ...  # pragma: no cover
 
     async def select_cursor(
@@ -150,7 +145,7 @@ class AsyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: list | dict,
+        parameters: List | Dict,
     ) -> AbstractAsyncContextManager[Any]: ...  # pragma: no cover
 
     # TODO: Next major version introduce a return? Optional return?
@@ -159,7 +154,7 @@ class AsyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: list | dict,
+        parameters: List | Dict,
     ) -> None: ...  # pragma: no cover
 
     # TODO: Next major version introduce a return? Optional return?
@@ -168,7 +163,7 @@ class AsyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: list | dict,
+        parameters: List | Dict,
     ) -> None: ...  # pragma: no cover
 
     async def insert_returning(
@@ -176,7 +171,7 @@ class AsyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: list | dict,
+        parameters: List | Dict,
     ) -> Any | None: ...  # pragma: no cover
 
     async def execute_script(self, conn: Any, sql: str) -> str: ...  # pragma: no cover
