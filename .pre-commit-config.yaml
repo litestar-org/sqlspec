@@ -19,7 +19,7 @@ repos:
 
 # Ruff replaces black, flake8, autoflake and isort
 - repo: https://github.com/charliermarsh/ruff-pre-commit
-  rev: 'v0.3.2'  # make sure this is always consistent with hatch configs
+  rev: 'v0.3.3'  # make sure this is always consistent with hatch configs
   hooks:
     - id: ruff
       args: [  --config, ./pyproject.toml]

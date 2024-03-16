@@ -4,6 +4,7 @@
     "**/*.pyc": {
       "when": "$(basename).py"
     },
+    ".direnv": true,
     ".coverage.*": true,
     ".mypy_cache": true,
     "**/__pycache__": true,
