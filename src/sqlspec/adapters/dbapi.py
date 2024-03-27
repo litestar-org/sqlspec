@@ -3,6 +3,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any
 
+from sqlspec.exceptions import SQLSpecError
+
 
 class GenericAdapter:
     """A Generic SQLSPEC Adapter suitable for `named` parameter style and DB-API compliant connections..
@@ -72,7 +74,7 @@ class GenericAdapter:
                     return next(iter(result.values()))
                 # pragma: no cover
                 msg = f"unexpected value type: {type(result)}"
-                raise Exception(msg)
+                raise SQLSpecError(msg)
             return None
         finally:
             cur.close()

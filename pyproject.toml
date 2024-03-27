@@ -1,6 +1,6 @@
 [build-system]
 build-backend = "hatchling.build"
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling", "hatch-vcs", "hatch-pip-compile", "mypy", "hatch-mypyc"]
 
 ####################
 # Project Metadata #
@@ -395,7 +395,7 @@ type = "virtual"
 
 # Test matrix for various Python versions replacing the functionality of tox
 [[tool.hatch.envs.test.matrix]]
-python = ["3.8", "3.9", "3.10", "3.11", "3.12"]
+python-version = ["3.8", "3.9", "3.10", "3.11", "3.12"]
 
 [tool.hatch.envs.test.scripts]
 cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=src/sqlspec --cov=tests {args}"
@@ -422,7 +422,7 @@ extra-dependencies = [
   "linkchecker>=10.3",
 ]
 features = ["performance", "sqlite", "oracle", "mysql", "mssql", "postgres"]
-python = "3.12"
+python-version = "3.12"
 template = "test"
 
 [tool.hatch.envs.docs.env-vars]
@@ -463,7 +463,7 @@ extra-dependencies = [
 features = ["performance", "sqlite", "oracle", "mysql", "mssql", "postgres"]
 lock-filename = "requirements/requirements-dev.txt"
 path = ".venv/"
-python = "3.12"
+python-version = "3.12"
 template = "test"
 type = "pip-compile"
 
