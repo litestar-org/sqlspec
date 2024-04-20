@@ -47,6 +47,33 @@ class MissingDependencyError(SQLSpecError, ImportError):
         )
 
 
+class ImproperConfigurationError(SQLSpecError):
+    """Improper Configuration error.
+
+    This exception is raised only when a module depends on a dependency that has not been installed.
+    """
+
+
+class SerializationError(SQLSpecError):
+    """Encoding or decoding of an object failed."""
+
+
+class RepositoryError(SQLSpecError):
+    """Base repository exception type."""
+
+
+class IntegrityError(RepositoryError):
+    """Data integrity error."""
+
+
+class NotFoundError(RepositoryError):
+    """An identity does not exist."""
+
+
+class MultipleResultsFoundError(RepositoryError):
+    """A single database result was required but more than one were found."""
+
+
 class SQLLoadError(SQLSpecError):
     """Raised when there is a problem loading SQL content from a file or directory"""
 

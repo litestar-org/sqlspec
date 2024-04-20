@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from typing import Any
 
-from sqlspec.patterns import VAR_REF
+from aiosql.utils import VAR_REF
 
 
 class MaybeAcquire:
@@ -23,11 +24,11 @@ class MaybeAcquire:
             await self.client.release(self._managed_conn)
 
 
-class AsyncPGAdapter:
+class AIOODBCAdapter:
     is_asyncio = True
 
     def __init__(self) -> None:
-        self.var_sorted: dict[str, list] = defaultdict(list)
+        self.var_sorted: dict[str, Any] = defaultdict(list)
 
     def process_sql(self, query_name, _op_type, sql):
         adj = 0

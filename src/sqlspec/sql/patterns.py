@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlspec.types import SQLOperationType
+from sqlspec.types.protocols import SQLOperationType
 
 try:
     import re2 as re  # pylance: ignore[reportMissingImports]

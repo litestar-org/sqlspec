@@ -8,7 +8,7 @@ from sqlspec.exceptions import SQLSpecError
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from sqlspec.queries import Queries
+    from sqlspec.sql.queries import Queries
 
 __all__ = ["SQLService"]
 

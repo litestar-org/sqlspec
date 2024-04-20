@@ -17,6 +17,8 @@ def _colon_to_dollar(match):
 class DuckDBAdapter(GenericAdapter):
     """DuckDB Adapter"""
 
+    is_asyncio = False
+
     def __init__(self, driver=None, cursor_as_dict: bool = False) -> None:
         super().__init__(driver=driver)
         # whether to converts the default tuple response to a dict.

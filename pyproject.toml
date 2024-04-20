@@ -1,6 +1,6 @@
 [build-system]
 build-backend = "hatchling.build"
-requires = ["hatchling", "hatch-vcs", "hatch-pip-compile", "mypy", "hatch-mypyc"]
+requires = ["hatchling", "hatch-mypyc"]
 
 ####################
 # Project Metadata #
@@ -22,30 +22,26 @@ classifiers = [
 ]
 dependencies = ["msgspec>=0.18.4", "sqlglot>=19.4.0"]
 description = "A tool to make working with SQL databases more Pythonic"
-dynamic = ["version"]
 keywords = ["database"]
 license = { text = "MIT" }
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.8,<3.13"
+version = "0.1.0"
 
 [project.urls]
-Changelog = "https://docs.sqlspec.jolt.rs/latest/changelog"
-Discord = "https://discord.gg/XpFNTjjtTK"
-Documentation = "https://docs.sqlspec.jolt.rs/latest/"
-Funding = "https://github.com/sponsors/jolt-org"
-Homepage = "https://docs.sqlspec.jolt.rs/latest/"
-Issue = "https://github.com/jolt-org/sqlspec/issues/"
-Source = "https://github.com/jolt-org/sqlspecy"
+# important URLs for this project
+Documentation = "https://github.com/cofin/sqlspec"
+Source = "https://github.com/cofin/sqlspec"
 
 [project.optional-dependencies]
+duckdb = ["duckdb"]
 mssql = ["aioodbc"]
 mysql = ["asyncmy>=0.2.9"]
 oracle = ["oracledb"]
 performance = ["google-re2; sys_platform == \"linux\"", "sqlglot[rs]"]
 postgres = ["asyncpg>=0.29.0"]
 sqlite = ["aiosqlite"]
-
 
 ######################
 # Build & Versioning #
@@ -54,16 +50,6 @@ sqlite = ["aiosqlite"]
 [tool.hatch.metadata]
 # direct dependency references, e.g `pip @ git+https://github.com/pypa/pip.git@master`
 allow-direct-references = true
-
-# [tool.hatch.version]
-# path = "src/sqlspec/__about__.py"
-
-[tool.hatch.version]
-raw-options = { version_scheme = "no-guess-dev" }
-source = "vcs"
-
-[tool.hatch.build.hooks.vcs]
-version-file = "src/sqlspec/_version.py"
 
 [tool.hatch.build]
 dev-mode-dirs = ["src/"]
@@ -127,7 +113,7 @@ module = ["aisoql.*"]
 [[tool.mypy.overrides]]
 disallow_untyped_calls = false
 disallow_untyped_defs = false
-module = ["sqlspec.lib.db.adapters.*", "sqlspec.lib.db.adapters", "sqlspec.lib.db.base", "sqlspec.lib.db"]
+module = ["sqlspec._serialization"]
 warn_unused_ignores = false
 
 [[tool.mypy.overrides]]
@@ -365,6 +351,7 @@ lock-filename = "requirements/requirements.txt"
 pip-compile-hashes = false
 pip-compile-installer = "uv"
 pip-compile-resolver = "uv"
+python = "3.11"
 requires = ["hatch-pip-compile"]
 type = "pip-compile"
 
@@ -381,7 +368,6 @@ dependencies = [
   "coverage[toml]>=6.2",
   "pytest",
   "pytest-cov",
-  "coverage",
   "pytest-mock",
   "pytest-mysql",
   "pytest-postgresql",
@@ -395,10 +381,10 @@ type = "virtual"
 
 # Test matrix for various Python versions replacing the functionality of tox
 [[tool.hatch.envs.test.matrix]]
-python-version = ["3.8", "3.9", "3.10", "3.11", "3.12"]
+python = ["3.8", "3.9", "3.10", "3.11", "3.12"]
 
 [tool.hatch.envs.test.scripts]
-cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=src/sqlspec --cov=tests {args}"
+cov = "pytest --cov-report=term-missing --cov=src/sqlspec --cov=tests {args}"
 debug = "cov --no-cov -s --pdb --pdbcls=IPython.core.debugger:Pdb {args}"
 no-cov = "cov --no-cov {args}"
 
@@ -422,7 +408,7 @@ extra-dependencies = [
   "linkchecker>=10.3",
 ]
 features = ["performance", "sqlite", "oracle", "mysql", "mssql", "postgres"]
-python-version = "3.12"
+python = "3.11"
 template = "test"
 
 [tool.hatch.envs.docs.env-vars]
@@ -463,7 +449,7 @@ extra-dependencies = [
 features = ["performance", "sqlite", "oracle", "mysql", "mssql", "postgres"]
 lock-filename = "requirements/requirements-dev.txt"
 path = ".venv/"
-python-version = "3.12"
+python = "3.11"
 template = "test"
 type = "pip-compile"
 
@@ -491,7 +477,7 @@ extra-dependencies = [
   "asyncpg-stubs",
 ]
 features = ["sqlite", "performance", "oracle", "mysql", "mssql", "postgres"]
-python-version = "3.12"
+python = "3.11"
 
 [tool.hatch.envs.lint.scripts]
 check = ["style", "typing"]

@@ -12,6 +12,8 @@ class GenericAdapter:
     This class also serves as the base class for other adapters.
     """
 
+    is_asyncio = False
+
     def __init__(self, driver=None) -> None:
         self._driver = driver
 

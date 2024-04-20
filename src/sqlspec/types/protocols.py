@@ -1,13 +1,34 @@
+# SPDX-FileCopyrightText: 2023-present Cody Fincher <codyfincher@google.com>
+#
+# SPDX-License-Identifier: MIT
 from __future__ import annotations
 
+from collections.abc import Collection, Iterable
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Protocol, Tuple
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, NamedTuple, Protocol, TypeVar, runtime_checkable
 
 if TYPE_CHECKING:
     import inspect
     from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
     from pathlib import Path
+
+
+@runtime_checkable
+class DataclassProtocol(Protocol):
+    """Protocol for instance checking dataclasses"""
+
+    __dataclass_fields__: ClassVar[dict[str, Any]]
+
+
+T_co = TypeVar("T_co", covariant=True)
+
+
+@runtime_checkable
+class InstantiableCollection(Collection[T_co], Protocol[T_co]):  # pyright: ignore
+    """A protocol for instantiable collection types."""
+
+    def __init__(self, iterable: Iterable[T_co], /) -> None: ...
 
 
 class SQLOperationType(Enum):
@@ -30,7 +51,7 @@ class QueryDatum(NamedTuple):
     sql: str
     record_class: Any = None
     signature: inspect.Signature | None = None
-    floc: Tuple[Path | str, int] | None = None
+    floc: tuple[Path | str, int] | None = None
 
 
 class QueryFn(Protocol):
@@ -46,6 +67,8 @@ QueryDataTree = Dict[str, QueryDatum | Dict]
 
 
 class SyncDriverAdapterProtocol(Protocol):
+    is_asyncio: bool = False
+
     def process_sql(self, query_name: str, op_type: SQLOperationType, sql: str) -> str: ...  # pragma: no cover
 
     def select(
@@ -53,7 +76,7 @@ class SyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: List | Dict,
+        parameters: list | dict,
         record_class: Callable | None,
     ) -> list: ...  # pragma: no cover
 
@@ -62,7 +85,7 @@ class SyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: List | Dict,
+        parameters: list | dict,
         record_class: Callable | None,
     ) -> Any | None: ...  # pragma: no cover
 
@@ -71,7 +94,7 @@ class SyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: List | Dict,
+        parameters: list | dict,
     ) -> Any | None: ...  # pragma: no cover
 
     def select_cursor(
@@ -79,7 +102,7 @@ class SyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: List | Dict,
+        parameters: list | dict,
     ) -> AbstractContextManager[Any]: ...  # pragma: no cover
 
     # TODO: Next major version introduce a return? Optional return?
@@ -88,7 +111,7 @@ class SyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: List | Dict,
+        parameters: list | dict,
     ) -> int: ...  # pragma: no cover
 
     # TODO: Next major version introduce a return? Optional return?
@@ -97,7 +120,7 @@ class SyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: List | Dict,
+        parameters: list | dict,
     ) -> int: ...  # pragma: no cover
 
     def insert_returning(
@@ -105,13 +128,15 @@ class SyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: List | Dict,
+        parameters: list | dict,
     ) -> Any | None: ...  # pragma: no cover
 
     def execute_script(self, conn: Any, sql: str) -> str: ...  # pragma: no cover
 
 
 class AsyncDriverAdapterProtocol(Protocol):
+    is_asyncio: bool = True
+
     def process_sql(self, query_name: str, op_type: SQLOperationType, sql: str) -> str: ...  # pragma: no cover
 
     async def select(
@@ -119,7 +144,7 @@ class AsyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: List | Dict,
+        parameters: list | dict,
         record_class: Callable | None,
     ) -> list: ...  # pragma: no cover
 
@@ -128,7 +153,7 @@ class AsyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: List | Dict,
+        parameters: list | dict,
         record_class: Callable | None,
     ) -> Any | None: ...  # pragma: no cover
 
@@ -137,7 +162,7 @@ class AsyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: List | Dict,
+        parameters: list | dict,
     ) -> Any | None: ...  # pragma: no cover
 
     async def select_cursor(
@@ -145,7 +170,7 @@ class AsyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: List | Dict,
+        parameters: list | dict,
     ) -> AbstractAsyncContextManager[Any]: ...  # pragma: no cover
 
     # TODO: Next major version introduce a return? Optional return?
@@ -154,7 +179,7 @@ class AsyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: List | Dict,
+        parameters: list | dict,
     ) -> None: ...  # pragma: no cover
 
     # TODO: Next major version introduce a return? Optional return?
@@ -163,7 +188,7 @@ class AsyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: List | Dict,
+        parameters: list | dict,
     ) -> None: ...  # pragma: no cover
 
     async def insert_returning(
@@ -171,7 +196,7 @@ class AsyncDriverAdapterProtocol(Protocol):
         conn: Any,
         query_name: str,
         sql: str,
-        parameters: List | Dict,
+        parameters: list | dict,
     ) -> Any | None: ...  # pragma: no cover
 
     async def execute_script(self, conn: Any, sql: str) -> str: ...  # pragma: no cover

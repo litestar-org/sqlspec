@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.patterns import VAR_REF
+
+if TYPE_CHECKING:
+    from aiosql.types import SQLOperationType
 
 
 class MaybeAcquire:
@@ -23,13 +27,13 @@ class MaybeAcquire:
             await self.client.release(self._managed_conn)
 
 
-class AsyncPGAdapter:
+class AsyncOracleDBAdapter:
     is_asyncio = True
 
     def __init__(self) -> None:
-        self.var_sorted: dict[str, list] = defaultdict(list)
+        self.var_sorted: dict[str, Any] = defaultdict(list)
 
-    def process_sql(self, query_name, _op_type, sql):
+    def process_sql(self, query_name: str, op_type: SQLOperationType, sql: str) -> str:
         adj = 0
 
         for match in VAR_REF.finditer(sql):
@@ -64,7 +68,7 @@ class AsyncPGAdapter:
 
         return sql
 
-    def maybe_order_params(self, query_name, parameters):
+    def maybe_order_params(self, query_name: str, parameters: dict | tuple | Any) -> list | tuple:
         if isinstance(parameters, dict):
             return [parameters[rk] for rk in self.var_sorted[query_name]]
         if isinstance(parameters, tuple):

@@ -40,7 +40,9 @@ configure-hatch: 										## Configure Hatch defaults
 upgrade-hatch: 										## Update Hatch, UV, and Ruff
 	@pipx upgrade hatch --include-injected
 
-install: 										## Install the project and
+install: 										## Install the project and all dependencies
+	@if [ "$(VENV_EXISTS)" ]; then echo "=> Removing existing virtual environment"; $(MAKE) destroy-venv; fi
+	@$(MAKE) clean
 	@if ! pipx --version > /dev/null; then echo '=> Installing `pipx`'; $(MAKE) install-pipx ; fi
 	@if ! hatch --version > /dev/null; then echo '=> Installing `hatch` with `pipx`'; $(MAKE) install-hatch ; fi
 	@if ! hatch-pip-compile --version > /dev/null; then echo '=> Updating `hatch` and installing plugins'; $(MAKE) upgrade-hatch ; fi

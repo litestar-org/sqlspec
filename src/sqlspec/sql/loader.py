@@ -4,12 +4,8 @@ import inspect
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
-try:
-    import re2 as re  # pylance: ignore[reportMissingImports]
-except ImportError:
-    import re
 from sqlspec.exceptions import SQLLoadError, SQLParsingError
-from sqlspec.patterns import (
+from sqlspec.sql.patterns import (
     BAD_PREFIX,
     QUERY_DEF,
     QUERY_OPERATION_NAME,
@@ -19,7 +15,12 @@ from sqlspec.patterns import (
     UNCOMMENT,
     VAR_REF,
 )
-from sqlspec.types import DriverAdapterProtocol, QueryDataTree, QueryDatum, SQLOperationType
+from sqlspec.types.protocols import DriverAdapterProtocol, QueryDataTree, QueryDatum, SQLOperationType
+
+try:
+    import re2 as re  # pylance: ignore[reportMissingImports]
+except ImportError:
+    import re
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
