@@ -2,8 +2,10 @@ from contextlib import asynccontextmanager
 
 import asyncmy
 
+from sqlspec.types.protocols import AsyncDriverAdapterProtocol
 
-class AsyncMYAdapter:
+
+class AsyncMYAdapter(AsyncDriverAdapterProtocol):
     is_asyncio = True
 
     def process_sql(self, _query_name, _op_type, sql):

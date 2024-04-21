@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.types.protocols import SQLOperationType, SyncDriverAdapterProtocol
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
-class GenericAdapter:
-    """A Generic SQLSPEC Adapter suitable for `named` parameter style and DB-API compliant connections..
+class GenericAdapter(SyncDriverAdapterProtocol):
+    """A Generic SQLSpec Adapter suitable for `named` parameter style and DB-API compliant connections..
 
     This class also serves as the base class for other adapters.
     """
@@ -17,15 +21,15 @@ class GenericAdapter:
     def __init__(self, driver=None) -> None:
         self._driver = driver
 
-    def process_sql(self, _query_name, _op_type, sql):
+    def process_sql(self, query_name: str, op_type: SQLOperationType, sql: str) -> str:
         """Preprocess SQL query."""
         return sql
 
-    def _cursor(self, conn):
+    def _cursor(self, conn: Any) -> Any:
         """Get a cursor from a connection."""
         return conn.cursor()
 
-    def select(self, conn, _query_name: str, sql: str, parameters, record_class=None):
+    def select(self, conn: Any, query_name: str, sql: str, parameters: list | dict, record_class: Callable | None):
         """Handle a relation-returning SELECT (no suffix)."""
         column_names: list[str] = []
         cur = self._cursor(conn)
@@ -43,7 +47,7 @@ class GenericAdapter:
         finally:
             cur.close()
 
-    def select_one(self, conn, _query_name, sql, parameters, record_class=None):
+    def select_one(self, conn: Any, query_name: str, sql: str, parameters: list | dict, record_class: Callable | None):
         """Handle a tuple-returning (one row) SELECT (``^`` suffix).
 
         Return None if empty.
@@ -60,7 +64,7 @@ class GenericAdapter:
             cur.close()
         return result
 
-    def select_value(self, conn, _query_name, sql, parameters):
+    def select_value(self, conn: Any, query_name: str, sql: str, parameters: list | dict):
         """Handle a scalar-returning (one value) SELECT (``$`` suffix).
 
         Return None if empty.
@@ -82,7 +86,7 @@ class GenericAdapter:
             cur.close()
 
     @contextmanager
-    def select_cursor(self, conn, _query_name, sql, parameters):
+    def select_cursor(self, conn: Any, query_name: str, sql: str, parameters: list | dict):
         """Return the raw cursor after a SELECT exec."""
         cur = self._cursor(conn)
         cur.execute(sql, parameters)
@@ -91,7 +95,7 @@ class GenericAdapter:
         finally:
             cur.close()
 
-    def insert_update_delete(self, conn, _query_name, sql, parameters) -> int:
+    def insert_update_delete(self, conn: Any, query_name: str, sql: str, parameters: list | dict) -> int:
         """Handle affected row counts (INSERT UPDATE DELETE) (``!`` suffix)."""
         cur = self._cursor(conn)
         cur.execute(sql, parameters)
@@ -99,7 +103,7 @@ class GenericAdapter:
         cur.close()
         return rc
 
-    def insert_update_delete_many(self, conn, _query_name, sql, parameters) -> int:
+    def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: list | dict) -> int:
         """Handle affected row counts (INSERT UPDATE DELETE) (``*!`` suffix)."""
         cur = self._cursor(conn)
         cur.executemany(sql, parameters)
@@ -108,7 +112,7 @@ class GenericAdapter:
         return rc
 
     # FIXME this made sense when SQLite had no RETURNING prefix (v3.35, 2021-03-12)
-    def insert_returning(self, conn, _query_name, sql, parameters):
+    def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: list | dict):
         """Special case for RETURNING (``<!`` suffix) with SQLite."""
         # very similar to select_one but the returned value
         cur = self._cursor(conn)

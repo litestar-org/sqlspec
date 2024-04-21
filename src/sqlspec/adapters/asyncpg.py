@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections import defaultdict
 from contextlib import asynccontextmanager
 
-from sqlspec.patterns import VAR_REF
+from sqlspec.sql.patterns import VAR_REF
+from sqlspec.types.protocols import AsyncDriverAdapterProtocol
 
 
 class MaybeAcquire:
@@ -23,7 +24,7 @@ class MaybeAcquire:
             await self.client.release(self._managed_conn)
 
 
-class AsyncPGAdapter:
+class AsyncPGAdapter(AsyncDriverAdapterProtocol):
     is_asyncio = True
 
     def __init__(self) -> None:

@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from sqlspec.patterns import VAR_REF
-
-if TYPE_CHECKING:
-    from aiosql.types import SQLOperationType
+from sqlspec.sql.patterns import VAR_REF
+from sqlspec.types.protocols import AsyncDriverAdapterProtocol, SQLOperationType
 
 
 class MaybeAcquire:
@@ -27,7 +25,7 @@ class MaybeAcquire:
             await self.client.release(self._managed_conn)
 
 
-class AsyncOracleDBAdapter:
+class AsyncOracleDBAdapter(AsyncDriverAdapterProtocol):
     is_asyncio = True
 
     def __init__(self) -> None:

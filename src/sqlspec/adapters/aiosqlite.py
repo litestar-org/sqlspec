@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
 
+from sqlspec.types.protocols import AsyncDriverAdapterProtocol
 
-class AioSQLiteAdapter:
+
+class AioSQLiteAdapter(AsyncDriverAdapterProtocol):
     is_asyncio = True
 
     def process_sql(self, _query_name, _op_type, sql):

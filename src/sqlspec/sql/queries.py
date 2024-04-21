@@ -48,7 +48,7 @@ class Queries:
             raise ValueError(msg)
         return args or kwargs
 
-    def _query_fn(
+    def _query_fn(  # noqa: PLR6301
         self,
         fn: Callable[..., Any],
         name: str,
@@ -72,12 +72,12 @@ class Queries:
     # NOTE about coverage: because __code__ is set to reflect the actual SQL file
     # source, coverage does note detect that the "fn" functions are actually called,
     # hence the "no cover" hints.
-    def _make_sync_fn(self, query_datum: QueryDatum) -> QueryFn:
+    def _make_sync_fn(self: Self, query_datum: QueryDatum) -> QueryFn:
         """Build a dynamic method from a parsed query."""
         query_name, doc_comments, operation_type, sql, record_class, signature, floc = query_datum
         if operation_type == SQLOperationType.INSERT_RETURNING:
 
-            def fn(self, conn, *args: Any, kwargs: Any):  # pragma: no cover
+            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
                 return self.driver_adapter.insert_returning(
                     conn,
                     query_name,
@@ -87,7 +87,7 @@ class Queries:
 
         elif operation_type == SQLOperationType.INSERT_UPDATE_DELETE:
 
-            def fn(self, conn, *args: Any, kwargs: Any):  # pragma: no cover
+            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
                 return self.driver_adapter.insert_update_delete(
                     conn,
                     query_name,
@@ -97,19 +97,19 @@ class Queries:
 
         elif operation_type == SQLOperationType.INSERT_UPDATE_DELETE_MANY:
 
-            def fn(self, conn, *args: Any, kwargs: Any):  # pragma: no cover
+            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
                 assert not kwargs, "cannot use named parameters in many query"  # help type checker
                 return self.driver_adapter.insert_update_delete_many(conn, query_name, sql, *args)
 
         elif operation_type == SQLOperationType.SCRIPT:
 
-            def fn(self, conn, *args: Any, kwargs: Any):  # pragma: no cover
+            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
                 # FIXME parameters are ignored?
                 return self.driver_adapter.execute_script(conn, sql)
 
         elif operation_type == SQLOperationType.SELECT:
 
-            def fn(self, conn, *args: Any, kwargs: Any):  # pragma: no cover
+            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
                 return self.driver_adapter.select(
                     conn,
                     query_name,
@@ -120,7 +120,7 @@ class Queries:
 
         elif operation_type == SQLOperationType.SELECT_ONE:
 
-            def fn(self, conn, *args: Any, kwargs: Any):  # pragma: no cover
+            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
                 return self.driver_adapter.select_one(
                     conn,
                     query_name,
@@ -131,7 +131,7 @@ class Queries:
 
         elif operation_type == SQLOperationType.SELECT_VALUE:
 
-            def fn(self, conn, *args: Any, kwargs: Any):  # pragma: no cover
+            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
                 return self.driver_adapter.select_value(
                     conn,
                     query_name,
@@ -146,18 +146,18 @@ class Queries:
         return self._query_fn(fn, query_name, doc_comments, sql, operation_type, signature, floc)
 
     # NOTE does this make sense?
-    def _make_async_fn(self, fn: QueryFn) -> QueryFn:
+    def _make_async_fn(self: Self, fn: QueryFn) -> QueryFn:
         """Wrap in an async function."""
 
-        async def afn(self, conn, *args: Any, kwargs: Any):  # pragma: no cover
+        async def afn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
             return await fn(self, conn, *args, kwargs)
 
         return self._query_fn(afn, fn.__name__, fn.__doc__, fn.sql, fn.operation, fn.__signature__)
 
-    def _make_ctx_mgr(self, fn: QueryFn) -> QueryFn:
+    def _make_ctx_mgr(self: Self, fn: QueryFn) -> QueryFn:
         """Wrap in a context manager function."""
 
-        def ctx_mgr(self, conn, *args: Any, kwargs: Any):  # pragma: no cover
+        def ctx_mgr(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
             return self.driver_adapter.select_cursor(
                 conn,
                 fn.__name__,

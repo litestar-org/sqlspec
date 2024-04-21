@@ -6,6 +6,8 @@ from typing import Any
 
 from aiosql.utils import VAR_REF
 
+from sqlspec.types.protocols import AsyncDriverAdapterProtocol
+
 
 class MaybeAcquire:
     def __init__(self, client, driver=None) -> None:
@@ -24,7 +26,7 @@ class MaybeAcquire:
             await self.client.release(self._managed_conn)
 
 
-class AIOODBCAdapter:
+class AioODBCAdapter(AsyncDriverAdapterProtocol):
     is_asyncio = True
 
     def __init__(self) -> None:
