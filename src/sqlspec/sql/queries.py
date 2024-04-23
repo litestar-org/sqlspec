@@ -77,7 +77,7 @@ class Queries:
         query_name, doc_comments, operation_type, sql, record_class, signature, floc = query_datum
         if operation_type == SQLOperationType.INSERT_RETURNING:
 
-            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
+            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover  # noqa: ANN202
                 return self.driver_adapter.insert_returning(
                     conn,
                     query_name,
@@ -87,7 +87,7 @@ class Queries:
 
         elif operation_type == SQLOperationType.INSERT_UPDATE_DELETE:
 
-            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
+            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover # noqa: ANN202
                 return self.driver_adapter.insert_update_delete(
                     conn,
                     query_name,
@@ -97,19 +97,19 @@ class Queries:
 
         elif operation_type == SQLOperationType.INSERT_UPDATE_DELETE_MANY:
 
-            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
+            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover # noqa: ANN202
                 assert not kwargs, "cannot use named parameters in many query"  # help type checker
                 return self.driver_adapter.insert_update_delete_many(conn, query_name, sql, *args)
 
         elif operation_type == SQLOperationType.SCRIPT:
 
-            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
+            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover # noqa: ANN202
                 # FIXME parameters are ignored?
                 return self.driver_adapter.execute_script(conn, sql)
 
         elif operation_type == SQLOperationType.SELECT:
 
-            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
+            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover # noqa: ANN202
                 return self.driver_adapter.select(
                     conn,
                     query_name,
@@ -120,7 +120,7 @@ class Queries:
 
         elif operation_type == SQLOperationType.SELECT_ONE:
 
-            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
+            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover # noqa: ANN202
                 return self.driver_adapter.select_one(
                     conn,
                     query_name,
@@ -131,7 +131,7 @@ class Queries:
 
         elif operation_type == SQLOperationType.SELECT_VALUE:
 
-            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
+            def fn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover # noqa: ANN202
                 return self.driver_adapter.select_value(
                     conn,
                     query_name,
@@ -149,7 +149,7 @@ class Queries:
     def _make_async_fn(self: Self, fn: QueryFn) -> QueryFn:
         """Wrap in an async function."""
 
-        async def afn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
+        async def afn(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover # noqa: ANN202
             return await fn(self, conn, *args, kwargs)
 
         return self._query_fn(afn, fn.__name__, fn.__doc__, fn.sql, fn.operation, fn.__signature__)
@@ -157,7 +157,7 @@ class Queries:
     def _make_ctx_mgr(self: Self, fn: QueryFn) -> QueryFn:
         """Wrap in a context manager function."""
 
-        def ctx_mgr(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover
+        def ctx_mgr(self: Self, conn: Any, *args: Any, kwargs: Any):  # pragma: no cover # noqa: ANN202
             return self.driver_adapter.select_cursor(
                 conn,
                 fn.__name__,

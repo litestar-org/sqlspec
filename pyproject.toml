@@ -14,6 +14,9 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Natural Language :: English",
   "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python",
@@ -21,7 +24,7 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = ["msgspec>=0.18.4", "sqlglot>=19.4.0"]
-description = "A tool to make working with SQL databases more Pythonic"
+description = "A collection of utilities for working with raw SQL."
 keywords = ["database"]
 license = { text = "MIT" }
 name = "sqlspec"
@@ -35,12 +38,16 @@ Documentation = "https://github.com/cofin/sqlspec"
 Source = "https://github.com/cofin/sqlspec"
 
 [project.optional-dependencies]
+adbc = ["adbc"]
+bigquery = ["google-cloud-bigquery"]
+cockroachdb = ["psycopg"]
 duckdb = ["duckdb"]
 mssql = ["aioodbc"]
-mysql = ["asyncmy>=0.2.9"]
+mysql = ["asyncmy"]
 oracle = ["oracledb"]
 performance = ["google-re2; sys_platform == \"linux\"", "sqlglot[rs]"]
-postgres = ["asyncpg>=0.29.0"]
+postgres = ["asyncpg"]
+spanner = ["google-cloud-spanner"]
 sqlite = ["aiosqlite"]
 
 ######################
