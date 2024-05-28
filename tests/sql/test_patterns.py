@@ -1,5 +1,5 @@
-from sqlspec.loader import remove_multiline_comments
-from sqlspec.patterns import UNCOMMENT, VAR_REF
+from sqlspec.sql.loader import remove_multiline_comments
+from sqlspec.sql.patterns import UNCOMMENT, VAR_REF
 
 
 def test_var_pattern_is_quote_aware() -> None:
@@ -95,6 +95,7 @@ KO
  */
 -- /* KO
 -- */
+-- /* KO
 /* OK
   -- OK
   ' OK ' "OK "
@@ -102,6 +103,7 @@ KO
 KO
 /* OK */ -- KO 'KO'
 -- KO */
+/*+ test */
 """
 
 
@@ -120,7 +122,7 @@ def test_comments() -> None:
             assert "OK" not in d
         if c:
             assert "OK" not in c
-    assert n == 13
+    assert n == 15
 
 
 COMMENT_UNCOMMENT = [
@@ -132,6 +134,7 @@ COMMENT_UNCOMMENT = [
     ("-- /* */\n", "-- /* */\n"),
     ("-- /* */", "-- /* */"),
     ("'/* */'", "'/* */'"),
+    ("/*+ */", "/*+ */"),
     ("--\n/* */X\n", "--\nX\n"),
 ]
 

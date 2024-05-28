@@ -8,11 +8,25 @@
 # - pytest
 # - pytest-cov
 # - pytest-mock
-# - pytest-mysql
-# - pytest-postgresql
 # - pytest-vcr
 # - pytest-sugar
 # - pytest-click
+# - pytest-databases
+# - mkdocs>=1.5
+# - mkdocs-material>=9.4
+# - mkdocs-include-markdown-plugin
+# - mkdocs-gen-files
+# - mkdocs-literate-nav
+# - mkdocs-minify-plugin>=0.5
+# - mkdocs-section-index
+# - mkdocs-git-revision-date-localized-plugin>=1.1
+# - mkdocstrings[python]
+# - mkdocs-redirects>=1.2
+# - mkdocs-glightbox>=0.3.0
+# - mike>=2.0.0
+# - pymdown-extensions>=10.5
+# - pygments>=2.13
+# - linkchecker>=10.3
 # - harlequin
 # - cython
 # - anyio
@@ -33,18 +47,21 @@
 # - msgspec>=0.18.4
 # - sqlglot>=19.4.0
 # - aioodbc
-# - asyncmy>=0.2.9
+# - asyncmy
 # - oracledb
 # - google-re2; sys_platform == "linux"
 # - sqlglot[rs]
-# - asyncpg>=0.29.0
+# - asyncpg
 # - aiosqlite
 #
 
 aioodbc==0.5.0
+    # via hatch.envs.local
 aiosqlite==0.20.0
+    # via hatch.envs.local
 anyio==4.3.0
     # via
+    #   hatch.envs.local
     #   httpx
     #   jupyter-server
 argon2-cffi==23.1.0
@@ -62,19 +79,30 @@ async-lru==2.0.4
 async-timeout==4.0.3
     # via asyncpg
 asyncmy==0.2.9
+    # via hatch.envs.local
 asyncpg==0.29.0
-    # via asyncpg-stubs
+    # via
+    #   hatch.envs.local
+    #   asyncpg-stubs
 asyncpg-stubs==0.29.1
+    # via hatch.envs.local
 attrs==23.2.0
     # via
     #   jsonschema
     #   referencing
 babel==2.14.0
-    # via jupyterlab-server
+    # via
+    #   jupyterlab-server
+    #   mkdocs-git-revision-date-localized-plugin
+    #   mkdocs-material
 beautifulsoup4==4.12.3
-    # via nbconvert
+    # via
+    #   linkchecker
+    #   nbconvert
 bleach==6.1.0
     # via nbconvert
+bracex==2.4
+    # via wcmatch
 certifi==2024.2.2
     # via
     #   httpcore
@@ -91,20 +119,31 @@ charset-normalizer==3.3.2
 click==8.1.7
     # via
     #   harlequin
+    #   mkdocs
+    #   mkdocstrings
     #   pytest-click
     #   rich-click
     #   shandy-sqlfmt
+colorama==0.4.6
+    # via
+    #   griffe
+    #   mkdocs-material
 comm==0.2.2
     # via ipykernel
 contourpy==1.2.1
     # via matplotlib
 coverage==7.4.4
-    # via pytest-cov
+    # via
+    #   hatch.envs.local
+    #   pytest-cov
 cryptography==42.0.5
     # via oracledb
+csscompressor==0.9.5
+    # via mkdocs-minify-plugin
 cycler==0.12.1
     # via matplotlib
 cython==3.0.10
+    # via hatch.envs.local
 debugpy==1.8.1
     # via ipykernel
 decorator==5.1.1
@@ -115,6 +154,8 @@ dill==0.3.8
     # via pylint
 distlib==0.3.8
     # via virtualenv
+dnspython==2.6.1
+    # via linkchecker
 duckdb==0.10.2
     # via harlequin
 executing==2.0.1
@@ -127,10 +168,22 @@ fonttools==4.51.0
     # via matplotlib
 fqdn==1.5.1
     # via jsonschema
+ghp-import==2.1.0
+    # via mkdocs
+gitdb==4.0.11
+    # via gitpython
+gitpython==3.1.43
+    # via mkdocs-git-revision-date-localized-plugin
 google-re2==1.1
+    # via hatch.envs.local
+griffe==0.45.2
+    # via mkdocstrings-python
 h11==0.14.0
     # via httpcore
 harlequin==1.17.0
+    # via hatch.envs.local
+htmlmin2==0.1.13
+    # via mkdocs-minify-plugin
 httpcore==1.0.5
     # via httpx
 httpx==0.27.0
@@ -144,12 +197,18 @@ idna==3.7
     #   jsonschema
     #   requests
     #   yarl
+importlib-metadata==7.1.0
+    # via mike
+importlib-resources==6.4.0
+    # via mike
 iniconfig==2.0.0
     # via pytest
 ipykernel==6.29.4
     # via jupyterlab
 ipython==8.18.0
-    # via ipykernel
+    # via
+    #   hatch.envs.local
+    #   ipykernel
 isoduration==20.11.0
     # via jsonschema
 isort==5.13.2
@@ -161,8 +220,14 @@ jinja2==3.1.3
     #   jupyter-server
     #   jupyterlab
     #   jupyterlab-server
+    #   mike
+    #   mkdocs
+    #   mkdocs-material
+    #   mkdocstrings
     #   nbconvert
     #   shandy-sqlfmt
+jsmin==3.0.1
+    # via mkdocs-minify-plugin
 json5==0.9.25
     # via jupyterlab-server
 jsonpointer==2.4
@@ -201,14 +266,24 @@ jupyter-server==2.14.0
 jupyter-server-terminals==0.5.3
     # via jupyter-server
 jupyterlab==4.1.6
+    # via hatch.envs.local
 jupyterlab-pygments==0.3.0
     # via nbconvert
 jupyterlab-server==2.26.0
     # via jupyterlab
 kiwisolver==1.4.5
     # via matplotlib
+linkchecker==10.4.0
+    # via hatch.envs.local
 linkify-it-py==2.0.3
     # via markdown-it-py
+markdown==3.6
+    # via
+    #   mkdocs
+    #   mkdocs-autorefs
+    #   mkdocs-material
+    #   mkdocstrings
+    #   pymdown-extensions
 markdown-it-py==3.0.0
     # via
     #   mdit-py-plugins
@@ -217,6 +292,9 @@ markdown-it-py==3.0.0
 markupsafe==2.1.5
     # via
     #   jinja2
+    #   mkdocs
+    #   mkdocs-autorefs
+    #   mkdocstrings
     #   nbconvert
 matplotlib==3.8.4
     # via seaborn
@@ -230,20 +308,66 @@ mdit-py-plugins==0.4.0
     # via markdown-it-py
 mdurl==0.1.2
     # via markdown-it-py
-mirakuru==2.5.2
+mergedeep==1.3.4
     # via
-    #   pytest-mysql
-    #   pytest-postgresql
+    #   mkdocs
+    #   mkdocs-get-deps
+mike==2.1.1
+    # via hatch.envs.local
 mistune==3.0.2
     # via nbconvert
+mkdocs==1.6.0
+    # via
+    #   hatch.envs.local
+    #   mike
+    #   mkdocs-autorefs
+    #   mkdocs-gen-files
+    #   mkdocs-git-revision-date-localized-plugin
+    #   mkdocs-include-markdown-plugin
+    #   mkdocs-literate-nav
+    #   mkdocs-material
+    #   mkdocs-minify-plugin
+    #   mkdocs-redirects
+    #   mkdocs-section-index
+    #   mkdocstrings
+mkdocs-autorefs==1.0.1
+    # via mkdocstrings
+mkdocs-gen-files==0.5.0
+    # via hatch.envs.local
+mkdocs-get-deps==0.2.0
+    # via mkdocs
+mkdocs-git-revision-date-localized-plugin==1.2.5
+    # via hatch.envs.local
+mkdocs-glightbox==0.4.0
+    # via hatch.envs.local
+mkdocs-include-markdown-plugin==6.0.6
+    # via hatch.envs.local
+mkdocs-literate-nav==0.6.1
+    # via hatch.envs.local
+mkdocs-material==9.5.25
+    # via hatch.envs.local
+mkdocs-material-extensions==1.3.1
+    # via mkdocs-material
+mkdocs-minify-plugin==0.8.0
+    # via hatch.envs.local
+mkdocs-redirects==1.2.1
+    # via hatch.envs.local
+mkdocs-section-index==0.3.9
+    # via hatch.envs.local
+mkdocstrings==0.25.1
+    # via
+    #   hatch.envs.local
+    #   mkdocstrings-python
+mkdocstrings-python==1.10.3
+    # via mkdocstrings
 msgspec==0.18.6
+    # via hatch.envs.local
 multidict==6.0.5
     # via yarl
 mypy==1.9.0
+    # via hatch.envs.local
 mypy-extensions==1.0.0
     # via mypy
-mysqlclient==2.2.4
-    # via pytest-mysql
 nbclient==0.10.0
     # via nbconvert
 nbconvert==7.16.3
@@ -256,7 +380,9 @@ nbformat==5.10.4
 nest-asyncio==1.6.0
     # via ipykernel
 nodeenv==1.8.0
-    # via pre-commit
+    # via
+    #   hatch.envs.local
+    #   pre-commit
 notebook-shim==0.2.4
     # via jupyterlab
 numpy==1.26.4
@@ -268,6 +394,7 @@ numpy==1.26.4
     #   pyarrow
     #   seaborn
 oracledb==2.1.2
+    # via hatch.envs.local
 overrides==7.7.0
     # via jupyter-server
 packaging==24.0
@@ -277,16 +404,22 @@ packaging==24.0
     #   jupyterlab
     #   jupyterlab-server
     #   matplotlib
+    #   mkdocs
     #   nbconvert
     #   pytest
-    #   pytest-mysql
     #   pytest-sugar
+paginate==0.5.6
+    # via mkdocs-material
 pandas==2.2.2
-    # via seaborn
+    # via
+    #   hatch.envs.local
+    #   seaborn
 pandocfilters==1.5.1
     # via nbconvert
 parso==0.8.4
     # via jedi
+pathspec==0.12.1
+    # via mkdocs
 pexpect==4.9.0
     # via ipython
 pillow==10.3.0
@@ -295,16 +428,15 @@ platformdirs==4.2.0
     # via
     #   harlequin
     #   jupyter-core
+    #   mkdocs-get-deps
+    #   mkdocstrings
     #   pylint
     #   shandy-sqlfmt
     #   virtualenv
 pluggy==1.5.0
     # via pytest
-port-for==0.7.2
-    # via
-    #   pytest-mysql
-    #   pytest-postgresql
 pre-commit==3.7.0
+    # via hatch.envs.local
 prometheus-client==0.20.0
     # via jupyter-server
 prompt-toolkit==3.0.36
@@ -312,11 +444,7 @@ prompt-toolkit==3.0.36
     #   ipython
     #   questionary
 psutil==5.9.8
-    # via
-    #   ipykernel
-    #   mirakuru
-psycopg==3.1.18
-    # via pytest-postgresql
+    # via ipykernel
 ptyprocess==0.7.0
     # via
     #   pexpect
@@ -329,47 +457,74 @@ pycparser==2.22
     # via cffi
 pygments==2.17.2
     # via
+    #   hatch.envs.local
     #   ipython
+    #   mkdocs-material
     #   nbconvert
     #   rich
 pylint==3.1.0
+    # via hatch.envs.local
+pymdown-extensions==10.8.1
+    # via
+    #   hatch.envs.local
+    #   mkdocs-material
+    #   mkdocstrings
 pyodbc==5.1.0
     # via aioodbc
 pyparsing==3.1.2
-    # via matplotlib
+    # via
+    #   matplotlib
+    #   mike
 pyperclip==1.8.2
     # via textual-textarea
 pytest==8.1.1
     # via
+    #   hatch.envs.local
     #   pytest-click
     #   pytest-cov
+    #   pytest-databases
     #   pytest-mock
-    #   pytest-mysql
-    #   pytest-postgresql
     #   pytest-sugar
     #   pytest-vcr
 pytest-click==1.1.0
+    # via hatch.envs.local
 pytest-cov==5.0.0
+    # via hatch.envs.local
+pytest-databases==0.6.0
+    # via hatch.envs.local
 pytest-mock==3.14.0
-pytest-mysql==2.5.0
-pytest-postgresql==6.0.0
+    # via hatch.envs.local
 pytest-sugar==1.0.0
+    # via hatch.envs.local
 pytest-vcr==1.0.2
+    # via hatch.envs.local
 python-dateutil==2.9.0.post0
     # via
     #   arrow
+    #   ghp-import
     #   jupyter-client
     #   matplotlib
     #   pandas
 python-json-logger==2.0.7
     # via jupyter-events
 pytz==2024.1
-    # via pandas
+    # via
+    #   mkdocs-git-revision-date-localized-plugin
+    #   pandas
 pyyaml==6.0.1
     # via
     #   jupyter-events
+    #   mike
+    #   mkdocs
+    #   mkdocs-get-deps
     #   pre-commit
+    #   pymdown-extensions
+    #   pyyaml-env-tag
     #   vcrpy
+pyyaml-env-tag==0.1
+    # via
+    #   mike
+    #   mkdocs
 pyzmq==26.0.2
     # via
     #   ipykernel
@@ -382,8 +537,13 @@ referencing==0.34.0
     #   jsonschema
     #   jsonschema-specifications
     #   jupyter-events
+regex==2024.5.15
+    # via mkdocs-material
 requests==2.31.0
-    # via jupyterlab-server
+    # via
+    #   jupyterlab-server
+    #   linkchecker
+    #   mkdocs-material
 rfc3339-validator==0.1.4
     # via
     #   jsonschema
@@ -403,13 +563,13 @@ rpds-py==0.18.0
     #   jsonschema
     #   referencing
 ruff==0.4.1
+    # via hatch.envs.local
 seaborn==0.13.2
+    # via hatch.envs.local
 send2trash==1.8.3
     # via jupyter-server
 setuptools==69.5.1
-    # via
-    #   nodeenv
-    #   pytest-postgresql
+    # via nodeenv
 shandy-sqlfmt==0.21.2
     # via harlequin
 six==1.16.0
@@ -418,6 +578,8 @@ six==1.16.0
     #   bleach
     #   python-dateutil
     #   rfc3339-validator
+smmap==5.0.1
+    # via gitdb
 sniffio==1.3.1
     # via
     #   anyio
@@ -425,7 +587,9 @@ sniffio==1.3.1
 soupsieve==2.5
     # via beautifulsoup4
 sourcery==1.16.0
+    # via hatch.envs.local
 sqlglot==23.11.2
+    # via hatch.envs.local
 sqlglotrs==0.2.0
     # via sqlglot
 stack-data==0.6.3
@@ -483,17 +647,20 @@ tree-sitter-languages==1.9.1
     #   textual
     #   textual-textarea
 types-click==7.1.8
+    # via hatch.envs.local
 types-decorator==5.1.8.20240310
+    # via hatch.envs.local
 types-python-dateutil==2.9.0.20240316
     # via arrow
 types-pyyaml==6.0.12.20240311
+    # via hatch.envs.local
 types-six==1.16.21.20240311
+    # via hatch.envs.local
 typing-extensions==4.11.0
     # via
     #   aiosqlite
     #   asyncpg-stubs
     #   mypy
-    #   psycopg
     #   rich-click
     #   textual
 tzdata==2024.1
@@ -506,8 +673,14 @@ urllib3==2.2.1
     # via requests
 vcrpy==6.0.1
     # via pytest-vcr
+verspec==0.1.0
+    # via mike
 virtualenv==20.25.3
     # via pre-commit
+watchdog==4.0.1
+    # via mkdocs
+wcmatch==8.5.2
+    # via mkdocs-include-markdown-plugin
 wcwidth==0.2.13
     # via prompt-toolkit
 webcolors==1.13
@@ -522,3 +695,5 @@ wrapt==1.16.0
     # via vcrpy
 yarl==1.9.4
     # via vcrpy
+zipp==3.19.0
+    # via importlib-metadata

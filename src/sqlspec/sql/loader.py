@@ -15,7 +15,7 @@ from sqlspec.sql.patterns import (
     UNCOMMENT,
     VAR_REF,
 )
-from sqlspec.types.protocols import DriverAdapterProtocol, QueryDataTree, QueryDatum, SQLOperationType
+from sqlspec.types.protocols import QueryDataTree, QueryDatum, SQLOperationType
 
 try:
     import re2 as re  # pylance: ignore[reportMissingImports]
@@ -31,24 +31,20 @@ logger = logging.getLogger("sqlspec")
 
 def remove_multiline_comments(code: str) -> str:
     """Remove /* ... */ comments from code"""
-    # identify commented regions
-    rm = [m.span() for m in UNCOMMENT.finditer(code) if m.groupdict()["multiline"]]
-    # keep whatever else
-    trimmed_code, current = "", 0
-    for start, end in rm:
-        trimmed_code += code[current:start]
-        current = end
-    trimmed_code += code[current:]
-    return trimmed_code
+
+    def replacer(match: Any) -> Any:
+        if match.group("multiline") and not match.group(0).startswith("/*+"):
+            return ""
+        return match.group(0)
+
+    return UNCOMMENT.sub(replacer, code)
 
 
 class QueryLoader:
     def __init__(
         self,
-        driver_adapter: DriverAdapterProtocol,
-        record_classes: dict[str, Any] | None,
+        record_classes: dict[str, Any] | None = None,
     ) -> None:
-        self.driver_adapter = driver_adapter
         self.record_classes = record_classes if record_classes is not None else {}
 
     def _make_query_datum(
@@ -69,10 +65,10 @@ class QueryLoader:
         sql, doc = self._get_sql_doc(lines[2 if record_class else 1 :])
         signature = self._build_signature(sql)
         query_fqn = ".".join([*ns_parts, qname])
-        sql = self.driver_adapter.process_sql(query_fqn, qop, sql)
         return QueryDatum(query_fqn, doc, qop, sql, record_class, signature, floc)
 
-    def _get_name_op(self, text: str) -> tuple[str, SQLOperationType]:
+    @staticmethod
+    def _get_name_op(text: str) -> tuple[str, SQLOperationType]:
         qname_spec = text.replace("-", "_")
         operation_name = QUERY_OPERATION_NAME.match(qname_spec)
         if not operation_name or BAD_PREFIX.match(qname_spec):
@@ -87,7 +83,8 @@ class QueryLoader:
         # TODO: Probably will want this to be a class, marshal in, and marshal out
         return self.record_classes.get(rc_name) if isinstance(rc_name, str) else None
 
-    def _get_sql_doc(self, lines: Sequence[str]) -> tuple[str, str]:
+    @staticmethod
+    def _get_sql_doc(lines: Sequence[str]) -> tuple[str, str]:
         doc, sql = "", ""
         for line in lines:
             if doc_match := SQL_COMMENT.match(line):
@@ -97,7 +94,8 @@ class QueryLoader:
 
         return sql.strip(), doc.rstrip()
 
-    def _build_signature(self, sql: str) -> inspect.Signature:
+    @staticmethod
+    def _build_signature(sql: str) -> inspect.Signature:
         params = [inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
         names = set()
         for match in VAR_REF.finditer(sql):
@@ -126,10 +124,8 @@ class QueryLoader:
             ns_parts = []
         trimmed_sql = remove_multiline_comments(sql)
         query_defs = QUERY_DEF.split(trimmed_sql)
-        # FIXME lineno is from the uncommented file
         lineno = 1 + query_defs[0].count("\n")
         data = []
-        # first item is anything before the first query definition, drop it!
         for query_def in query_defs[1:]:
             data.append(self._make_query_datum(query_def, ns_parts, (fname, lineno) if fname else None))
             lineno += query_def.count("\n")

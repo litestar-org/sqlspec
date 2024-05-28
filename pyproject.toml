@@ -237,13 +237,12 @@ known-first-party = ["sqlspec", "tests", "scripts"]
 ban-relative-imports = "all"
 
 [tool.ruff.lint.per-file-ignores]
+"__init__.py" = ['F401', 'D104']
+"__main__.py" = ["E402"]
 # Allow print/pprint
 "docs/*" = ["S404", "INP001"]
 "examples/*" = ["T201"]
 # Tests can use magic values, assertions, and relative imports
-"__init__.py" = ['F401', 'D104']
-"__main__.py" = ["E402"]
-"src/sqlspec/_version.py" = ["UP035", "UP006"]
 "tests/**/*" = [
   "PLR2004",
   "S101",
@@ -261,22 +260,17 @@ ban-relative-imports = "all"
 # temp
 "src/sqlspec/adapters/*.py" = ["ANN001", "ANN201", "ANN204", "PLR6301"]
 # 3.8 requirements
-"src/sqlspec/patterns.py" = ["UP035", "UP006", "FIX001"]
-"src/sqlspec/queries.py" = ["UP035", "UP006", "ANN001", "ANN202"]
+"src/sqlspec/sql/patterns.py" = ["UP035", "UP006", "FIX001"]
+"src/sqlspec/sql/queries.py" = ["UP035", "UP006", "ANN001", "ANN202"]
 "src/sqlspec/types.py" = ["UP035", "UP006"]
 # copyright
-"**/*.py" = ["CPY001"]
+"**/*.py" = ["CPY001", "FIX001"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 12
 
 [tool.ruff.lint.pep8-naming]
-classmethod-decorators = [
-  "classmethod",
-  "sqlalchemy.ext.declarative.declared_attr",
-  "sqlalchemy.orm.declared_attr.directive",
-  "sqlalchemy.orm.declared_attr",
-]
+classmethod-decorators = ["classmethod"]
 
 # configure in-case someone runs this
 [tool.black]
@@ -354,13 +348,8 @@ exclude_lines = [
 
 # Default environment with production dependencies
 [tool.hatch.envs.default]
-lock-filename = "requirements/requirements.txt"
-pip-compile-hashes = false
-pip-compile-installer = "uv"
-pip-compile-resolver = "uv"
+installer = "uv"
 python = "3.11"
-requires = ["hatch-pip-compile"]
-type = "pip-compile"
 
 [tool.hatch.envs.default.scripts]
 upgrade-all = "PIP_COMPILE_UPGRADE=1 hatch env run --env {env_name} -- python --version"
@@ -376,11 +365,10 @@ dependencies = [
   "pytest",
   "pytest-cov",
   "pytest-mock",
-  "pytest-mysql",
-  "pytest-postgresql",
   "pytest-vcr",
   "pytest-sugar",
   "pytest-click",
+  "pytest-databases",
 ]
 features = ["performance", "sqlite", "oracle", "mysql", "mssql", "postgres"]
 template = "default"
@@ -397,6 +385,19 @@ no-cov = "cov --no-cov {args}"
 
 # Docs environment
 [tool.hatch.envs.docs]
+dependencies = [
+  "nodeenv",             # required test dependencies
+  "cython",
+  "anyio",
+  "coverage[toml]>=6.2",
+  "pytest",
+  "pytest-cov",
+  "pytest-mock",
+  "pytest-vcr",
+  "pytest-sugar",
+  "pytest-click",
+  "pytest-databases",
+]
 extra-dependencies = [
   "mkdocs>=1.5",
   "mkdocs-material>=9.4",                           # Plugins
@@ -416,7 +417,6 @@ extra-dependencies = [
 ]
 features = ["performance", "sqlite", "oracle", "mysql", "mssql", "postgres"]
 python = "3.11"
-template = "test"
 
 [tool.hatch.envs.docs.env-vars]
 MKDOCS_CONFIG = "mkdocs.yml"
@@ -434,8 +434,36 @@ build-check = ["build", "validate"]
 
 
 [tool.hatch.envs.local]
+dependencies = [
+  "nodeenv",             # required test dependencies
+  "cython",
+  "anyio",
+  "coverage[toml]>=6.2",
+  "pytest",
+  "pytest-cov",
+  "pytest-mock",
+  "pytest-vcr",
+  "pytest-sugar",
+  "pytest-click",
+  "pytest-databases",
+]
 extra-dependencies = [
-  "harlequin",       # linting
+  "mkdocs>=1.5",
+  "mkdocs-material>=9.4",                           # Plugins
+  "mkdocs-include-markdown-plugin",
+  "mkdocs-gen-files",
+  "mkdocs-literate-nav",
+  "mkdocs-minify-plugin>=0.5",
+  "mkdocs-section-index",
+  "mkdocs-git-revision-date-localized-plugin>=1.1",
+  "mkdocstrings[python]",
+  "mkdocs-redirects>=1.2",
+  "mkdocs-glightbox>=0.3.0",
+  "mike>=2.0.0",                                    # Extensions
+  "pymdown-extensions>=10.5",                       # Necessary for syntax highlighting in code blocks
+  "pygments>=2.13",                                 # Validation
+  "linkchecker>=10.3",
+  "harlequin",                                      # linting
   "cython",
   "anyio",
   "mypy",
@@ -447,18 +475,16 @@ extra-dependencies = [
   "types-six",
   "types-decorator",
   "types-pyyaml",
-  "asyncpg-stubs",   # extras
+  "asyncpg-stubs",                                  # extras
   "jupyterlab",
   "ipython",
   "seaborn",
   "pandas",
 ]
 features = ["performance", "sqlite", "oracle", "mysql", "mssql", "postgres"]
-lock-filename = "requirements/requirements-dev.txt"
 path = ".venv/"
 python = "3.11"
-template = "test"
-type = "pip-compile"
+type = "virtual"
 
 [tool.hatch.envs.local.scripts]
 start-infra = "docker-compose -f tests/docker-compose.yml up --force-recreate -d"

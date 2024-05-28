@@ -22,30 +22,26 @@ help:  ## Display this help
 # =============================================================================
 # Developer Utils
 # =============================================================================
-.PHONY: upgrade clean build install-rye install-pipx install-hatch configure-hatch ugprade-hatch install clean-install destroy-venv
+.PHONY: upgrade clean build install-rye install-hatch configure-hatch ugprade-hatch install clean-install destroy-venv
 install-rye: 										## Install latest version of PDM
 	@curl -sSf https://rye-up.com/get | RYE_VERSION="latest" RYE_TOOLCHAIN="cpython@3.12.2" RYE_INSTALL_OPTION="--yes" bash
 
-install-pipx: 										## Install pipx
-	@python3 -m pip install --upgrade --user pipx
-
 install-hatch: 										## Install Hatch, UV, and Ruff
-	@pipx install hatch --force
-	@pipx inject hatch ruff uv hatch-pip-compile hatch-vcs hatch-mypyc hatch-fancy-pypi-readme --include-deps --include-apps --force
+	@hatch self update
+	@hatch self pip install hatch-pip-compile hatch-vcs hatch-mypyc hatch-fancy-pypi-readme
 
 configure-hatch: 										## Configure Hatch defaults
 	@hatch config set dirs.env.virtual .direnv
 	@hatch config set dirs.env.pip-compile .direnv
 
 upgrade-hatch: 										## Update Hatch, UV, and Ruff
-	@pipx upgrade hatch --include-injected
+	@hatch self update
+	@hatch self pip install hatch-pip-compile hatch-vcs hatch-mypyc hatch-fancy-pypi-readme
 
 install: 										## Install the project and all dependencies
 	@if [ "$(VENV_EXISTS)" ]; then echo "=> Removing existing virtual environment"; $(MAKE) destroy-venv; fi
 	@$(MAKE) clean
-	@if ! pipx --version > /dev/null; then echo '=> Installing `pipx`'; $(MAKE) install-pipx ; fi
-	@if ! hatch --version > /dev/null; then echo '=> Installing `hatch` with `pipx`'; $(MAKE) install-hatch ; fi
-	@if ! hatch-pip-compile --version > /dev/null; then echo '=> Updating `hatch` and installing plugins'; $(MAKE) upgrade-hatch ; fi
+	@$(MAKE) upgrade-hatch
 	@echo "=> Creating Python environments..."
 	@$(MAKE) configure-hatch
 	@hatch env create local
