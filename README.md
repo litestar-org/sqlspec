@@ -11,4 +11,4 @@
 
 # SQLSpec
 
-SQL Expiriments in Python
+SQL Experiments in Python

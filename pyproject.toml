@@ -2,14 +2,14 @@
 authors = [{ name = "Cody Fincher", email = "cody@litestar.dev" }]
 dependencies = [  "typing-extensions>=4.0.0", 
   "eval_type_backport; python_version <= \"3.9\"",]
-description = "SQL Expiriments in Python"
+description = "SQL Experiments in Python"
 maintainers = [
     { name = "Litestar Developers", email = "hello@litestar.dev" },
 ]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.9, <4.0"
-version = "0.1.0"
+version = "0.1.1"
 
 [build-system]
 build-backend = "hatchling.build"
