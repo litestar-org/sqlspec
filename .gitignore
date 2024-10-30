@@ -1,0 +1,33 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# folders
+.auto_pytabs_cache/
+.hypothesis/
+.mypy_cache/
+.pytest_cache/
+.venv/
+*.egg-info/
+build/
+dist/
+results/
+site/
+target/
+.idea/
+.vscode/
+.cursor/
+
+# files
+**/*.so
+**/*.sqlite
+**/*.sqlite*
+*.iml
+.coverage
+.dmypy.json
+.python-version
+.ruff_cache
+/docs/_build/
+coverage.*
+setup.py
