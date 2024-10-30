@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import Field, fields
-from typing import TYPE_CHECKING, TypeGuard
+from typing import TYPE_CHECKING
+
+from typing_extensions import TypeGuard
 
 from sqlspec.types.empty import Empty
 

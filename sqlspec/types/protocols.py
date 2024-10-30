@@ -4,7 +4,14 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Iterable
-from typing import Any, ClassVar, Protocol, TypeVar, runtime_checkable
+from enum import Enum
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Protocol, TypeVar, Union, runtime_checkable
+
+if TYPE_CHECKING:
+    import inspect
+    from collections.abc import Callable
+    from contextlib import AbstractAsyncContextManager, AbstractContextManager
+    from pathlib import Path
 
 __all__ = (
     "DataclassProtocol",
@@ -111,7 +118,192 @@ T_co = TypeVar("T_co", covariant=True)
 
 
 @runtime_checkable
-class InstantiableCollection(Collection[T_co], Protocol[T_co]):  # pyright: ignore
+class InstantiableCollection(Collection[T_co], Protocol[T_co]):
     """A protocol for instantiable collection types."""
 
     def __init__(self, iterable: Iterable[T_co], /) -> None: ...
+
+
+class StatementType(Enum):
+    """Enumeration of SQL operation types."""
+
+    INSERT_UPDATE_DELETE_RETURNING = 0
+    INSERT_UPDATE_DELETE = 1
+    INSERT_UPDATE_DELETE_MANY = 2
+    SCRIPT = 3
+    SELECT = 4
+    SELECT_ONE = 5
+    SELECT_VALUE = 6
+    BULK_SELECT = 7
+
+
+class StatementDetails(NamedTuple):
+    statement_name: str
+    doc_comments: str
+    operation_type: StatementType
+    sql: str
+    record_class: Any = None
+    signature: inspect.Signature | None = None
+    floc: tuple[Path | str, int] | None = None
+
+
+class StatementFn(Protocol):
+    __name__: str
+    __signature__: inspect.Signature | None
+    sql: str
+    operation: StatementType
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...  # pragma: no cover
+
+
+SQLStatements = dict[str, Union[StatementDetails, dict]]
+
+
+class SyncDriverAdapterProtocol(Protocol):
+    is_asyncio: bool = False
+
+    def process_sql(self, op_type: StatementType, sql: str) -> str: ...  # pragma: no cover
+
+    def select(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+        record_class: Callable | None,
+    ) -> list: ...  # pragma: no cover
+
+    def select_one(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+        record_class: Callable | None,
+    ) -> Any | None: ...  # pragma: no cover
+
+    def select_value(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+    ) -> Any | None: ...  # pragma: no cover
+
+    def select_cursor(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+    ) -> AbstractContextManager[Any]: ...  # pragma: no cover
+
+    def insert_update_delete(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+    ) -> int: ...  # pragma: no cover
+
+    def insert_update_delete_returning(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+    ) -> int: ...  # pragma: no cover
+
+    # TODO: Next major version introduce a return? Optional return?
+    def insert_update_delete_many(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+    ) -> int: ...  # pragma: no cover
+
+    def insert_update_delete_many_returning(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+    ) -> int: ...  # pragma: no cover
+
+    def insert_returning(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+    ) -> Any | None: ...  # pragma: no cover
+
+    def execute_script(self, connection: Any, sql: str) -> str: ...  # pragma: no cover
+
+
+class AsyncDriverAdapterProtocol(Protocol):
+    is_asyncio: bool = True
+
+    def process_sql(self, op_type: StatementType, sql: str) -> str: ...  # pragma: no cover
+
+    async def select(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+        record_class: Callable | None,
+    ) -> list: ...  # pragma: no cover
+
+    async def select_one(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+        record_class: Callable | None,
+    ) -> Any | None: ...  # pragma: no cover
+
+    async def select_value(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+    ) -> Any | None: ...  # pragma: no cover
+
+    async def select_cursor(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+    ) -> AbstractAsyncContextManager[Any]: ...  # pragma: no cover
+
+    async def insert_update_delete(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+    ) -> int: ...  # pragma: no cover
+
+    async def insert_update_delete_returning(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+    ) -> int: ...  # pragma: no cover
+
+    async def insert_update_delete_many(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+    ) -> int: ...  # pragma: no cover
+
+    def insert_update_delete_many_returning(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+    ) -> int: ...  # pragma: no cover
+
+    def insert_returning(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: list | dict,
+    ) -> Any | None: ...  # pragma: no cover
+
+    async def execute_script(self, connection: Any, sql: str) -> str: ...  # pragma: no cover
+
+
+DriverAdapterProtocol = Union[SyncDriverAdapterProtocol, AsyncDriverAdapterProtocol]
