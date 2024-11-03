@@ -14,4 +14,3 @@ Available API References
 .. toctree::
     :titlesonly:
     :glob:
-

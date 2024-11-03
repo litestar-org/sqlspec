@@ -4,7 +4,7 @@ import inspect
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.exceptions import SQLLoadError, SQLParsingError
+from sqlspec.exceptions import SQLLoadingError, SQLParsingError
 from sqlspec.sql.patterns import (
     BAD_PREFIX,
     QUERY_DEF,
@@ -23,8 +23,15 @@ except ImportError:
     import re
 
 if TYPE_CHECKING:
+    import re  # noqa: TCH004
     from collections.abc import Sequence
     from pathlib import Path
+
+__all__ = (
+    "QueryLoader",
+    "remove_multiline_comments",
+)
+
 
 logger = logging.getLogger("sqlspec")
 
@@ -69,17 +76,17 @@ class QueryLoader:
         sql, doc = self._get_sql_doc(lines[2 if record_class else 1 :])
         signature = self._build_signature(sql)
         query_fqn = ".".join([*ns_parts, qname])
-        sql = self.driver_adapter.process_sql(query_fqn, qop, sql)
+        sql = self.driver_adapter.process_sql(qop, sql)
         return StatementDetails(query_fqn, doc, qop, sql, record_class, signature, floc)
 
     def _get_name_op(self, text: str) -> tuple[str, StatementType]:
         qname_spec = text.replace("-", "_")
         operation_name = QUERY_OPERATION_NAME.match(qname_spec)
-        if not operation_name or BAD_PREFIX.match(qname_spec):
+        if operation_name is None or BAD_PREFIX.match(qname_spec):
             msg = f'invalid query name and operation spec: "{qname_spec}"'
             raise SQLParsingError(msg)
-        qname, qop = operation_name.group(1, 2)
-        return qname, SQL_OPERATION_TYPES[qop]
+        qname, qop = operation_name.group(1, 2)  # pyright: ignore[reportGeneralTypeIssues]
+        return cast("tuple[str, StatementType]", (qname, SQL_OPERATION_TYPES[cast(str, qop)]))
 
     def _get_record_class(self, text: str) -> type | None:
         rc_match = QUERY_RECORD_DEF.match(text)
@@ -91,7 +98,7 @@ class QueryLoader:
         doc, sql = "", ""
         for line in lines:
             if doc_match := SQL_COMMENT.match(line):
-                doc += doc_match.group(1) + "\n"
+                doc += doc_match.group(1) + "\n"  # pyright: ignore[reportOperatorIssue]
             else:
                 sql += line + "\n"
 
@@ -173,7 +180,7 @@ class QueryLoader:
                         query_data_tree[query_datum.statement_name] = query_datum
                 elif p.is_dir():
                     query_data_tree[p.name] = cast(
-                        "QueryDatum",
+                        "StatementDetails",
                         _recurse_load_query_data_tree(
                             path=p,
                             ns_parts=[*ns_parts, p.name],
@@ -184,7 +191,7 @@ class QueryLoader:
                 else:  # pragma: no cover
                     # This should be practically unreachable.
                     msg = f"The path must be a directory or file, got {p}"
-                    raise SQLLoadError(msg)
+                    raise SQLLoadingError(msg)
             return query_data_tree
 
-        return cast("QueryDataTree", _recurse_load_query_data_tree(dir_path, ext=ext, encoding=encoding))
+        return cast("SQLStatements", _recurse_load_query_data_tree(dir_path, ext=ext, encoding=encoding))

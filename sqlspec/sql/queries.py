@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import inspect
-from pathlib import Path
 from types import MethodType
-from typing import Any, Callable, List, cast
+from typing import TYPE_CHECKING, Any, Callable, cast
 
-from .types import DriverAdapterProtocol, QueryDataTree, QueryDatum, QueryFn, SQLOperationType
+from sqlspec.exceptions import SQLLoadingError
+from sqlspec.types.protocols import DriverAdapterProtocol, SQLStatements, StatementDetails, StatementFn, StatementType
 
-try:
-    import re2 as re  # pyright: ignore[reportMissingImports]
-except ImportError:
-    import re
+if TYPE_CHECKING:
+    import inspect
+    from pathlib import Path
+
+
+__all__ = ("Statements",)
 
 
 class Statements:
@@ -35,9 +36,9 @@ class Statements:
         kwargs_only: bool = False,
     ):
         self.driver_adapter: DriverAdapterProtocol = driver_adapter
-        self.is_asyncio: bool = getattr(driver_adapter, "is_asyncio", False)
+        self.is_async: bool = getattr(driver_adapter, "is_async", False)
         self._kwargs_only = kwargs_only
-        self._available_queries: set[str] = set()
+        self._available_statements: set[str] = set()
 
     #
     # INTERNAL UTILS
@@ -76,96 +77,92 @@ class Statements:
             return kwargs
         return args
 
-    def _look_like_a_select(self, sql: str) -> bool:
-        # skipped: VALUES, SHOW
-        return re.search(r"(?i)\b(SELECT|RETURNING|TABLE|EXECUTE)\b", sql) is not None
-
     def _query_fn(
         self,
         fn: Callable[..., Any],
         name: str,
         doc: str | None,
         sql: str,
-        operation: SQLOperationType,
+        operation: StatementType,
         signature: inspect.Signature | None,
         floc: tuple[Path | str, int] = ("<unknown>", 0),
         attributes: dict[str, dict[str, str]] | None = None,
-    ) -> QueryFn:
+    ) -> StatementFn:
         """Add custom-made metadata to a dynamically generated function."""
         fname, lineno = floc
-        fn.__code__ = fn.__code__.replace(co_filename=str(fname), co_firstlineno=lineno)  # type: ignore
-        qfn = cast(QueryFn, fn)
+        fn.__code__ = fn.__code__.replace(co_filename=str(fname), co_firstlineno=lineno)
+        qfn = cast(StatementFn, fn)
         qfn.__name__ = name
         qfn.__doc__ = doc
         qfn.__signature__ = signature
         qfn.sql = sql
         qfn.operation = operation
         qfn.attributes = attributes
-        # sanity check in passing…
-        if operation == SQLOperationType.SELECT and not self._look_like_a_select(sql):
-            log.warning(f"query {fname} may not be a select, consider adding an operator, eg '!'")
         return qfn
 
     # NOTE about coverage: because __code__ is set to reflect the actual SQL file
     # source, coverage does note detect that the "fn" functions are actually called,
     # hence the "no cover" hints.
-    def _make_sync_fn(self, query_datum: QueryDatum) -> QueryFn:
+    def _make_sync_fn(self, statement_details: StatementDetails) -> StatementFn:
         """Build a dynamic method from a parsed query."""
 
-        query_name, doc_comments, operation_type, sql, record_class, signature, floc, attributes = query_datum
-
-        if operation_type == SQLOperationType.INSERT_RETURNING:
+        query_name, doc_comments, operation_type, sql, record_class, signature, floc, attributes = statement_details
+        if operation_type == StatementType.INSERT_UPDATE_DELETE:
 
             def fn(self, conn, *args, **kwargs):  # pragma: no cover
-                return self.driver_adapter.insert_returning(
-                    conn, query_name, sql, self._params(attributes, args, kwargs)
-                )
-
-        elif operation_type == SQLOperationType.INSERT_UPDATE_DELETE:
-
-            def fn(self, conn, *args, **kwargs):  # type: ignore # pragma: no cover
                 return self.driver_adapter.insert_update_delete(
                     conn, query_name, sql, self._params(attributes, args, kwargs)
                 )
+        elif operation_type == StatementType.INSERT_UPDATE_DELETE_RETURNING:
 
-        elif operation_type == SQLOperationType.INSERT_UPDATE_DELETE_MANY:
+            def fn(self, conn, *args, **kwargs):  # pragma: no cover
+                return self.driver_adapter.insert_update_delete_returning(
+                    conn, query_name, sql, self._params(attributes, args, kwargs)
+                )
 
-            def fn(self, conn, *args, **kwargs):  # type: ignore # pragma: no cover
-                assert not kwargs, "cannot use named parameters in many query"  # help type checker
+        elif operation_type == StatementType.INSERT_UPDATE_DELETE_MANY:
+
+            def fn(self, conn, *args, **kwargs):  # pragma: no cover
                 return self.driver_adapter.insert_update_delete_many(conn, query_name, sql, *args)
 
-        elif operation_type == SQLOperationType.SCRIPT:
+        elif operation_type == StatementType.INSERT_UPDATE_DELETE_MANY_RETURNING:
 
-            def fn(self, conn, *args, **kwargs):  # type: ignore # pragma: no cover
+            def fn(self, conn, *args, **kwargs):  # pragma: no cover
+                return self.driver_adapter.insert_update_delete_many_returning(conn, query_name, sql, *args)
+
+        elif operation_type == StatementType.SCRIPT:
+
+            def fn(self, conn, *args, **kwargs):  # pragma: no cover
                 # FIXME parameters are ignored?
                 return self.driver_adapter.execute_script(conn, sql)
 
-        elif operation_type == SQLOperationType.SELECT:
+        elif operation_type == StatementType.SELECT:
 
-            def fn(self, conn, *args, **kwargs):  # type: ignore # pragma: no cover
+            def fn(self, conn, *args, **kwargs):  # pragma: no cover
                 return self.driver_adapter.select(
                     conn, query_name, sql, self._params(attributes, args, kwargs), record_class
                 )
 
-        elif operation_type == SQLOperationType.SELECT_ONE:
+        elif operation_type == StatementType.SELECT_ONE:
 
             def fn(self, conn, *args, **kwargs):  # pragma: no cover
                 return self.driver_adapter.select_one(
                     conn, query_name, sql, self._params(attributes, args, kwargs), record_class
                 )
 
-        elif operation_type == SQLOperationType.SELECT_VALUE:
+        elif operation_type == StatementType.SELECT_SCALAR:
 
             def fn(self, conn, *args, **kwargs):  # pragma: no cover
-                return self.driver_adapter.select_value(conn, query_name, sql, self._params(attributes, args, kwargs))
+                return self.driver_adapter.select_scalar(conn, query_name, sql, self._params(attributes, args, kwargs))
 
         else:
             raise ValueError(f"Unknown operation_type: {operation_type}")
-
+        if floc is None:
+            floc = ("<no_source_file>", 0)
         return self._query_fn(fn, query_name, doc_comments, sql, operation_type, signature, floc, attributes)
 
     # NOTE does this make sense?
-    def _make_async_fn(self, fn: QueryFn) -> QueryFn:
+    def _make_async_fn(self, fn: StatementFn) -> StatementFn:
         """Wrap in an async function."""
 
         async def afn(self, conn, *args, **kwargs):  # pragma: no cover
@@ -173,7 +170,7 @@ class Statements:
 
         return self._query_fn(afn, fn.__name__, fn.__doc__, fn.sql, fn.operation, fn.__signature__)
 
-    def _make_ctx_mgr(self, fn: QueryFn) -> QueryFn:
+    def _make_ctx_mgr(self, fn: StatementFn) -> StatementFn:
         """Wrap in a context manager function."""
 
         def ctx_mgr(self, conn, *args, **kwargs):  # pragma: no cover
@@ -183,78 +180,75 @@ class Statements:
 
         return self._query_fn(ctx_mgr, f"{fn.__name__}_cursor", fn.__doc__, fn.sql, fn.operation, fn.__signature__)
 
-    def _create_methods(self, query_datum: QueryDatum, is_aio: bool) -> List[QueryFn]:
+    def _create_methods(self, query_datum: StatementDetails, is_async: bool) -> list[StatementFn]:
         """Internal function to feed add_queries."""
         fn = self._make_sync_fn(query_datum)
-        if is_aio:
+        if is_async:
             fn = self._make_async_fn(fn)
 
         ctx_mgr = self._make_ctx_mgr(fn)
 
-        if query_datum.operation_type == SQLOperationType.SELECT:
+        if query_datum.operation_type == StatementType.SELECT:
             return [fn, ctx_mgr]
         return [fn]
 
-    #
-    # PUBLIC INTERFACE
-    #
     @property
-    def available_queries(self) -> List[str]:
-        """Returns listing of all the available query methods loaded in this class.
+    def available_statements(self) -> list[str]:
+        """Returns listing of all the available Query/Statement methods loaded in this class.
 
         **Returns:** ``list[str]`` List of dot-separated method accessor names.
         """
-        return sorted(self._available_queries)
+        return sorted(self._available_statements)
 
     def __repr__(self) -> str:
-        return "Queries(" + self.available_queries.__repr__() + ")"
+        return "Statements(" + self.available_statements.__repr__() + ")"
 
-    def add_query(self, query_name: str, fn: Callable) -> None:
+    def add_statement(self, statement_name: str, fn: Callable) -> None:
         """Adds a new dynamic method to this class.
 
         **Parameters:**
 
-        - **query_name** - The method name as found in the SQL content.
+        - **statement_name** - The method name as found in the SQL content.
         - **fn** - The loaded query function.
         """
-        if hasattr(self, query_name):
+        if hasattr(self, statement_name):
             # this is filtered out because it can lead to hard to find bugs.
-            raise SQLLoadException(f"cannot override existing attribute with query: {query_name}")
-        setattr(self, query_name, fn)
-        self._available_queries.add(query_name)
+            raise SQLLoadingError(f"cannot override existing attribute with statement: {statement_name}")
+        setattr(self, statement_name, fn)
+        self._available_statements.add(statement_name)
 
-    def add_queries(self, queries: List[QueryFn]) -> None:
-        """Add query methods to `Queries` instance."""
-        for fn in queries:
-            query_name = fn.__name__.rpartition(".")[2]
-            self.add_query(query_name, MethodType(fn, self))
+    def add_statements(self, statements: list[StatementFn]) -> None:
+        """Add SQL Statement methods to `Statements` instance."""
+        for fn in statements:
+            statement_name = fn.__name__.rpartition(".")[2]
+            self.add_statement(statement_name, MethodType(fn, self))
 
-    def add_child_queries(self, child_name: str, child_queries: Statements) -> None:
-        """Adds a Queries object as a property.
+    def add_child_statements(self, child_name: str, child_statements: Statements) -> None:
+        """Adds a Statement object as a property.
 
         **Parameters:**
 
         - **child_name** - The property name to group the child queries under.
-        - **child_queries** - Queries instance to add as sub-queries.
+        - **child_statements** - Queries instance to add as sub-queries.
         """
         if hasattr(self, child_name):  # pragma: no cover
             # this is filtered out because it can lead to hard to find bugs.
-            raise SQLLoadException(f"cannot override existing attribute with child: {child_name}")
-        setattr(self, child_name, child_queries)
-        for child_query_name in child_queries.available_queries:
-            self._available_queries.add(f"{child_name}.{child_query_name}")
+            raise SQLLoadingError(f"cannot override existing attribute with child: {child_name}")
+        setattr(self, child_name, child_statements)
+        for child_query_name in child_statements.available_statements:
+            self._available_statements.add(f"{child_name}.{child_query_name}")
 
-    def load_from_list(self, query_data: List[QueryDatum]):
-        """Load Queries from a list of `QueryDatum`"""
-        for query_datum in query_data:
-            self.add_queries(self._create_methods(query_datum, self.is_aio))
+    def load_from_list(self, sql_statements: list[StatementDetails]):
+        """Load Statements from a list of `StatementDetails`"""
+        for sql_statement in sql_statements:
+            self.add_statements(self._create_methods(sql_statement, self.is_async))
         return self
 
-    def load_from_tree(self, query_data_tree: QueryDataTree):
-        """Load Queries from a `QueryDataTree`"""
-        for key, value in query_data_tree.items():
+    def load_from_tree(self, sql_statements_tree: SQLStatements):
+        """Load Statements from a `SQLStatementsTree`"""
+        for key, value in sql_statements_tree.items():
             if isinstance(value, dict):
-                self.add_child_queries(key, Statements(self.driver_adapter).load_from_tree(value))
+                self.add_child_statements(key, Statements(self.driver_adapter).load_from_tree(value))
             else:
-                self.add_queries(self._create_methods(value, self.is_aio))
+                self.add_statements(self._create_methods(value, self.is_async))
         return self

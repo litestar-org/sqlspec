@@ -37,10 +37,10 @@ class QueryManager:
         """Get available queries optionally filtered to queries starting with prefix."""
         if prefix is None:
             return sorted(
-                [q for q in self.queries.available_queries if not q.endswith("cursor")],
+                [q for q in self.queries.available_statements if not q.endswith("cursor")],
             )
         return sorted(
-            [q for q in self.queries.available_queries if q.startswith(prefix) and not q.endswith("cursor")],
+            [q for q in self.queries.available_statements if q.startswith(prefix) and not q.endswith("cursor")],
         )
 
     @classmethod

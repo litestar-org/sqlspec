@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from litestar.plugins import InitPluginProtocol
 
 if TYPE_CHECKING:
     from litestar.config.app import AppConfig
 
-    from sqlspec.config import AiosqlConfig
 
 T = TypeVar("T")
 
@@ -17,7 +16,7 @@ class SQLSpecPlugin(InitPluginProtocol):
 
     __slots__ = ("_config",)
 
-    def __init__(self, config: AiosqlConfig) -> None:
+    def __init__(self, config: Any) -> None:
         """Initialize ``AiosqlPlugin``.
 
         Args:

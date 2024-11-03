@@ -2,6 +2,17 @@ from __future__ import annotations
 
 from typing import Any
 
+__all__ = (
+    "ImproperConfigurationError",
+    "IntegrityError",
+    "MissingDependencyError",
+    "MultipleResultsFoundError",
+    "NotFoundError",
+    "RepositoryError",
+    "SQLSpecError",
+    "SerializationError",
+)
+
 
 class SQLSpecError(Exception):
     """Base exception class from which all Advanced Alchemy exceptions inherit."""
@@ -45,6 +56,24 @@ class MissingDependencyError(SQLSpecError, ImportError):
             f"'pip install sqlspec[{install_package or package}]' to install sqlspec with the required extra "
             f"or 'pip install {install_package or package}' to install the package separately",
         )
+
+
+class SQLLoadingError(SQLSpecError):
+    """Issues loading referenced SQL file."""
+
+    def __init__(self, message: str | None = None) -> None:
+        if message is None:
+            message = "Issues loading referenced SQL file."
+        super().__init__(message)
+
+
+class SQLParsingError(SQLSpecError):
+    """Issues parsing SQL statements."""
+
+    def __init__(self, message: str | None = None) -> None:
+        if message is None:
+            message = "Issues parsing SQL statement."
+        super().__init__(message)
 
 
 class ImproperConfigurationError(SQLSpecError):

@@ -5,69 +5,39 @@ from __future__ import annotations
 from collections.abc import Sequence
 from functools import lru_cache
 from typing import (
+    TYPE_CHECKING,
     Annotated,
     Any,
-    ClassVar,
     Final,
-    Generic,
-    Protocol,
     Union,
     cast,
-    runtime_checkable,
 )
 
 from typing_extensions import TypeAlias, TypeGuard, TypeVar
 
-from sqlspec.filters import ModelT, StatementFilter
-
 T = TypeVar("T")  # pragma: nocover
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel  # pyright: ignore[reportAssignmentType]
+    from pydantic.type_adapter import TypeAdapter  # pyright: ignore[reportUnusedImport, reportAssignmentType]
+
+    from sqlspec.filters import StatementFilter
 try:
-    from pydantic import BaseModel  # pyright: ignore[reportAssignmentType,reportMissingImports]
-    from pydantic.type_adapter import (  # pyright: ignore[reportUnusedImport, reportAssignmentType,reportMissingImports]
-        TypeAdapter,
-    )
+    from pydantic import BaseModel  # pyright: ignore[reportAssignmentType]
+    from pydantic.type_adapter import TypeAdapter  # pyright: ignore[reportUnusedImport, reportAssignmentType]
 
     PYDANTIC_INSTALLED: Final[bool] = True
 except ImportError:  # pragma: nocover
-
-    @runtime_checkable
-    class BaseModel(Protocol):  # type: ignore[no-redef] # pragma: nocover
-        """Placeholder Implementation"""
-
-        model_fields: ClassVar[dict[str, Any]]
-
-        def model_dump(*args: Any, **kwargs: Any) -> dict[str, Any]:
-            """Placeholder"""
-            return {}
-
-    class TypeAdapter(Generic[T]):  # type: ignore[no-redef] # pragma: nocover
-        """Placeholder Implementation"""
-
-        def __init__(self, *args: Any, **kwargs: Any) -> None:  # pragma: nocover
-            """Init"""
-
-        def validate_python(self, data: Any, *args: Any, **kwargs: Any) -> T:  # pragma: nocover
-            """Stub"""
-            return cast("T", data)
-
     PYDANTIC_INSTALLED: Final[bool] = False  # type: ignore # pyright: ignore[reportConstantRedefinition,reportGeneralTypeIssues]
 
+if TYPE_CHECKING:
+    from pydantic import FailFast  # pyright: ignore[reportAssignmentType]
 try:
     # this is from pydantic 2.8.  We should check for it before using it.
-    from pydantic import FailFast  # pyright: ignore[reportAssignmentType,reportMissingImports]
+    from pydantic import FailFast  # pyright: ignore[reportAssignmentType]
 
     PYDANTIC_USE_FAILFAST: Final[bool] = False
 except ImportError:
-
-    class FailFast:  # type: ignore[no-redef] # pragma: nocover
-        """Placeholder Implementation for FailFast"""
-
-        def __init__(self, *args: Any, **kwargs: Any) -> None:  # pragma: nocover
-            """Init"""
-
-        def __call__(self, *args: Any, **kwargs: Any) -> None:  # pragma: nocover
-            """Placeholder"""
-
     PYDANTIC_USE_FAILFAST: Final[bool] = False  # type: ignore # pyright: ignore[reportConstantRedefinition,reportGeneralTypeIssues]
 
 
@@ -81,60 +51,41 @@ def get_type_adapter(f: type[T]) -> TypeAdapter[T]:
     return TypeAdapter(f)
 
 
+if TYPE_CHECKING:
+    from msgspec import UNSET, Struct, convert  # pyright: ignore[reportAssignmentType,reportUnusedImport]
 try:
-    from msgspec import UNSET, Struct, UnsetType, convert  # pyright: ignore[reportAssignmentType,reportUnusedImport]
+    from msgspec import (  # pyright: ignore[reportAssignmentType,reportUnusedImport]
+        UNSET,
+        Struct,
+        UnsetType,
+        convert,
+    )
 
     MSGSPEC_INSTALLED: Final[bool] = True
 except ImportError:  # pragma: nocover
-    import enum
-
-    @runtime_checkable
-    class Struct(Protocol):  # type: ignore[no-redef]
-        """Placeholder Implementation"""
-
-        __struct_fields__: ClassVar[tuple[str, ...]]
-
-    def convert(*args: Any, **kwargs: Any) -> Any:  # type: ignore[no-redef]
-        """Placeholder implementation"""
-        return {}
-
-    class UnsetType(enum.Enum):  # type: ignore[no-redef] # pragma: nocover
-        UNSET = "UNSET"
-
-    UNSET = UnsetType.UNSET  # pyright: ignore[reportConstantRedefinition,reportGeneralTypeIssues]
     MSGSPEC_INSTALLED: Final[bool] = False  # type: ignore # pyright: ignore[reportConstantRedefinition,reportGeneralTypeIssues]
 
+
+if TYPE_CHECKING:
+    from litestar.dto.data_structures import (  # pyright: ignore[reportMissingImports]
+        DTOData,  # pyright: ignore[reportAssignmentType,reportUnusedImport,reportMissingImports]
+    )
 try:
-    from litestar.dto.data_structures import (  # pyright: ignore[reportAssignmentType,reportUnusedImport,reportMissingImports]
-        DTOData,
+    from litestar.dto.data_structures import (  # pyright: ignore[reportMissingImports]
+        DTOData,  # pyright: ignore[reportAssignmentType,reportUnusedImport,reportMissingImports]
     )
 
     LITESTAR_INSTALLED: Final[bool] = True
 except ImportError:
-
-    class DTOData(Generic[T]):  # type: ignore[no-redef] # pragma: nocover
-        """Placeholder implementation"""
-
-        def create_instance(*args: Any, **kwargs: Any) -> T:  # type: ignore[no-redef]
-            """Placeholder implementation"""
-            return cast("T", kwargs)
-
-        def update_instance(*args: Any, **kwargs: Any) -> T:  # type: ignore[no-redef]
-            """Placeholder implementation"""
-            return cast("T", kwargs)
-
-        def as_builtins(*args: Any, **kwargs: Any) -> dict[str, Any]:  # type: ignore[no-redef]
-            """Placeholder implementation"""
-            return {}
-
     LITESTAR_INSTALLED: Final[bool] = False  # type: ignore # pyright: ignore[reportConstantRedefinition,reportGeneralTypeIssues]
 
+ModelT = TypeVar("ModelT")
 FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
 ModelDTOT = TypeVar("ModelDTOT", bound="Struct | BaseModel")
 PydanticOrMsgspecT = Union[Struct, BaseModel]
 ModelDictT: TypeAlias = Union[dict[str, Any], ModelT, Struct, BaseModel, DTOData[ModelT]]
 ModelDictListT: TypeAlias = Sequence[Union[dict[str, Any], ModelT, Struct, BaseModel]]
-BulkModelDictT: TypeAlias = Union[Sequence[Union[dict[str, Any], ModelT, Struct, BaseModel]], DTOData[list[ModelT]]]
+BulkModelDictT: TypeAlias = Union[Sequence[Union[dict[str, Any], ModelT, Struct, BaseModel]], DTOData[list[ModelT]]]  # pyright: ignore[reportInvalidTypeArguments]
 
 
 def is_dto_data(v: Any) -> TypeGuard[DTOData[Any]]:
@@ -213,6 +164,7 @@ __all__ = (
     "Struct",
     "convert",
     "UNSET",
+    "UnsetType",
     "is_dto_data",
     "is_dict",
     "is_dict_with_field",

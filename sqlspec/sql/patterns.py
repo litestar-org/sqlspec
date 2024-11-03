@@ -39,7 +39,7 @@ SQL_OPERATION_TYPES = {
     "!": StatementType.INSERT_UPDATE_DELETE,
     "#": StatementType.SCRIPT,
     "^": StatementType.SELECT_ONE,
-    "$": StatementType.SELECT_VALUE,
+    "$": StatementType.SELECT_SCALAR,
     "@": StatementType.BULK_SELECT,
     "": StatementType.SELECT,
 }

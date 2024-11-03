@@ -6,18 +6,13 @@ from abc import ABC, abstractmethod
 from collections import abc  # noqa: TCH003
 from dataclasses import dataclass
 from datetime import datetime  # noqa: TCH003
-from typing import TYPE_CHECKING, Any, Generic, Literal
+from typing import Generic, Literal
 
 from typing_extensions import TypeVar
-
-if TYPE_CHECKING:
-    from typing_extensions import TypeAlias
-
 
 __all__ = (
     "BeforeAfter",
     "CollectionFilter",
-    "FilterTypes",
     "LimitOffset",
     "OrderBy",
     "SearchFilter",
@@ -27,19 +22,14 @@ __all__ = (
     "PaginationFilter",
     "InAnyFilter",
     "StatementFilter",
-    "StatementFilterT",
 )
 
 T = TypeVar("T")
-ModelT = TypeVar("ModelT")
-StatementFilterT = TypeVar("StatementFilterT", bound="StatementFilter")
-FilterTypes: TypeAlias = "BeforeAfter | OnBeforeAfter | CollectionFilter[Any] | LimitOffset | OrderBy | SearchFilter | NotInCollectionFilter[Any] | NotInSearchFilter"
-"""Aggregate type alias of the types supported for collection filtering."""
 
 
 class StatementFilter(ABC):
     @abstractmethod
-    def append_to_statement(self, statement: str, model: type[ModelT]) -> str:
+    def append_to_statement(self, statement: str) -> str:
         return statement
 
 

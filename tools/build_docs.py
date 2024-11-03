@@ -57,7 +57,7 @@ def build(output_dir: str, version: str | None) -> None:
     if version is None:
         version = importlib.metadata.version("sqlspec").rsplit(".")[0]
     else:
-        os.environ["_sqlspec_DOCS_BUILD_VERSION"] = version
+        os.environ["_SQLSPEC_DOCS_BUILD_VERSION"] = version
 
     subprocess.run(["make", "docs"], check=True)  # noqa: S607
 

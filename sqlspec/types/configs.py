@@ -1,5 +1,10 @@
 from dataclasses import dataclass
 
+__all__ = (
+    "GenericDatabaseConfig",
+    "GenericPoolConfig",
+)
+
 
 @dataclass
 class GenericDatabaseConfig:

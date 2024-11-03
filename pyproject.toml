@@ -23,6 +23,9 @@ pydantic = ["pydantic"]
 pymssql = ["pymssql"]
 pymysql = ["pymysql"]
 spanner = ["google-cloud-spanner"]
+litestar = ["litestar"]
+fastapi = ["fastapi"]
+flask = ["flask"]
 
 [dependency-groups]
 dev = [{ include-group = "lint" }, { include-group = "doc" }, { include-group = "test" }]
@@ -41,7 +44,7 @@ doc = [
   "sphinx-togglebutton>=0.3.2",
   "sphinx-toolbox>=3.8.1",
 ]
-lint = ["mypy>=1.13.0", "pre-commit>=3.5.0", "pyright>=1.1.386", "ruff>=0.7.1", "slotscheck>=0.16.5"]
+lint = ["mypy>=1.13.0", "pre-commit>=3.5.0", "pyright>=1.1.386", "ruff>=0.7.1", "slotscheck>=0.16.5", "types-Pygments", "types-colorama"]
 test = [
   "anyio",
   "coverage>=7.6.1",
@@ -127,6 +130,17 @@ warn_unreachable = true
 warn_unused_configs = true
 warn_unused_ignores = true
 
+[[tool.mypy.overrides]]
+ignore_missing_imports = true
+module = [
+  "orjson","re2",
+  "re2.*",
+  "uvicorn.*",
+  "googleapiclient",
+  "googleapiclient.*",
+  "uvloop.*",
+]
+
 [tool.pyright]
 disableBytesTypePromotions = true
 exclude = ["tools", "docs"]
@@ -203,7 +217,7 @@ target-version = "py39"
 convention = "google"
 
 [tool.ruff.lint.mccabe]
-max-complexity = 12
+max-complexity = 18
 
 [tool.ruff.lint.pep8-naming]
 classmethod-decorators = ["classmethod"]
