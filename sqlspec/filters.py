@@ -2,35 +2,39 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections import abc  # noqa: TCH003
 from dataclasses import dataclass
 from datetime import datetime  # noqa: TCH003
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+from typing import Generic, Literal
 
-if TYPE_CHECKING:
-    from typing_extensions import TypeAlias
-
-T = TypeVar("T")
+from typing_extensions import TypeVar
 
 __all__ = (
     "BeforeAfter",
     "CollectionFilter",
-    "FilterTypes",
     "LimitOffset",
-    "NotInCollectionFilter",
-    "NotInSearchFilter",
-    "OnBeforeAfter",
     "OrderBy",
     "SearchFilter",
+    "NotInCollectionFilter",
+    "OnBeforeAfter",
+    "NotInSearchFilter",
+    "PaginationFilter",
+    "InAnyFilter",
+    "StatementFilter",
 )
 
+T = TypeVar("T")
 
-FilterTypes: TypeAlias = "BeforeAfter | OnBeforeAfter | CollectionFilter[Any] | LimitOffset | OrderBy | SearchFilter | NotInCollectionFilter[Any] | NotInSearchFilter"
-"""Aggregate type alias of the types supported for collection filtering."""
+
+class StatementFilter(ABC):
+    @abstractmethod
+    def append_to_statement(self, statement: str) -> str:
+        return statement
 
 
 @dataclass
-class BeforeAfter:
+class BeforeAfter(StatementFilter):
     """Data required to filter a query on a ``datetime`` column."""
 
     field_name: str
@@ -42,7 +46,7 @@ class BeforeAfter:
 
 
 @dataclass
-class OnBeforeAfter:
+class OnBeforeAfter(StatementFilter):
     """Data required to filter a query on a ``datetime`` column."""
 
     field_name: str
@@ -53,8 +57,12 @@ class OnBeforeAfter:
     """Filter results where field on or later than this."""
 
 
+class InAnyFilter(StatementFilter, ABC):
+    """Subclass for methods that have a `prefer_any` attribute."""
+
+
 @dataclass
-class CollectionFilter(Generic[T]):
+class CollectionFilter(InAnyFilter, Generic[T]):
     """Data required to construct a ``WHERE ... IN (...)`` clause."""
 
     field_name: str
@@ -66,7 +74,7 @@ class CollectionFilter(Generic[T]):
 
 
 @dataclass
-class NotInCollectionFilter(Generic[T]):
+class NotInCollectionFilter(InAnyFilter, Generic[T]):
     """Data required to construct a ``WHERE ... NOT IN (...)`` clause."""
 
     field_name: str
@@ -77,8 +85,12 @@ class NotInCollectionFilter(Generic[T]):
     An empty list or ``None`` will return all rows."""
 
 
+class PaginationFilter(StatementFilter, ABC):
+    """Subclass for methods that function as a pagination type."""
+
+
 @dataclass
-class LimitOffset:
+class LimitOffset(PaginationFilter):
     """Data required to add limit/offset filtering to a query."""
 
     limit: int
@@ -88,7 +100,7 @@ class LimitOffset:
 
 
 @dataclass
-class OrderBy:
+class OrderBy(StatementFilter):
     """Data required to construct a ``ORDER BY ...`` clause."""
 
     field_name: str
@@ -98,24 +110,17 @@ class OrderBy:
 
 
 @dataclass
-class SearchFilter:
+class SearchFilter(StatementFilter):
     """Data required to construct a ``WHERE field_name LIKE '%' || :value || '%'`` clause."""
 
-    field_name: str
-    """Name of the model attribute to sort on."""
+    field_name: str | set[str]
+    """Name of the model attribute to search on."""
     value: str
-    """Values for ``LIKE`` clause."""
+    """Search value."""
     ignore_case: bool | None = False
     """Should the search be case insensitive."""
 
 
 @dataclass
-class NotInSearchFilter:
+class NotInSearchFilter(SearchFilter):
     """Data required to construct a ``WHERE field_name NOT LIKE '%' || :value || '%'`` clause."""
-
-    field_name: str
-    """Name of the model attribute to search on."""
-    value: str
-    """Values for ``NOT LIKE`` clause."""
-    ignore_case: bool | None = False
-    """Should the search be case insensitive."""
