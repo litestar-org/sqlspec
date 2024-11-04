@@ -9,6 +9,7 @@ from asyncpg import create_pool as asyncpg_create_pool
 
 from sqlspec._serialization import decode_json, encode_json
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.types.configs import GenericDatabaseConfig, GenericPoolConfig
 from sqlspec.types.empty import Empty, EmptyType
 from sqlspec.utils.dataclass import simple_asdict
 
@@ -30,7 +31,7 @@ T = TypeVar("T")
 
 
 @dataclass
-class AsyncpgPoolConfig:
+class AsyncpgPoolConfig(GenericPoolConfig):
     """Configuration for Asyncpg's :class:`Pool <asyncpg.pool.Pool>`.
 
     For details see: https://magicstack.github.io/asyncpg/current/api/index.html#connection-pools
@@ -70,7 +71,7 @@ class AsyncpgPoolConfig:
 
 
 @dataclass
-class AsyncpgConfig:
+class AsyncpgConfig(GenericDatabaseConfig):
     """Asyncpg Configuration."""
 
     pool_config: AsyncpgPoolConfig | None = None

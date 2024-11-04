@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.types.configs import GenericDatabaseConfig
 from sqlspec.types.empty import Empty, EmptyType
 from sqlspec.utils.dataclass import simple_asdict
 
@@ -16,7 +17,7 @@ __all__ = ("SqliteConfig",)
 
 
 @dataclass
-class SqliteConfig:
+class SqliteConfig(GenericDatabaseConfig):
     """Configuration for SQLite database connections.
 
     This class provides configuration options for SQLite database connections, wrapping all parameters

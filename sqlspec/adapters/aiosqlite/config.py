@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.types.configs import GenericDatabaseConfig
 from sqlspec.types.empty import Empty, EmptyType
 from sqlspec.utils.dataclass import simple_asdict
 
@@ -19,7 +20,7 @@ __all__ = ("AiosqliteConfig",)
 
 
 @dataclass
-class AiosqliteConfig:
+class AiosqliteConfig(GenericDatabaseConfig):
     """Configuration for Aiosqlite database connections.
 
     This class provides configuration options for Aiosqlite database connections, wrapping all parameters
