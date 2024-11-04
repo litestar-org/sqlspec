@@ -19,6 +19,11 @@ if TYPE_CHECKING:
     from collections.abc import Generator
     from typing import Any
 
+__all__ = (
+    "SyncOracleDatabaseConfig",
+    "SyncOraclePoolConfig",
+)
+
 
 @dataclass
 class SyncOraclePoolConfig(GenericOraclePoolConfig[ConnectionPool, Connection]):

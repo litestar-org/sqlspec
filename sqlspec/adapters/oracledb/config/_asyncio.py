@@ -19,17 +19,22 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable
     from typing import Any
 
+__all__ = (
+    "OracleAsyncDatabaseConfig",
+    "OracleAsyncPoolConfig",
+)
+
 
 @dataclass
-class AsyncOraclePoolConfig(GenericOraclePoolConfig[AsyncConnectionPool, AsyncConnection]):
+class OracleAsyncPoolConfig(GenericOraclePoolConfig[AsyncConnectionPool, AsyncConnection]):
     """Async Oracle Pool Config"""
 
 
 @dataclass
-class AsyncOracleDatabaseConfig(GenericOracleDatabaseConfig[AsyncConnectionPool, AsyncConnection]):
+class OracleAsyncDatabaseConfig(GenericOracleDatabaseConfig[AsyncConnectionPool, AsyncConnection]):
     """Async Oracle database Configuration."""
 
-    pool_config: AsyncOraclePoolConfig | None = None
+    pool_config: OracleAsyncPoolConfig | None = None
     """Oracle Pool configuration"""
 
     @property

@@ -16,6 +16,12 @@ if TYPE_CHECKING:
     from asyncmy.cursors import Cursor, DictCursor
     from asyncmy.pool import Pool
 
+__all__ = (
+    "AsyncmyConfig",
+    "AsyncmyPoolConfig",
+)
+
+
 T = TypeVar("T")
 
 

@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 
     from aiosqlite import Connection
 
+__all__ = ("AiosqliteConfig",)
+
 
 @dataclass
 class AiosqliteConfig:

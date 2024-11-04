@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 
     from duckdb import DuckDBPyConnection
 
+__all__ = ("DuckDBConfig",)
+
 
 @dataclass
 class DuckDBConfig:

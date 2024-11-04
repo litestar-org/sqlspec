@@ -20,6 +20,11 @@ if TYPE_CHECKING:
     from asyncpg.connection import Connection
     from asyncpg.pool import Pool, PoolConnectionProxy
 
+__all__ = (
+    "AsyncpgConfig",
+    "AsyncpgPoolConfig",
+)
+
 
 T = TypeVar("T")
 

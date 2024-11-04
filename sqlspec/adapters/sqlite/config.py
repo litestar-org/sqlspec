@@ -12,6 +12,8 @@ if TYPE_CHECKING:
     from collections.abc import Generator
     from sqlite3 import Connection
 
+__all__ = ("SqliteConfig",)
+
 
 @dataclass
 class SqliteConfig:
