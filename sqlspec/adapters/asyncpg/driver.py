@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.sql.patterns import VAR_REF
 from sqlspec.types.protocols import AsyncDriverAdapterProtocol, StatementType
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 __all__ = ("AsyncpgAdapter",)
 
 
-class MaybeAcquire:
+class ManagedConnection:
     """Context manager for handling connection acquisition from pools or direct connections."""
 
     def __init__(self, client: Connection | Pool) -> None:
@@ -23,14 +23,15 @@ class MaybeAcquire:
         self._managed_conn: Connection | None = None
 
     async def __aenter__(self) -> Connection:
-        if hasattr(self.client, "acquire"):
-            self._managed_conn = await self.client.acquire()
-            return self._managed_conn
-        return self.client
+        if "acquire" in dir(self.client):
+            self._managed_conn = await self.client.acquire()  # pyright: ignore[reportAttributeAccessIssue]
+            return cast("Connection", self._managed_conn)
+        self._managed_conn = None
+        return cast("Connection", self.client)
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         if self._managed_conn is not None:
-            await self.client.release(self._managed_conn)
+            await self.client.release(self._managed_conn)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 class AsyncpgAdapter(AsyncDriverAdapterProtocol):
@@ -99,7 +100,7 @@ class AsyncpgAdapter(AsyncDriverAdapterProtocol):
         record_class: Callable | None,
     ) -> Iterable[Any]:
         """Handle a relation-returning SELECT."""
-        async with MaybeAcquire(connection) as conn:
+        async with ManagedConnection(connection) as conn:
             results = await conn.fetch(sql, *parameters)
             if record_class is not None:
                 return [record_class(**dict(rec)) for rec in results]
@@ -113,7 +114,7 @@ class AsyncpgAdapter(AsyncDriverAdapterProtocol):
         record_class: Callable | None,
     ) -> Any | None:
         """Handle a single-row-returning SELECT."""
-        async with MaybeAcquire(connection) as conn:
+        async with ManagedConnection(connection) as conn:
             result = await conn.fetchrow(sql, *parameters)
             if result is not None and record_class is not None:
                 return record_class(**dict(result))
@@ -126,7 +127,7 @@ class AsyncpgAdapter(AsyncDriverAdapterProtocol):
         parameters: list | dict,
     ) -> Any | None:
         """Handle a scalar-returning SELECT."""
-        async with MaybeAcquire(connection) as conn:
+        async with ManagedConnection(connection) as conn:
             return await conn.fetchval(sql, *parameters)
 
     async def with_cursor(
@@ -136,7 +137,7 @@ class AsyncpgAdapter(AsyncDriverAdapterProtocol):
         parameters: list | dict,
     ) -> AsyncGenerator[Cursor | CursorFactory, None]:
         """Execute a query and yield the cursor."""
-        async with MaybeAcquire(connection) as conn:
+        async with ManagedConnection(connection) as conn:
             stmt = await conn.prepare(sql)
             async with conn.transaction():
                 yield stmt.cursor(*parameters)
@@ -148,7 +149,7 @@ class AsyncpgAdapter(AsyncDriverAdapterProtocol):
         parameters: list | dict,
     ) -> int:
         """Handle an INSERT, UPDATE, or DELETE."""
-        async with MaybeAcquire(connection) as conn:
+        async with ManagedConnection(connection) as conn:
             result = await conn.execute(sql, *parameters)
             if isinstance(result, str):
                 return int(result.split()[-1])
@@ -172,7 +173,7 @@ class AsyncpgAdapter(AsyncDriverAdapterProtocol):
         record_class: Callable | None = None,
     ) -> Any:
         """Execute a SQL script."""
-        async with MaybeAcquire(connection) as conn:
+        async with ManagedConnection(connection) as conn:
             if parameters:
                 result = await conn.fetch(sql, *parameters)
             else:

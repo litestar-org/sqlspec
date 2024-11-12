@@ -36,18 +36,22 @@ class OracleAsyncAdapter(AsyncDriverAdapterProtocol):
         record_class: Callable | None,
     ) -> Iterable[Any]:
         """Handle a relation-returning SELECT."""
-        cur = await self._cursor(connection)
+        cur = self._cursor(connection)
         try:
             await cur.execute(sql, parameters)
+            column_names = [desc[0] for desc in cur.description]
+            cur.rowfactory = lambda *args: dict(zip(column_names, args))
+            data = await cur.fetchall()
             if record_class is None:
                 async for row in cur:
                     yield row
             else:
                 column_names = [desc[0] for desc in cur.description]
+                cur.rowfactory = lambda *args: dict(zip(column_names, args))
                 async for row in cur:
                     yield record_class(**{str(k): v for k, v in zip(column_names, row, strict=False)})
         finally:
-            await cur.close()
+            cur.close()
 
     async def select_one(
         self,
@@ -90,7 +94,7 @@ class OracleAsyncAdapter(AsyncDriverAdapterProtocol):
         parameters: list | dict,
     ) -> AsyncGenerator[AsyncCursor, None]:
         """Execute a query and yield the cursor."""
-        cur = await self._cursor(connection)
+        cur = self._cursor(connection)
         try:
             await cur.execute(sql, parameters)
             yield cur
@@ -104,7 +108,7 @@ class OracleAsyncAdapter(AsyncDriverAdapterProtocol):
         parameters: list | dict,
     ) -> int:
         """Handle an INSERT, UPDATE, or DELETE."""
-        cur = await self._cursor(connection)
+        cur = self._cursor(connection)
         try:
             await cur.execute(sql, parameters)
             return cur.rowcount
