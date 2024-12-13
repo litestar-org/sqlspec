@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from sqlspec.types.protocols import StatementType
+    from sqlspec.extensions.loader.protocols import StatementType
 
 __all__ = ("BasePsycopgAdapter",)
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.types.protocols import AsyncDriverAdapterProtocol, StatementType
+from sqlspec.extensions.loader.protocols import AsyncDriverAdapterProtocol, StatementType
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Iterable

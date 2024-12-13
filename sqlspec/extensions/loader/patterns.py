@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlspec.types.protocols import StatementType
+from sqlspec.extensions.loader.protocols import StatementType
 
 try:
     import re2 as re  # pyright: ignore[reportMissingImports,reportMissingTypeStubs]

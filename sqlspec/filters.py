@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections import abc  # noqa: TCH003
+from collections import abc  # noqa: TC003
 from dataclasses import dataclass
-from datetime import datetime  # noqa: TCH003
+from datetime import datetime  # noqa: TC003
 from typing import Generic, Literal
 
 from typing_extensions import TypeVar
@@ -13,14 +13,14 @@ from typing_extensions import TypeVar
 __all__ = (
     "BeforeAfter",
     "CollectionFilter",
-    "LimitOffset",
-    "OrderBy",
-    "SearchFilter",
-    "NotInCollectionFilter",
-    "OnBeforeAfter",
-    "NotInSearchFilter",
-    "PaginationFilter",
     "InAnyFilter",
+    "LimitOffset",
+    "NotInCollectionFilter",
+    "NotInSearchFilter",
+    "OnBeforeAfter",
+    "OrderBy",
+    "PaginationFilter",
+    "SearchFilter",
     "StatementFilter",
 )
 

@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.psycopg.driver._base import BasePsycopgAdapter
-from sqlspec.types.protocols import SyncDriverAdapterProtocol
+from sqlspec.extensions.loader.protocols import SyncDriverAdapterProtocol
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Iterable

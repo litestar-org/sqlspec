@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.psycopg.driver._base import BasePsycopgAdapter
-from sqlspec.types.protocols import AsyncDriverAdapterProtocol
+from sqlspec.extensions.loader.protocols import AsyncDriverAdapterProtocol
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Iterable

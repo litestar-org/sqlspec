@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.sql.patterns import VAR_REF
-from sqlspec.types.protocols import AsyncDriverAdapterProtocol, StatementType
+from sqlspec.extensions.loader.patterns import VAR_REF
+from sqlspec.extensions.loader.protocols import AsyncDriverAdapterProtocol, StatementType
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Iterable

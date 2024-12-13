@@ -5,7 +5,7 @@ import logging
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.exceptions import SQLLoadingError, SQLParsingError
-from sqlspec.sql.patterns import (
+from sqlspec.extensions.loader.patterns import (
     BAD_PREFIX,
     QUERY_DEF,
     QUERY_OPERATION_NAME,
@@ -15,7 +15,7 @@ from sqlspec.sql.patterns import (
     UNCOMMENT,
     VAR_REF,
 )
-from sqlspec.types.protocols import DriverAdapterProtocol, SQLStatements, StatementDetails, StatementType
+from sqlspec.extensions.loader.protocols import DriverAdapterProtocol, SQLStatements, StatementDetails, StatementType
 
 try:
     import re2 as re  # pylance: ignore[reportMissingImports]
@@ -23,7 +23,7 @@ except ImportError:
     import re
 
 if TYPE_CHECKING:
-    import re  # noqa: TCH004
+    import re  # noqa: TC004
     from collections.abc import Sequence
     from pathlib import Path
 

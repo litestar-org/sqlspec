@@ -4,7 +4,13 @@ from types import MethodType
 from typing import TYPE_CHECKING, Any, Callable, cast
 
 from sqlspec.exceptions import SQLLoadingError
-from sqlspec.types.protocols import DriverAdapterProtocol, SQLStatements, StatementDetails, StatementFn, StatementType
+from sqlspec.extensions.loader.protocols import (
+    DriverAdapterProtocol,
+    SQLStatements,
+    StatementDetails,
+    StatementFn,
+    StatementType,
+)
 
 if TYPE_CHECKING:
     import inspect

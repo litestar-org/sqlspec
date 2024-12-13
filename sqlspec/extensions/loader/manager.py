@@ -8,7 +8,7 @@ from sqlspec.exceptions import SQLSpecError
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from sqlspec.sql.queries import Statements
+    from sqlspec.extensions.loader.queries import Statements
 
 __all__ = ["SQLService"]
 

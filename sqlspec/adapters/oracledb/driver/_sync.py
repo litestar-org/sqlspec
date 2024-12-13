@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.types.protocols import StatementType, SyncDriverAdapterProtocol
+from sqlspec.extensions.loader.protocols import StatementType, SyncDriverAdapterProtocol
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Iterable
