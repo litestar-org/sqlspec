@@ -8,10 +8,10 @@ from asyncpg import Record
 from asyncpg import create_pool as asyncpg_create_pool
 
 from sqlspec._serialization import decode_json, encode_json
+from sqlspec.config import GenericDatabaseConfig, GenericPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.types.configs import GenericDatabaseConfig, GenericPoolConfig
-from sqlspec.types.empty import Empty, EmptyType
 from sqlspec.utils.dataclass import simple_asdict
+from sqlspec.utils.empty import Empty, EmptyType
 
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop

@@ -59,7 +59,7 @@ class PsycopgAsyncDatabaseConfig(GenericPsycopgDatabaseConfig[AsyncConnectionPoo
         pool_config = self.pool_config_dict
         self.pool_instance = AsyncConnectionPool(**pool_config)
         if self.pool_instance is None:
-            msg = "Could not configure the 'pool_instance'. Please check your configuration."
+            msg = "Could not configure the 'pool_instance'. Please check your configuration."  # type: ignore[unreachable]
             raise ImproperConfigurationError(msg)
         return self.pool_instance
 

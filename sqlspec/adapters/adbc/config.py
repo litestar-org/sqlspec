@@ -4,8 +4,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar
 
-from sqlspec.types.configs import GenericDatabaseConfig
-from sqlspec.types.empty import Empty
+from sqlspec.config import GenericDatabaseConfig
+from sqlspec.utils.empty import Empty
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
     from adbc_driver_manager.dbapi import Connection, Cursor
 
-    from sqlspec.types.empty import EmptyType
+    from sqlspec.utils.empty import EmptyType
 
 __all__ = ("AdbcDatabaseConfig",)
 

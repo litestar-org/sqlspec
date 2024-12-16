@@ -16,6 +16,9 @@ asyncmy = ["asyncmy"]
 asyncpg = ["asyncpg"]
 bigquery = ["google-cloud-bigquery"]
 duckdb = ["duckdb"]
+fastapi = ["fastapi"]
+flask = ["flask"]
+litestar = ["litestar"]
 msgspec = ["msgspec"]
 oracledb = ["oracledb"]
 performance = ["sqlglot[rs]", "google-re2; sys_platform == \"linux\""]
@@ -24,12 +27,16 @@ pydantic = ["pydantic"]
 pymssql = ["pymssql"]
 pymysql = ["pymysql"]
 spanner = ["google-cloud-spanner"]
-litestar = ["litestar"]
-fastapi = ["fastapi"]
-flask = ["flask"]
 
 [dependency-groups]
-dev = ["adbc-driver-sqlite", "adbc-driver-postgresql", "adbc-driver-flightsql", { include-group = "lint" }, { include-group = "doc" }, { include-group = "test" }]
+dev = [
+  "adbc-driver-sqlite",
+  "adbc-driver-postgresql",
+  "adbc-driver-flightsql",
+  { include-group = "lint" },
+  { include-group = "doc" },
+  { include-group = "test" },
+]
 doc = [
   "auto-pytabs[sphinx]>=0.5.0",
   "git-cliff>=2.6.1",
@@ -45,7 +52,15 @@ doc = [
   "sphinx-togglebutton>=0.3.2",
   "sphinx-toolbox>=3.8.1",
 ]
-lint = ["mypy>=1.13.0", "pre-commit>=3.5.0", "pyright>=1.1.386", "ruff>=0.7.1", "slotscheck>=0.16.5", "types-Pygments", "types-colorama"]
+lint = [
+  "mypy>=1.13.0",
+  "pre-commit>=3.5.0",
+  "pyright>=1.1.386",
+  "ruff>=0.7.1",
+  "slotscheck>=0.16.5",
+  "types-Pygments",
+  "types-colorama",
+]
 test = [
   "anyio",
   "coverage>=7.6.1",
@@ -133,14 +148,7 @@ warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
 ignore_missing_imports = true
-module = [
-  "orjson","re2",
-  "re2.*",
-  "uvicorn.*",
-  "googleapiclient",
-  "googleapiclient.*",
-  "uvloop.*",
-]
+module = ["orjson", "re2", "re2.*", "uvicorn.*", "googleapiclient", "googleapiclient.*", "uvloop.*"]
 
 [tool.pyright]
 disableBytesTypePromotions = true
@@ -184,7 +192,7 @@ lint.select = [
   "SIM", # flake8-simplify
   "T10", # flake8-debugger
   "T20", # flake8-print
-  "TCH", # flake8-type-checking
+  "TC",  # flake8-type-checking
   "TID", # flake8-tidy-imports
   "UP",  # pyupgrade
   "W",   # pycodestyle - warning
@@ -227,7 +235,7 @@ classmethod-decorators = ["classmethod"]
 known-first-party = ["sqlspec", "tests"]
 
 [tool.ruff.lint.per-file-ignores]
-"docs/**/*.*" = ["S", "B", "DTZ", "A", "TCH", "ERA", "D", "RET", "PLW0127"]
+"docs/**/*.*" = ["S", "B", "DTZ", "A", "TC", "ERA", "D", "RET", "PLW0127"]
 "docs/examples/**" = ["T201"]
 "tests/**/*.*" = [
   "A",
@@ -250,7 +258,7 @@ known-first-party = ["sqlspec", "tests"]
   "S",
   "S101",
   "SIM",
-  "TCH",
+  "TC",
   "TRY",
 ]
 "tools/**/*.*" = ["D", "ARG", "EM", "TRY", "G", "FBT", "S603", "F811", "PLW0127"]

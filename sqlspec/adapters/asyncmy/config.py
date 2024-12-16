@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar
 
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.types.empty import Empty, EmptyType
 from sqlspec.utils.dataclass import simple_asdict
+from sqlspec.utils.empty import Empty, EmptyType
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

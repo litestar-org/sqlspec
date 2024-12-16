@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
 
 from typing_extensions import TypeGuard
 
-from sqlspec.types.empty import Empty
+from sqlspec.utils.empty import Empty
 
 if TYPE_CHECKING:
     from collections.abc import Iterable

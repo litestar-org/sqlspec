@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generic, TypeVar
 
-from sqlspec.types.configs import GenericDatabaseConfig, GenericPoolConfig
-from sqlspec.types.empty import Empty
+from sqlspec.config import GenericDatabaseConfig, GenericPoolConfig
+from sqlspec.utils.empty import Empty
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from psycopg import AsyncConnection, Connection
     from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
-    from sqlspec.types.empty import EmptyType
+    from sqlspec.utils.empty import EmptyType
 
 __all__ = (
     "GenericPsycopgDatabaseConfig",
