@@ -5,15 +5,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar
 
 from sqlspec.config import GenericDatabaseConfig
-from sqlspec.utils.empty import Empty
+from sqlspec.typing import Empty, EmptyType
 
 if TYPE_CHECKING:
     from collections.abc import Generator
     from typing import Any
 
     from adbc_driver_manager.dbapi import Connection, Cursor
-
-    from sqlspec.utils.empty import EmptyType
 
 __all__ = ("AdbcDatabaseConfig",)
 

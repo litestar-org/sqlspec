@@ -5,15 +5,26 @@ This is used to ensure compatibility when one or more of the libraries are insta
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import (
     Any,
     ClassVar,
+    Final,
     Protocol,
+    Union,
     cast,
     runtime_checkable,
 )
 
-from typing_extensions import TypeVar, dataclass_transform
+from typing_extensions import Literal, TypeVar, dataclass_transform
+
+
+@runtime_checkable
+class DataclassProtocol(Protocol):
+    """Protocol for instance checking dataclasses."""
+
+    __dataclass_fields__: ClassVar[dict[str, Any]]
+
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
@@ -99,11 +110,26 @@ except ImportError:
     UNSET = UnsetType.UNSET  # pyright: ignore[reportConstantRedefinition]
     MSGSPEC_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
+
+class EmptyEnum(Enum):
+    """A sentinel enum used as placeholder."""
+
+    EMPTY = 0
+
+
+EmptyType = Union[Literal[EmptyEnum.EMPTY], UnsetType]
+Empty: Final = EmptyEnum.EMPTY
+
+
 __all__ = (
     "MSGSPEC_INSTALLED",
     "PYDANTIC_INSTALLED",
     "UNSET",
     "BaseModel",
+    "DataclassProtocol",
+    "Empty",
+    "EmptyEnum",
+    "EmptyType",
     "FailFast",
     "Struct",
     "TypeAdapter",
