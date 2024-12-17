@@ -6,8 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlspec.config import GenericDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.utils.dataclass import simple_asdict
-from sqlspec.utils.empty import Empty, EmptyType
+from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -60,7 +59,7 @@ class AiosqliteConfig(GenericDatabaseConfig):
         Returns:
             A string keyed dict of config kwargs for the aiosqlite.connect() function.
         """
-        return simple_asdict(self, exclude_empty=True, convert_nested=False)
+        return dataclass_to_dict(self, exclude_empty=True, convert_nested=False)
 
     async def create_connection(self) -> Connection:
         """Create and return a new database connection.

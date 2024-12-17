@@ -13,7 +13,7 @@ from sqlspec.adapters.oracledb.config._common import (
     OracleGenericPoolConfig,
 )
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.utils.dataclass import simple_asdict
+from sqlspec.typing import dataclass_to_dict
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable
@@ -36,6 +36,11 @@ class OracleAsyncDatabaseConfig(OracleGenericDatabaseConfig[AsyncConnectionPool,
 
     pool_config: OracleAsyncPoolConfig | None = None
     """Oracle Pool configuration"""
+    pool_instance: AsyncConnectionPool | None = None
+    """Optional pool to use.
+
+    If set, the plugin will use the provided pool rather than instantiate one.
+    """
 
     @property
     def pool_config_dict(self) -> dict[str, Any]:
@@ -46,7 +51,7 @@ class OracleAsyncDatabaseConfig(OracleGenericDatabaseConfig[AsyncConnectionPool,
             function.
         """
         if self.pool_config is not None:
-            return simple_asdict(self.pool_config, exclude_empty=True, convert_nested=False)
+            return dataclass_to_dict(self.pool_config, exclude_empty=True, convert_nested=False)
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 
@@ -71,14 +76,14 @@ class OracleAsyncDatabaseConfig(OracleGenericDatabaseConfig[AsyncConnectionPool,
         return self.pool_instance
 
     @asynccontextmanager
-    async def lifespan(self, *args: Any, **kwargs) -> AsyncGenerator[None, None]:
+    async def lifespan(self, *args: Any, **kwargs: Any) -> AsyncGenerator[None, None]:
         db_pool = await self.create_pool()
         try:
             yield
         finally:
             await db_pool.close(force=True)
 
-    def provide_pool(self, *args: Any, **kwargs) -> Awaitable[AsyncConnectionPool]:
+    def provide_pool(self, *args: Any, **kwargs: Any) -> Awaitable[AsyncConnectionPool]:
         """Create a pool instance.
 
         Returns:

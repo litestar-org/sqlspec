@@ -128,6 +128,8 @@ exclude_lines = [
 
 [tool.pytest.ini_options]
 addopts = "-ra -q --doctest-glob='*.md' --strict-markers --strict-config"
+asyncio_default_fixture_loop_scope = "function"
+asyncio_mode = "auto"
 testpaths = ["tests"]
 xfail_strict = true
 

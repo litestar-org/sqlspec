@@ -13,7 +13,7 @@ from sqlspec.adapters.oracledb.config._common import (
     OracleGenericPoolConfig,
 )
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.utils.dataclass import simple_asdict
+from sqlspec.typing import dataclass_to_dict
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -51,7 +51,7 @@ class OracleSyncDatabaseConfig(OracleGenericDatabaseConfig[ConnectionPool, Conne
             function.
         """
         if self.pool_config:
-            return simple_asdict(self.pool_config, exclude_empty=True, convert_nested=False)
+            return dataclass_to_dict(self.pool_config, exclude_empty=True, convert_nested=False)
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 

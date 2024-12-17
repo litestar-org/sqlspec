@@ -10,8 +10,7 @@ from asyncpg import create_pool as asyncpg_create_pool
 from sqlspec._serialization import decode_json, encode_json
 from sqlspec.config import GenericDatabaseConfig, GenericPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.utils.dataclass import simple_asdict
-from sqlspec.utils.empty import Empty, EmptyType
+from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop
@@ -98,7 +97,7 @@ class AsyncPgConfig(GenericDatabaseConfig):
             function.
         """
         if self.pool_config:
-            return simple_asdict(self.pool_config, exclude_empty=True, convert_nested=False)
+            return dataclass_to_dict(self.pool_config, exclude_empty=True, convert_nested=False)
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 
@@ -125,7 +124,7 @@ class AsyncPgConfig(GenericDatabaseConfig):
         return self.pool_instance
 
     @asynccontextmanager
-    async def lifespan(self, *args: Any, **kwargs) -> AsyncGenerator[None, None]:
+    async def lifespan(self, *args: Any, **kwargs: Any) -> AsyncGenerator[None, None]:
         db_pool = await self.create_pool()
         try:
             yield
@@ -133,7 +132,7 @@ class AsyncPgConfig(GenericDatabaseConfig):
             db_pool.terminate()
             await db_pool.close()
 
-    def provide_pool(self, *args: Any, **kwargs) -> Awaitable[Pool]:
+    def provide_pool(self, *args: Any, **kwargs: Any) -> Awaitable[Pool]:
         """Create a pool instance.
 
         Returns:

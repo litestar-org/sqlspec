@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import Field, fields
 from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
@@ -18,15 +19,22 @@ from sqlspec._typing import (
     PYDANTIC_INSTALLED,
     UNSET,
     BaseModel,
+    DataclassProtocol,
+    Empty,
+    EmptyType,
     FailFast,
     Struct,
     TypeAdapter,
+    UnsetType,
     convert,
 )
-from sqlspec.utils.dataclass import DataclassProtocol, is_dataclass_instance, simple_asdict
 
 if TYPE_CHECKING:
-    from .filters import StatementFilter
+    from collections.abc import Iterable
+    from collections.abc import Set as AbstractSet
+
+    from sqlspec.filters import StatementFilter
+
 
 PYDANTIC_USE_FAILFAST = False  # leave permanently disabled for now
 
@@ -53,6 +61,18 @@ A list or sequence of any of the following:
 - :type:`Sequence`[:type:`dict[str, Any]` | :class:`~advanced_alchemy.base.ModelProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel`]
 
 """
+
+
+def is_dataclass_instance(obj: Any) -> TypeGuard[DataclassProtocol]:
+    """Check if an object is a dataclass instance.
+
+    Args:
+        obj: An object to check.
+
+    Returns:
+        True if the object is a dataclass instance.
+    """
+    return hasattr(type(obj), "__dataclass_fields__")
 
 
 @lru_cache(typed=True)
@@ -224,6 +244,104 @@ def is_msgspec_model_without_field(v: Any, field_name: str) -> TypeGuard[Struct]
     return not is_msgspec_model_with_field(v, field_name)
 
 
+def extract_dataclass_fields(
+    dt: DataclassProtocol,
+    exclude_none: bool = False,
+    exclude_empty: bool = False,
+    include: AbstractSet[str] | None = None,
+    exclude: AbstractSet[str] | None = None,
+) -> tuple[Field[Any], ...]:
+    """Extract dataclass fields.
+
+    Args:
+        dt: A dataclass instance.
+        exclude_none: Whether to exclude None values.
+        exclude_empty: Whether to exclude Empty values.
+        include: An iterable of fields to include.
+        exclude: An iterable of fields to exclude.
+
+
+    Returns:
+        A tuple of dataclass fields.
+    """
+    include = include or set()
+    exclude = exclude or set()
+
+    if common := (include & exclude):
+        msg = f"Fields {common} are both included and excluded."
+        raise ValueError(msg)
+
+    dataclass_fields: Iterable[Field[Any]] = fields(dt)
+    if exclude_none:
+        dataclass_fields = (field for field in dataclass_fields if getattr(dt, field.name) is not None)
+    if exclude_empty:
+        dataclass_fields = (field for field in dataclass_fields if getattr(dt, field.name) is not Empty)
+    if include:
+        dataclass_fields = (field for field in dataclass_fields if field.name in include)
+    if exclude:
+        dataclass_fields = (field for field in dataclass_fields if field.name not in exclude)
+
+    return tuple(dataclass_fields)
+
+
+def extract_dataclass_items(
+    dt: DataclassProtocol,
+    exclude_none: bool = False,
+    exclude_empty: bool = False,
+    include: AbstractSet[str] | None = None,
+    exclude: AbstractSet[str] | None = None,
+) -> tuple[tuple[str, Any], ...]:
+    """Extract dataclass name, value pairs.
+
+    Unlike the 'asdict' method exports by the stdlib, this function does not pickle values.
+
+    Args:
+        dt: A dataclass instance.
+        exclude_none: Whether to exclude None values.
+        exclude_empty: Whether to exclude Empty values.
+        include: An iterable of fields to include.
+        exclude: An iterable of fields to exclude.
+
+    Returns:
+        A tuple of key/value pairs.
+    """
+    dataclass_fields = extract_dataclass_fields(dt, exclude_none, exclude_empty, include, exclude)
+    return tuple((field.name, getattr(dt, field.name)) for field in dataclass_fields)
+
+
+def dataclass_to_dict(
+    obj: DataclassProtocol,
+    exclude_none: bool = False,
+    exclude_empty: bool = False,
+    convert_nested: bool = True,
+    exclude: set[str] | None = None,
+) -> dict[str, Any]:
+    """Convert a dataclass to a dictionary.
+
+    This method has important differences to the standard library version:
+    - it does not deepcopy values
+    - it does not recurse into collections
+
+    Args:
+        obj: A dataclass instance.
+        exclude_none: Whether to exclude None values.
+        exclude_empty: Whether to exclude Empty values.
+        convert_nested: Whether to recursively convert nested dataclasses.
+        exclude: An iterable of fields to exclude.
+
+    Returns:
+        A dictionary of key/value pairs.
+    """
+    ret = {}
+    for field in extract_dataclass_fields(obj, exclude_none, exclude_empty, exclude=exclude):
+        value = getattr(obj, field.name)
+        if is_dataclass_instance(value) and convert_nested:
+            ret[field.name] = dataclass_to_dict(value, exclude_none, exclude_empty)
+        else:
+            ret[field.name] = getattr(obj, field.name)
+    return ret
+
+
 def schema_dump(
     data: dict[str, Any] | Struct | BaseModel | DataclassProtocol,
     exclude_unset: bool = True,
@@ -238,7 +356,7 @@ def schema_dump(
         :type: dict[str, Any]
     """
     if is_dataclass(data):
-        return simple_asdict(data, exclude_empty=exclude_unset)
+        return dataclass_to_dict(data, exclude_empty=exclude_unset)
     if is_pydantic_model(data):
         return data.model_dump(exclude_unset=exclude_unset)
     if is_msgspec_model(data) and exclude_unset:
@@ -254,6 +372,9 @@ __all__ = (
     "PYDANTIC_USE_FAILFAST",
     "UNSET",
     "BaseModel",
+    "DataclassProtocol",
+    "Empty",
+    "EmptyType",
     "FailFast",
     "FilterTypeT",
     "ModelDictListT",
@@ -262,7 +383,14 @@ __all__ = (
     "TypeAdapter",
     "UnsetType",
     "convert",
+    "dataclass_to_dict",
+    "extract_dataclass_fields",
+    "extract_dataclass_items",
     "get_type_adapter",
+    "is_dataclass",
+    "is_dataclass_instance",
+    "is_dataclass_with_field",
+    "is_dataclass_without_field",
     "is_dict",
     "is_dict_with_field",
     "is_dict_without_field",

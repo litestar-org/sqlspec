@@ -5,8 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar
 
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.utils.dataclass import simple_asdict
-from sqlspec.utils.empty import Empty, EmptyType
+from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -101,7 +100,7 @@ class AsyncmyPoolConfig:
         Returns:
             A string keyed dict of config kwargs for the Asyncmy create_pool function.
         """
-        return simple_asdict(self, exclude_empty=True, convert_nested=False)
+        return dataclass_to_dict(self, exclude_empty=True, convert_nested=False)
 
 
 @dataclass
@@ -125,7 +124,7 @@ class AsyncMyConfig:
             A string keyed dict of config kwargs for the Asyncmy create_pool function.
         """
         if self.pool_config:
-            return simple_asdict(self.pool_config, exclude_empty=True, convert_nested=False)
+            return dataclass_to_dict(self.pool_config, exclude_empty=True, convert_nested=False)
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 

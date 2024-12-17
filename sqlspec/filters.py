@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import ABC
 from collections import abc  # noqa: TC003
 from dataclasses import dataclass
 from datetime import datetime  # noqa: TC003
-from typing import Generic, Literal
+from typing import Generic, Literal, Protocol
 
 from typing_extensions import TypeVar
 
@@ -27,9 +27,11 @@ __all__ = (
 T = TypeVar("T")
 
 
-class StatementFilter(ABC):
-    @abstractmethod
+class StatementFilter(Protocol):
+    """Protocol for filters that can be appended to a statement."""
+
     def append_to_statement(self, statement: str) -> str:
+        """Append the filter to the statement."""
         return statement
 
 

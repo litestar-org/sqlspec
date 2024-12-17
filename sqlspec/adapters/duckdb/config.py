@@ -2,19 +2,66 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.config import GenericDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.utils.dataclass import simple_asdict
-from sqlspec.utils.empty import Empty, EmptyType
+from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Sequence
 
     from duckdb import DuckDBPyConnection
 
-__all__ = ("DuckDBConfig",)
+__all__ = ("DuckDBConfig", "ExtensionConfig")
+
+
+@dataclass
+class ExtensionConfig:
+    """Configuration for a DuckDB extension.
+
+    This class provides configuration options for DuckDB extensions, including installation
+    and post-install configuration settings.
+
+    Args:
+        name: The name of the extension to install
+        config: Optional configuration settings to apply after installation
+        force_install: Whether to force reinstall if already present
+        repository: Optional repository name to install from
+        repository_url: Optional repository URL to install from
+        version: Optional version of the extension to install
+    """
+
+    name: str
+    config: dict[str, Any] | None = None
+    force_install: bool = False
+    repository: str | None = None
+    repository_url: str | None = None
+    version: str | None = None
+
+    @classmethod
+    def from_dict(cls, name: str, config: dict[str, Any] | bool | None = None) -> ExtensionConfig:
+        """Create an ExtensionConfig from a configuration dictionary.
+
+        Args:
+            name: The name of the extension
+            config: Configuration dictionary that may contain settings
+
+        Returns:
+            A new ExtensionConfig instance
+        """
+        if config is None:
+            return cls(name=name)
+
+        if not isinstance(config, dict):
+            config = {"force_install": bool(config)}
+
+        install_args = {
+            key: config.pop(key)
+            for key in ["force_install", "repository", "repository_url", "version", "config", "name"]
+            if key in config
+        }
+        return cls(name=name, **install_args)
 
 
 @dataclass
@@ -39,6 +86,73 @@ class DuckDBConfig(GenericDatabaseConfig):
     For details see: https://duckdb.org/docs/api/python/overview#connection-options
     """
 
+    extensions: Sequence[ExtensionConfig] | EmptyType = Empty
+    """A sequence of extension configurations to install and configure upon connection creation."""
+
+    def __post_init__(self) -> None:
+        """Post-initialization validation and processing.
+
+        This method handles merging extension configurations from both the extensions field
+        and the config dictionary, if present. The config['extensions'] field can be either:
+        - A dictionary mapping extension names to their configurations
+        - A list of extension names (which will be installed with force_install=True)
+
+        Raises:
+            ImproperConfigurationError: If there are duplicate extension configurations.
+        """
+        if self.config is Empty:
+            self.config = {}
+
+        if self.extensions is Empty:
+            self.extensions = []
+        # this is purely for mypy
+        assert isinstance(self.config, dict)  # noqa: S101
+        assert isinstance(self.extensions, list)  # noqa: S101
+
+        _e = self.config.pop("extensions", {})
+        if not isinstance(_e, (dict, list, tuple)):
+            msg = "When configuring extensions in the 'config' dictionary, the value must be a dictionary or sequence of extension names"
+            raise ImproperConfigurationError(msg)
+        if not isinstance(_e, dict):
+            _e = {str(ext): {"force_install": False} for ext in _e}
+
+        if len(set(_e.keys()).intersection({ext.name for ext in self.extensions})) > 0:
+            msg = "Configuring the same extension in both 'extensions' and as a key in 'config['extensions']' is not allowed"
+            raise ImproperConfigurationError(msg)
+
+        self.extensions.extend([ExtensionConfig.from_dict(name, ext_config) for name, ext_config in _e.items()])
+
+    def _configure_extensions(self, connection: DuckDBPyConnection) -> None:
+        """Configure extensions for the connection.
+
+        Args:
+            connection: The DuckDB connection to configure extensions for.
+
+        Raises:
+            ImproperConfigurationError: If extension installation or configuration fails.
+        """
+        if self.extensions is Empty:
+            return
+
+        for extension in cast("list[ExtensionConfig]", self.extensions):
+            try:
+                if extension.force_install:
+                    connection.install_extension(
+                        extension=extension.name,
+                        force_install=extension.force_install,
+                        repository=extension.repository,
+                        repository_url=extension.repository_url,
+                        version=extension.version,
+                    )
+                connection.load_extension(extension.name)
+
+                if extension.config:
+                    for key, value in extension.config.items():
+                        connection.execute(f"SET {key}={value}")
+            except Exception as e:
+                msg = f"Failed to configure extension {extension.name}. Error: {e!s}"
+                raise ImproperConfigurationError(msg) from e
+
     @property
     def connection_config_dict(self) -> dict[str, Any]:
         """Return the connection configuration as a dict.
@@ -46,24 +160,26 @@ class DuckDBConfig(GenericDatabaseConfig):
         Returns:
             A string keyed dict of config kwargs for the duckdb.connect() function.
         """
-        config = simple_asdict(self, exclude_empty=True, convert_nested=False)
+        config = dataclass_to_dict(self, exclude_empty=True, exclude={"extensions"}, convert_nested=False)
         if not config.get("database"):
             config["database"] = ":memory:"
         return config
 
     def create_connection(self) -> DuckDBPyConnection:
-        """Create and return a new database connection.
+        """Create and return a new database connection with configured extensions.
 
         Returns:
-            A new DuckDB connection instance.
+            A new DuckDB connection instance with extensions installed and configured.
 
         Raises:
-            ImproperConfigurationError: If the connection could not be established.
+            ImproperConfigurationError: If the connection could not be established or extensions could not be configured.
         """
         import duckdb
 
         try:
-            return duckdb.connect(**self.connection_config_dict)
+            connection = duckdb.connect(**self.connection_config_dict)
+            self._configure_extensions(connection)
+            return connection
         except Exception as e:
             msg = f"Could not configure the DuckDB connection. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 from oracledb import ConnectionPool
 
 from sqlspec.config import GenericDatabaseConfig, GenericPoolConfig
-from sqlspec.utils.empty import Empty
+from sqlspec.typing import Empty
 
 if TYPE_CHECKING:
     import ssl
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from oracledb.connection import AsyncConnection, Connection
     from oracledb.pool import AsyncConnectionPool, ConnectionPool
 
-    from sqlspec.utils.empty import EmptyType
+    from sqlspec.typing import EmptyType
 
 __all__ = (
     "OracleGenericDatabaseConfig",
