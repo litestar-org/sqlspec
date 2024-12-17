@@ -124,7 +124,7 @@ class AsyncPgConfig(GenericDatabaseConfig):
         return self.pool_instance
 
     @asynccontextmanager
-    async def lifespan(self, *args: Any, **kwargs) -> AsyncGenerator[None, None]:
+    async def lifespan(self, *args: Any, **kwargs: Any) -> AsyncGenerator[None, None]:
         db_pool = await self.create_pool()
         try:
             yield
@@ -132,7 +132,7 @@ class AsyncPgConfig(GenericDatabaseConfig):
             db_pool.terminate()
             await db_pool.close()
 
-    def provide_pool(self, *args: Any, **kwargs) -> Awaitable[Pool]:
+    def provide_pool(self, *args: Any, **kwargs: Any) -> Awaitable[Pool]:
         """Create a pool instance.
 
         Returns:

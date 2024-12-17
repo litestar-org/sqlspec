@@ -70,7 +70,7 @@ class SqliteConfig(GenericDatabaseConfig):
         import sqlite3
 
         try:
-            return sqlite3.connect(**self.connection_config_dict)
+            return sqlite3.connect(**self.connection_config_dict)  # type: ignore[no-any-return,unused-ignore]
         except Exception as e:
             msg = f"Could not configure the SQLite connection. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e

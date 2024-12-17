@@ -36,6 +36,11 @@ class OracleAsyncDatabaseConfig(OracleGenericDatabaseConfig[AsyncConnectionPool,
 
     pool_config: OracleAsyncPoolConfig | None = None
     """Oracle Pool configuration"""
+    pool_instance: AsyncConnectionPool | None = None
+    """Optional pool to use.
+
+    If set, the plugin will use the provided pool rather than instantiate one.
+    """
 
     @property
     def pool_config_dict(self) -> dict[str, Any]:
@@ -71,14 +76,14 @@ class OracleAsyncDatabaseConfig(OracleGenericDatabaseConfig[AsyncConnectionPool,
         return self.pool_instance
 
     @asynccontextmanager
-    async def lifespan(self, *args: Any, **kwargs) -> AsyncGenerator[None, None]:
+    async def lifespan(self, *args: Any, **kwargs: Any) -> AsyncGenerator[None, None]:
         db_pool = await self.create_pool()
         try:
             yield
         finally:
             await db_pool.close(force=True)
 
-    def provide_pool(self, *args: Any, **kwargs) -> Awaitable[AsyncConnectionPool]:
+    def provide_pool(self, *args: Any, **kwargs: Any) -> Awaitable[AsyncConnectionPool]:
         """Create a pool instance.
 
         Returns:

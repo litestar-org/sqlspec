@@ -149,7 +149,7 @@ class TestDuckDBConfig:
             ImproperConfigurationError,
             match="When configuring extensions in the 'config' dictionary, the value must be a dictionary or sequence of extension names",
         ):
-            DuckDBConfig(config={"extensions": 123})  # type: ignore
+            DuckDBConfig(config={"extensions": 123})
 
     @pytest.mark.parametrize(
         ("extension_config", "expected_calls"),
@@ -230,13 +230,9 @@ class TestDuckDBConfig:
             method = getattr(connection, method_name)
             assert method.called
             if method_name == "execute":
-                actual_calls.append(
-                    (method_name, {"query": method.call_args.args[0]})  # type: ignore
-                )
+                actual_calls.append((method_name, {"query": method.call_args.args[0]}))
             else:
-                actual_calls.append(
-                    (method_name, method.call_args.kwargs)  # type: ignore
-                )
+                actual_calls.append((method_name, method.call_args.kwargs))
 
         assert actual_calls == expected_calls
 
