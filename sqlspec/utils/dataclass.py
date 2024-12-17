@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import Field, fields
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
 
 from typing_extensions import TypeGuard
 
-from sqlspec.types.empty import Empty
+from sqlspec.utils.empty import Empty
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from collections.abc import Set as AbstractSet
     from typing import Any
 
-    from sqlspec.types.protocols import DataclassProtocol
 
 __all__ = (
     "extract_dataclass_fields",
@@ -20,6 +19,13 @@ __all__ = (
     "is_dataclass_instance",
     "simple_asdict",
 )
+
+
+@runtime_checkable
+class DataclassProtocol(Protocol):
+    """Protocol for instance checking dataclasses"""
+
+    __dataclass_fields__: ClassVar[dict[str, Any]]
 
 
 def is_dataclass_instance(obj: Any) -> TypeGuard[DataclassProtocol]:

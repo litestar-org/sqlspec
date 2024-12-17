@@ -1,5 +1,3 @@
-"""Typing Helpers"""
-
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -8,172 +6,282 @@ from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
-    Final,
+    TypeVar,
     Union,
     cast,
 )
 
-from typing_extensions import TypeAlias, TypeGuard, TypeVar
+from typing_extensions import TypeAlias, TypeGuard
 
-T = TypeVar("T")  # pragma: nocover
-
-if TYPE_CHECKING:
-    from pydantic import BaseModel  # pyright: ignore[reportAssignmentType]
-    from pydantic.type_adapter import TypeAdapter  # pyright: ignore[reportUnusedImport, reportAssignmentType]
-
-    from sqlspec.filters import StatementFilter
-try:
-    from pydantic import BaseModel  # pyright: ignore[reportAssignmentType]
-    from pydantic.type_adapter import TypeAdapter  # pyright: ignore[reportUnusedImport, reportAssignmentType]
-
-    PYDANTIC_INSTALLED: Final[bool] = True
-except ImportError:  # pragma: nocover
-    PYDANTIC_INSTALLED: Final[bool] = False  # type: ignore # pyright: ignore[reportConstantRedefinition,reportGeneralTypeIssues]
+from sqlspec._typing import (
+    MSGSPEC_INSTALLED,
+    PYDANTIC_INSTALLED,
+    UNSET,
+    BaseModel,
+    FailFast,
+    Struct,
+    TypeAdapter,
+    convert,
+)
+from sqlspec.utils.dataclass import DataclassProtocol, is_dataclass_instance, simple_asdict
 
 if TYPE_CHECKING:
-    from pydantic import FailFast  # pyright: ignore[reportAssignmentType]
-try:
-    # this is from pydantic 2.8.  We should check for it before using it.
-    from pydantic import FailFast  # pyright: ignore[reportAssignmentType]
+    from .filters import StatementFilter
 
-    PYDANTIC_USE_FAILFAST: Final[bool] = False
-except ImportError:
-    PYDANTIC_USE_FAILFAST: Final[bool] = False  # type: ignore # pyright: ignore[reportConstantRedefinition,reportGeneralTypeIssues]
+PYDANTIC_USE_FAILFAST = False  # leave permanently disabled for now
+
+
+T = TypeVar("T")
+
+ModelT = TypeVar("ModelT", bound="Struct | BaseModel | DataclassProtocol")
+
+FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
+"""Type variable for filter types.
+
+:class:`~advanced_alchemy.filters.StatementFilter`
+"""
+ModelDictT: TypeAlias = Union[dict[str, Any], ModelT, DataclassProtocol, Struct, BaseModel]
+"""Type alias for model dictionaries.
+
+Represents:
+- :type:`dict[str, Any]` | :class:`~advanced_alchemy.base.ModelProtocol` | :class:`msgspec.Struct` |  :class:`pydantic.BaseModel` | :class:`litestar.dto.data_structures.DTOData` | :class:`~advanced_alchemy.base.ModelProtocol`
+"""
+ModelDictListT: TypeAlias = Sequence[Union[dict[str, Any], ModelT, DataclassProtocol, Struct, BaseModel]]
+"""Type alias for model dictionary lists.
+
+A list or sequence of any of the following:
+- :type:`Sequence`[:type:`dict[str, Any]` | :class:`~advanced_alchemy.base.ModelProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel`]
+
+"""
 
 
 @lru_cache(typed=True)
 def get_type_adapter(f: type[T]) -> TypeAdapter[T]:
-    """Caches and returns a pydantic type adapter"""
+    """Caches and returns a pydantic type adapter.
+
+    Args:
+        f: Type to create a type adapter for.
+
+    Returns:
+        :class:`pydantic.TypeAdapter`[:class:`typing.TypeVar`[T]]
+    """
     if PYDANTIC_USE_FAILFAST:
         return TypeAdapter(
-            Annotated[f, FailFast()],  # type: ignore[operator]
+            Annotated[f, FailFast()],
         )
     return TypeAdapter(f)
 
 
-if TYPE_CHECKING:
-    from msgspec import UNSET, Struct, convert  # pyright: ignore[reportAssignmentType,reportUnusedImport]
-try:
-    from msgspec import (  # pyright: ignore[reportAssignmentType,reportUnusedImport]
-        UNSET,
-        Struct,
-        UnsetType,
-        convert,
-    )
-
-    MSGSPEC_INSTALLED: Final[bool] = True
-except ImportError:  # pragma: nocover
-    MSGSPEC_INSTALLED: Final[bool] = False  # type: ignore # pyright: ignore[reportConstantRedefinition,reportGeneralTypeIssues]
-
-
-if TYPE_CHECKING:
-    from litestar.dto.data_structures import (  # pyright: ignore[reportMissingImports]
-        DTOData,  # pyright: ignore[reportAssignmentType,reportUnusedImport,reportMissingImports]
-    )
-try:
-    from litestar.dto.data_structures import (  # pyright: ignore[reportMissingImports]
-        DTOData,  # pyright: ignore[reportAssignmentType,reportUnusedImport,reportMissingImports]
-    )
-
-    LITESTAR_INSTALLED: Final[bool] = True
-except ImportError:
-    LITESTAR_INSTALLED: Final[bool] = False  # type: ignore # pyright: ignore[reportConstantRedefinition,reportGeneralTypeIssues]
-
-ModelT = TypeVar("ModelT")
-FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
-ModelDTOT = TypeVar("ModelDTOT", bound="Struct | BaseModel")
-PydanticOrMsgspecT = Union[Struct, BaseModel]
-ModelDictT: TypeAlias = Union[dict[str, Any], ModelT, Struct, BaseModel, DTOData[ModelT]]
-ModelDictListT: TypeAlias = Sequence[Union[dict[str, Any], ModelT, Struct, BaseModel]]
-BulkModelDictT: TypeAlias = Union[Sequence[Union[dict[str, Any], ModelT, Struct, BaseModel]], DTOData[list[ModelT]]]  # pyright: ignore[reportInvalidTypeArguments]
-
-
-def is_dto_data(v: Any) -> TypeGuard[DTOData[Any]]:
-    return LITESTAR_INSTALLED and isinstance(v, DTOData)
-
-
 def is_pydantic_model(v: Any) -> TypeGuard[BaseModel]:
+    """Check if a value is a pydantic model.
+
+    Args:
+        v: Value to check.
+
+    Returns:
+        bool
+    """
     return PYDANTIC_INSTALLED and isinstance(v, BaseModel)
 
 
 def is_msgspec_model(v: Any) -> TypeGuard[Struct]:
+    """Check if a value is a msgspec model.
+
+    Args:
+        v: Value to check.
+
+    Returns:
+        bool
+    """
     return MSGSPEC_INSTALLED and isinstance(v, Struct)
 
 
 def is_dict(v: Any) -> TypeGuard[dict[str, Any]]:
+    """Check if a value is a dictionary.
+
+    Args:
+        v: Value to check.
+
+    Returns:
+        bool
+    """
     return isinstance(v, dict)
 
 
 def is_dict_with_field(v: Any, field_name: str) -> TypeGuard[dict[str, Any]]:
+    """Check if a dictionary has a specific field.
+
+    Args:
+        v: Value to check.
+        field_name: Field name to check for.
+
+    Returns:
+        bool
+    """
     return is_dict(v) and field_name in v
 
 
 def is_dict_without_field(v: Any, field_name: str) -> TypeGuard[dict[str, Any]]:
+    """Check if a dictionary does not have a specific field.
+
+    Args:
+        v: Value to check.
+        field_name: Field name to check for.
+
+    Returns:
+        bool
+    """
     return is_dict(v) and field_name not in v
 
 
+def is_dataclass(v: Any) -> TypeGuard[DataclassProtocol]:
+    """Check if a value is a dataclass.
+
+    Args:
+        v: Value to check.
+
+    Returns:
+        bool
+    """
+    return is_dataclass_instance(v)
+
+
+def is_dataclass_with_field(v: Any, field_name: str) -> TypeGuard[DataclassProtocol]:
+    """Check if a dataclass has a specific field.
+
+    Args:
+        v: Value to check.
+        field_name: Field name to check for.
+
+    Returns:
+        bool
+    """
+    return is_dataclass(v) and field_name in v.__dataclass_fields__
+
+
+def is_dataclass_without_field(v: Any, field_name: str) -> TypeGuard[DataclassProtocol]:
+    """Check if a dataclass does not have a specific field.
+
+    Args:
+        v: Value to check.
+        field_name: Field name to check for.
+
+    Returns:
+        bool
+    """
+    return is_dataclass(v) and field_name not in v.__dataclass_fields__
+
+
 def is_pydantic_model_with_field(v: Any, field_name: str) -> TypeGuard[BaseModel]:
+    """Check if a pydantic model has a specific field.
+
+    Args:
+        v: Value to check.
+        field_name: Field name to check for.
+
+    Returns:
+        bool
+    """
     return is_pydantic_model(v) and field_name in v.model_fields
 
 
 def is_pydantic_model_without_field(v: Any, field_name: str) -> TypeGuard[BaseModel]:
+    """Check if a pydantic model does not have a specific field.
+
+    Args:
+        v: Value to check.
+        field_name: Field name to check for.
+
+    Returns:
+        bool
+    """
     return not is_pydantic_model_with_field(v, field_name)
 
 
 def is_msgspec_model_with_field(v: Any, field_name: str) -> TypeGuard[Struct]:
+    """Check if a msgspec model has a specific field.
+
+    Args:
+        v: Value to check.
+        field_name: Field name to check for.
+
+    Returns:
+        bool
+    """
     return is_msgspec_model(v) and field_name in v.__struct_fields__
 
 
 def is_msgspec_model_without_field(v: Any, field_name: str) -> TypeGuard[Struct]:
+    """Check if a msgspec model does not have a specific field.
+
+    Args:
+        v: Value to check.
+        field_name: Field name to check for.
+
+    Returns:
+        bool
+    """
     return not is_msgspec_model_with_field(v, field_name)
 
 
 def schema_dump(
-    data: dict[str, Any] | ModelT | Struct | BaseModel | DTOData[ModelT],
+    data: dict[str, Any] | Struct | BaseModel | DataclassProtocol,
     exclude_unset: bool = True,
-) -> dict[str, Any] | ModelT:
-    if is_dict(data):
-        return data
+) -> dict[str, Any]:
+    """Dump a data object to a dictionary.
+
+    Args:
+        data:  dict[str, Any] | ModelT | Struct | BaseModel | DataclassProtocol
+        exclude_unset: :type:`bool` Whether to exclude unset values.
+
+    Returns:
+        :type: dict[str, Any]
+    """
+    if is_dataclass(data):
+        return simple_asdict(data, exclude_empty=exclude_unset)
     if is_pydantic_model(data):
         return data.model_dump(exclude_unset=exclude_unset)
     if is_msgspec_model(data) and exclude_unset:
         return {f: val for f in data.__struct_fields__ if (val := getattr(data, f, None)) != UNSET}
     if is_msgspec_model(data) and not exclude_unset:
         return {f: getattr(data, f, None) for f in data.__struct_fields__}
-    if is_dto_data(data):
-        return cast("ModelT", data.as_builtins())  # pyright: ignore[reportUnknownVariableType]
-    return cast("ModelT", data)
+    return cast("dict[str,Any]", data)
 
 
 __all__ = (
-    "ModelDictT",
-    "ModelDictListT",
-    "FilterTypeT",
-    "ModelDTOT",
-    "BulkModelDictT",
-    "PydanticOrMsgspecT",
-    "PYDANTIC_INSTALLED",
     "MSGSPEC_INSTALLED",
-    "LITESTAR_INSTALLED",
+    "PYDANTIC_INSTALLED",
     "PYDANTIC_USE_FAILFAST",
-    "DTOData",
-    "BaseModel",
-    "TypeAdapter",
-    "get_type_adapter",
-    "FailFast",
-    "Struct",
-    "convert",
     "UNSET",
+    "BaseModel",
+    "FailFast",
+    "FilterTypeT",
+    "ModelDictListT",
+    "ModelDictT",
+    "Struct",
+    "TypeAdapter",
     "UnsetType",
-    "is_dto_data",
+    "convert",
+    "get_type_adapter",
     "is_dict",
     "is_dict_with_field",
     "is_dict_without_field",
     "is_msgspec_model",
-    "is_pydantic_model_with_field",
+    "is_msgspec_model_with_field",
     "is_msgspec_model_without_field",
     "is_pydantic_model",
-    "is_msgspec_model_with_field",
+    "is_pydantic_model_with_field",
     "is_pydantic_model_without_field",
     "schema_dump",
 )
+
+if TYPE_CHECKING:
+    if not PYDANTIC_INSTALLED:
+        from ._typing import BaseModel, FailFast, TypeAdapter
+    else:
+        from pydantic import BaseModel, FailFast, TypeAdapter  # noqa: TC004
+
+    if not MSGSPEC_INSTALLED:
+        from ._typing import UNSET, Struct, UnsetType, convert
+    else:
+        from msgspec import UNSET, Struct, UnsetType, convert  # noqa: TC004

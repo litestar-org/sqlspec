@@ -5,8 +5,8 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 
 from oracledb import ConnectionPool
 
-from sqlspec.types.configs import GenericDatabaseConfig, GenericPoolConfig
-from sqlspec.types.empty import Empty
+from sqlspec.config import GenericDatabaseConfig, GenericPoolConfig
+from sqlspec.utils.empty import Empty
 
 if TYPE_CHECKING:
     import ssl
@@ -17,11 +17,11 @@ if TYPE_CHECKING:
     from oracledb.connection import AsyncConnection, Connection
     from oracledb.pool import AsyncConnectionPool, ConnectionPool
 
-    from sqlspec.types.empty import EmptyType
+    from sqlspec.utils.empty import EmptyType
 
 __all__ = (
-    "GenericOracleDatabaseConfig",
-    "GenericOraclePoolConfig",
+    "OracleGenericDatabaseConfig",
+    "OracleGenericPoolConfig",
 )
 
 
@@ -32,7 +32,7 @@ PoolT = TypeVar("PoolT", bound="ConnectionPool | AsyncConnectionPool")
 
 
 @dataclass
-class GenericOraclePoolConfig(Generic[PoolT, ConnectionT], GenericPoolConfig):
+class OracleGenericPoolConfig(Generic[PoolT, ConnectionT], GenericPoolConfig):
     """Configuration for Oracle database connection pools.
 
     This class provides configuration options for both synchronous and asynchronous Oracle
@@ -137,7 +137,7 @@ class GenericOraclePoolConfig(Generic[PoolT, ConnectionT], GenericPoolConfig):
 
 
 @dataclass
-class GenericOracleDatabaseConfig(Generic[PoolT, ConnectionT], GenericDatabaseConfig):
+class OracleGenericDatabaseConfig(Generic[PoolT, ConnectionT], GenericDatabaseConfig):
     """Oracle database Configuration.
 
     This class provides the base configuration for Oracle database connections, extending

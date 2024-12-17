@@ -1,9 +1,9 @@
-from ._async import PsycopgAsyncDatabaseConfig, PsycopgAsyncPoolConfig
-from ._sync import PsycopgSyncDatabaseConfig, PsycopgSyncPoolConfig
+from ._async import PsycoPgAsyncDatabaseConfig, PsycoPgAsyncPoolConfig
+from ._sync import PsycoPgSyncDatabaseConfig, PsycoPgSyncPoolConfig
 
 __all__ = (
-    "PsycopgAsyncDatabaseConfig",
-    "PsycopgAsyncPoolConfig",
-    "PsycopgSyncDatabaseConfig",
-    "PsycopgSyncPoolConfig",
+    "PsycoPgAsyncDatabaseConfig",
+    "PsycoPgAsyncPoolConfig",
+    "PsycoPgSyncDatabaseConfig",
+    "PsycoPgSyncPoolConfig",
 )

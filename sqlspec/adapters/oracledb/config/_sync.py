@@ -9,8 +9,8 @@ from oracledb.connection import Connection
 from oracledb.pool import ConnectionPool
 
 from sqlspec.adapters.oracledb.config._common import (
-    GenericOracleDatabaseConfig,
-    GenericOraclePoolConfig,
+    OracleGenericDatabaseConfig,
+    OracleGenericPoolConfig,
 )
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.dataclass import simple_asdict
@@ -20,21 +20,21 @@ if TYPE_CHECKING:
     from typing import Any
 
 __all__ = (
-    "SyncOracleDatabaseConfig",
-    "SyncOraclePoolConfig",
+    "OracleSyncDatabaseConfig",
+    "OracleSyncPoolConfig",
 )
 
 
 @dataclass
-class SyncOraclePoolConfig(GenericOraclePoolConfig[ConnectionPool, Connection]):
+class OracleSyncPoolConfig(OracleGenericPoolConfig[ConnectionPool, Connection]):
     """Sync Oracle Pool Config"""
 
 
 @dataclass
-class SyncOracleDatabaseConfig(GenericOracleDatabaseConfig[ConnectionPool, Connection]):
+class OracleSyncDatabaseConfig(OracleGenericDatabaseConfig[ConnectionPool, Connection]):
     """Oracle database Configuration."""
 
-    pool_config: SyncOraclePoolConfig | None = None
+    pool_config: OracleSyncPoolConfig | None = None
     """Oracle Pool configuration"""
     pool_instance: ConnectionPool | None = None
     """Optional pool to use.
@@ -75,14 +75,14 @@ class SyncOracleDatabaseConfig(GenericOracleDatabaseConfig[ConnectionPool, Conne
             raise ImproperConfigurationError(msg)
         return self.pool_instance
 
-    def lifespan(self, *args: Any, **kwargs) -> Generator[None, None, None]:
+    def lifespan(self, *args: Any, **kwargs: Any) -> Generator[None, None, None]:
         db_pool = self.create_pool()
         try:
             yield
         finally:
             db_pool.close()
 
-    def provide_pool(self, *args: Any, **kwargs) -> ConnectionPool:
+    def provide_pool(self, *args: Any, **kwargs: Any) -> ConnectionPool:
         """Create a pool instance.
 
         Returns:

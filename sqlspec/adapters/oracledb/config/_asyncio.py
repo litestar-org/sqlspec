@@ -9,8 +9,8 @@ from oracledb.connection import AsyncConnection
 from oracledb.pool import AsyncConnectionPool
 
 from sqlspec.adapters.oracledb.config._common import (
-    GenericOracleDatabaseConfig,
-    GenericOraclePoolConfig,
+    OracleGenericDatabaseConfig,
+    OracleGenericPoolConfig,
 )
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.dataclass import simple_asdict
@@ -26,12 +26,12 @@ __all__ = (
 
 
 @dataclass
-class OracleAsyncPoolConfig(GenericOraclePoolConfig[AsyncConnectionPool, AsyncConnection]):
+class OracleAsyncPoolConfig(OracleGenericPoolConfig[AsyncConnectionPool, AsyncConnection]):
     """Async Oracle Pool Config"""
 
 
 @dataclass
-class OracleAsyncDatabaseConfig(GenericOracleDatabaseConfig[AsyncConnectionPool, AsyncConnection]):
+class OracleAsyncDatabaseConfig(OracleGenericDatabaseConfig[AsyncConnectionPool, AsyncConnection]):
     """Async Oracle database Configuration."""
 
     pool_config: OracleAsyncPoolConfig | None = None
