@@ -1,7 +1,7 @@
 :orphan:
 
 ======================
-Litestar HTMX Releases
+SQLSpec Releases
 ======================
 
 Version Numbering
