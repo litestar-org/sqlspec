@@ -22,8 +22,8 @@ if TYPE_CHECKING:
     from asyncpg.pool import Pool, PoolConnectionProxy
 
 __all__ = (
-    "AsyncpgConfig",
-    "AsyncpgPoolConfig",
+    "AsyncPgConfig",
+    "AsyncPgPoolConfig",
 )
 
 
@@ -31,7 +31,7 @@ T = TypeVar("T")
 
 
 @dataclass
-class AsyncpgPoolConfig(GenericPoolConfig):
+class AsyncPgPoolConfig(GenericPoolConfig):
     """Configuration for Asyncpg's :class:`Pool <asyncpg.pool.Pool>`.
 
     For details see: https://magicstack.github.io/asyncpg/current/api/index.html#connection-pools
@@ -71,10 +71,10 @@ class AsyncpgPoolConfig(GenericPoolConfig):
 
 
 @dataclass
-class AsyncpgConfig(GenericDatabaseConfig):
+class AsyncPgConfig(GenericDatabaseConfig):
     """Asyncpg Configuration."""
 
-    pool_config: AsyncpgPoolConfig | None = None
+    pool_config: AsyncPgPoolConfig | None = None
     """Asyncpg Pool configuration"""
     json_deserializer: Callable[[str], Any] = decode_json
     """For dialects that support the :class:`JSON <sqlalchemy.types.JSON>` datatype, this is a Python callable that will

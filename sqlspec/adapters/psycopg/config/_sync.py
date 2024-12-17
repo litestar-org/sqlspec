@@ -8,8 +8,8 @@ from psycopg import Connection
 from psycopg_pool import ConnectionPool
 
 from sqlspec.adapters.psycopg.config._common import (
-    GenericPsycopgDatabaseConfig,
-    GenericPsycopgPoolConfig,
+    PsycoPgGenericDatabaseConfig,
+    PsycoPgGenericPoolConfig,
 )
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.dataclass import simple_asdict
@@ -20,21 +20,21 @@ if TYPE_CHECKING:
 
 
 __all__ = (
-    "PsycopgSyncDatabaseConfig",
-    "PsycopgSyncPoolConfig",
+    "PsycoPgSyncDatabaseConfig",
+    "PsycoPgSyncPoolConfig",
 )
 
 
 @dataclass
-class PsycopgSyncPoolConfig(GenericPsycopgPoolConfig[ConnectionPool, Connection]):
+class PsycoPgSyncPoolConfig(PsycoPgGenericPoolConfig[ConnectionPool, Connection]):
     """Sync Psycopg Pool Config"""
 
 
 @dataclass
-class PsycopgSyncDatabaseConfig(GenericPsycopgDatabaseConfig[ConnectionPool, Connection]):
+class PsycoPgSyncDatabaseConfig(PsycoPgGenericDatabaseConfig[ConnectionPool, Connection]):
     """Sync Psycopg database Configuration."""
 
-    pool_config: PsycopgSyncPoolConfig | None = None
+    pool_config: PsycoPgSyncPoolConfig | None = None
     """Psycopg Pool configuration"""
     pool_instance: ConnectionPool | None = None
     """Optional pool to use"""

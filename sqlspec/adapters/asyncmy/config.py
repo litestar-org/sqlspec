@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from asyncmy.pool import Pool
 
 __all__ = (
-    "AsyncmyConfig",
+    "AsyncMyConfig",
     "AsyncmyPoolConfig",
 )
 
@@ -105,7 +105,7 @@ class AsyncmyPoolConfig:
 
 
 @dataclass
-class AsyncmyConfig:
+class AsyncMyConfig:
     """Asyncmy Configuration."""
 
     pool_config: AsyncmyPoolConfig | None = None

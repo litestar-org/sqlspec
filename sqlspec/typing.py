@@ -279,9 +279,9 @@ if TYPE_CHECKING:
     if not PYDANTIC_INSTALLED:
         from ._typing import BaseModel, FailFast, TypeAdapter
     else:
-        from pydantic import BaseModel, FailFast, TypeAdapter  # type: ignore[assignment] # noqa: TC004
+        from pydantic import BaseModel, FailFast, TypeAdapter  # noqa: TC004
 
     if not MSGSPEC_INSTALLED:
         from ._typing import UNSET, Struct, UnsetType, convert
     else:
-        from msgspec import UNSET, Struct, UnsetType, convert  # type: ignore[assignment]  # noqa: TC004
+        from msgspec import UNSET, Struct, UnsetType, convert  # noqa: TC004

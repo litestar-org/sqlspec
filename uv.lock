@@ -290,6 +290,19 @@ wheels = [
 ]
 
 [[package]]
+name = "asyncpg-stubs"
+version = "0.30.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "asyncpg" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/92/fb/08e27995b5444c888d58040203a2a73b9151855e267d171b3aff69033e7d/asyncpg_stubs-0.30.0.tar.gz", hash = "sha256:8bfe20f1b1e24a19674152ec9abbcc2df72c01e78af696f44fc275d56fe335ba", size = 20946 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/db/92/fb8ba4baca7f02ae627ad1f3b84fff8c550c93bd71fd7f993e6792d5718e/asyncpg_stubs-0.30.0-py3-none-any.whl", hash = "sha256:1eac258c10fc45a781729913a2fcfba775888bed160ae47f55fe0964d639e9cd", size = 26816 },
+]
+
+[[package]]
 name = "auto-pytabs"
 version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3112,6 +3125,7 @@ dev = [
     { name = "adbc-driver-postgresql" },
     { name = "adbc-driver-sqlite" },
     { name = "anyio" },
+    { name = "asyncpg-stubs" },
     { name = "auto-pytabs", extra = ["sphinx"] },
     { name = "coverage" },
     { name = "git-cliff" },
@@ -3157,6 +3171,7 @@ doc = [
     { name = "sphinxcontrib-mermaid" },
 ]
 lint = [
+    { name = "asyncpg-stubs" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pyright" },
@@ -3210,6 +3225,7 @@ dev = [
     { name = "adbc-driver-postgresql" },
     { name = "adbc-driver-sqlite" },
     { name = "anyio" },
+    { name = "asyncpg-stubs" },
     { name = "auto-pytabs", extras = ["sphinx"], specifier = ">=0.5.0" },
     { name = "coverage", specifier = ">=7.6.1" },
     { name = "git-cliff", specifier = ">=2.6.1" },
@@ -3255,6 +3271,7 @@ doc = [
     { name = "sphinxcontrib-mermaid", specifier = ">=0.9.2" },
 ]
 lint = [
+    { name = "asyncpg-stubs" },
     { name = "mypy", specifier = ">=1.13.0" },
     { name = "pre-commit", specifier = ">=3.5.0" },
     { name = "pyright", specifier = ">=1.1.386" },

@@ -16,8 +16,8 @@ if TYPE_CHECKING:
     from sqlspec.utils.empty import EmptyType
 
 __all__ = (
-    "GenericPsycopgDatabaseConfig",
-    "GenericPsycopgPoolConfig",
+    "PsycoPgGenericDatabaseConfig",
+    "PsycoPgGenericPoolConfig",
 )
 
 
@@ -26,7 +26,7 @@ PoolT = TypeVar("PoolT", bound="ConnectionPool | AsyncConnectionPool")
 
 
 @dataclass
-class GenericPsycopgPoolConfig(Generic[PoolT, ConnectionT], GenericPoolConfig):
+class PsycoPgGenericPoolConfig(Generic[PoolT, ConnectionT], GenericPoolConfig):
     """Configuration for Psycopg connection pools.
 
     This class provides configuration options for both synchronous and asynchronous Psycopg
@@ -61,7 +61,7 @@ class GenericPsycopgPoolConfig(Generic[PoolT, ConnectionT], GenericPoolConfig):
 
 
 @dataclass
-class GenericPsycopgDatabaseConfig(Generic[PoolT, ConnectionT], GenericDatabaseConfig):
+class PsycoPgGenericDatabaseConfig(Generic[PoolT, ConnectionT], GenericDatabaseConfig):
     """Psycopg database Configuration.
 
     This class provides the base configuration for Psycopg database connections, extending

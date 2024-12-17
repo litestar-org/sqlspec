@@ -60,6 +60,7 @@ lint = [
   "slotscheck>=0.16.5",
   "types-Pygments",
   "types-colorama",
+  "asyncpg-stubs",
 ]
 test = [
   "anyio",
@@ -148,7 +149,7 @@ warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
 ignore_missing_imports = true
-module = ["orjson", "re2", "re2.*", "uvicorn.*", "googleapiclient", "googleapiclient.*", "uvloop.*"]
+module = ["orjson", "re2", "re2.*", "uvicorn.*", "googleapiclient", "googleapiclient.*", "uvloop.*","asyncmy", "asyncmy.*"]
 
 [tool.pyright]
 disableBytesTypePromotions = true

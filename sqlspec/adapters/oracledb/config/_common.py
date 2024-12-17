@@ -20,8 +20,8 @@ if TYPE_CHECKING:
     from sqlspec.utils.empty import EmptyType
 
 __all__ = (
-    "GenericOracleDatabaseConfig",
-    "GenericOraclePoolConfig",
+    "OracleGenericDatabaseConfig",
+    "OracleGenericPoolConfig",
 )
 
 
@@ -32,7 +32,7 @@ PoolT = TypeVar("PoolT", bound="ConnectionPool | AsyncConnectionPool")
 
 
 @dataclass
-class GenericOraclePoolConfig(Generic[PoolT, ConnectionT], GenericPoolConfig):
+class OracleGenericPoolConfig(Generic[PoolT, ConnectionT], GenericPoolConfig):
     """Configuration for Oracle database connection pools.
 
     This class provides configuration options for both synchronous and asynchronous Oracle
@@ -137,7 +137,7 @@ class GenericOraclePoolConfig(Generic[PoolT, ConnectionT], GenericPoolConfig):
 
 
 @dataclass
-class GenericOracleDatabaseConfig(Generic[PoolT, ConnectionT], GenericDatabaseConfig):
+class OracleGenericDatabaseConfig(Generic[PoolT, ConnectionT], GenericDatabaseConfig):
     """Oracle database Configuration.
 
     This class provides the base configuration for Oracle database connections, extending
