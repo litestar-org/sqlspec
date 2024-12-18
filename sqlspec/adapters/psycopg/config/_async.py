@@ -63,15 +63,6 @@ class PsycoPgAsyncDatabaseConfig(PsycoPgGenericDatabaseConfig[AsyncConnectionPoo
             raise ImproperConfigurationError(msg)
         return self.pool_instance
 
-    @asynccontextmanager
-    async def lifespan(self, *args: Any, **kwargs: Any) -> AsyncGenerator[None, None]:
-        """Manage the lifecycle of the connection pool."""
-        pool = await self.create_pool()
-        try:
-            yield
-        finally:
-            await pool.close()
-
     def provide_pool(self, *args: Any, **kwargs: Any) -> Awaitable[AsyncConnectionPool]:
         """Create and return a connection pool."""
         return self.create_pool()

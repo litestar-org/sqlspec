@@ -75,13 +75,6 @@ class OracleSyncDatabaseConfig(OracleGenericDatabaseConfig[ConnectionPool, Conne
             raise ImproperConfigurationError(msg)
         return self.pool_instance
 
-    def lifespan(self, *args: Any, **kwargs: Any) -> Generator[None, None, None]:
-        db_pool = self.create_pool()
-        try:
-            yield
-        finally:
-            db_pool.close()
-
     def provide_pool(self, *args: Any, **kwargs: Any) -> ConnectionPool:
         """Create a pool instance.
 

@@ -162,23 +162,6 @@ class AsyncMyConfig:
         return await self.create_pool()
 
     @asynccontextmanager
-    async def lifespan(self, *args: Any, **kwargs: Any) -> AsyncGenerator[None, None]:
-        """Manage the lifecycle of a database connection pool.
-
-        Yields:
-            None
-
-        Raises:
-            ImproperConfigurationError: If the pool could not be established.
-        """
-        pool = await self.create_pool()
-        try:
-            yield
-        finally:
-            pool.close()
-            await pool.wait_closed()
-
-    @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[Connection, None]:
         """Create and provide a database connection.
 

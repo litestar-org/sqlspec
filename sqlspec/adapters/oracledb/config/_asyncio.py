@@ -75,14 +75,6 @@ class OracleAsyncDatabaseConfig(OracleGenericDatabaseConfig[AsyncConnectionPool,
             raise ImproperConfigurationError(msg)
         return self.pool_instance
 
-    @asynccontextmanager
-    async def lifespan(self, *args: Any, **kwargs: Any) -> AsyncGenerator[None, None]:
-        db_pool = await self.create_pool()
-        try:
-            yield
-        finally:
-            await db_pool.close(force=True)
-
     def provide_pool(self, *args: Any, **kwargs: Any) -> Awaitable[AsyncConnectionPool]:
         """Create a pool instance.
 

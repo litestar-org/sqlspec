@@ -63,15 +63,6 @@ class PsycoPgSyncDatabaseConfig(PsycoPgGenericDatabaseConfig[ConnectionPool, Con
             raise ImproperConfigurationError(msg)
         return self.pool_instance
 
-    @contextmanager
-    def lifespan(self, *args: Any, **kwargs: Any) -> Generator[None, None, None]:
-        """Manage the lifecycle of the connection pool."""
-        pool = self.create_pool()
-        try:
-            yield
-        finally:
-            pool.close()
-
     def provide_pool(self, *args: Any, **kwargs: Any) -> ConnectionPool:
         """Create and return a connection pool."""
         return self.create_pool()
