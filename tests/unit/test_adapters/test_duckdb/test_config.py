@@ -250,19 +250,3 @@ class TestDuckDBConfig:
             config = DuckDBConfig()
             with pytest.raises(ImproperConfigurationError, match="Could not configure"):
                 config.create_connection()
-
-    def test_connection_lifecycle(self, mock_duckdb_connection: MagicMock) -> None:
-        """Test connection lifecycle management."""
-        config = DuckDBConfig()
-
-        # Test lifespan
-        with config.lifespan():
-            assert mock_duckdb_connection.close.call_count == 0
-        assert mock_duckdb_connection.close.call_count == 1
-
-        # Test provide_connection
-        mock_duckdb_connection.reset_mock()
-        with config.provide_connection() as conn:
-            assert conn is mock_duckdb_connection
-            assert mock_duckdb_connection.close.call_count == 0
-        assert mock_duckdb_connection.close.call_count == 1

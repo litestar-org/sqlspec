@@ -76,22 +76,6 @@ class SqliteConfig(GenericDatabaseConfig):
             raise ImproperConfigurationError(msg) from e
 
     @contextmanager
-    def lifespan(self, *args: Any, **kwargs: Any) -> Generator[None, None, None]:
-        """Manage the lifecycle of a database connection.
-
-        Yields:
-            None
-
-        Raises:
-            ImproperConfigurationError: If the connection could not be established.
-        """
-        connection = self.create_connection()
-        try:
-            yield
-        finally:
-            connection.close()
-
-    @contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> Generator[Connection, None, None]:
         """Create and provide a database connection.
 

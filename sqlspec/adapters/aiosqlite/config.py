@@ -79,22 +79,6 @@ class AiosqliteConfig(GenericDatabaseConfig):
             raise ImproperConfigurationError(msg) from e
 
     @asynccontextmanager
-    async def lifespan(self, *args: Any, **kwargs: Any) -> AsyncGenerator[None, None]:
-        """Manage the lifecycle of a database connection.
-
-        Yields:
-            None
-
-        Raises:
-            ImproperConfigurationError: If the connection could not be established.
-        """
-        connection = await self.create_connection()
-        try:
-            yield
-        finally:
-            await connection.close()
-
-    @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[Connection, None]:
         """Create and provide a database connection.
 

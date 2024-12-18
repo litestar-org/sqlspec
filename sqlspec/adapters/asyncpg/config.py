@@ -123,15 +123,6 @@ class AsyncPgConfig(GenericDatabaseConfig):
             )
         return self.pool_instance
 
-    @asynccontextmanager
-    async def lifespan(self, *args: Any, **kwargs: Any) -> AsyncGenerator[None, None]:
-        db_pool = await self.create_pool()
-        try:
-            yield
-        finally:
-            db_pool.terminate()
-            await db_pool.close()
-
     def provide_pool(self, *args: Any, **kwargs: Any) -> Awaitable[Pool]:
         """Create a pool instance.
 
