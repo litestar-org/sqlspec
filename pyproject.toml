@@ -6,7 +6,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.9, <4.0"
-version = "0.4.0alpha1"
+version = "0.4.0"
 
 [project.optional-dependencies]
 adbc = ["adbc-driver-manager", "pyarrow"]
@@ -151,7 +151,17 @@ warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
 ignore_missing_imports = true
-module = ["orjson", "re2", "re2.*", "uvicorn.*", "googleapiclient", "googleapiclient.*", "uvloop.*","asyncmy", "asyncmy.*"]
+module = [
+  "orjson",
+  "re2",
+  "re2.*",
+  "uvicorn.*",
+  "googleapiclient",
+  "googleapiclient.*",
+  "uvloop.*",
+  "asyncmy",
+  "asyncmy.*",
+]
 
 [tool.pyright]
 disableBytesTypePromotions = true
