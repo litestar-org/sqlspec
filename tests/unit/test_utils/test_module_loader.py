@@ -37,7 +37,7 @@ def test_module_path(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
 
 def test_import_non_existing_attribute_raises() -> None:
     with pytest.raises(ImportError):
-        import_string("sqlspec.base.GenericDatabaseConfig")
+        import_string("sqlspec.base.GenericDatabaseConfig.extra.module")
 
 
 def test_import_string_cached(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
