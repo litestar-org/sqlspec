@@ -26,13 +26,16 @@ __all__ = (
 
 
 @dataclass
-class PsycoPgAsyncPoolConfig(PsycoPgGenericPoolConfig[AsyncConnectionPool, AsyncConnection]):
+class PsycoPgAsyncPoolConfig(PsycoPgGenericPoolConfig[AsyncConnection, AsyncConnectionPool]):
     """Async Psycopg Pool Config"""
 
 
 @dataclass
-class PsycoPgAsyncDatabaseConfig(PsycoPgGenericDatabaseConfig[AsyncConnectionPool, AsyncConnection]):
+class PsycoPgAsyncDatabaseConfig(PsycoPgGenericDatabaseConfig[AsyncConnection, AsyncConnectionPool]):
     """Async Psycopg database Configuration."""
+
+    __is_async__ = True
+    __supports_connection_pooling__ = True
 
     pool_config: PsycoPgAsyncPoolConfig | None = None
     """Psycopg Pool configuration"""
@@ -58,7 +61,7 @@ class PsycoPgAsyncDatabaseConfig(PsycoPgGenericDatabaseConfig[AsyncConnectionPoo
 
         pool_config = self.pool_config_dict
         self.pool_instance = AsyncConnectionPool(**pool_config)
-        if self.pool_instance is None:
+        if self.pool_instance is None:  # pyright: ignore[reportUnnecessaryComparison]
             msg = "Could not configure the 'pool_instance'. Please check your configuration."  # type: ignore[unreachable]
             raise ImproperConfigurationError(msg)
         return self.pool_instance

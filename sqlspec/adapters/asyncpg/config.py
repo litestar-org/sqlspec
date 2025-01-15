@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, TypeVar, Union
 
 from asyncpg import Record
 from asyncpg import create_pool as asyncpg_create_pool
+from asyncpg.connection import Connection
+from asyncpg.pool import Pool, PoolConnectionProxy
+from typing_extensions import TypeAlias
 
 from sqlspec._serialization import decode_json, encode_json
-from sqlspec.config import GenericDatabaseConfig, GenericPoolConfig
+from sqlspec.base import DatabaseConfigProtocol, GenericDatabaseConfig, GenericPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
@@ -17,8 +20,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
     from typing import Any
 
-    from asyncpg.connection import Connection
-    from asyncpg.pool import Pool, PoolConnectionProxy
 
 __all__ = (
     "AsyncPgConfig",
@@ -27,6 +28,8 @@ __all__ = (
 
 
 T = TypeVar("T")
+
+PgConnection: TypeAlias = Union[Connection, PoolConnectionProxy]
 
 
 @dataclass
@@ -70,8 +73,11 @@ class AsyncPgPoolConfig(GenericPoolConfig):
 
 
 @dataclass
-class AsyncPgConfig(GenericDatabaseConfig):
+class AsyncPgConfig(DatabaseConfigProtocol[PgConnection, Pool], GenericDatabaseConfig):
     """Asyncpg Configuration."""
+
+    __is_async__ = True
+    __supports_connection_pooling__ = True
 
     pool_config: AsyncPgPoolConfig | None = None
     """Asyncpg Pool configuration"""
@@ -132,9 +138,7 @@ class AsyncPgConfig(GenericDatabaseConfig):
         return self.create_pool()
 
     @asynccontextmanager
-    async def provide_connection(
-        self, *args: Any, **kwargs: Any
-    ) -> AsyncGenerator[Connection | PoolConnectionProxy, None]:
+    async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[PoolConnectionProxy, None]:
         """Create a connection instance.
 
         Returns:

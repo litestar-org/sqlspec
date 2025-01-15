@@ -1,4 +1,4 @@
-from .config import (
+from sqlspec.adapters.oracledb.config import (
     OracleAsyncDatabaseConfig,
     OracleAsyncPoolConfig,
     OracleSyncDatabaseConfig,

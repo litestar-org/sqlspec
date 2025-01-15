@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 
 from oracledb import ConnectionPool
 
-from sqlspec.config import GenericDatabaseConfig, GenericPoolConfig
+from sqlspec.base import DatabaseConfigProtocol, GenericDatabaseConfig, GenericPoolConfig
 from sqlspec.typing import Empty
 
 if TYPE_CHECKING:
@@ -32,7 +32,7 @@ PoolT = TypeVar("PoolT", bound="ConnectionPool | AsyncConnectionPool")
 
 
 @dataclass
-class OracleGenericPoolConfig(Generic[PoolT, ConnectionT], GenericPoolConfig):
+class OracleGenericPoolConfig(Generic[ConnectionT, PoolT], GenericPoolConfig):
     """Configuration for Oracle database connection pools.
 
     This class provides configuration options for both synchronous and asynchronous Oracle
@@ -58,7 +58,7 @@ class OracleGenericPoolConfig(Generic[PoolT, ConnectionT], GenericPoolConfig):
     """New password for password change operations"""
     wallet_password: str | EmptyType = Empty
     """Password for accessing Oracle Wallet"""
-    access_token: str | tuple | Callable | EmptyType = Empty
+    access_token: str | tuple[str, ...] | Callable[[], str] | EmptyType = Empty
     """Token for token-based authentication"""
     host: str | EmptyType = Empty
     """Database server hostname"""
@@ -112,11 +112,11 @@ class OracleGenericPoolConfig(Generic[PoolT, ConnectionT], GenericPoolConfig):
     """If True, allows connections with different tags"""
     config_dir: str | EmptyType = Empty
     """Directory containing Oracle configuration files"""
-    appcontext: list | EmptyType = Empty
+    appcontext: list[str] | EmptyType = Empty
     """Application context list"""
-    shardingkey: list | EmptyType = Empty
+    shardingkey: list[str] | EmptyType = Empty
     """Sharding key list"""
-    supershardingkey: list | EmptyType = Empty
+    supershardingkey: list[str] | EmptyType = Empty
     """Super sharding key list"""
     debug_jdwp: str | EmptyType = Empty
     """JDWP debugging string"""
@@ -137,7 +137,7 @@ class OracleGenericPoolConfig(Generic[PoolT, ConnectionT], GenericPoolConfig):
 
 
 @dataclass
-class OracleGenericDatabaseConfig(Generic[PoolT, ConnectionT], GenericDatabaseConfig):
+class OracleGenericDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT], GenericDatabaseConfig):
     """Oracle database Configuration.
 
     This class provides the base configuration for Oracle database connections, extending

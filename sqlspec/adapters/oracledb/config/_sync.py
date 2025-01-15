@@ -26,13 +26,16 @@ __all__ = (
 
 
 @dataclass
-class OracleSyncPoolConfig(OracleGenericPoolConfig[ConnectionPool, Connection]):
+class OracleSyncPoolConfig(OracleGenericPoolConfig[Connection, ConnectionPool]):
     """Sync Oracle Pool Config"""
 
 
 @dataclass
-class OracleSyncDatabaseConfig(OracleGenericDatabaseConfig[ConnectionPool, Connection]):
+class OracleSyncDatabaseConfig(OracleGenericDatabaseConfig[Connection, ConnectionPool]):
     """Oracle database Configuration."""
+
+    __is_async__ = False
+    __supports_connection_pooling__ = True
 
     pool_config: OracleSyncPoolConfig | None = None
     """Oracle Pool configuration"""
@@ -70,7 +73,7 @@ class OracleSyncDatabaseConfig(OracleGenericDatabaseConfig[ConnectionPool, Conne
 
         pool_config = self.pool_config_dict
         self.pool_instance = oracledb_create_pool(**pool_config)
-        if self.pool_instance is None:
+        if self.pool_instance is None:  # pyright: ignore[reportUnnecessaryComparison]
             msg = "Could not configure the 'pool_instance'. Please check your configuration."
             raise ImproperConfigurationError(msg)
         return self.pool_instance
@@ -91,5 +94,5 @@ class OracleSyncDatabaseConfig(OracleGenericDatabaseConfig[ConnectionPool, Conne
             A connection instance.
         """
         db_pool = self.provide_pool(*args, **kwargs)
-        with db_pool.acquire() as connection:
+        with db_pool.acquire() as connection:  # pyright: ignore[reportUnknownMemberType]
             yield connection

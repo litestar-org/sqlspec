@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.config import GenericDatabaseConfig
+from sqlspec.base import GenericDatabaseConfig, NoPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
@@ -19,7 +19,7 @@ __all__ = ("AiosqliteConfig",)
 
 
 @dataclass
-class AiosqliteConfig(GenericDatabaseConfig):
+class AiosqliteConfig(NoPoolConfig["Connection"], GenericDatabaseConfig):
     """Configuration for Aiosqlite database connections.
 
     This class provides configuration options for Aiosqlite database connections, wrapping all parameters

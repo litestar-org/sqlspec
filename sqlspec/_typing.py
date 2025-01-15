@@ -29,7 +29,6 @@ class DataclassProtocol(Protocol):
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
 
-
 try:
     from pydantic import BaseModel, FailFast, TypeAdapter
 
@@ -110,6 +109,35 @@ except ImportError:
     UNSET = UnsetType.UNSET  # pyright: ignore[reportConstantRedefinition]
     MSGSPEC_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
+try:
+    from litestar.dto.data_structures import DTOData  # pyright: ignore[reportUnknownVariableType]
+
+    LITESTAR_INSTALLED = True
+except ImportError:
+
+    @runtime_checkable
+    class DTOData(Protocol[T]):  # type: ignore[no-redef]
+        """Placeholder implementation"""
+
+        __slots__ = ("_backend", "_data_as_builtins")
+
+        def __init__(self, backend: Any, data_as_builtins: Any) -> None:
+            """Placeholder init"""
+
+        def create_instance(self, **kwargs: Any) -> T:
+            """Placeholder implementation"""
+            return cast("T", kwargs)
+
+        def update_instance(self, instance: T, **kwargs: Any) -> T:
+            """Placeholder implementation"""
+            return cast("T", kwargs)
+
+        def as_builtins(self) -> Any:
+            """Placeholder implementation"""
+            return {}
+
+    LITESTAR_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
+
 
 class EmptyEnum(Enum):
     """A sentinel enum used as placeholder."""
@@ -122,10 +150,12 @@ Empty: Final = EmptyEnum.EMPTY
 
 
 __all__ = (
+    "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
     "PYDANTIC_INSTALLED",
     "UNSET",
     "BaseModel",
+    "DTOData",
     "DataclassProtocol",
     "Empty",
     "EmptyEnum",

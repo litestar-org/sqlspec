@@ -121,45 +121,36 @@ test:                                               ## Run the tests
 	@uv run pytest tests
 	@echo "${OK} Tests complete ✨"
 
-.PHONY: test-examples
-test-examples:                                      ## Run the examples tests
-	@echo "${INFO} Running example tests... 🧪"
-	@uv run pytest docs/examples
-	@echo "${OK} Example tests complete ✨"
-
 .PHONY: test-all
-test-all: test test-examples                        ## Run all tests
+test-all: tests				                        ## Run all tests
 	@echo "${INFO} All tests executed successfully ✨"
 
 .PHONY: coverage
-coverage:                                          ## Run tests with coverage report
+coverage:                                           ## Run tests with coverage report
 	@echo "${INFO} Running tests with coverage... 📊"
-	@uv run pytest tests --cov -n auto --quiet
+	@uv run pytest --cov -n auto --quiet
 	@uv run coverage html >/dev/null 2>&1
 	@uv run coverage xml >/dev/null 2>&1
 	@echo "${OK} Coverage report generated ✨"
+
+# -----------------------------------------------------------------------------
+# Type Checking
+# -----------------------------------------------------------------------------
 
 .PHONY: mypy
 mypy:                                               ## Run mypy
 	@echo "${INFO} Running mypy... 🔍"
 	@uv run dmypy run
-	@echo "${OK} mypy complete ✨"
-
-.PHONY: mypy-nocache
-mypy-nocache:                                       ## Run Mypy without cache
-	@echo "${INFO} Running mypy without cache... 🔍"
-	@uv run mypy
-	@echo "${OK} mypy complete ✨"
+	@echo "${OK} Mypy checks passed ✨"
 
 .PHONY: pyright
 pyright:                                            ## Run pyright
 	@echo "${INFO} Running pyright... 🔍"
 	@uv run pyright
-	@echo "${OK} pyright complete ✨"
+	@echo "${OK} Pyright checks passed ✨"
 
 .PHONY: type-check
 type-check: mypy pyright                            ## Run all type checking
-	@echo "${OK} All type checks passed ✨"
 
 # -----------------------------------------------------------------------------
 # Linting and Formatting
