@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from sqlspec.config import GenericDatabaseConfig
+from sqlspec.base import GenericDatabaseConfig, NoPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
@@ -16,7 +16,7 @@ __all__ = ("SqliteConfig",)
 
 
 @dataclass
-class SqliteConfig(GenericDatabaseConfig):
+class SqliteConfig(NoPoolConfig["Connection"], GenericDatabaseConfig):
     """Configuration for SQLite database connections.
 
     This class provides configuration options for SQLite database connections, wrapping all parameters
@@ -25,7 +25,7 @@ class SqliteConfig(GenericDatabaseConfig):
     For details see: https://docs.python.org/3/library/sqlite3.html#sqlite3.connect
     """
 
-    database: str
+    database: str = ":memory:"
     """The path to the database file to be opened. Pass ":memory:" to open a connection to a database that resides in RAM instead of on disk."""
 
     timeout: float | EmptyType = Empty

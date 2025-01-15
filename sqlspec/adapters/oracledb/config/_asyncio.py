@@ -26,13 +26,16 @@ __all__ = (
 
 
 @dataclass
-class OracleAsyncPoolConfig(OracleGenericPoolConfig[AsyncConnectionPool, AsyncConnection]):
+class OracleAsyncPoolConfig(OracleGenericPoolConfig[AsyncConnection, AsyncConnectionPool]):
     """Async Oracle Pool Config"""
 
 
 @dataclass
-class OracleAsyncDatabaseConfig(OracleGenericDatabaseConfig[AsyncConnectionPool, AsyncConnection]):
+class OracleAsyncDatabaseConfig(OracleGenericDatabaseConfig[AsyncConnection, AsyncConnectionPool]):
     """Async Oracle database Configuration."""
+
+    __is_async__ = True
+    __supports_connection_pooling__ = True
 
     pool_config: OracleAsyncPoolConfig | None = None
     """Oracle Pool configuration"""
@@ -70,7 +73,7 @@ class OracleAsyncDatabaseConfig(OracleGenericDatabaseConfig[AsyncConnectionPool,
 
         pool_config = self.pool_config_dict
         self.pool_instance = oracledb_create_pool(**pool_config)
-        if self.pool_instance is None:
+        if self.pool_instance is None:  # pyright: ignore[reportUnnecessaryComparison]
             msg = "Could not configure the 'pool_instance'. Please check your configuration."
             raise ImproperConfigurationError(msg)
         return self.pool_instance

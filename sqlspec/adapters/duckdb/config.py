@@ -4,14 +4,16 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.config import GenericDatabaseConfig
+from duckdb import DuckDBPyConnection
+from duckdb import connect as duckdb_connect
+
+from sqlspec.base import GenericDatabaseConfig, NoPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
 
-    from duckdb import DuckDBPyConnection
 
 __all__ = ("DuckDBConfig", "ExtensionConfig")
 
@@ -23,21 +25,21 @@ class ExtensionConfig:
     This class provides configuration options for DuckDB extensions, including installation
     and post-install configuration settings.
 
-    Args:
-        name: The name of the extension to install
-        config: Optional configuration settings to apply after installation
-        force_install: Whether to force reinstall if already present
-        repository: Optional repository name to install from
-        repository_url: Optional repository URL to install from
-        version: Optional version of the extension to install
+    For details see: https://duckdb.org/docs/extensions/overview
     """
 
     name: str
+    """The name of the extension to install"""
     config: dict[str, Any] | None = None
+    """Optional configuration settings to apply after installation"""
     force_install: bool = False
+    """Whether to force reinstall if already present"""
     repository: str | None = None
+    """Optional repository name to install from"""
     repository_url: str | None = None
+    """Optional repository URL to install from"""
     version: str | None = None
+    """Optional version of the extension to install"""
 
     @classmethod
     def from_dict(cls, name: str, config: dict[str, Any] | bool | None = None) -> ExtensionConfig:
@@ -65,7 +67,7 @@ class ExtensionConfig:
 
 
 @dataclass
-class DuckDBConfig(GenericDatabaseConfig):
+class DuckDBConfig(NoPoolConfig[DuckDBPyConnection], GenericDatabaseConfig):
     """Configuration for DuckDB database connections.
 
     This class provides configuration options for DuckDB database connections, wrapping all parameters
@@ -114,13 +116,13 @@ class DuckDBConfig(GenericDatabaseConfig):
             msg = "When configuring extensions in the 'config' dictionary, the value must be a dictionary or sequence of extension names"
             raise ImproperConfigurationError(msg)
         if not isinstance(_e, dict):
-            _e = {str(ext): {"force_install": False} for ext in _e}
+            _e = {str(ext): {"force_install": False} for ext in _e}  # pyright: ignore[reportUnknownVariableType,reportUnknownArgumentType]
 
-        if len(set(_e.keys()).intersection({ext.name for ext in self.extensions})) > 0:
+        if len(set(_e.keys()).intersection({ext.name for ext in self.extensions})) > 0:  # pyright: ignore[ reportUnknownArgumentType]
             msg = "Configuring the same extension in both 'extensions' and as a key in 'config['extensions']' is not allowed"
             raise ImproperConfigurationError(msg)
 
-        self.extensions.extend([ExtensionConfig.from_dict(name, ext_config) for name, ext_config in _e.items()])
+        self.extensions.extend([ExtensionConfig.from_dict(name, ext_config) for name, ext_config in _e.items()])  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
 
     def _configure_extensions(self, connection: DuckDBPyConnection) -> None:
         """Configure extensions for the connection.
@@ -174,10 +176,9 @@ class DuckDBConfig(GenericDatabaseConfig):
         Raises:
             ImproperConfigurationError: If the connection could not be established or extensions could not be configured.
         """
-        import duckdb
 
         try:
-            connection = duckdb.connect(**self.connection_config_dict)
+            connection = duckdb_connect(**self.connection_config_dict)
             self._configure_extensions(connection)
             return connection
         except Exception as e:

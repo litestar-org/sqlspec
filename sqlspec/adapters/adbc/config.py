@@ -2,30 +2,30 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
-from sqlspec.config import GenericDatabaseConfig
+from sqlspec.base import GenericDatabaseConfig, NoPoolConfig
 from sqlspec.typing import Empty, EmptyType
 
 if TYPE_CHECKING:
     from collections.abc import Generator
     from typing import Any
 
-    from adbc_driver_manager.dbapi import Connection, Cursor
+    from adbc_driver_manager.dbapi import Connection
 
 __all__ = ("AdbcDatabaseConfig",)
 
-ConnectionT = TypeVar("ConnectionT", bound="Connection")
-CursorT = TypeVar("CursorT", bound="Cursor")
-
 
 @dataclass
-class AdbcDatabaseConfig(GenericDatabaseConfig):
+class AdbcDatabaseConfig(NoPoolConfig["Connection"], GenericDatabaseConfig):
     """Configuration for ADBC connections.
 
     This class provides configuration options for ADBC database connections using the
     ADBC Driver Manager.([1](https://arrow.apache.org/adbc/current/python/api/adbc_driver_manager.html))
     """
+
+    __supports_connection_pooling = False
+    __is_async = False
 
     uri: str | EmptyType = Empty
     """Database URI"""

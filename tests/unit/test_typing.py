@@ -21,9 +21,9 @@ from sqlspec.typing import (
     is_dict,
     is_dict_with_field,
     is_dict_without_field,
-    is_msgspec_model,
-    is_msgspec_model_with_field,
-    is_msgspec_model_without_field,
+    is_msgspec_struct,
+    is_msgspec_struct_with_field,
+    is_msgspec_struct_without_field,
     is_pydantic_model,
     is_pydantic_model_with_field,
     is_pydantic_model_without_field,
@@ -118,20 +118,20 @@ class TestTypeChecking:
         assert is_pydantic_model_without_field(sample_pydantic, "nonexistent")
         assert not is_pydantic_model_without_field(sample_pydantic, "name")
 
-    def test_is_msgspec_model(self, sample_msgspec: SampleMsgspecModel) -> None:
+    def test_is_msgspec_struct(self, sample_msgspec: SampleMsgspecModel) -> None:
         """Test Msgspec model type checking."""
-        assert is_msgspec_model(sample_msgspec)
-        assert not is_msgspec_model({"name": "test"})
+        assert is_msgspec_struct(sample_msgspec)
+        assert not is_msgspec_struct({"name": "test"})
 
-    def test_is_msgspec_model_with_field(self, sample_msgspec: SampleMsgspecModel) -> None:
+    def test_is_msgspec_struct_with_field(self, sample_msgspec: SampleMsgspecModel) -> None:
         """Test Msgspec model field checking."""
-        assert is_msgspec_model_with_field(sample_msgspec, "name")
-        assert not is_msgspec_model_with_field(sample_msgspec, "nonexistent")
+        assert is_msgspec_struct_with_field(sample_msgspec, "name")
+        assert not is_msgspec_struct_with_field(sample_msgspec, "nonexistent")
 
-    def test_is_msgspec_model_without_field(self, sample_msgspec: SampleMsgspecModel) -> None:
+    def test_is_msgspec_struct_without_field(self, sample_msgspec: SampleMsgspecModel) -> None:
         """Test Msgspec model field absence checking."""
-        assert is_msgspec_model_without_field(sample_msgspec, "nonexistent")
-        assert not is_msgspec_model_without_field(sample_msgspec, "name")
+        assert is_msgspec_struct_without_field(sample_msgspec, "nonexistent")
+        assert not is_msgspec_struct_without_field(sample_msgspec, "name")
 
     def test_is_dict(self, sample_dict: dict[str, Any]) -> None:
         """Test dictionary type checking."""

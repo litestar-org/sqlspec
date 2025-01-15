@@ -13,7 +13,7 @@ try:
 
 except ImportError:
     try:
-        from orjson import dumps as _encode_json  # pyright: ignore[reportMissingImports]
+        from orjson import dumps as _encode_json  # pyright: ignore[reportMissingImports,reportUnknownVariableType]
         from orjson import loads as decode_json  # type: ignore[no-redef]
 
         def encode_json(data: Any) -> str:

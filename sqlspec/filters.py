@@ -25,12 +25,13 @@ __all__ = (
 )
 
 T = TypeVar("T")
+StatementT = TypeVar("StatementT", bound="str")
 
 
 class StatementFilter(Protocol):
     """Protocol for filters that can be appended to a statement."""
 
-    def append_to_statement(self, statement: str) -> str:
+    def append_to_statement(self, statement: StatementT) -> StatementT:
         """Append the filter to the statement."""
         return statement
 

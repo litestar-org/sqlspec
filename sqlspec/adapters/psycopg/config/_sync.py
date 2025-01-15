@@ -26,13 +26,16 @@ __all__ = (
 
 
 @dataclass
-class PsycoPgSyncPoolConfig(PsycoPgGenericPoolConfig[ConnectionPool, Connection]):
+class PsycoPgSyncPoolConfig(PsycoPgGenericPoolConfig[Connection, ConnectionPool]):
     """Sync Psycopg Pool Config"""
 
 
 @dataclass
-class PsycoPgSyncDatabaseConfig(PsycoPgGenericDatabaseConfig[ConnectionPool, Connection]):
+class PsycoPgSyncDatabaseConfig(PsycoPgGenericDatabaseConfig[Connection, ConnectionPool]):
     """Sync Psycopg database Configuration."""
+
+    __is_async__ = False
+    __supports_connection_pooling__ = True
 
     pool_config: PsycoPgSyncPoolConfig | None = None
     """Psycopg Pool configuration"""

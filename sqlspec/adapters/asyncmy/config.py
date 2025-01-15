@@ -4,6 +4,10 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar
 
+from asyncmy.connection import Connection
+from asyncmy.pool import Pool
+
+from sqlspec.base import DatabaseConfigProtocol, GenericDatabaseConfig, GenericPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
@@ -11,9 +15,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from typing import Any
 
-    from asyncmy.connection import Connection
     from asyncmy.cursors import Cursor, DictCursor
-    from asyncmy.pool import Pool
 
 __all__ = (
     "AsyncMyConfig",
@@ -25,7 +27,7 @@ T = TypeVar("T")
 
 
 @dataclass
-class AsyncmyPoolConfig:
+class AsyncmyPoolConfig(GenericPoolConfig):
     """Configuration for Asyncmy's connection pool.
 
     This class provides configuration options for Asyncmy database connection pools.
@@ -104,8 +106,11 @@ class AsyncmyPoolConfig:
 
 
 @dataclass
-class AsyncMyConfig:
+class AsyncMyConfig(DatabaseConfigProtocol[Connection, Pool], GenericDatabaseConfig):
     """Asyncmy Configuration."""
+
+    __is_async__ = True
+    __supports_connection_pooling__ = True
 
     pool_config: AsyncmyPoolConfig | None = None
     """Asyncmy Pool configuration"""
