@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Generator
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
-from dataclasses import dataclass, field
-from typing import Any, Generic, TypeVar, Union
+from dataclasses import dataclass
+from typing import Any, ClassVar, Generic, TypeVar, Union
 
 __all__ = (
     "DatabaseConfigProtocol",
@@ -18,8 +18,8 @@ PoolT = TypeVar("PoolT")
 class DatabaseConfigProtocol(Generic[ConnectionT, PoolT], ABC):
     """Protocol defining the interface for database configurations."""
 
-    __is_async__: bool = field(default=False, init=False)
-    __supports_connection_pooling__: bool = field(default=False, init=False)
+    __is_async__: ClassVar[bool] = False
+    __supports_connection_pooling__: ClassVar[bool] = False
 
     @abstractmethod
     def create_connection(self) -> Union[ConnectionT, Awaitable[ConnectionT]]:

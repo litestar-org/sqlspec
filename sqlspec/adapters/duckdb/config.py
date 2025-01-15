@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from duckdb import DuckDBPyConnection
-from duckdb import connect as duckdb_connect
 
 from sqlspec.base import GenericDatabaseConfig, NoPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
@@ -176,9 +175,10 @@ class DuckDBConfig(NoPoolConfig[DuckDBPyConnection], GenericDatabaseConfig):
         Raises:
             ImproperConfigurationError: If the connection could not be established or extensions could not be configured.
         """
+        import duckdb
 
         try:
-            connection = duckdb_connect(**self.connection_config_dict)
+            connection = duckdb.connect(**self.connection_config_dict)  # pyright: ignore[reportUnknownMemberType]
             self._configure_extensions(connection)
             return connection
         except Exception as e:

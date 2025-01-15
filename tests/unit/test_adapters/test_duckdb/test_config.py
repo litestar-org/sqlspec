@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from _pytest.fixtures import FixtureRequest
 
 from sqlspec.adapters.duckdb.config import DuckDBConfig, ExtensionConfig
 from sqlspec.exceptions import ImproperConfigurationError
@@ -217,6 +218,7 @@ class TestDuckDBConfig:
     )
     def test_configure_extensions(
         self,
+        request: FixtureRequest,
         mock_duckdb_connection: MagicMock,
         extension_config: ExtensionConfig,
         expected_calls: list[tuple[str, dict[str, Any]]],
@@ -228,7 +230,7 @@ class TestDuckDBConfig:
         actual_calls = []
         for method_name, kwargs in expected_calls:
             method = getattr(connection, method_name)
-            assert method.called
+            assert method.called, f"Method {method_name} was not called"
             if method_name == "execute":
                 actual_calls.append((method_name, {"query": method.call_args.args[0]}))
             else:
