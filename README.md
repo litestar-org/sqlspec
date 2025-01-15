@@ -29,7 +29,7 @@ SQLSpec draws inspiration from `aiosql`, aiming to provide a more flexible and e
 
 The primary goal at this stage is to establish a **native connectivity interface** that works seamlessly across all supported database environments. This means you can connect to any of the supported databases using a consistent API, regardless of the underlying driver or dialect.
 
-#### Adapters: Completed, In Progress, and Planned
+### Adapters: Completed, In Progress, and Planned
 
 This list is not final. If you have a driver you'd like to see added, please open an issue or submit a PR!
 
@@ -52,8 +52,6 @@ This list is not final. If you have a driver you'd like to see added, please ope
 | [`sqlserver`](https://docs.microsoft.com/en-us/sql/connect/python/pyodbc/python-sql-driver-for-pyodbc?view=sql-server-ver16) | SQL Server | Sync    | 🗓️ Planned |
 | [`mysql`](https://dev.mysql.com/doc/connector-python/en/connector-python-api-mysql-connector-python.html)     | MySQL      | Sync    | 🗓️ Planned |
 | [`snowflake`](https://docs.snowflake.com)
-
-### Proposed Project Structure
 
 ### Proposed Project Structure
 
