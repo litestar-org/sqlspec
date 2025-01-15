@@ -23,7 +23,7 @@ SQLSpec is a work in progress. While it offers a solid foundation for modern SQL
 
 ### Inspiration and Future Direction
 
-SQLSpec draws inspiration from `aiosql`, aiming to provide a more flexible and extensible query interface. Many of the enhancements developed within SQLSpec, such as support for `spanner` and `bigquery` drivers, are intended to be contributed back to `aiosql` where appropriate.
+SQLSpec originally drew inspiration from features found in the `aiosql` library.  This is a great library for working with and executed SQL stored in files.  It's unclear how much of an overlap there will be between the two libraries, but it's possible that some features will be contributed back to `aiosql` where appropriate.
 
 ### Current Focus: Universal Connectivity
 
