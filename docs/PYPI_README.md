@@ -10,12 +10,13 @@ SQLSpec is an experimental Python library designed to streamline and modernize y
 
 - **Consistent Database Session Interface**: Provides a consistent connectivity interface for interacting with one or more database systems, including SQLite, Postgres, DuckDB, MySQL, Oracle, SQL Server, Spanner, BigQuery, and more.
 - **Emphasis on RAW SQL and Minimal Abstractions and Performance**: SQLSpec is a library for working with SQL in Python.  It's goals are to offer minimal abstractions between the user and the database.  It does not aim to be an ORM library.
-- **Type-Safe Queries**: Quickly map SQL queries to typed objects using libraries such as Pydantic, Msqspec, Attrs, etc.
+- **Type-Safe Queries**: Quickly map SQL queries to typed objects using libraries such as Pydantic, Msgspec, Attrs, etc.
 - **Extensible Design**: Easily add support for new database dialects or extend existing functionality to meet your specific needs.  Easily add support for async and sync database drivers.
 - **Minimal Dependencies**: SQLSpec is designed to be lightweight and can run on it's own or with other libraries such as `litestar`, `fastapi`, `flask` and more.  (Contributions welcome!)
 - **Dynamic Query Manipulation**: Easily apply filters to pre-defined queries with a fluent, Pythonic API. Safely manipulate queries without the risk of SQL injection.
 - **Dialect Validation and Conversion**: Use `sqlglot` to validate your SQL against specific dialects and seamlessly convert between them.
 - **Support for Async and Sync Database Drivers**: SQLSpec supports both async and sync database drivers, allowing you to choose the style that best fits your application.
+- **Basic Migration Management**: A mechanism to generate empty migration files where you can add your own SQL and intelligently track which migrations have been applied.
 
 ## What SQLSpec Is Not (Yet)
 
@@ -47,11 +48,11 @@ This list is not final. If you have a driver you'd like to see added, please ope
 | [`oracledb`](https://oracle.github.io/python-oracledb/)                                                      | Oracle     | Async   | ✅         |
 | [`oracledb`](https://oracle.github.io/python-oracledb/)                                                      | Oracle     | Sync    | ✅         |
 | [`duckdb`](https://duckdb.org/)                                                                               | DuckDB     | Sync    | ✅         |
-| [`bigquery`](https://googleapis.dev/python/bigquery/latest/index.html)                                        | BigQuery   | Sync    | 🗓️ Planned |
-| [`spanner`](https://googleapis.dev/python/spanner/latest/index.html)                                         | Spanner    | Sync    | 🗓️ Planned |
-| [`sqlserver`](https://docs.microsoft.com/en-us/sql/connect/python/pyodbc/python-sql-driver-for-pyodbc?view=sql-server-ver16) | SQL Server | Sync    | 🗓️ Planned |
-| [`mysql`](https://dev.mysql.com/doc/connector-python/en/connector-python-api-mysql-connector-python.html)     | MySQL      | Sync    | 🗓️ Planned |
-| [`snowflake`](https://docs.snowflake.com)                                                                    | MySQL      | Sync    | 🗓️ Planned |
+| [`bigquery`](https://googleapis.dev/python/bigquery/latest/index.html)                                        | BigQuery   | Sync    | 🗓️ |
+| [`spanner`](https://googleapis.dev/python/spanner/latest/index.html)                                         | Spanner    | Sync    | 🗓️  |
+| [`sqlserver`](https://docs.microsoft.com/en-us/sql/connect/python/pyodbc/python-sql-driver-for-pyodbc?view=sql-server-ver16) | SQL Server | Sync    | 🗓️  |
+| [`mysql`](https://dev.mysql.com/doc/connector-python/en/connector-python-api-mysql-connector-python.html)     | MySQL      | Sync    | 🗓️  |
+| [`snowflake`](https://docs.snowflake.com)                                                                    | MySQL      | Sync    | 🗓️  |
 
 ## Proposed Project Structure
 
