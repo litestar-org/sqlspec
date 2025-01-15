@@ -1,6 +1,6 @@
 [project]
 authors = [{ name = "Cody Fincher", email = "cody@litestar.dev" }]
-dependencies = ["typing-extensions", "sqlglot"]
+dependencies = ["typing-extensions", "sqlglot", "eval_type_backport; python_version < \"3.10\""]
 description = "SQL Experiments in Python"
 maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"

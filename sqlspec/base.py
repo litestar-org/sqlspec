@@ -21,13 +21,6 @@ class DatabaseConfigProtocol(Generic[ConnectionT, PoolT], ABC):
     __is_async__: bool = field(default=False, init=False)
     __supports_connection_pooling__: bool = field(default=False, init=False)
 
-    bind_key: str
-
-    def __post_init__(self) -> None:
-        """Post-initialization validation and processing."""
-        if not self.bind_key:
-            self.bind_key = "default"
-
     @abstractmethod
     def create_connection(self) -> Union[ConnectionT, Awaitable[ConnectionT]]:
         """Create and return a new database connection."""
@@ -92,6 +85,3 @@ class GenericPoolConfig:
 @dataclass
 class GenericDatabaseConfig:
     """Generic Database Configuration."""
-
-    bind_key: str
-    """The key to bind the database configuration to."""
