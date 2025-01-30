@@ -28,14 +28,9 @@ def mock_aiosqlite_connection() -> Generator[MagicMock, None, None]:
 class TestAiosqliteConfig:
     """Test AiosqliteConfig class."""
 
-    def test_default_values(self) -> None:
-        """Test default values for AiosqliteConfig."""
-        with pytest.raises(TypeError, match="missing 1 required positional argument: 'database'"):
-            AiosqliteConfig()
-
     def test_minimal_config(self) -> None:
         """Test minimal configuration with only required values."""
-        config = AiosqliteConfig(database=":memory:")
+        config = AiosqliteConfig()
         assert config.database == ":memory:"
         assert config.timeout is Empty
         assert config.detect_types is Empty

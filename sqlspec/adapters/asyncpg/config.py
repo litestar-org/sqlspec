@@ -16,7 +16,7 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
 if TYPE_CHECKING:
-    from asyncio import AbstractEventLoop
+    from asyncio import AbstractEventLoop  # pyright: ignore[reportAttributeAccessIssue]
     from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 
 
@@ -28,7 +28,7 @@ __all__ = (
 
 T = TypeVar("T")
 
-PgConnection: TypeAlias = Union[Connection[Any], PoolConnectionProxy[Any]]
+PgConnection: TypeAlias = Union[Connection, PoolConnectionProxy]
 
 
 @dataclass
@@ -44,7 +44,7 @@ class AsyncPgPoolConfig(GenericPoolConfig):
     connect_kwargs: dict[Any, Any] | None | EmptyType = Empty
     """A dictionary of arguments which will be passed directly to the ``connect()`` method as keyword arguments.
     """
-    connection_class: type[Connection[Any]] | None | EmptyType = Empty
+    connection_class: type[Connection] | None | EmptyType = Empty
     """The class to use for connections. Must be a subclass of Connection
     """
     record_class: type[Record] | EmptyType = Empty
@@ -62,9 +62,9 @@ class AsyncPgPoolConfig(GenericPoolConfig):
     max_inactive_connection_lifetime: float | EmptyType = Empty
     """Number of seconds after which inactive connections in the pool will be closed. Pass 0 to disable this mechanism."""
 
-    setup: Coroutine[None, type[Connection[Any]], Any] | EmptyType = Empty
+    setup: Coroutine[None, type[Connection], Any] | EmptyType = Empty
     """A coroutine to prepare a connection right before it is returned from Pool.acquire(). An example use case would be to automatically set up notifications listeners for all connections of a pool."""
-    init: Coroutine[None, type[Connection[Any]], Any] | EmptyType = Empty
+    init: Coroutine[None, type[Connection], Any] | EmptyType = Empty
     """A coroutine to prepare a connection right before it is returned from Pool.acquire(). An example use case would be to automatically set up notifications listeners for all connections of a pool."""
 
     loop: AbstractEventLoop | EmptyType = Empty
@@ -72,7 +72,7 @@ class AsyncPgPoolConfig(GenericPoolConfig):
 
 
 @dataclass
-class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool[Any]]):
+class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):
     """Asyncpg Configuration."""
 
     pool_config: AsyncPgPoolConfig | None = None
@@ -84,7 +84,7 @@ class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool[Any]]):
     json_serializer: Callable[[Any], str] = encode_json
     """For dialects that support the JSON datatype, this is a Python callable that will render a given object as JSON.
     By default, SQLSpec's :attr:`encode_json() <sqlspec._serialization.encode_json>` is used."""
-    pool_instance: Pool[Any] | None = None
+    pool_instance: Pool | None = None
     """Optional pool to use.
 
     If set, the plugin will use the provided pool rather than instantiate one.
@@ -103,7 +103,7 @@ class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool[Any]]):
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 
-    async def create_pool(self) -> Pool[Any]:
+    async def create_pool(self) -> Pool:
         """Return a pool. If none exists yet, create one.
 
         Returns:
@@ -125,7 +125,7 @@ class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool[Any]]):
             )
         return self.pool_instance
 
-    def provide_pool(self, *args: Any, **kwargs: Any) -> Awaitable[Pool[Any]]:
+    def provide_pool(self, *args: Any, **kwargs: Any) -> Awaitable[Pool]:
         """Create a pool instance.
 
         Returns:
@@ -134,7 +134,7 @@ class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool[Any]]):
         return self.create_pool()
 
     @asynccontextmanager
-    async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[PoolConnectionProxy[Any], None]:
+    async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[PoolConnectionProxy, None]:
         """Create a connection instance.
 
         Returns:

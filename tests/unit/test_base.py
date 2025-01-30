@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator, Generator
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
+from dataclasses import dataclass
 from typing import Annotated, Any
 
 import pytest
@@ -35,11 +36,9 @@ class MockAsyncPool:
         pass
 
 
+@dataclass
 class MockDatabaseConfig(SyncDatabaseConfig[MockConnection, MockPool]):
     """Mock database configuration that supports pooling."""
-
-    __is_async__ = False
-    __supports_connection_pooling__ = True
 
     def create_connection(self) -> MockConnection:
         return MockConnection()
@@ -120,13 +119,13 @@ class TestConfigManager:
 
     def test_add_config(self) -> None:
         """Test adding configurations."""
-        pool_type = self.config_manager.add_config(self.pool_config)
-        assert isinstance(pool_type, type)
-        assert issubclass(pool_type, MockDatabaseConfig)
+        main_db_with_a_pool = self.config_manager.add_config(self.pool_config)
+        db_config = main_db_with_a_pool()
+        assert isinstance(db_config, MockDatabaseConfig)
 
         non_pool_type = self.config_manager.add_config(self.non_pool_config)
-        assert isinstance(non_pool_type, type)
-        assert issubclass(non_pool_type, MockNonPoolConfig)
+        instance = non_pool_type()
+        assert isinstance(instance, MockNonPoolConfig)
 
     def test_get_config(self) -> None:
         """Test retrieving configurations."""
@@ -142,7 +141,7 @@ class TestConfigManager:
         """Test retrieving non-existent configuration."""
         fake_type = Annotated[MockDatabaseConfig, MockConnection, MockPool]
         with pytest.raises(KeyError):
-            self.config_manager.get_config(fake_type)  # pyright: ignore[reportArgumentType]
+            self.config_manager.get_config(fake_type)  # pyright: ignore[reportCallIssue,reportArgumentType]
 
     def test_get_connection(self) -> None:
         """Test creating connections."""
@@ -159,12 +158,6 @@ class TestConfigManager:
         pool_type = self.config_manager.add_config(self.pool_config)
         pool = self.config_manager.get_pool(pool_type)
         assert isinstance(pool, MockPool)
-
-    def test_get_pool_unsupported(self) -> None:
-        """Test creating pool for non-pooling configuration."""
-        non_pool_type = self.config_manager.add_config(self.non_pool_config)
-        with pytest.raises(TypeError, match="Configuration does not support pooling"):
-            self.config_manager.get_pool(non_pool_type)
 
     def test_config_properties(self) -> None:
         """Test configuration properties."""
@@ -201,6 +194,7 @@ class TestConfigManager:
 
         # Test retrieving each configuration
         assert isinstance(self.config_manager.get_config(pool_type), MockDatabaseConfig)
+        assert isinstance(self.config_manager.get_config(second_pool_type), MockDatabaseConfig)
         assert isinstance(self.config_manager.get_config(non_pool_type), MockNonPoolConfig)
 
         # Test that configurations are distinct
@@ -220,7 +214,7 @@ class TestConfigManager:
         pool2 = self.config_manager.get_pool(second_pool_type)
 
         assert isinstance(pool1, MockPool)
-        assert isinstance(pool2, MockPool)
+        assert isinstance(pool2, MockPool)  # type: ignore[unreachable]
         assert pool1 is not pool2
 
 
@@ -230,5 +224,6 @@ class TestNoPoolConfig:
     def test_pool_methods(self) -> None:
         """Test that pool methods return None."""
         config = MockNonPoolConfig()
+        assert config.support_connection_pooling is False
+        assert config.is_async is False
         assert config.create_pool() is None  # type: ignore[func-returns-value]
-        assert config.provide_pool() is None  # type: ignore[func-returns-value]

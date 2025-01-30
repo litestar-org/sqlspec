@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, metadata, version
 
-__all__ = ["__project__", "__version__"]
+__all__ = ("__project__", "__version__")
 
 try:
     __version__ = version("sqlspec")
