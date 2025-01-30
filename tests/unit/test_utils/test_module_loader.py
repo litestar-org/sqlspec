@@ -3,13 +3,13 @@ from pathlib import Path
 import pytest
 from _pytest.monkeypatch import MonkeyPatch
 
-from sqlspec.base import GenericDatabaseConfig
+from sqlspec.base import SyncDatabaseConfig
 from sqlspec.utils.module_loader import import_string, module_to_os_path
 
 
 def test_import_string() -> None:
-    cls = import_string("sqlspec.base.GenericDatabaseConfig")
-    assert type(cls) is type(GenericDatabaseConfig)
+    cls = import_string("sqlspec.base.SyncDatabaseConfig")
+    assert type(cls) is type(SyncDatabaseConfig)
 
     with pytest.raises(ImportError):
         _ = import_string("GenericAlembicConfigNew")

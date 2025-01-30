@@ -7,10 +7,8 @@ from typing import TYPE_CHECKING
 from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool
 
-from sqlspec.adapters.psycopg.config._common import (
-    PsycoPgGenericDatabaseConfig,
-    PsycoPgGenericPoolConfig,
-)
+from sqlspec.adapters.psycopg.config._common import PsycoPgGenericPoolConfig
+from sqlspec.base import AsyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import dataclass_to_dict
 
@@ -31,11 +29,15 @@ class PsycoPgAsyncPoolConfig(PsycoPgGenericPoolConfig[AsyncConnection, AsyncConn
 
 
 @dataclass
-class PsycoPgAsyncDatabaseConfig(PsycoPgGenericDatabaseConfig[AsyncConnection, AsyncConnectionPool]):
-    """Async Psycopg database Configuration."""
+class PsycoPgAsyncDatabaseConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPool]):
+    """Async Psycopg database Configuration.
 
-    __is_async__ = True
-    __supports_connection_pooling__ = True
+    This class provides the base configuration for Psycopg database connections, extending
+    the generic database configuration with Psycopg-specific settings.([1](https://www.psycopg.org/psycopg3/docs/api/connections.html))
+
+    The configuration supports all standard Psycopg connection parameters and can be used
+    with both synchronous and asynchronous connections.([2](https://www.psycopg.org/psycopg3/docs/api/connections.html))
+    """
 
     pool_config: PsycoPgAsyncPoolConfig | None = None
     """Psycopg Pool configuration"""

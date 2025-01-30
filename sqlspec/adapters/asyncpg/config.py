@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeVar, Union
+from typing import TYPE_CHECKING, Any, TypeVar, Union
 
 from asyncpg import Record
 from asyncpg import create_pool as asyncpg_create_pool
@@ -11,14 +11,13 @@ from asyncpg.pool import Pool, PoolConnectionProxy
 from typing_extensions import TypeAlias
 
 from sqlspec._serialization import decode_json, encode_json
-from sqlspec.base import DatabaseConfigProtocol, GenericDatabaseConfig, GenericPoolConfig
+from sqlspec.base import AsyncDatabaseConfig, GenericPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
 if TYPE_CHECKING:
-    from asyncio import AbstractEventLoop
+    from asyncio import AbstractEventLoop  # pyright: ignore[reportAttributeAccessIssue]
     from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
-    from typing import Any
 
 
 __all__ = (
@@ -73,11 +72,8 @@ class AsyncPgPoolConfig(GenericPoolConfig):
 
 
 @dataclass
-class AsyncPgConfig(DatabaseConfigProtocol[PgConnection, Pool], GenericDatabaseConfig):
+class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):
     """Asyncpg Configuration."""
-
-    __is_async__ = True
-    __supports_connection_pooling__ = True
 
     pool_config: AsyncPgPoolConfig | None = None
     """Asyncpg Pool configuration"""

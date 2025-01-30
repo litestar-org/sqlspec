@@ -154,7 +154,7 @@ class TestDuckDBConfig:
 
     @pytest.mark.parametrize(
         ("extension_config", "expected_calls"),
-        [
+        [  # pyright: ignore[reportUnknownArgumentType]
             (
                 ExtensionConfig(name="test", force_install=True),
                 [
@@ -228,13 +228,13 @@ class TestDuckDBConfig:
         connection = config.create_connection()
 
         actual_calls = []
-        for method_name, kwargs in expected_calls:
+        for method_name, _kwargs in expected_calls:
             method = getattr(connection, method_name)
             assert method.called, f"Method {method_name} was not called"
             if method_name == "execute":
-                actual_calls.append((method_name, {"query": method.call_args.args[0]}))
+                actual_calls.append((method_name, {"query": method.call_args.args[0]}))  # pyright: ignore[reportUnknownMemberType]
             else:
-                actual_calls.append((method_name, method.call_args.kwargs))
+                actual_calls.append((method_name, method.call_args.kwargs))  # pyright: ignore[reportUnknownMemberType]
 
         assert actual_calls == expected_calls
 

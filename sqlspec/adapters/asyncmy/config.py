@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, TypeVar
 from asyncmy.connection import Connection
 from asyncmy.pool import Pool
 
-from sqlspec.base import DatabaseConfigProtocol, GenericDatabaseConfig, GenericPoolConfig
+from sqlspec.base import AsyncDatabaseConfig, GenericPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
@@ -106,7 +106,7 @@ class AsyncmyPoolConfig(GenericPoolConfig):
 
 
 @dataclass
-class AsyncMyConfig(DatabaseConfigProtocol[Connection, Pool], GenericDatabaseConfig):
+class AsyncMyConfig(AsyncDatabaseConfig[Connection, Pool]):
     """Asyncmy Configuration."""
 
     __is_async__ = True

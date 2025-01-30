@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from duckdb import DuckDBPyConnection
 
-from sqlspec.base import GenericDatabaseConfig, NoPoolConfig
+from sqlspec.base import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
@@ -66,7 +66,7 @@ class ExtensionConfig:
 
 
 @dataclass
-class DuckDBConfig(NoPoolConfig[DuckDBPyConnection], GenericDatabaseConfig):
+class DuckDBConfig(NoPoolSyncConfig[DuckDBPyConnection]):
     """Configuration for DuckDB database connections.
 
     This class provides configuration options for DuckDB database connections, wrapping all parameters
