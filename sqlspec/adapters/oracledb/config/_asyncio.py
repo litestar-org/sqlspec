@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from oracledb import create_pool_async as oracledb_create_pool
+from oracledb import create_pool_async as oracledb_create_pool  # pyright: ignore[reportUnknownVariableType]
 from oracledb.connection import AsyncConnection
 from oracledb.pool import AsyncConnectionPool
 
@@ -94,5 +94,5 @@ class OracleAsyncDatabaseConfig(OracleGenericDatabaseConfig[AsyncConnection, Asy
             A connection instance.
         """
         db_pool = await self.provide_pool(*args, **kwargs)
-        async with db_pool.acquire() as connection:
+        async with db_pool.acquire() as connection:  # pyright: ignore[reportUnknownMemberType]
             yield connection

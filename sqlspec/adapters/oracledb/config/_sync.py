@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from oracledb import create_pool as oracledb_create_pool
+from oracledb import create_pool as oracledb_create_pool  # pyright: ignore[reportUnknownVariableType]
 from oracledb.connection import Connection
 from oracledb.pool import ConnectionPool
 
