@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from sqlspec.base import GenericDatabaseConfig, NoPoolConfig
+from sqlspec.base import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
@@ -16,7 +16,7 @@ __all__ = ("SqliteConfig",)
 
 
 @dataclass
-class SqliteConfig(NoPoolConfig["Connection"], GenericDatabaseConfig):
+class SqliteConfig(NoPoolSyncConfig["Connection"]):
     """Configuration for SQLite database connections.
 
     This class provides configuration options for SQLite database connections, wrapping all parameters

@@ -9,9 +9,9 @@ from oracledb.connection import Connection
 from oracledb.pool import ConnectionPool
 
 from sqlspec.adapters.oracledb.config._common import (
-    OracleGenericDatabaseConfig,
     OracleGenericPoolConfig,
 )
+from sqlspec.base import SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import dataclass_to_dict
 
@@ -31,11 +31,18 @@ class OracleSyncPoolConfig(OracleGenericPoolConfig[Connection, ConnectionPool]):
 
 
 @dataclass
-class OracleSyncDatabaseConfig(OracleGenericDatabaseConfig[Connection, ConnectionPool]):
-    """Oracle database Configuration."""
+class OracleSyncDatabaseConfig(SyncDatabaseConfig[Connection, ConnectionPool]):
+    """Oracle Sync database Configuration.
 
-    __is_async__ = False
-    __supports_connection_pooling__ = True
+    This class provides the base configuration for Oracle database connections, extending
+    the generic database configuration with Oracle-specific settings. It supports both
+    thin and thick modes of the python-oracledb driver.([1](https://python-oracledb.readthedocs.io/en/latest/index.html))
+
+    The configuration supports all standard Oracle connection parameters and can be used
+    with both synchronous and asynchronous connections. It includes support for features
+    like Oracle Wallet, external authentication, connection pooling, and advanced security
+    options.([2](https://python-oracledb.readthedocs.io/en/latest/user_guide/tuning.html))
+    """
 
     pool_config: OracleSyncPoolConfig | None = None
     """Oracle Pool configuration"""

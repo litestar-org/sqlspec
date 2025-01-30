@@ -5,13 +5,18 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, Generic, TypeVar, Union, overload
 
 __all__ = (
+    "AsyncDatabaseConfig",
     "DatabaseConfigProtocol",
     "GenericPoolConfig",
-    "NoPoolConfig",
+    "NoPoolAsyncConfig",
+    "NoPoolSyncConfig",
+    "SyncDatabaseConfig",
 )
 
 ConnectionT = TypeVar("ConnectionT")
 PoolT = TypeVar("PoolT")
+AsyncConfigT = TypeVar("AsyncConfigT", bound="Union[AsyncDatabaseConfig[Any, Any], NoPoolAsyncConfig[Any]]")
+SyncConfigT = TypeVar("SyncConfigT", bound="Union[SyncDatabaseConfig[Any, Any], NoPoolSyncConfig[Any]]")
 
 
 @dataclass
@@ -67,9 +72,25 @@ class DatabaseConfigProtocol(Generic[ConnectionT, PoolT], ABC):
         return self.__supports_connection_pooling__
 
 
-class NoPoolConfig(DatabaseConfigProtocol[ConnectionT, None]):
-    """Base class for database configurations that do not implement a pool."""
+class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None]):
+    """Base class for a sync database configurations that do not implement a pool."""
 
+    __is_async__ = False
+    __supports_connection_pooling__ = False
+
+    def create_pool(self) -> None:
+        """This database backend has not implemented the pooling configurations."""
+        return
+
+    def provide_pool(self, *args: Any, **kwargs: Any) -> None:
+        """This database backend has not implemented the pooling configurations."""
+        return
+
+
+class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None]):
+    """Base class for an async database configurations that do not implement a pool."""
+
+    __is_async__ = True
     __supports_connection_pooling__ = False
 
     def create_pool(self) -> None:
@@ -88,63 +109,38 @@ class ConfigManager:
         self._configs: dict[type, DatabaseConfigProtocol[Any, Any]] = {}
 
     @overload
-    def add_config(
-        self, config: DatabaseConfigProtocol[ConnectionT, PoolT]
-    ) -> type[DatabaseConfigProtocol[ConnectionT, PoolT]]: ...
+    def add_config(self, config: SyncConfigT) -> type[SyncConfigT]: ...
 
     @overload
-    def add_config(self, config: DatabaseConfigProtocol[Any, Any]) -> type: ...
+    def add_config(self, config: AsyncConfigT) -> type[AsyncConfigT]: ...
 
-    def add_config(self, config: DatabaseConfigProtocol[Any, Any]) -> type:
+    def add_config(self, config: DatabaseConfigProtocol[ConnectionT, PoolT]) -> type:
         """Add a new configuration to the manager."""
-        annotated_type = type(config)
-        self._configs[annotated_type] = config
-        return annotated_type
+        config_type = type(config)
+        self._configs[config_type] = config
+        return config_type
 
-    @overload
     def get_config(
-        self,
-        annotated_type: type[DatabaseConfigProtocol[ConnectionT, PoolT]],
-    ) -> DatabaseConfigProtocol[ConnectionT, PoolT]: ...
-
-    @overload
-    def get_config(self, annotated_type: type) -> DatabaseConfigProtocol[Any, Any]: ...
-
-    def get_config(self, annotated_type: type) -> DatabaseConfigProtocol[Any, Any]:
-        """Retrieve a configuration by its annotated type."""
-        config = self._configs.get(annotated_type)
+        self, name: type[DatabaseConfigProtocol[ConnectionT, PoolT]]
+    ) -> DatabaseConfigProtocol[ConnectionT, PoolT]:
+        """Retrieve a configuration by its type."""
+        config = self._configs.get(name)
         if not config:
-            raise KeyError(f"No configuration found for {annotated_type}")
+            raise KeyError(f"No configuration found for {name}")
         return config
 
-    @overload
     def get_connection(
-        self,
-        annotated_type: type[DatabaseConfigProtocol[ConnectionT, PoolT]],
-    ) -> ConnectionT: ...
-
-    @overload
-    def get_connection(self, annotated_type: type) -> Any: ...
-
-    def get_connection(self, annotated_type: type) -> Any:
+        self, name: type[DatabaseConfigProtocol[ConnectionT, PoolT]]
+    ) -> Union[ConnectionT, Awaitable[ConnectionT]]:
         """Create and return a connection from the specified configuration."""
-        config = self.get_config(annotated_type)
+        config = self.get_config(name)
         return config.create_connection()
 
-    @overload
-    def get_pool(
-        self,
-        annotated_type: type[DatabaseConfigProtocol[ConnectionT, PoolT]],
-    ) -> PoolT: ...
-
-    @overload
-    def get_pool(self, annotated_type: type) -> Any: ...
-
-    def get_pool(self, annotated_type: type) -> Any:
+    def get_pool(self, name: type[DatabaseConfigProtocol[ConnectionT, PoolT]]) -> Union[PoolT, Awaitable[PoolT]]:
         """Create and return a connection pool from the specified configuration."""
-        config = self.get_config(annotated_type)
+        config = self.get_config(name)
         if not config.support_connection_pooling:
-            raise TypeError(f"Configuration does not support pooling: {annotated_type}")
+            raise TypeError(f"Configuration does not support pooling: {name}")
         return config.create_pool()
 
 
@@ -154,5 +150,16 @@ class GenericPoolConfig:
 
 
 @dataclass
-class GenericDatabaseConfig:
-    """Generic Database Configuration."""
+class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT]):
+    """Generic Sync Database Configuration."""
+
+    __is_async__ = False
+    __supports_connection_pooling__ = True
+
+
+@dataclass
+class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT]):
+    """Generic Async Database Configuration."""
+
+    __is_async__ = True
+    __supports_connection_pooling__ = True

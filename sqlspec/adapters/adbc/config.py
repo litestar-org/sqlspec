@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from sqlspec.base import GenericDatabaseConfig, NoPoolConfig
+from sqlspec.base import NoPoolSyncConfig
 from sqlspec.typing import Empty, EmptyType
 
 if TYPE_CHECKING:
@@ -17,7 +17,7 @@ __all__ = ("AdbcDatabaseConfig",)
 
 
 @dataclass
-class AdbcDatabaseConfig(NoPoolConfig["Connection"], GenericDatabaseConfig):
+class AdbcDatabaseConfig(NoPoolSyncConfig["Connection"]):
     """Configuration for ADBC connections.
 
     This class provides configuration options for ADBC database connections using the

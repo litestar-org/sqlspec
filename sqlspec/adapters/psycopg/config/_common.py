@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generic, TypeVar
 
-from sqlspec.base import DatabaseConfigProtocol, GenericDatabaseConfig, GenericPoolConfig
+from sqlspec.base import GenericPoolConfig
 from sqlspec.typing import Empty
 
 if TYPE_CHECKING:
@@ -16,10 +16,7 @@ if TYPE_CHECKING:
     from sqlspec.typing import EmptyType
 
 
-__all__ = (
-    "PsycoPgGenericDatabaseConfig",
-    "PsycoPgGenericPoolConfig",
-)
+__all__ = ("PsycoPgGenericPoolConfig",)
 
 
 ConnectionT = TypeVar("ConnectionT", bound="Connection | AsyncConnection")
@@ -59,15 +56,3 @@ class PsycoPgGenericPoolConfig(Generic[ConnectionT, PoolT], GenericPoolConfig):
     """Number of background workers"""
     configure: Callable[[ConnectionT], None] | EmptyType = Empty
     """Callback to configure new connections"""
-
-
-@dataclass
-class PsycoPgGenericDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT], GenericDatabaseConfig):
-    """Psycopg database Configuration.
-
-    This class provides the base configuration for Psycopg database connections, extending
-    the generic database configuration with Psycopg-specific settings.([1](https://www.psycopg.org/psycopg3/docs/api/connections.html))
-
-    The configuration supports all standard Psycopg connection parameters and can be used
-    with both synchronous and asynchronous connections.([2](https://www.psycopg.org/psycopg3/docs/api/connections.html))
-    """

@@ -52,7 +52,7 @@ This list is not final. If you have a driver you'd like to see added, please ope
 | [`spanner`](https://googleapis.dev/python/spanner/latest/index.html)                                         | Spanner    | Sync    | 🗓️  |
 | [`sqlserver`](https://docs.microsoft.com/en-us/sql/connect/python/pyodbc/python-sql-driver-for-pyodbc?view=sql-server-ver16) | SQL Server | Sync    | 🗓️  |
 | [`mysql`](https://dev.mysql.com/doc/connector-python/en/connector-python-api-mysql-connector-python.html)     | MySQL      | Sync    | 🗓️  |
-| [`snowflake`](https://docs.snowflake.com)                                                                    | MySQL      | Sync    | 🗓️  |
+| [`snowflake`](https://docs.snowflake.com)                                                                    | Snowflake  | Sync    | 🗓️  |
 
 ## Proposed Project Structure
 

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 
 from oracledb import ConnectionPool
 
-from sqlspec.base import DatabaseConfigProtocol, GenericDatabaseConfig, GenericPoolConfig
+from sqlspec.base import GenericPoolConfig
 from sqlspec.typing import Empty
 
 if TYPE_CHECKING:
@@ -19,10 +19,7 @@ if TYPE_CHECKING:
 
     from sqlspec.typing import EmptyType
 
-__all__ = (
-    "OracleGenericDatabaseConfig",
-    "OracleGenericPoolConfig",
-)
+__all__ = ("OracleGenericPoolConfig",)
 
 
 T = TypeVar("T")
@@ -134,18 +131,3 @@ class OracleGenericPoolConfig(Generic[ConnectionT, PoolT], GenericPoolConfig):
     """SSL/TLS protocol version"""
     handle: int | EmptyType = Empty
     """Oracle service context handle"""
-
-
-@dataclass
-class OracleGenericDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT], GenericDatabaseConfig):
-    """Oracle database Configuration.
-
-    This class provides the base configuration for Oracle database connections, extending
-    the generic database configuration with Oracle-specific settings. It supports both
-    thin and thick modes of the python-oracledb driver.([1](https://python-oracledb.readthedocs.io/en/latest/index.html))
-
-    The configuration supports all standard Oracle connection parameters and can be used
-    with both synchronous and asynchronous connections. It includes support for features
-    like Oracle Wallet, external authentication, connection pooling, and advanced security
-    options.([2](https://python-oracledb.readthedocs.io/en/latest/user_guide/tuning.html))
-    """

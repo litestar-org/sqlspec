@@ -11,7 +11,8 @@ import pytest
 from oracledb import AuthMode, Connection, Purity
 from oracledb.pool import ConnectionPool
 
-from sqlspec.adapters.oracledb.config._common import OracleGenericDatabaseConfig, OracleGenericPoolConfig
+from sqlspec.adapters.oracledb.config._common import OracleGenericPoolConfig
+from sqlspec.base import AsyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty
 
@@ -197,7 +198,7 @@ class TestOraclePoolConfig:
         assert config.handle == 12345
 
 
-class MockOracleDatabaseConfig(OracleGenericDatabaseConfig[Connection, ConnectionPool]):
+class MockOracleDatabaseConfig(AsyncDatabaseConfig[Connection, ConnectionPool]):
     """Mock OracleDatabaseConfig for testing."""
 
     def __init__(

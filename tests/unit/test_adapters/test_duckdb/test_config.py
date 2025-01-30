@@ -154,7 +154,7 @@ class TestDuckDBConfig:
 
     @pytest.mark.parametrize(
         ("extension_config", "expected_calls"),
-        [  # type: ignore
+        [  # pyright: ignore[reportUnknownArgumentType]
             (
                 ExtensionConfig(name="test", force_install=True),
                 [

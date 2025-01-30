@@ -31,7 +31,7 @@ class TestAiosqliteConfig:
     def test_default_values(self) -> None:
         """Test default values for AiosqliteConfig."""
         with pytest.raises(TypeError, match="missing 1 required positional argument: 'database'"):
-            AiosqliteConfig()  # type: ignore[call-arg]
+            AiosqliteConfig()
 
     def test_minimal_config(self) -> None:
         """Test minimal configuration with only required values."""

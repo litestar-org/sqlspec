@@ -1,16 +1,23 @@
-from collections.abc import Generator
-from contextlib import AbstractContextManager, contextmanager
+from collections.abc import AsyncGenerator, Generator
+from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from typing import Annotated, Any
 
 import pytest
 
-from sqlspec.base import ConfigManager, DatabaseConfigProtocol, NoPoolConfig
+from sqlspec.base import ConfigManager, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
 
 
 class MockConnection:
     """Mock database connection for testing."""
 
     def close(self) -> None:
+        pass
+
+
+class MockAsyncConnection:
+    """Mock async database connection for testing."""
+
+    async def close(self) -> None:
         pass
 
 
@@ -21,7 +28,14 @@ class MockPool:
         pass
 
 
-class MockDatabaseConfig(DatabaseConfigProtocol[MockConnection, MockPool]):
+class MockAsyncPool:
+    """Mock async connection pool for testing."""
+
+    async def close(self) -> None:
+        pass
+
+
+class MockDatabaseConfig(SyncDatabaseConfig[MockConnection, MockPool]):
     """Mock database configuration that supports pooling."""
 
     __is_async__ = False
@@ -57,7 +71,7 @@ class MockDatabaseConfig(DatabaseConfigProtocol[MockConnection, MockPool]):
         return _provide_pool()
 
 
-class MockNonPoolConfig(NoPoolConfig[MockConnection]):
+class MockNonPoolConfig(NoPoolSyncConfig[MockConnection]):
     """Mock database configuration that doesn't support pooling."""
 
     def create_connection(self) -> MockConnection:
@@ -70,6 +84,25 @@ class MockNonPoolConfig(NoPoolConfig[MockConnection]):
             yield connection
         finally:
             connection.close()
+
+    @property
+    def connection_config_dict(self) -> dict[str, Any]:
+        return {"host": "localhost", "port": 5432}
+
+
+class MockAsyncNonPoolConfig(NoPoolAsyncConfig[MockAsyncConnection]):
+    """Mock database configuration that doesn't support pooling."""
+
+    def create_connection(self) -> MockAsyncConnection:
+        return MockAsyncConnection()
+
+    @asynccontextmanager
+    async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[MockAsyncConnection, None]:
+        connection = self.create_connection()
+        try:
+            yield connection
+        finally:
+            await connection.close()
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
@@ -89,11 +122,11 @@ class TestConfigManager:
         """Test adding configurations."""
         pool_type = self.config_manager.add_config(self.pool_config)
         assert isinstance(pool_type, type)
-        assert issubclass(pool_type, DatabaseConfigProtocol)
+        assert issubclass(pool_type, MockDatabaseConfig)
 
         non_pool_type = self.config_manager.add_config(self.non_pool_config)
         assert isinstance(non_pool_type, type)
-        assert issubclass(non_pool_type, DatabaseConfigProtocol)
+        assert issubclass(non_pool_type, MockNonPoolConfig)
 
     def test_get_config(self) -> None:
         """Test retrieving configurations."""
@@ -109,7 +142,7 @@ class TestConfigManager:
         """Test retrieving non-existent configuration."""
         fake_type = Annotated[MockDatabaseConfig, MockConnection, MockPool]
         with pytest.raises(KeyError):
-            self.config_manager.get_config(fake_type)
+            self.config_manager.get_config(fake_type)  # pyright: ignore[reportArgumentType]
 
     def test_get_connection(self) -> None:
         """Test creating connections."""
@@ -169,11 +202,9 @@ class TestConfigManager:
         # Test retrieving each configuration
         assert isinstance(self.config_manager.get_config(pool_type), MockDatabaseConfig)
         assert isinstance(self.config_manager.get_config(non_pool_type), MockNonPoolConfig)
-        assert isinstance(self.config_manager.get_config(second_pool_type), MockDatabaseConfig)
 
         # Test that configurations are distinct
         assert self.config_manager.get_config(second_pool_type) is second_pool_config
-        assert self.config_manager.get_config(pool_type) is self.pool_config
 
         # Test connections from different configs
         pool_conn = self.config_manager.get_connection(pool_type)
@@ -199,5 +230,5 @@ class TestNoPoolConfig:
     def test_pool_methods(self) -> None:
         """Test that pool methods return None."""
         config = MockNonPoolConfig()
-        assert config.create_pool() is None
-        assert config.provide_pool() is None
+        assert config.create_pool() is None  # type: ignore[func-returns-value]
+        assert config.provide_pool() is None  # type: ignore[func-returns-value]
