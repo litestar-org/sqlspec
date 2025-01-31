@@ -1021,22 +1021,6 @@ wheels = [
 ]
 
 [[package]]
-name = "google-re2"
-version = "1.1.20240702"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/81/34/ea9bfa2afbb6847b7bc7f90ab927dd31fcd7f478062a8a10045059367de1/google_re2-1.1.20240702.tar.gz", hash = "sha256:8788db69f6c93cb229df62c74b2d9aa8e64bf754e9495700f85812afa32efd2b", size = 11626 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/dd/d1/f79265535a972b024c7ed5b5fd018def95a8f0b42ec5a58a13c7f0cc0997/google_re2-1.1.20240702-1-cp310-cp310-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7bc4fa65ecec3d63ea6048ecaf8784560bbfb31191c02ffaa87771e4a2f813e1", size = 539247 },
-    { url = "https://files.pythonhosted.org/packages/f9/29/b5f82912f33497953d97705176b1fb92f6f815b790ea7b130335bfa4aa72/google_re2-1.1.20240702-1-cp310-cp310-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7480309b133c39f2afb19ff28bc30d27b364cbc56b5d46918d1b4f1fb2e13183", size = 546846 },
-    { url = "https://files.pythonhosted.org/packages/6a/b2/7638b0cedc0b8395d28e658b4d90cd06584a8c536026fa9ee3ed2b657f6e/google_re2-1.1.20240702-1-cp311-cp311-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:4b920c1b0356f0359b35a0e6d0b5ff12fba9067d3c455a9811952fbc9a213268", size = 540758 },
-    { url = "https://files.pythonhosted.org/packages/fd/63/e62749a0ed2484fd598059cc258d35705446e6892c380292ff5ba7bc192a/google_re2-1.1.20240702-1-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:42c2c39b7378e928d197e4fdf4a23c9338f29cad6d4c5c5c06a2ad7c8c2a3ebc", size = 548442 },
-    { url = "https://files.pythonhosted.org/packages/01/43/87ec7735b7a5162df33aa205c3ad7828e542fbb7f5505a27a7da7c8132fe/google_re2-1.1.20240702-1-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7e4a2b88516b4140891a014c6e5b774f57db90c8bd0ccf0554e9f9b99ee1e942", size = 537958 },
-    { url = "https://files.pythonhosted.org/packages/a3/3e/7eba5be6ad3ecba8d2b6e947966931209d8462a165dbaf5a60ae20fed25f/google_re2-1.1.20240702-1-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d95b1e06298299b28e23288a6bfd3c6f13e0f7a01c1f2e86e74073928676cf88", size = 546774 },
-    { url = "https://files.pythonhosted.org/packages/36/64/cade8c592ad92b025fa3a982bd46581789cf7675a4f54aebd30c75bd7339/google_re2-1.1.20240702-1-cp39-cp39-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7d3d1e58f374510101273cda1b6c2b45c178eb94f4c1bd17f7f750cea8d1c85a", size = 539385 },
-    { url = "https://files.pythonhosted.org/packages/a1/78/f12096ab6728e3e2a300817c8b6401b5f4e2fbb2037508d54342ea3c74bf/google_re2-1.1.20240702-1-cp39-cp39-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:386d2a8c4b10daaeda03adc7f65c457f67ee8cb18b4f9b4178a44ed62ab291df", size = 546946 },
-]
-
-[[package]]
 name = "google-resumable-media"
 version = "2.7.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3053,7 +3037,7 @@ wheels = [
 
 [[package]]
 name = "sqlspec"
-version = "0.5.0"
+version = "0.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "eval-type-backport", marker = "python_full_version < '3.10'" },
@@ -3100,7 +3084,6 @@ oracledb = [
     { name = "oracledb" },
 ]
 performance = [
-    { name = "google-re2", marker = "sys_platform == 'linux'" },
     { name = "sqlglot", extra = ["rs"] },
 ]
 psycopg = [
@@ -3205,7 +3188,6 @@ requires-dist = [
     { name = "flask", marker = "extra == 'flask'" },
     { name = "google-cloud-bigquery", marker = "extra == 'bigquery'" },
     { name = "google-cloud-spanner", marker = "extra == 'spanner'" },
-    { name = "google-re2", marker = "sys_platform == 'linux' and extra == 'performance'" },
     { name = "litestar", marker = "extra == 'litestar'" },
     { name = "msgspec", marker = "extra == 'msgspec'" },
     { name = "oracledb", marker = "extra == 'oracledb'" },
