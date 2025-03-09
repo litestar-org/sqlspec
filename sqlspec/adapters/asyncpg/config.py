@@ -1,12 +1,9 @@
-from __future__ import annotations
-
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Optional, TypeVar, Union
 
 from asyncpg import Record
 from asyncpg import create_pool as asyncpg_create_pool
-from asyncpg.connection import Connection
 from asyncpg.pool import Pool, PoolConnectionProxy
 from typing_extensions import TypeAlias
 
@@ -19,6 +16,8 @@ if TYPE_CHECKING:
     from asyncio import AbstractEventLoop  # pyright: ignore[reportAttributeAccessIssue]
     from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 
+    from asyncpg.connection import Connection
+
 
 __all__ = (
     "AsyncPgConfig",
@@ -28,7 +27,7 @@ __all__ = (
 
 T = TypeVar("T")
 
-PgConnection: TypeAlias = Union[Connection, PoolConnectionProxy]
+PgConnection: TypeAlias = "Union[Connection, PoolConnectionProxy]"  # pyright: ignore[reportMissingTypeArgument]
 
 
 @dataclass
@@ -41,57 +40,57 @@ class AsyncPgPoolConfig(GenericPoolConfig):
     dsn: str
     """Connection arguments specified using as a single string in the following format: ``postgres://user:pass@host:port/database?option=value``
     """
-    connect_kwargs: dict[Any, Any] | None | EmptyType = Empty
+    connect_kwargs: "Optional[Union[dict[Any, Any], EmptyType]]" = Empty
     """A dictionary of arguments which will be passed directly to the ``connect()`` method as keyword arguments.
     """
-    connection_class: type[Connection] | None | EmptyType = Empty
+    connection_class: "Optional[Union[type[Connection], EmptyType]]" = Empty  # pyright: ignore[reportMissingTypeArgument]
     """The class to use for connections. Must be a subclass of Connection
     """
-    record_class: type[Record] | EmptyType = Empty
+    record_class: "Union[type[Record], EmptyType]" = Empty
     """If specified, the class to use for records returned by queries on the connections in this pool. Must be a subclass of Record."""
 
-    min_size: int | EmptyType = Empty
+    min_size: "Union[int, EmptyType]" = Empty
     """The number of connections to keep open inside the connection pool."""
-    max_size: int | EmptyType = Empty
+    max_size: "Union[int, EmptyType]" = Empty
     """The number of connections to allow in connection pool “overflow”, that is connections that can be opened above
     and beyond the pool_size setting, which defaults to 10."""
 
-    max_queries: int | EmptyType = Empty
+    max_queries: "Union[int, EmptyType]" = Empty
     """Number of queries after a connection is closed and replaced with a new connection.
     """
-    max_inactive_connection_lifetime: float | EmptyType = Empty
+    max_inactive_connection_lifetime: "Union[float, EmptyType]" = Empty
     """Number of seconds after which inactive connections in the pool will be closed. Pass 0 to disable this mechanism."""
 
-    setup: Coroutine[None, type[Connection], Any] | EmptyType = Empty
+    setup: "Union[Coroutine[None, type[Connection], Any], EmptyType]" = Empty  # pyright: ignore[reportMissingTypeArgument]
     """A coroutine to prepare a connection right before it is returned from Pool.acquire(). An example use case would be to automatically set up notifications listeners for all connections of a pool."""
-    init: Coroutine[None, type[Connection], Any] | EmptyType = Empty
+    init: "Union[Coroutine[None, type[Connection], Any], EmptyType]" = Empty  # pyright: ignore[reportMissingTypeArgument]
     """A coroutine to prepare a connection right before it is returned from Pool.acquire(). An example use case would be to automatically set up notifications listeners for all connections of a pool."""
 
-    loop: AbstractEventLoop | EmptyType = Empty
+    loop: "Union[AbstractEventLoop, EmptyType]" = Empty
     """An asyncio event loop instance. If None, the default event loop will be used."""
 
 
 @dataclass
-class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):
+class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):  # pyright: ignore[reportMissingTypeArgument]
     """Asyncpg Configuration."""
 
-    pool_config: AsyncPgPoolConfig | None = None
+    pool_config: "Optional[AsyncPgPoolConfig]" = None
     """Asyncpg Pool configuration"""
-    json_deserializer: Callable[[str], Any] = decode_json
+    json_deserializer: "Callable[[str], Any]" = decode_json
     """For dialects that support the :class:`JSON <sqlalchemy.types.JSON>` datatype, this is a Python callable that will
     convert a JSON string to a Python object. By default, this is set to SQLSpec's
     :attr:`decode_json() <sqlspec._serialization.decode_json>` function."""
-    json_serializer: Callable[[Any], str] = encode_json
+    json_serializer: "Callable[[Any], str]" = encode_json
     """For dialects that support the JSON datatype, this is a Python callable that will render a given object as JSON.
     By default, SQLSpec's :attr:`encode_json() <sqlspec._serialization.encode_json>` is used."""
-    pool_instance: Pool | None = None
+    pool_instance: "Optional[Pool[Any]]" = None
     """Optional pool to use.
 
     If set, the plugin will use the provided pool rather than instantiate one.
     """
 
     @property
-    def pool_config_dict(self) -> dict[str, Any]:
+    def pool_config_dict(self) -> "dict[str, Any]":
         """Return the pool configuration as a dict.
 
         Returns:
@@ -103,7 +102,7 @@ class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 
-    async def create_pool(self) -> Pool:
+    async def create_pool(self) -> "Pool":  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]
         """Return a pool. If none exists yet, create one.
 
         Returns:
@@ -125,21 +124,21 @@ class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):
             )
         return self.pool_instance
 
-    def provide_pool(self, *args: Any, **kwargs: Any) -> Awaitable[Pool]:
+    def provide_pool(self, *args: "Any", **kwargs: "Any") -> "Awaitable[Pool]":  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]
         """Create a pool instance.
 
         Returns:
             A Pool instance.
         """
-        return self.create_pool()
+        return self.create_pool()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
 
     @asynccontextmanager
-    async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[PoolConnectionProxy, None]:
+    async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[PoolConnectionProxy, None]":  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]
         """Create a connection instance.
 
         Returns:
             A connection instance.
         """
-        db_pool = await self.provide_pool(*args, **kwargs)
-        async with db_pool.acquire() as connection:
+        db_pool = await self.provide_pool(*args, **kwargs)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        async with db_pool.acquire() as connection:  # pyright: ignore[reportUnknownVariableType]
             yield connection

@@ -1,20 +1,11 @@
-from __future__ import annotations  # noqa: A005
-
-from collections.abc import Sequence
 from dataclasses import Field, fields
 from functools import lru_cache
-from typing import (
-    TYPE_CHECKING,
-    Annotated,
-    Any,
-    TypeVar,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Annotated, Any, Optional, TypeVar, Union, cast
 
 from typing_extensions import TypeAlias, TypeGuard
 
 from sqlspec._typing import (
+    LITESTAR_INSTALLED,
     MSGSPEC_INSTALLED,
     PYDANTIC_INSTALLED,
     UNSET,
@@ -22,7 +13,6 @@ from sqlspec._typing import (
     DataclassProtocol,
     Empty,
     EmptyType,
-    FailFast,
     Struct,
     TypeAdapter,
     UnsetType,
@@ -30,7 +20,7 @@ from sqlspec._typing import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
     from collections.abc import Set as AbstractSet
 
     from sqlspec.filters import StatementFilter
@@ -41,39 +31,36 @@ PYDANTIC_USE_FAILFAST = False  # leave permanently disabled for now
 
 T = TypeVar("T")
 
-ModelT = TypeVar("ModelT", bound="Struct | BaseModel | DataclassProtocol")
+ModelT = TypeVar("ModelT", bound="Union[Struct, BaseModel, DataclassProtocol]")
 
 FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
 """Type variable for filter types.
 
 :class:`~advanced_alchemy.filters.StatementFilter`
 """
-ModelDTOT = TypeVar("ModelDTOT", bound="Struct | BaseModel")
-"""Type variable for model DTOs.
 
-:class:`msgspec.Struct`|:class:`pydantic.BaseModel`
-"""
-PydanticOrMsgspecT: TypeAlias = Union[Struct, BaseModel]
+
+SupportedSchemaModel: TypeAlias = Union[Struct, BaseModel]
 """Type alias for pydantic or msgspec models.
 
 :class:`msgspec.Struct` or :class:`pydantic.BaseModel`
 """
-ModelDictT: TypeAlias = Union[dict[str, Any], ModelT, DataclassProtocol, Struct, BaseModel]
+ModelDictT: TypeAlias = "Union[dict[str, Any], ModelT ]"
 """Type alias for model dictionaries.
 
 Represents:
-- :type:`dict[str, Any]` |  :class:`msgspec.Struct` |  :class:`pydantic.BaseModel`
+- :type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` |  :class:`pydantic.BaseModel`
 """
-ModelDictListT: TypeAlias = Sequence[Union[dict[str, Any], ModelT, DataclassProtocol, Struct, BaseModel]]
+ModelDictListT: TypeAlias = "Sequence[Union[dict[str, Any], ModelT ]]"
 """Type alias for model dictionary lists.
 
 A list or sequence of any of the following:
-- :type:`Sequence`[:type:`dict[str, Any]` | :class:`~advanced_alchemy.base.ModelProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel`]
+- :type:`Sequence`[:type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel`]
 
 """
 
 
-def is_dataclass_instance(obj: Any) -> TypeGuard[DataclassProtocol]:
+def is_dataclass_instance(obj: Any) -> "TypeGuard[DataclassProtocol]":
     """Check if an object is a dataclass instance.
 
     Args:
@@ -86,7 +73,7 @@ def is_dataclass_instance(obj: Any) -> TypeGuard[DataclassProtocol]:
 
 
 @lru_cache(typed=True)
-def get_type_adapter(f: type[T]) -> TypeAdapter[T]:
+def get_type_adapter(f: "type[T]") -> "TypeAdapter[T]":
     """Caches and returns a pydantic type adapter.
 
     Args:
@@ -102,241 +89,224 @@ def get_type_adapter(f: type[T]) -> TypeAdapter[T]:
     return TypeAdapter(f)
 
 
-def is_pydantic_model(v: Any) -> TypeGuard[BaseModel]:
+def is_pydantic_model(obj: Any) -> "TypeGuard[BaseModel]":
     """Check if a value is a pydantic model.
 
     Args:
-        v: Value to check.
+        obj: Value to check.
 
     Returns:
         bool
     """
-    return PYDANTIC_INSTALLED and isinstance(v, BaseModel)
+    return PYDANTIC_INSTALLED and isinstance(obj, BaseModel)
 
 
-def is_pydantic_model_with_field(v: Any, field_name: str) -> TypeGuard[BaseModel]:
+def is_pydantic_model_with_field(obj: "Any", field_name: str) -> "TypeGuard[BaseModel]":
     """Check if a pydantic model has a specific field.
 
     Args:
-        v: Value to check.
+        obj: Value to check.
         field_name: Field name to check for.
 
     Returns:
         bool
     """
-    return is_pydantic_model(v) and field_name in v.model_fields
+    return is_pydantic_model(obj) and hasattr(obj, field_name)
 
 
-def is_pydantic_model_without_field(v: Any, field_name: str) -> TypeGuard[BaseModel]:
+def is_pydantic_model_without_field(obj: "Any", field_name: str) -> "TypeGuard[BaseModel]":
     """Check if a pydantic model does not have a specific field.
 
     Args:
-        v: Value to check.
+        obj: Value to check.
         field_name: Field name to check for.
 
     Returns:
         bool
     """
-    return not is_pydantic_model_with_field(v, field_name)
+    return is_pydantic_model(obj) and not hasattr(obj, field_name)
 
 
-def is_msgspec_struct(v: Any) -> TypeGuard[Struct]:
-    """Check if a value is a msgspec model.
+def is_msgspec_struct(obj: "Any") -> "TypeGuard[Struct]":
+    """Check if a value is a msgspec struct.
 
     Args:
-        v: Value to check.
+        obj: Value to check.
 
     Returns:
         bool
     """
-    return MSGSPEC_INSTALLED and isinstance(v, Struct)
+    return MSGSPEC_INSTALLED and isinstance(obj, Struct)
 
 
-def is_msgspec_struct_with_field(v: Any, field_name: str) -> TypeGuard[Struct]:
-    """Check if a msgspec model has a specific field.
+def is_msgspec_struct_with_field(obj: "Any", field_name: str) -> "TypeGuard[Struct]":
+    """Check if a msgspec struct has a specific field.
 
     Args:
-        v: Value to check.
+        obj: Value to check.
         field_name: Field name to check for.
 
     Returns:
         bool
     """
-    return is_msgspec_struct(v) and field_name in v.__struct_fields__
+    return is_msgspec_struct(obj) and hasattr(obj, field_name)
 
 
-def is_msgspec_struct_without_field(v: Any, field_name: str) -> TypeGuard[Struct]:
-    """Check if a msgspec model does not have a specific field.
+def is_msgspec_struct_without_field(obj: "Any", field_name: str) -> "TypeGuard[Struct]":
+    """Check if a msgspec struct does not have a specific field.
 
     Args:
-        v: Value to check.
+        obj: Value to check.
         field_name: Field name to check for.
 
     Returns:
         bool
     """
-    return not is_msgspec_struct_with_field(v, field_name)
+    return is_msgspec_struct(obj) and not hasattr(obj, field_name)
 
 
-def is_dict(v: Any) -> TypeGuard[dict[str, Any]]:
+def is_dict(obj: "Any") -> "TypeGuard[dict[str, Any]]":
     """Check if a value is a dictionary.
 
     Args:
-        v: Value to check.
+        obj: Value to check.
 
     Returns:
         bool
     """
-    return isinstance(v, dict)
+    return isinstance(obj, dict)
 
 
-def is_dict_with_field(v: Any, field_name: str) -> TypeGuard[dict[str, Any]]:
+def is_dict_with_field(obj: "Any", field_name: str) -> "TypeGuard[dict[str, Any]]":
     """Check if a dictionary has a specific field.
 
     Args:
-        v: Value to check.
+        obj: Value to check.
         field_name: Field name to check for.
 
     Returns:
         bool
     """
-    return is_dict(v) and field_name in v
+    return is_dict(obj) and field_name in obj
 
 
-def is_dict_without_field(v: Any, field_name: str) -> TypeGuard[dict[str, Any]]:
+def is_dict_without_field(obj: "Any", field_name: str) -> "TypeGuard[dict[str, Any]]":
     """Check if a dictionary does not have a specific field.
 
     Args:
-        v: Value to check.
+        obj: Value to check.
         field_name: Field name to check for.
 
     Returns:
         bool
     """
-    return is_dict(v) and field_name not in v
+    return is_dict(obj) and field_name not in obj
 
 
-def is_schema(v: Any) -> TypeGuard[Struct | BaseModel]:
+def is_schema(obj: "Any") -> "TypeGuard[SupportedSchemaModel]":
     """Check if a value is a msgspec Struct or Pydantic model.
 
     Args:
-        v: Value to check.
+        obj: Value to check.
 
     Returns:
         bool
     """
-    return is_msgspec_struct(v) or is_pydantic_model(v)
+    return is_msgspec_struct(obj) or is_pydantic_model(obj)
 
 
-def is_schema_or_dict(v: Any) -> TypeGuard[Struct | BaseModel | dict[str, Any]]:
+def is_schema_or_dict(obj: "Any") -> "TypeGuard[Union[SupportedSchemaModel, dict[str, Any]]]":
     """Check if a value is a msgspec Struct, Pydantic model, or dict.
 
     Args:
-        v: Value to check.
+        obj: Value to check.
 
     Returns:
         bool
     """
-    return is_schema(v) or is_dict(v)
+    return is_schema(obj) or is_dict(obj)
 
 
-def is_schema_with_field(v: Any, field_name: str) -> TypeGuard[Struct | BaseModel]:
+def is_schema_with_field(obj: "Any", field_name: str) -> "TypeGuard[SupportedSchemaModel]":
     """Check if a value is a msgspec Struct or Pydantic model with a specific field.
 
     Args:
-        v: Value to check.
+        obj: Value to check.
         field_name: Field name to check for.
 
     Returns:
         bool
     """
-    return is_msgspec_struct_with_field(v, field_name) or is_pydantic_model_with_field(v, field_name)
+    return is_msgspec_struct_with_field(obj, field_name) or is_pydantic_model_with_field(obj, field_name)
 
 
-def is_schema_without_field(v: Any, field_name: str) -> TypeGuard[Struct | BaseModel]:
+def is_schema_without_field(obj: "Any", field_name: str) -> "TypeGuard[SupportedSchemaModel]":
     """Check if a value is a msgspec Struct or Pydantic model without a specific field.
 
     Args:
-        v: Value to check.
+        obj: Value to check.
         field_name: Field name to check for.
 
     Returns:
         bool
     """
-    return not is_schema_with_field(v, field_name)
+    return not is_schema_with_field(obj, field_name)
 
 
-def is_schema_or_dict_with_field(v: Any, field_name: str) -> TypeGuard[Struct | BaseModel | dict[str, Any]]:
+def is_schema_or_dict_with_field(
+    obj: "Any", field_name: str
+) -> "TypeGuard[Union[SupportedSchemaModel, dict[str, Any]]]":
     """Check if a value is a msgspec Struct, Pydantic model, or dict with a specific field.
 
     Args:
-        v: Value to check.
+        obj: Value to check.
         field_name: Field name to check for.
 
     Returns:
         bool
     """
-    return is_schema_with_field(v, field_name) or is_dict_with_field(v, field_name)
+    return is_schema_with_field(obj, field_name) or is_dict_with_field(obj, field_name)
 
 
-def is_schema_or_dict_without_field(v: Any, field_name: str) -> TypeGuard[Struct | BaseModel | dict[str, Any]]:
+def is_schema_or_dict_without_field(
+    obj: "Any", field_name: str
+) -> "TypeGuard[Union[SupportedSchemaModel, dict[str, Any]]]":
     """Check if a value is a msgspec Struct, Pydantic model, or dict without a specific field.
 
     Args:
-        v: Value to check.
+        obj: Value to check.
         field_name: Field name to check for.
 
     Returns:
         bool
     """
-    return not is_schema_or_dict_with_field(v, field_name)
+    return not is_schema_or_dict_with_field(obj, field_name)
 
 
-def is_dataclass(v: Any) -> TypeGuard[DataclassProtocol]:
-    """Check if a value is a dataclass.
-
-    Args:
-        v: Value to check.
-
-    Returns:
-        bool
-    """
-    return is_dataclass_instance(v)
+def is_dataclass(obj: "Any") -> "TypeGuard[DataclassProtocol]":
+    """Check if an object is a dataclass."""
+    return is_dataclass_instance(obj)
 
 
-def is_dataclass_with_field(v: Any, field_name: str) -> TypeGuard[DataclassProtocol]:
-    """Check if a dataclass has a specific field.
-
-    Args:
-        v: Value to check.
-        field_name: Field name to check for.
-
-    Returns:
-        bool
-    """
-    return is_dataclass(v) and field_name in v.__dataclass_fields__
+def is_dataclass_with_field(
+    obj: "Any", field_name: str
+) -> "TypeGuard[object]":  # Can't specify dataclass type directly
+    """Check if an object is a dataclass and has a specific field."""
+    return is_dataclass(obj) and hasattr(obj, field_name)
 
 
-def is_dataclass_without_field(v: Any, field_name: str) -> TypeGuard[DataclassProtocol]:
-    """Check if a dataclass does not have a specific field.
-
-    Args:
-        v: Value to check.
-        field_name: Field name to check for.
-
-    Returns:
-        bool
-    """
-    return is_dataclass(v) and field_name not in v.__dataclass_fields__
+def is_dataclass_without_field(obj: "Any", field_name: str) -> "TypeGuard[object]":
+    """Check if an object is a dataclass and does not have a specific field."""
+    return is_dataclass(obj) and not hasattr(obj, field_name)
 
 
 def extract_dataclass_fields(
-    dt: DataclassProtocol,
+    dt: "DataclassProtocol",
     exclude_none: bool = False,
     exclude_empty: bool = False,
-    include: AbstractSet[str] | None = None,
-    exclude: AbstractSet[str] | None = None,
-) -> tuple[Field[Any], ...]:
+    include: "Optional[AbstractSet[str]]" = None,
+    exclude: "Optional[AbstractSet[str]]" = None,
+) -> "tuple[Field[Any], ...]":
     """Extract dataclass fields.
 
     Args:
@@ -371,12 +341,12 @@ def extract_dataclass_fields(
 
 
 def extract_dataclass_items(
-    dt: DataclassProtocol,
+    dt: "DataclassProtocol",
     exclude_none: bool = False,
     exclude_empty: bool = False,
-    include: AbstractSet[str] | None = None,
-    exclude: AbstractSet[str] | None = None,
-) -> tuple[tuple[str, Any], ...]:
+    include: "Optional[AbstractSet[str]]" = None,
+    exclude: "Optional[AbstractSet[str]]" = None,
+) -> "tuple[tuple[str, Any], ...]":
     """Extract dataclass name, value pairs.
 
     Unlike the 'asdict' method exports by the stdlib, this function does not pickle values.
@@ -396,12 +366,12 @@ def extract_dataclass_items(
 
 
 def dataclass_to_dict(
-    obj: DataclassProtocol,
+    obj: "DataclassProtocol",
     exclude_none: bool = False,
     exclude_empty: bool = False,
     convert_nested: bool = True,
-    exclude: set[str] | None = None,
-) -> dict[str, Any]:
+    exclude: "Optional[AbstractSet[str]]" = None,
+) -> "dict[str, Any]":
     """Convert a dataclass to a dictionary.
 
     This method has important differences to the standard library version:
@@ -429,17 +399,16 @@ def dataclass_to_dict(
 
 
 def schema_dump(
-    data: dict[str, Any] | Struct | BaseModel | DataclassProtocol,
-    exclude_unset: bool = True,
-) -> dict[str, Any]:
+    data: "Union[dict[str, Any],   DataclassProtocol, Struct, BaseModel]", exclude_unset: bool = True
+) -> "dict[str, Any]":
     """Dump a data object to a dictionary.
 
     Args:
-        data:  dict[str, Any] | ModelT | Struct | BaseModel | DataclassProtocol
+        data:  :type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel`
         exclude_unset: :type:`bool` Whether to exclude unset values.
 
     Returns:
-        :type: dict[str, Any]
+        :type:`dict[str, Any]`
     """
     if is_dict(data):
         return data
@@ -447,14 +416,18 @@ def schema_dump(
         return dataclass_to_dict(data, exclude_empty=exclude_unset)
     if is_pydantic_model(data):
         return data.model_dump(exclude_unset=exclude_unset)
-    if is_msgspec_struct(data) and exclude_unset:
-        return {f: val for f in data.__struct_fields__ if (val := getattr(data, f, None)) != UNSET}
-    if is_msgspec_struct(data) and not exclude_unset:
+    if is_msgspec_struct(data):
+        if exclude_unset:
+            return {f: val for f in data.__struct_fields__ if (val := getattr(data, f, None)) != UNSET}
         return {f: getattr(data, f, None) for f in data.__struct_fields__}
-    return cast("dict[str,Any]", data)
+
+    if hasattr(data, "__dict__"):
+        return data.__dict__
+    return cast("dict[str, Any]", data)
 
 
 __all__ = (
+    "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
     "PYDANTIC_INSTALLED",
     "PYDANTIC_USE_FAILFAST",
@@ -488,6 +461,12 @@ __all__ = (
     "is_pydantic_model",
     "is_pydantic_model_with_field",
     "is_pydantic_model_without_field",
+    "is_schema",
+    "is_schema_or_dict",
+    "is_schema_or_dict_with_field",
+    "is_schema_or_dict_without_field",
+    "is_schema_with_field",
+    "is_schema_without_field",
     "schema_dump",
 )
 

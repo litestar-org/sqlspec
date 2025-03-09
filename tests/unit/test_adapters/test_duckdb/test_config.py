@@ -31,45 +31,46 @@ class TestExtensionConfig:
     def test_default_values(self) -> None:
         """Test default values for ExtensionConfig."""
         config = ExtensionConfig(name="test")
-        assert config.name == "test"
-        assert config.config is None
-        assert not config.force_install
-        assert config.repository is None
-        assert config.repository_url is None
-        assert config.version is None
+        assert config["name"] == "test"
+        assert config.get("config") is None
+        assert config.get("force_install") is None
+        assert config.get("repository") is None
+        assert config.get("repository_url") is None
+        assert config.get("version") is None
 
     def test_from_dict_empty_config(self) -> None:
         """Test from_dict with empty config."""
-        config = ExtensionConfig.from_dict("test")
-        assert config.name == "test"
-        assert config.config is None
-        assert not config.force_install
+        config = ExtensionConfig(name="test")
+        assert config["name"] == "test"
+        assert config.get("config") is None
+        assert config.get("force_install") is None
 
     def test_from_dict_with_install_args(self) -> None:
         """Test from_dict with installation arguments."""
-        config = ExtensionConfig.from_dict(
-            "test",
-            {
-                "force_install": True,
-                "repository": "custom_repo",
-                "repository_url": "https://example.com",
-                "version": "1.0.0",
-                "config": {"some_setting": "value"},
-            },
+        config = ExtensionConfig(
+            name="test",
+            force_install=True,
+            repository="custom_repo",
+            repository_url="https://example.com",
+            version="1.0.0",
+            config={"some_setting": "value"},
         )
-        assert config.name == "test"
-        assert config.force_install
-        assert config.repository == "custom_repo"
-        assert config.repository_url == "https://example.com"
-        assert config.version == "1.0.0"
-        assert config.config == {"some_setting": "value"}
+        assert config["name"] == "test"
+        assert config.get("force_install")
+        assert config.get("repository") == "custom_repo"
+        assert config.get("repository_url") == "https://example.com"
+        assert config.get("version") == "1.0.0"
+        assert config.get("config") == {"some_setting": "value"}
 
     def test_from_dict_with_only_config(self) -> None:
         """Test from_dict with only config settings."""
-        config = ExtensionConfig.from_dict("test", {"config": {"some_setting": "value"}})
-        assert config.name == "test"
-        assert config.config == {"some_setting": "value"}
-        assert not config.force_install
+        config = ExtensionConfig(
+            name="test",
+            config={"some_setting": "value"},
+        )
+        assert config["name"] == "test"
+        assert config.get("config") == {"some_setting": "value"}
+        assert config.get("force_install") is None
 
 
 class TestDuckDBConfig:
@@ -98,50 +99,37 @@ class TestDuckDBConfig:
         """Test extension configuration from config dictionary."""
         config = DuckDBConfig(
             config={
-                "extensions": {
-                    "ext1": True,
-                    "ext2": {
-                        "force_install": True,
-                        "repository": "repo",
-                        "config": {"setting": "value"},
-                    },
-                }
+                "extensions": [
+                    {"name": "ext1"},
+                    {"name": "ext2", "force_install": True, "repository": "repo", "config": {"setting": "value"}},
+                ]
             },
         )
         assert isinstance(config.extensions, list)
         assert len(config.extensions) == 2
-        ext1 = next(ext for ext in config.extensions if ext.name == "ext1")
-        ext2 = next(ext for ext in config.extensions if ext.name == "ext2")
-        assert ext1.force_install
-        assert ext2.force_install
-        assert ext2.repository == "repo"
-        assert ext2.config == {"setting": "value"}
-
-    def test_extensions_from_list(self) -> None:
-        """Test extension configuration from list."""
-        config = DuckDBConfig(config={"extensions": ["ext1", "ext2"]})
-        assert isinstance(config.extensions, list)
-        assert len(config.extensions) == 2
-        assert all(isinstance(ext, ExtensionConfig) for ext in config.extensions)
-        assert {ext.name for ext in config.extensions} == {"ext1", "ext2"}
-        assert all(not ext.force_install for ext in config.extensions)
+        ext1 = next(ext for ext in config.extensions if ext["name"] == "ext1")
+        ext2 = next(ext for ext in config.extensions if ext["name"] == "ext2")
+        assert ext1.get("force_install") is None
+        assert ext2.get("force_install")
+        assert ext2.get("repository") == "repo"
+        assert ext2.get("config") == {"setting": "value"}
 
     def test_extensions_from_both_sources(self) -> None:
         """Test extension configuration from both extensions and config."""
         config = DuckDBConfig(
-            extensions=[ExtensionConfig("ext1")],
-            config={"extensions": {"ext2": {"force_install": True}}},
+            extensions=[{"name": "ext1"}],
+            config={"extensions": [{"name": "ext2", "force_install": True}]},
         )
         assert isinstance(config.extensions, list)
         assert len(config.extensions) == 2
-        assert {ext.name for ext in config.extensions} == {"ext1", "ext2"}
+        assert {ext["name"] for ext in config.extensions} == {"ext1", "ext2"}
 
     def test_duplicate_extensions_error(self) -> None:
         """Test error on duplicate extension configuration."""
         with pytest.raises(ImproperConfigurationError, match="Configuring the same extension"):
             DuckDBConfig(
-                extensions=[ExtensionConfig("ext1")],
-                config={"extensions": {"ext1": True}},
+                extensions=[{"name": "ext1"}],
+                config={"extensions": {"name": "ext1", "force_install": True}},
             )
 
     def test_invalid_extensions_type_error(self) -> None:
@@ -172,11 +160,11 @@ class TestDuckDBConfig:
                 ],
             ),
             (
-                ExtensionConfig(name="test", force_install=False),
+                {"name": "test", "force_install": False},
                 [("load_extension", {})],
             ),
             (
-                ExtensionConfig(name="test", force_install=True, config={"setting": "value"}),
+                {"name": "test", "force_install": True, "config": {"setting": "value"}},
                 [
                     (
                         "install_extension",
@@ -193,13 +181,13 @@ class TestDuckDBConfig:
                 ],
             ),
             (
-                ExtensionConfig(
-                    "test",
-                    force_install=True,
-                    repository="repo",
-                    repository_url="url",
-                    version="1.0",
-                ),
+                {
+                    "name": "test",
+                    "force_install": True,
+                    "repository": "repo",
+                    "repository_url": "url",
+                    "version": "1.0",
+                },
                 [
                     (
                         "install_extension",
@@ -225,6 +213,14 @@ class TestDuckDBConfig:
     ) -> None:
         """Test extension configuration with various settings."""
         config = DuckDBConfig(extensions=[extension_config])
+
+        # Configure the mock to match expected behavior
+        for method_name, _kwargs in expected_calls:
+            if method_name == "execute":
+                continue  # Skip pre-configuring execute calls as they're variable
+
+            getattr(mock_duckdb_connection, method_name).return_value = None
+
         connection = config.create_connection()
 
         actual_calls = []
@@ -240,8 +236,13 @@ class TestDuckDBConfig:
 
     def test_extension_configuration_error(self, mock_duckdb_connection: MagicMock) -> None:
         """Test error handling during extension configuration."""
+        # Simulate an error during extension loading
         mock_duckdb_connection.load_extension.side_effect = Exception("Test error")
-        config = DuckDBConfig(extensions=[ExtensionConfig("test")])
+
+        # Force the implementation to call load_extension
+        mock_duckdb_connection.install_extension.return_value = None
+
+        config = DuckDBConfig(extensions=[{"name": "test", "force_install": True}])
 
         with pytest.raises(ImproperConfigurationError, match="Failed to configure extension test"):
             config.create_connection()

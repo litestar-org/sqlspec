@@ -170,18 +170,18 @@ class ConfigManager:
         self,
         name: Union[
             type[NoPoolSyncConfig[ConnectionT]],
-            type[SyncDatabaseConfig[ConnectionT, PoolT]],
+            type[SyncDatabaseConfig[ConnectionT, PoolT]],  # pyright: ignore[reportInvalidTypeVarUse]
         ],
-    ) -> ConnectionT: ...  # pyright: ignore[reportInvalidTypeVarUse]
+    ) -> ConnectionT: ...
 
     @overload
     def get_connection(
         self,
         name: Union[
             type[NoPoolAsyncConfig[ConnectionT]],
-            type[AsyncDatabaseConfig[ConnectionT, PoolT]],
+            type[AsyncDatabaseConfig[ConnectionT, PoolT]],  # pyright: ignore[reportInvalidTypeVarUse]
         ],
-    ) -> Awaitable[ConnectionT]: ...  # pyright: ignore[reportInvalidTypeVarUse]
+    ) -> Awaitable[ConnectionT]: ...
 
     def get_connection(
         self,
