@@ -1,7 +1,5 @@
 """Metadata for the Project."""
 
-from __future__ import annotations
-
 from importlib.metadata import PackageNotFoundError, metadata, version
 
 __all__ = ("__project__", "__version__")

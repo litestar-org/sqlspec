@@ -3,8 +3,6 @@
 This is used to ensure compatibility when one or more of the libraries are installed.
 """
 
-from __future__ import annotations
-
 from enum import Enum
 from typing import (
     Any,
@@ -30,10 +28,15 @@ T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
 
 try:
-    from pydantic import BaseModel, FailFast, TypeAdapter
+    from pydantic import (
+        BaseModel,
+        FailFast,  # pyright: ignore[reportGeneralTypeIssues,reportAssignmentType]
+        TypeAdapter,
+    )
 
     PYDANTIC_INSTALLED = True
 except ImportError:
+    from dataclasses import dataclass
 
     @runtime_checkable
     class BaseModel(Protocol):  # type: ignore[no-redef]
@@ -41,9 +44,41 @@ except ImportError:
 
         model_fields: ClassVar[dict[str, Any]]
 
-        def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        def model_dump(
+            self,
+            /,
+            *,
+            include: "Optional[Any]" = None,
+            exclude: "Optional[Any]" = None,
+            context: "Optional[Any]" = None,
+            by_alias: bool = False,
+            exclude_unset: bool = False,
+            exclude_defaults: bool = False,
+            exclude_none: bool = False,
+            round_trip: bool = False,
+            warnings: "Union[bool, Literal['none', 'warn', 'error']]" = True,
+            serialize_as_any: bool = False,
+        ) -> "dict[str, Any]":
             """Placeholder"""
             return {}
+
+        def model_dump_json(
+            self,
+            /,
+            *,
+            include: "Optional[Any]" = None,
+            exclude: "Optional[Any]" = None,
+            context: "Optional[Any]" = None,
+            by_alias: bool = False,
+            exclude_unset: bool = False,
+            exclude_defaults: bool = False,
+            exclude_none: bool = False,
+            round_trip: bool = False,
+            warnings: "Union[bool, Literal['none', 'warn', 'error']]" = True,
+            serialize_as_any: bool = False,
+        ) -> str:
+            """Placeholder"""
+            return ""
 
     @runtime_checkable
     class TypeAdapter(Protocol[T_co]):  # type: ignore[no-redef]
@@ -53,9 +88,9 @@ except ImportError:
             self,
             type: Any,  # noqa: A002
             *,
-            config: Any | None = None,
+            config: "Optional[Any]" = None,
             _parent_depth: int = 2,
-            module: str | None = None,
+            module: "Optional[str]" = None,
         ) -> None:
             """Init"""
 
@@ -64,19 +99,19 @@ except ImportError:
             object: Any,  # noqa: A002
             /,
             *,
-            strict: bool | None = None,
-            from_attributes: bool | None = None,
-            context: dict[str, Any] | None = None,
-        ) -> T_co:
+            strict: "Optional[bool]" = None,
+            from_attributes: "Optional[bool]" = None,
+            context: "Optional[dict[str, Any]]" = None,
+            experimental_allow_partial: "Union[bool, Literal['off', 'on', 'trailing-strings']]" = False,
+        ) -> "T_co":
             """Stub"""
             return cast("T_co", object)
 
-    @runtime_checkable
-    class FailFast(Protocol):  # type: ignore[no-redef]
+    @dataclass
+    class FailFast:  # type: ignore[no-redef]
         """Placeholder Implementation for FailFast"""
 
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            """Init"""
+        fail_fast: bool = True
 
     PYDANTIC_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
@@ -84,22 +119,36 @@ try:
     from msgspec import (
         UNSET,
         Struct,
-        UnsetType,  # pyright: ignore[reportAssignmentType]
+        UnsetType,  # pyright: ignore[reportAssignmentType,reportGeneralTypeIssues]
         convert,
     )
 
     MSGSPEC_INSTALLED: bool = True
 except ImportError:
     import enum
+    from collections.abc import Iterable
+    from typing import TYPE_CHECKING, Callable, Optional, Union
+
+    if TYPE_CHECKING:
+        from collections.abc import Iterable
 
     @dataclass_transform()
     @runtime_checkable
     class Struct(Protocol):  # type: ignore[no-redef]
         """Placeholder Implementation"""
 
-        __struct_fields__: ClassVar[tuple[str, ...]]
+        __struct_fields__: "ClassVar[tuple[str, ...]]"
 
-    def convert(*args: Any, **kwargs: Any) -> Any:  # type: ignore[no-redef]
+    def convert(  # type: ignore[no-redef]
+        obj: Any,
+        type: "Union[Any, type[T]]",  # noqa: A002
+        *,
+        strict: bool = True,
+        from_attributes: bool = False,
+        dec_hook: "Optional[Callable[[type, Any], Any]]" = None,
+        builtin_types: "Union[Iterable[type], None]" = None,
+        str_keys: bool = False,
+    ) -> "Union[T, Any]":
         """Placeholder implementation"""
         return {}
 
@@ -124,11 +173,11 @@ except ImportError:
         def __init__(self, backend: Any, data_as_builtins: Any) -> None:
             """Placeholder init"""
 
-        def create_instance(self, **kwargs: Any) -> T:
+        def create_instance(self, **kwargs: Any) -> "T":
             """Placeholder implementation"""
             return cast("T", kwargs)
 
-        def update_instance(self, instance: T, **kwargs: Any) -> T:
+        def update_instance(self, instance: "T", **kwargs: Any) -> "T":
             """Placeholder implementation"""
             return cast("T", kwargs)
 

@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 from psycopg import Connection
 from psycopg_pool import ConnectionPool
@@ -38,20 +36,20 @@ class PsycoPgSyncDatabaseConfig(SyncDatabaseConfig[Connection, ConnectionPool]):
     with both synchronous and asynchronous connections.([2](https://www.psycopg.org/psycopg3/docs/api/connections.html))
     """
 
-    pool_config: PsycoPgSyncPoolConfig | None = None
+    pool_config: "Optional[PsycoPgSyncPoolConfig]" = None
     """Psycopg Pool configuration"""
-    pool_instance: ConnectionPool | None = None
+    pool_instance: "Optional[ConnectionPool]" = None
     """Optional pool to use"""
 
     @property
-    def pool_config_dict(self) -> dict[str, Any]:
+    def pool_config_dict(self) -> "dict[str, Any]":
         """Return the pool configuration as a dict."""
         if self.pool_config:
             return dataclass_to_dict(self.pool_config, exclude_empty=True, convert_nested=False)
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 
-    def create_pool(self) -> ConnectionPool:
+    def create_pool(self) -> "ConnectionPool":
         """Create and return a connection pool."""
         if self.pool_instance is not None:
             return self.pool_instance
@@ -67,12 +65,12 @@ class PsycoPgSyncDatabaseConfig(SyncDatabaseConfig[Connection, ConnectionPool]):
             raise ImproperConfigurationError(msg)
         return self.pool_instance
 
-    def provide_pool(self, *args: Any, **kwargs: Any) -> ConnectionPool:
+    def provide_pool(self, *args: "Any", **kwargs: "Any") -> "ConnectionPool":
         """Create and return a connection pool."""
         return self.create_pool()
 
     @contextmanager
-    def provide_connection(self, *args: Any, **kwargs: Any) -> Generator[Connection, None, None]:
+    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[Connection, None, None]":
         """Create and provide a database connection."""
         pool = self.provide_pool(*args, **kwargs)
         with pool.connection() as connection:

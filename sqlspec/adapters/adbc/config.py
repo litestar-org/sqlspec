@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from sqlspec.base import NoPoolSyncConfig
 from sqlspec.typing import Empty, EmptyType
@@ -27,15 +25,15 @@ class AdbcDatabaseConfig(NoPoolSyncConfig["Connection"]):
     __supports_connection_pooling = False
     __is_async = False
 
-    uri: str | EmptyType = Empty
+    uri: "Union[str, EmptyType]" = Empty
     """Database URI"""
-    driver_name: str | EmptyType = Empty
+    driver_name: "Union[str, EmptyType]" = Empty
     """Name of the ADBC driver to use"""
-    db_kwargs: dict[str, Any] | None = None
+    db_kwargs: "Optional[dict[str, Any]]" = None
     """Additional database-specific connection parameters"""
 
     @property
-    def connection_params(self) -> dict[str, Any]:
+    def connection_params(self) -> "dict[str, Any]":
         """Return the connection parameters as a dict."""
         return {
             k: v
@@ -44,7 +42,7 @@ class AdbcDatabaseConfig(NoPoolSyncConfig["Connection"]):
         }
 
     @contextmanager
-    def provide_connection(self, *args: Any, **kwargs: Any) -> Generator[Connection, None, None]:
+    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[Connection, None, None]":
         """Create and provide a database connection."""
         from adbc_driver_manager.dbapi import connect
 

@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool
@@ -39,20 +37,20 @@ class PsycoPgAsyncDatabaseConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConne
     with both synchronous and asynchronous connections.([2](https://www.psycopg.org/psycopg3/docs/api/connections.html))
     """
 
-    pool_config: PsycoPgAsyncPoolConfig | None = None
+    pool_config: "Optional[PsycoPgAsyncPoolConfig]" = None
     """Psycopg Pool configuration"""
-    pool_instance: AsyncConnectionPool | None = None
+    pool_instance: "Optional[AsyncConnectionPool]" = None
     """Optional pool to use"""
 
     @property
-    def pool_config_dict(self) -> dict[str, Any]:
+    def pool_config_dict(self) -> "dict[str, Any]":
         """Return the pool configuration as a dict."""
         if self.pool_config:
             return dataclass_to_dict(self.pool_config, exclude_empty=True, convert_nested=False)
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 
-    async def create_pool(self) -> AsyncConnectionPool:
+    async def create_pool(self) -> "AsyncConnectionPool":
         """Create and return a connection pool."""
         if self.pool_instance is not None:
             return self.pool_instance
@@ -68,12 +66,12 @@ class PsycoPgAsyncDatabaseConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConne
             raise ImproperConfigurationError(msg)
         return self.pool_instance
 
-    def provide_pool(self, *args: Any, **kwargs: Any) -> Awaitable[AsyncConnectionPool]:
+    def provide_pool(self, *args: "Any", **kwargs: "Any") -> "Awaitable[AsyncConnectionPool]":
         """Create and return a connection pool."""
         return self.create_pool()
 
     @asynccontextmanager
-    async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncConnection, None]:
+    async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[AsyncConnection, None]":
         """Create and provide a database connection."""
         pool = await self.provide_pool(*args, **kwargs)
         async with pool.connection() as connection:

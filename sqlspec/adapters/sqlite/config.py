@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 from sqlspec.base import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
@@ -28,29 +26,29 @@ class SqliteConfig(NoPoolSyncConfig["Connection"]):
     database: str = ":memory:"
     """The path to the database file to be opened. Pass ":memory:" to open a connection to a database that resides in RAM instead of on disk."""
 
-    timeout: float | EmptyType = Empty
+    timeout: "Union[float, EmptyType]" = Empty
     """How many seconds the connection should wait before raising an OperationalError when a table is locked. If another thread or process has acquired a shared lock, a wait for the specified timeout occurs."""
 
-    detect_types: int | EmptyType = Empty
+    detect_types: "Union[int, EmptyType]" = Empty
     """Control whether and how data types are detected. It can be 0 (default) or a combination of PARSE_DECLTYPES and PARSE_COLNAMES."""
 
-    isolation_level: Literal["DEFERRED", "IMMEDIATE", "EXCLUSIVE"] | None | EmptyType = Empty
+    isolation_level: "Optional[Union[Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE'], EmptyType]]" = Empty
     """The isolation_level of the connection. This can be None for autocommit mode or one of "DEFERRED", "IMMEDIATE" or "EXCLUSIVE"."""
 
-    check_same_thread: bool | EmptyType = Empty
+    check_same_thread: "Union[bool, EmptyType]" = Empty
     """If True (default), ProgrammingError is raised if the database connection is used by a thread other than the one that created it. If False, the connection may be shared across multiple threads."""
 
-    factory: type[Connection] | EmptyType = Empty
+    factory: "Union[type[Connection], EmptyType]" = Empty
     """A custom Connection class factory. If given, must be a callable that returns a Connection instance."""
 
-    cached_statements: int | EmptyType = Empty
+    cached_statements: "Union[int, EmptyType]" = Empty
     """The number of statements that SQLite will cache for this connection. The default is 128."""
 
-    uri: bool | EmptyType = Empty
+    uri: "Union[bool, EmptyType]" = Empty
     """If set to True, database is interpreted as a URI with supported options."""
 
     @property
-    def connection_config_dict(self) -> dict[str, Any]:
+    def connection_config_dict(self) -> "dict[str, Any]":
         """Return the connection configuration as a dict.
 
         Returns:
@@ -58,7 +56,7 @@ class SqliteConfig(NoPoolSyncConfig["Connection"]):
         """
         return dataclass_to_dict(self, exclude_empty=True, convert_nested=False)
 
-    def create_connection(self) -> Connection:
+    def create_connection(self) -> "Connection":
         """Create and return a new database connection.
 
         Returns:
@@ -76,7 +74,7 @@ class SqliteConfig(NoPoolSyncConfig["Connection"]):
             raise ImproperConfigurationError(msg) from e
 
     @contextmanager
-    def provide_connection(self, *args: Any, **kwargs: Any) -> Generator[Connection, None, None]:
+    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[Connection, None, None]":
         """Create and provide a database connection.
 
         Yields:

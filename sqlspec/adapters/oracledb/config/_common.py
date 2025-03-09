@@ -1,7 +1,5 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar, Union
 
 from oracledb import ConnectionPool
 
@@ -24,8 +22,8 @@ __all__ = ("OracleGenericPoolConfig",)
 
 T = TypeVar("T")
 
-ConnectionT = TypeVar("ConnectionT", bound="Connection | AsyncConnection")
-PoolT = TypeVar("PoolT", bound="ConnectionPool | AsyncConnectionPool")
+ConnectionT = TypeVar("ConnectionT", bound="Union[Connection, AsyncConnection]")
+PoolT = TypeVar("PoolT", bound="Union[ConnectionPool, AsyncConnectionPool]")
 
 
 @dataclass
@@ -37,97 +35,97 @@ class OracleGenericPoolConfig(Generic[ConnectionT, PoolT], GenericPoolConfig):
     settings.([1](https://python-oracledb.readthedocs.io/en/latest/api_manual/module.html))
     """
 
-    conn_class: type[ConnectionT] | EmptyType = Empty
+    conn_class: "Union[type[ConnectionT], EmptyType]" = Empty
     """The connection class to use (Connection or AsyncConnection)"""
-    dsn: str | EmptyType = Empty
+    dsn: "Union[str, EmptyType]" = Empty
     """Connection string for the database   """
-    pool: PoolT | EmptyType = Empty
+    pool: "Union[PoolT, EmptyType]" = Empty
     """Existing pool instance to use"""
-    params: ConnectParams | EmptyType = Empty
+    params: "Union[ConnectParams, EmptyType]" = Empty
     """Connection parameters object"""
-    user: str | EmptyType = Empty
+    user: "Union[str, EmptyType]" = Empty
     """Username for database authentication"""
-    proxy_user: str | EmptyType = Empty
+    proxy_user: "Union[str, EmptyType]" = Empty
     """Name of the proxy user to connect through"""
-    password: str | EmptyType = Empty
+    password: "Union[str, EmptyType]" = Empty
     """Password for database authentication"""
-    newpassword: str | EmptyType = Empty
+    newpassword: "Union[str, EmptyType]" = Empty
     """New password for password change operations"""
-    wallet_password: str | EmptyType = Empty
+    wallet_password: "Union[str, EmptyType]" = Empty
     """Password for accessing Oracle Wallet"""
-    access_token: str | tuple[str, ...] | Callable[[], str] | EmptyType = Empty
+    access_token: "Union[str, tuple[str, ...], Callable[[], str], EmptyType]" = Empty
     """Token for token-based authentication"""
-    host: str | EmptyType = Empty
+    host: "Union[str, EmptyType]" = Empty
     """Database server hostname"""
-    port: int | EmptyType = Empty
+    port: "Union[int, EmptyType]" = Empty
     """Database server port number"""
-    protocol: str | EmptyType = Empty
+    protocol: "Union[str, EmptyType]" = Empty
     """Network protocol (TCP or TCPS)"""
-    https_proxy: str | EmptyType = Empty
+    https_proxy: "Union[str, EmptyType]" = Empty
     """HTTPS proxy server address"""
-    https_proxy_port: int | EmptyType = Empty
+    https_proxy_port: "Union[int, EmptyType]" = Empty
     """HTTPS proxy server port"""
-    service_name: str | EmptyType = Empty
+    service_name: "Union[str, EmptyType]" = Empty
     """Oracle service name"""
-    sid: str | EmptyType = Empty
+    sid: "Union[str, EmptyType]" = Empty
     """Oracle System ID (SID)"""
-    server_type: str | EmptyType = Empty
+    server_type: "Union[str, EmptyType]" = Empty
     """Server type (dedicated, shared, pooled, or drcp)"""
-    cclass: str | EmptyType = Empty
+    cclass: "Union[str, EmptyType]" = Empty
     """Connection class for database resident connection pooling"""
-    purity: Purity | EmptyType = Empty
+    purity: "Union[Purity, EmptyType]" = Empty
     """Session purity (NEW, SELF, or DEFAULT)"""
-    expire_time: int | EmptyType = Empty
+    expire_time: "Union[int, EmptyType]" = Empty
     """Time in minutes after which idle connections are closed"""
-    retry_count: int | EmptyType = Empty
+    retry_count: "Union[int, EmptyType]" = Empty
     """Number of attempts to connect"""
-    retry_delay: int | EmptyType = Empty
+    retry_delay: "Union[int, EmptyType]" = Empty
     """Time in seconds between connection attempts"""
-    tcp_connect_timeout: float | EmptyType = Empty
+    tcp_connect_timeout: "Union[float, EmptyType]" = Empty
     """Timeout for establishing TCP connections"""
-    ssl_server_dn_match: bool | EmptyType = Empty
+    ssl_server_dn_match: "Union[bool, EmptyType]" = Empty
     """If True, verify server certificate DN"""
-    ssl_server_cert_dn: str | EmptyType = Empty
+    ssl_server_cert_dn: "Union[str, EmptyType]" = Empty
     """Expected server certificate DN"""
-    wallet_location: str | EmptyType = Empty
+    wallet_location: "Union[str, EmptyType]" = Empty
     """Location of Oracle Wallet"""
-    events: bool | EmptyType = Empty
+    events: "Union[bool, EmptyType]" = Empty
     """If True, enables Oracle events for FAN and RLB"""
-    externalauth: bool | EmptyType = Empty
+    externalauth: "Union[bool, EmptyType]" = Empty
     """If True, uses external authentication"""
-    mode: AuthMode | EmptyType = Empty
+    mode: "Union[AuthMode, EmptyType]" = Empty
     """Session mode (SYSDBA, SYSOPER, etc.)"""
-    disable_oob: bool | EmptyType = Empty
+    disable_oob: "Union[bool, EmptyType]" = Empty
     """If True, disables Oracle out-of-band breaks"""
-    stmtcachesize: int | EmptyType = Empty
+    stmtcachesize: "Union[int, EmptyType]" = Empty
     """Size of the statement cache"""
-    edition: str | EmptyType = Empty
+    edition: "Union[str, EmptyType]" = Empty
     """Edition name for edition-based redefinition"""
-    tag: str | EmptyType = Empty
+    tag: "Union[str, EmptyType]" = Empty
     """Connection pool tag"""
-    matchanytag: bool | EmptyType = Empty
+    matchanytag: "Union[bool, EmptyType]" = Empty
     """If True, allows connections with different tags"""
-    config_dir: str | EmptyType = Empty
+    config_dir: "Union[str, EmptyType]" = Empty
     """Directory containing Oracle configuration files"""
-    appcontext: list[str] | EmptyType = Empty
+    appcontext: "Union[list[str], EmptyType]" = Empty
     """Application context list"""
-    shardingkey: list[str] | EmptyType = Empty
+    shardingkey: "Union[list[str], EmptyType]" = Empty
     """Sharding key list"""
-    supershardingkey: list[str] | EmptyType = Empty
+    supershardingkey: "Union[list[str], EmptyType]" = Empty
     """Super sharding key list"""
-    debug_jdwp: str | EmptyType = Empty
+    debug_jdwp: "Union[str, EmptyType]" = Empty
     """JDWP debugging string"""
-    connection_id_prefix: str | EmptyType = Empty
+    connection_id_prefix: "Union[str, EmptyType]" = Empty
     """Prefix for connection identifiers"""
-    ssl_context: Any | EmptyType = Empty
+    ssl_context: "Union[Any, EmptyType]" = Empty
     """SSL context for TCPS connections"""
-    sdu: int | EmptyType = Empty
+    sdu: "Union[int, EmptyType]" = Empty
     """Session data unit size"""
-    pool_boundary: str | EmptyType = Empty
+    pool_boundary: "Union[str, EmptyType]" = Empty
     """Connection pool boundary (statement or transaction)"""
-    use_tcp_fast_open: bool | EmptyType = Empty
+    use_tcp_fast_open: "Union[bool, EmptyType]" = Empty
     """If True, enables TCP Fast Open"""
-    ssl_version: ssl.TLSVersion | EmptyType = Empty
+    ssl_version: "Union[ssl.TLSVersion, EmptyType]" = Empty
     """SSL/TLS protocol version"""
-    handle: int | EmptyType = Empty
+    handle: "Union[int, EmptyType]" = Empty
     """Oracle service context handle"""

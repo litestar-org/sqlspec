@@ -1,13 +1,11 @@
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 from litestar.plugins import InitPluginProtocol
 
-from sqlspec.base import ConfigManager
-
 if TYPE_CHECKING:
     from litestar.config.app import AppConfig
+
+    from sqlspec.base import ConfigManager
 
 
 class SQLSpecPlugin(InitPluginProtocol):
@@ -15,7 +13,7 @@ class SQLSpecPlugin(InitPluginProtocol):
 
     __slots__ = ("_config",)
 
-    def __init__(self, config: ConfigManager) -> None:
+    def __init__(self, config: "ConfigManager") -> None:
         """Initialize ``SQLSpecPlugin``.
 
         Args:
@@ -24,7 +22,7 @@ class SQLSpecPlugin(InitPluginProtocol):
         self._config = config
 
     @property
-    def config(self) -> ConfigManager:
+    def config(self) -> "ConfigManager":
         """Return the plugin config.
 
         Returns:
@@ -32,11 +30,14 @@ class SQLSpecPlugin(InitPluginProtocol):
         """
         return self._config
 
-    def on_app_init(self, app_config: AppConfig) -> AppConfig:
+    def on_app_init(self, app_config: "AppConfig") -> "AppConfig":
         """Configure application for use with SQLSpec.
 
         Args:
             app_config: The :class:`AppConfig <.config.app.AppConfig>` instance.
         """
+
+        from sqlspec.base import ConfigManager
+
         app_config.signature_types.append(ConfigManager)
         return app_config

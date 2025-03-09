@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from sqlspec.base import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
@@ -28,25 +26,25 @@ class AiosqliteConfig(NoPoolSyncConfig["Connection"]):
     For details see: https://github.com/omnilib/aiosqlite/blob/main/aiosqlite/__init__.pyi
     """
 
-    database: str = field(default=":memory:")
+    database: "Union[str, EmptyType]" = field(default=":memory:")
     """The path to the database file to be opened. Pass ":memory:" to open a connection to a database that resides in RAM instead of on disk."""
-    timeout: float | EmptyType = field(default=Empty)
+    timeout: "Union[float, EmptyType]" = field(default=Empty)
     """How many seconds the connection should wait before raising an OperationalError when a table is locked. If another thread or process has acquired a shared lock, a wait for the specified timeout occurs."""
-    detect_types: int | EmptyType = field(default=Empty)
+    detect_types: "Union[int, EmptyType]" = field(default=Empty)
     """Control whether and how data types are detected. It can be 0 (default) or a combination of PARSE_DECLTYPES and PARSE_COLNAMES."""
-    isolation_level: Literal["DEFERRED", "IMMEDIATE", "EXCLUSIVE"] | None | EmptyType = field(default=Empty)
+    isolation_level: "Optional[Union[Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE'], EmptyType]]" = field(default=Empty)
     """The isolation_level of the connection. This can be None for autocommit mode or one of "DEFERRED", "IMMEDIATE" or "EXCLUSIVE"."""
-    check_same_thread: bool | EmptyType = field(default=Empty)
+    check_same_thread: "Union[bool, EmptyType]" = field(default=Empty)
     """If True (default), ProgrammingError is raised if the database connection is used by a thread other than the one that created it. If False, the connection may be shared across multiple threads."""
-    factory: type[SQLite3Connection] | EmptyType = field(default=Empty)
+    factory: "Union[type[SQLite3Connection], EmptyType]" = field(default=Empty)
     """A custom Connection class factory. If given, must be a callable that returns a Connection instance."""
-    cached_statements: int | EmptyType = field(default=Empty)
+    cached_statements: "Union[int, EmptyType]" = field(default=Empty)
     """The number of statements that SQLite will cache for this connection. The default is 128."""
-    uri: bool | EmptyType = field(default=Empty)
+    uri: "Union[bool, EmptyType]" = field(default=Empty)
     """If set to True, database is interpreted as a URI with supported options."""
 
     @property
-    def connection_config_dict(self) -> dict[str, Any]:
+    def connection_config_dict(self) -> "dict[str, Any]":
         """Return the connection configuration as a dict.
 
         Returns:
@@ -54,7 +52,7 @@ class AiosqliteConfig(NoPoolSyncConfig["Connection"]):
         """
         return dataclass_to_dict(self, exclude_empty=True, convert_nested=False)
 
-    async def create_connection(self) -> Connection:
+    async def create_connection(self) -> "Connection":
         """Create and return a new database connection.
 
         Returns:
@@ -72,7 +70,7 @@ class AiosqliteConfig(NoPoolSyncConfig["Connection"]):
             raise ImproperConfigurationError(msg) from e
 
     @asynccontextmanager
-    async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[Connection, None]:
+    async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[Connection, None]":
         """Create and provide a database connection.
 
         Yields:

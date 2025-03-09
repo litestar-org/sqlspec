@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-from typing import Any
+from typing import Any, Optional
 
 __all__ = (
     "ImproperConfigurationError",
@@ -50,7 +48,7 @@ class MissingDependencyError(SQLSpecError, ImportError):
     This exception is raised only when a module depends on a dependency that has not been installed.
     """
 
-    def __init__(self, package: str, install_package: str | None = None) -> None:
+    def __init__(self, package: str, install_package: Optional[str] = None) -> None:
         super().__init__(
             f"Package {package!r} is not installed but required. You can install it by running "
             f"'pip install sqlspec[{install_package or package}]' to install sqlspec with the required extra "
@@ -61,7 +59,7 @@ class MissingDependencyError(SQLSpecError, ImportError):
 class SQLLoadingError(SQLSpecError):
     """Issues loading referenced SQL file."""
 
-    def __init__(self, message: str | None = None) -> None:
+    def __init__(self, message: Optional[str] = None) -> None:
         if message is None:
             message = "Issues loading referenced SQL file."
         super().__init__(message)
@@ -70,7 +68,7 @@ class SQLLoadingError(SQLSpecError):
 class SQLParsingError(SQLSpecError):
     """Issues parsing SQL statements."""
 
-    def __init__(self, message: str | None = None) -> None:
+    def __init__(self, message: Optional[str] = None) -> None:
         if message is None:
             message = "Issues parsing SQL statement."
         super().__init__(message)

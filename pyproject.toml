@@ -22,9 +22,10 @@ flask = ["flask"]
 litestar = ["litestar"]
 msgspec = ["msgspec"]
 oracledb = ["oracledb"]
+orjson = ["orjson"]
 performance = ["sqlglot[rs]"]
 psycopg = ["psycopg[binary,pool]"]
-pydantic = ["pydantic"]
+pydantic = ["pydantic", "pydantic-extra-types"]
 pymssql = ["pymssql"]
 pymysql = ["pymysql"]
 spanner = ["google-cloud-spanner"]
@@ -211,6 +212,7 @@ lint.select = [
   "UP",  # pyupgrade
   "W",   # pycodestyle - warning
   "YTT", # flake8-2020
+
 ]
 
 line-length = 120
@@ -232,6 +234,8 @@ lint.ignore = [
   "PLW2901", # pylint - for loop variable overwritten by assignment target
   "RUF012",  # Ruff-specific rule - annotated with classvar
   "ISC001",  # Ruff formatter incompatible
+  "A005",    # flake8 - Module `x` shadows a Python standard-library module
+  "PLC0415", # pylint - `import` should be at the top of the file
 ]
 src = ["sqlspec", "tests", "docs/examples"]
 target-version = "py39"

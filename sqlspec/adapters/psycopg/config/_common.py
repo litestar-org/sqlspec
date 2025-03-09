@@ -1,7 +1,5 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar, Union
 
 from sqlspec.base import GenericPoolConfig
 from sqlspec.typing import Empty
@@ -19,8 +17,8 @@ if TYPE_CHECKING:
 __all__ = ("PsycoPgGenericPoolConfig",)
 
 
-ConnectionT = TypeVar("ConnectionT", bound="Connection | AsyncConnection")
-PoolT = TypeVar("PoolT", bound="ConnectionPool | AsyncConnectionPool")
+ConnectionT = TypeVar("ConnectionT", bound="Union[Connection, AsyncConnection]")
+PoolT = TypeVar("PoolT", bound="Union[ConnectionPool, AsyncConnectionPool]")
 
 
 @dataclass
@@ -32,27 +30,27 @@ class PsycoPgGenericPoolConfig(Generic[ConnectionT, PoolT], GenericPoolConfig):
     settings.([1](https://www.psycopg.org/psycopg3/docs/api/pool.html))
     """
 
-    conninfo: str | EmptyType = Empty
+    conninfo: "Union[str, EmptyType]" = Empty
     """Connection string in libpq format"""
-    kwargs: dict[str, Any] | EmptyType = Empty
+    kwargs: "Union[dict[str, Any], EmptyType]" = Empty
     """Additional connection parameters"""
-    min_size: int | EmptyType = Empty
+    min_size: "Union[int, EmptyType]" = Empty
     """Minimum number of connections in the pool"""
-    max_size: int | EmptyType = Empty
+    max_size: "Union[int, EmptyType]" = Empty
     """Maximum number of connections in the pool"""
-    name: str | EmptyType = Empty
+    name: "Union[str, EmptyType]" = Empty
     """Name of the connection pool"""
-    timeout: float | EmptyType = Empty
+    timeout: "Union[float, EmptyType]" = Empty
     """Timeout for acquiring connections"""
-    max_waiting: int | EmptyType = Empty
+    max_waiting: "Union[int, EmptyType]" = Empty
     """Maximum number of waiting clients"""
-    max_lifetime: float | EmptyType = Empty
+    max_lifetime: "Union[float, EmptyType]" = Empty
     """Maximum connection lifetime"""
-    max_idle: float | EmptyType = Empty
+    max_idle: "Union[float, EmptyType]" = Empty
     """Maximum idle time for connections"""
-    reconnect_timeout: float | EmptyType = Empty
+    reconnect_timeout: "Union[float, EmptyType]" = Empty
     """Time between reconnection attempts"""
-    num_workers: int | EmptyType = Empty
+    num_workers: "Union[int, EmptyType]" = Empty
     """Number of background workers"""
-    configure: Callable[[ConnectionT], None] | EmptyType = Empty
+    configure: "Union[Callable[[ConnectionT], None], EmptyType]" = Empty
     """Callback to configure new connections"""
