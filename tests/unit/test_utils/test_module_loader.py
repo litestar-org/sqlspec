@@ -29,7 +29,7 @@ def test_module_path(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
         (
             ImportError,
             TypeError,
-        )
+        ),
     ):
         _ = module_to_os_path("sqlspec.base.GenericDatabaseConfig")
         _ = module_to_os_path("sqlspec.base.GenericDatabaseConfig.extra.module")

@@ -7,7 +7,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.9, <4.0"
-version = "0.6.0"
+version = "0.7.0"
 
 [project.optional-dependencies]
 adbc = ["adbc-driver-manager", "pyarrow"]
@@ -21,6 +21,7 @@ fastapi = ["fastapi"]
 flask = ["flask"]
 litestar = ["litestar"]
 msgspec = ["msgspec"]
+nanoid = ["fastnanoid>=0.4.1"]
 oracledb = ["oracledb"]
 orjson = ["orjson"]
 performance = ["sqlglot[rs]"]
@@ -29,8 +30,10 @@ pydantic = ["pydantic", "pydantic-extra-types"]
 pymssql = ["pymssql"]
 pymysql = ["pymysql"]
 spanner = ["google-cloud-spanner"]
+uuid = ["uuid-utils>=0.6.1"]
 
 [dependency-groups]
+build = ["bump-my-version"]
 dev = [
   "adbc-driver-sqlite",
   "adbc-driver-postgresql",
@@ -38,11 +41,11 @@ dev = [
   { include-group = "lint" },
   { include-group = "doc" },
   { include-group = "test" },
+  { include-group = "build" },
 ]
 doc = [
   "auto-pytabs[sphinx]>=0.5.0",
-  "git-cliff>=2.6.1",
-  "litestar-sphinx-theme @ git+https://github.com/litestar-org/litestar-sphinx-theme.git@v3",
+  "shibuya",
   "sphinx>=7.0.0; python_version <= \"3.9\"",
   "sphinx>=8.0.0; python_version >= \"3.10\"",
   "sphinx-autobuild>=2021.3.14",
@@ -53,6 +56,8 @@ doc = [
   "sphinx-paramlinks>=0.6.0",
   "sphinx-togglebutton>=0.3.2",
   "sphinx-toolbox>=3.8.1",
+  "myst-parser",
+  "sphinx-autodoc-typehints",
 ]
 lint = [
   "mypy>=1.13.0",
@@ -76,7 +81,6 @@ test = [
   "pytest-xdist>=3.6.1",
 ]
 
-
 [build-system]
 build-backend = "hatchling.build"
 requires = ["hatchling"]
@@ -93,6 +97,40 @@ include = ["NOTICE"]
 packages = ["sqlspec"]
 
 
+[tool.bumpversion]
+allow_dirty = true
+commit = false
+commit_args = "--no-verify"
+current_version = "0.33.1"
+ignore_missing_files = false
+ignore_missing_version = false
+message = "chore(release): bump to v{new_version}"
+parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
+regex = false
+replace = "{new_version}"
+search = "{current_version}"
+serialize = ["{major}.{minor}.{patch}"]
+sign_tags = false
+tag = false
+tag_message = "chore(release): v{new_version}"
+tag_name = "v{new_version}"
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+replace = 'version = "{new_version}"'
+search = 'version = "{current_version}"'
+
+[[tool.bumpversion.files]]
+filename = "uv.lock"
+replace = """
+name = "advanced-alchemy"
+version = "{new_version}"
+"""
+search = """
+name = "advanced-alchemy"
+version = "{current_version}"
+"""
+
 [tool.codespell]
 ignore-words-list = "te"
 skip = 'uv.lock'
@@ -104,6 +142,7 @@ disable_warnings = ["no-data-collected", "module-not-measured", "module-not-impo
 omit = ["*/tests/*"]
 parallel = true
 plugins = ["covdefaults"]
+relative_files = true
 source = ["sqlspec"]
 
 [tool.coverage.report]
@@ -132,6 +171,17 @@ exclude_lines = [
 addopts = "-ra -q --doctest-glob='*.md' --strict-markers --strict-config"
 asyncio_default_fixture_loop_scope = "function"
 asyncio_mode = "auto"
+filterwarnings = [
+  "ignore::DeprecationWarning:pkg_resources.*",
+  "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
+  "ignore::DeprecationWarning:pkg_resources",
+  "ignore::DeprecationWarning:google.rpc",
+  "ignore::DeprecationWarning:google.gcloud",
+  "ignore::DeprecationWarning:google.iam",
+  "ignore::DeprecationWarning:google",
+  "ignore::DeprecationWarning:websockets.connection",
+  "ignore::DeprecationWarning:websockets.legacy",
+]
 testpaths = ["tests"]
 xfail_strict = true
 
@@ -177,46 +227,19 @@ reportUnnecessaryTypeIgnoreComments = true
 strict-imports = false
 
 [tool.ruff]
-lint.select = [
-  "A",   # flake8-builtins
-  "B",   # flake8-bugbear
-  "BLE", # flake8-blind-except
-  "C4",  # flake8-comprehensions
-  "C90", # mccabe
-  "D",   # pydocstyle
-  "DJ",  # flake8-django
-  "DTZ", # flake8-datetimez
-  "E",   # pycodestyle errors
-  "ERA", # eradicate
-  "EXE", # flake8-executable
-  "F",   # pyflakes
-  "G",   # flake8-logging-format
-  "I",   # isort
-  "ICN", # flake8-import-conventions
-  "ISC", # flake8-implicit-str-concat
-  "N",   # pep8-naming
-  "PIE", # flake8-pie
-  "PLC", # pylint - convention
-  "PLE", # pylint - error
-  "PLW", # pylint - warning
-  "PTH", # flake8-use-pathlib
-  "Q",   # flake8-quotes
-  "RET", # flake8-return
-  "RUF", # Ruff-specific rules
-  "S",   # flake8-bandit
-  "SIM", # flake8-simplify
-  "T10", # flake8-debugger
-  "T20", # flake8-print
-  "TC",  # flake8-type-checking
-  "TID", # flake8-tidy-imports
-  "UP",  # pyupgrade
-  "W",   # pycodestyle - warning
-  "YTT", # flake8-2020
-
-]
-
+exclude = [".venv", "node_modules"]
 line-length = 120
-lint.ignore = [
+src = ["sqlspec", "tests", "docs/examples", "tools"]
+target-version = "py39"
+
+[tool.ruff.format]
+docstring-code-format = true
+docstring-code-line-length = 60
+
+[tool.ruff.lint]
+extend-safe-fixes = ["TC"]
+fixable = ["ALL"]
+ignore = [
   "A003",    # flake8-builtins - class attribute {name} is shadowing a python builtin
   "B010",    # flake8-bugbear - do not call setattr with a constant attribute value
   "D100",    # pydocstyle - missing docstring in public module
@@ -236,9 +259,16 @@ lint.ignore = [
   "ISC001",  # Ruff formatter incompatible
   "A005",    # flake8 - Module `x` shadows a Python standard-library module
   "PLC0415", # pylint - `import` should be at the top of the file
+  "FA100",   # Add `from __future__ import annotations` to simplify
+  "ANN401",  # Dynamically typed expressions (typing.Any) are disallowed
+  "FBT001",  # Boolean-typed positional argument in function definition
+  "FBT002",  # Boolean default positional argument in function definition
+  "PLR0913", # pylint - Too many arguments in function definition
+  "ARG002",  # Unused method argument
+  "ARG001",  # Unused function argument
+  "CPY001",  # pycodestyle - Missing Copywrite notice at the top of the file
 ]
-src = ["sqlspec", "tests", "docs/examples"]
-target-version = "py39"
+select = ["ALL"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -278,10 +308,12 @@ known-first-party = ["sqlspec", "tests"]
   "SIM",
   "TC",
   "TRY",
+  "PT012",
+  "INP001",
 ]
-"tools/**/*.*" = ["D", "ARG", "EM", "TRY", "G", "FBT", "S603", "F811", "PLW0127"]
+"tools/**/*.*" = ["D", "ARG", "EM", "TRY", "G", "FBT", "S603", "F811", "PLW0127", "PLR0911"]
 "tools/prepare_release.py" = ["S603", "S607"]
 
-[tool.ruff.format]
-docstring-code-format = true
-docstring-code-line-length = 88
+[tool.ruff.lint.flake8-tidy-imports]
+# Disallow all relative imports.
+ban-relative-imports = "all"

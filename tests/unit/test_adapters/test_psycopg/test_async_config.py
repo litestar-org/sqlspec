@@ -40,14 +40,13 @@ def mock_psycopg_pool() -> Generator[MagicMock, None, None]:
     async_cm.__aenter__ = AsyncMock(return_value=connection)
     async_cm.__aexit__ = AsyncMock(return_value=None)
     pool.connection.return_value = async_cm
-    yield pool
+    return pool
 
 
 @pytest.fixture
 def mock_psycopg_connection() -> Generator[MagicMock, None, None]:
     """Create a mock Psycopg connection."""
-    connection = MagicMock(spec=AsyncConnection)
-    yield connection
+    return MagicMock(spec=AsyncConnection)
 
 
 class TestPsycoPgAsyncPoolConfig:
@@ -149,7 +148,8 @@ class TestPsycoPgAsyncDatabaseConfig:
         """Test create_pool raises error without pool config or instance."""
         config = MockPsycoPgAsyncDatabaseConfig()
         with pytest.raises(
-            ImproperConfigurationError, match="One of 'pool_config' or 'pool_instance' must be provided"
+            ImproperConfigurationError,
+            match="One of 'pool_config' or 'pool_instance' must be provided",
         ):
             await config.create_pool()
 

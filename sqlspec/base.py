@@ -36,7 +36,9 @@ class DatabaseConfigProtocol(Generic[ConnectionT, PoolT], ABC):
 
     @abstractmethod
     def provide_connection(
-        self, *args: Any, **kwargs: Any
+        self,
+        *args: Any,
+        **kwargs: Any,
     ) -> Union[
         Generator[ConnectionT, None, None],
         AsyncGenerator[ConnectionT, None],
@@ -59,7 +61,9 @@ class DatabaseConfigProtocol(Generic[ConnectionT, PoolT], ABC):
 
     @abstractmethod
     def provide_pool(
-        self, *args: Any, **kwargs: Any
+        self,
+        *args: Any,
+        **kwargs: Any,
     ) -> Union[PoolT, Awaitable[PoolT], AbstractContextManager[PoolT], AbstractAsyncContextManager[PoolT]]:
         """Provide pool instance."""
         raise NotImplementedError
@@ -157,12 +161,14 @@ class ConfigManager:
     def get_config(self, name: type[AsyncConfigT]) -> AsyncConfigT: ...
 
     def get_config(
-        self, name: Union[type[DatabaseConfigProtocol[ConnectionT, PoolT]], Any]
+        self,
+        name: Union[type[DatabaseConfigProtocol[ConnectionT, PoolT]], Any],
     ) -> DatabaseConfigProtocol[ConnectionT, PoolT]:
         """Retrieve a configuration by its type."""
         config = self._configs.get(name)
         if not config:
-            raise KeyError(f"No configuration found for {name}")
+            msg = f"No configuration found for {name}"
+            raise KeyError(msg)
         return config
 
     @overload

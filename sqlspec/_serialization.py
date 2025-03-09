@@ -42,7 +42,9 @@ except ImportError:
 
         def encode_json(data: Any) -> str:  # pragma: no cover
             return _encode_json(
-                data, default=_type_to_string, option=OPT_SERIALIZE_NUMPY | OPT_NAIVE_UTC | OPT_SERIALIZE_UUID
+                data,
+                default=_type_to_string,
+                option=OPT_SERIALIZE_NUMPY | OPT_NAIVE_UTC | OPT_SERIALIZE_UUID,
             ).decode("utf-8")
 
     except ImportError:

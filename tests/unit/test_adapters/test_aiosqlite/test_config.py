@@ -22,7 +22,7 @@ def mock_aiosqlite_connection() -> Generator[MagicMock, None, None]:
     """Create a mock Aiosqlite connection."""
     connection = MagicMock(spec=Connection)
     connection.close = AsyncMock()
-    yield connection
+    return connection
 
 
 class TestAiosqliteConfig:

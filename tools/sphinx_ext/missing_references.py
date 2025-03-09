@@ -1,32 +1,32 @@
+# pyright: ignore=reportGeneralTypeIssues,reportMissingTypeArgument
 """Sphinx extension for changelog and change directives."""
-
-from __future__ import annotations
 
 import ast
 import importlib
 import inspect
 import re
-from functools import cache  # pyright: ignore[reportAttributeAccessIssue]
+from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Union, cast
 
+from docutils.nodes import Node
 from docutils.utils import get_source_line
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-    from docutils.nodes import Element, Node
+    from docutils.nodes import Element
     from sphinx.addnodes import pending_xref
     from sphinx.application import Sphinx
     from sphinx.environment import BuildEnvironment
 
 
 @cache
-def _get_module_ast(source_file: str) -> ast.AST | ast.Module:
+def _get_module_ast(source_file: str) -> "Union[ast.AST, ast.Module]":
     return ast.parse(Path(source_file).read_text(encoding="utf-8"))
 
 
-def _get_import_nodes(nodes: list[ast.stmt]) -> Generator[ast.Import | ast.ImportFrom, None, None]:
+def _get_import_nodes(nodes: "list[ast.stmt]") -> "Generator[Union[ast.Import, ast.ImportFrom], None, None]":
     for node in nodes:
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             yield node
@@ -35,7 +35,7 @@ def _get_import_nodes(nodes: list[ast.stmt]) -> Generator[ast.Import | ast.Impor
 
 
 @cache
-def get_module_global_imports(module_import_path: str, reference_target_source_obj: str) -> set[str]:
+def get_module_global_imports(module_import_path: str, reference_target_source_obj: str) -> "set[str]":
     """Return a set of names that are imported globally within the containing module of ``reference_target_source_obj``,
     including imports in ``if TYPE_CHECKING`` blocks.
     """
@@ -47,8 +47,8 @@ def get_module_global_imports(module_import_path: str, reference_target_source_o
     return {path.asname or path.name for import_node in import_nodes for path in import_node.names}
 
 
-def on_warn_missing_reference(app: Sphinx, domain: str, node: Node) -> bool | None:
-    ignore_refs: dict[str | re.Pattern, set[str] | re.Pattern] = app.config["ignore_missing_refs"]
+def on_warn_missing_reference(app: "Sphinx", domain: str, node: Node) -> "Optional[bool]":
+    ignore_refs: dict[Union[str, re.Pattern[str]], Union[set[str], re.Pattern[str]]] = app.config["ignore_missing_refs"]
     if node.tagname != "pending_xref":  # type: ignore[attr-defined]
         return None
 
@@ -56,13 +56,16 @@ def on_warn_missing_reference(app: Sphinx, domain: str, node: Node) -> bool | No
         return None
 
     attributes = node.attributes  # type: ignore[attr-defined]
-    target = attributes["reftarget"]
+    target = cast("str", attributes["reftarget"])
 
-    if reference_target_source_obj := attributes.get(
-        "py:class",
-        attributes.get("py:meth", attributes.get("py:func")),
+    if reference_target_source_obj := cast(
+        "Optional[str]",
+        attributes.get(  # pyright: ignore[reportUnknownMemberType]
+            "py:class",
+            attributes.get("py:meth", attributes.get("py:func")),  # pyright: ignore[reportUnknownMemberType]
+        ),
     ):
-        global_names = get_module_global_imports(attributes["py:module"], reference_target_source_obj)
+        global_names = get_module_global_imports(attributes["py:module"], reference_target_source_obj)  # pyright: ignore[reportUnknownArgumentType]
 
         if target in global_names:
             # autodoc has issues with if TYPE_CHECKING imports, and randomly with type aliases in annotations,
@@ -83,13 +86,18 @@ def on_warn_missing_reference(app: Sphinx, domain: str, node: Node) -> bool | No
             continue
         if isinstance(targets, set) and target in targets:
             return True
-        if targets.match(target):  # pyright: ignore[reportAttributeAccessIssue]
+        if targets.match(target):  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType]
             return True
 
     return None
 
 
-def on_missing_reference(app: Sphinx, env: BuildEnvironment, node: pending_xref, contnode: Element) -> Element | None:
+def on_missing_reference(
+    app: "Sphinx",
+    env: "BuildEnvironment",
+    node: "pending_xref",
+    contnode: "Element",
+) -> "Optional[Element]":
     if not hasattr(node, "attributes"):
         return None
 
@@ -107,16 +115,16 @@ def on_missing_reference(app: Sphinx, env: BuildEnvironment, node: pending_xref,
     return new_node
 
 
-def on_env_before_read_docs(app: Sphinx, env: BuildEnvironment, docnames: set[str]) -> None:
+def on_env_before_read_docs(app: "Sphinx", env: "BuildEnvironment", docnames: "set[str]") -> None:
     tmp_examples_path = Path.cwd() / "docs/_build/_tmp_examples"
     tmp_examples_path.mkdir(exist_ok=True, parents=True)
     env.tmp_examples_path = tmp_examples_path  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def setup(app: Sphinx) -> dict[str, bool]:
+def setup(app: "Sphinx") -> "dict[str, bool]":
     app.connect("env-before-read-docs", on_env_before_read_docs)
     app.connect("missing-reference", on_missing_reference)
     app.connect("warn-missing-reference", on_warn_missing_reference)
-    app.add_config_value("ignore_missing_refs", default={}, rebuild=False)
+    app.add_config_value("ignore_missing_refs", default={}, rebuild="env")
 
     return {"parallel_read_safe": True, "parallel_write_safe": True}

@@ -112,30 +112,42 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBPyConnection]):
         Args:
             connection: The DuckDB connection to configure extensions for.
 
-        Raises:
-            ImproperConfigurationError: If extension installation or configuration fails.
+
         """
         if self.extensions is Empty:
             return
 
         for extension in cast("list[ExtensionConfig]", self.extensions):
-            try:
-                if extension.get("force_install"):
-                    connection.install_extension(
-                        extension=extension["name"],
-                        force_install=extension.get("force_install", False),
-                        repository=extension.get("repository"),
-                        repository_url=extension.get("repository_url"),
-                        version=extension.get("version"),
-                    )
-                connection.load_extension(extension["name"])
+            self._configure_extension(connection, extension)
 
-                if extension.get("config"):
-                    for key, value in extension.get("config", {}).items():
-                        connection.execute(f"SET {key}={value}")
-            except Exception as e:
-                msg = f"Failed to configure extension {extension['name']}. Error: {e!s}"
-                raise ImproperConfigurationError(msg) from e
+    @staticmethod
+    def _configure_extension(connection: "DuckDBPyConnection", extension: ExtensionConfig) -> None:
+        """Configure a single extension for the connection.
+
+        Args:
+            connection: The DuckDB connection to configure extension for.
+            extension: The extension configuration to apply.
+
+        Raises:
+            ImproperConfigurationError: If extension installation or configuration fails.
+        """
+        try:
+            if extension.get("force_install"):
+                connection.install_extension(
+                    extension=extension["name"],
+                    force_install=extension.get("force_install", False),
+                    repository=extension.get("repository"),
+                    repository_url=extension.get("repository_url"),
+                    version=extension.get("version"),
+                )
+            connection.load_extension(extension["name"])
+
+            if extension.get("config"):
+                for key, value in extension.get("config", {}).items():
+                    connection.execute(f"SET {key}={value}")
+        except Exception as e:
+            msg = f"Failed to configure extension {extension['name']}. Error: {e!s}"
+            raise ImproperConfigurationError(msg) from e
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -164,10 +176,11 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBPyConnection]):
             connection = duckdb.connect(**self.connection_config_dict)  # pyright: ignore[reportUnknownMemberType]
             self._configure_extensions(connection)
             self._configure_connection(connection)
-            return connection
         except Exception as e:
             msg = f"Could not configure the DuckDB connection. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e
+        else:
+            return connection
 
     @contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[DuckDBPyConnection, None, None]":
@@ -176,8 +189,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBPyConnection]):
         Yields:
             A DuckDB connection instance.
 
-        Raises:
-            ImproperConfigurationError: If the connection could not be established.
+
         """
         connection = self.create_connection()
         try:

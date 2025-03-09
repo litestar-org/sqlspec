@@ -37,14 +37,13 @@ def mock_psycopg_pool() -> Generator[MagicMock, None, None]:
     # Set up context manager for connection
     connection = MagicMock(spec=Connection)
     pool.connection.return_value.__enter__.return_value = connection
-    yield pool
+    return pool
 
 
 @pytest.fixture
 def mock_psycopg_connection() -> Generator[MagicMock, None, None]:
     """Create a mock Psycopg connection."""
-    connection = MagicMock(spec=Connection)
-    yield connection
+    return MagicMock(spec=Connection)
 
 
 class TestPsycoPgSyncPoolConfig:
@@ -138,7 +137,8 @@ class TestPsycoPgSyncPoolConfig:
         """Test create_pool raises error without pool config or instance."""
         config = MockPsycoPgSyncDatabaseConfig()
         with pytest.raises(
-            ImproperConfigurationError, match="One of 'pool_config' or 'pool_instance' must be provided"
+            ImproperConfigurationError,
+            match="One of 'pool_config' or 'pool_instance' must be provided",
         ):
             config.create_pool()
 
