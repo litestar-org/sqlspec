@@ -254,7 +254,8 @@ def is_schema_without_field(obj: "Any", field_name: str) -> "TypeGuard[Supported
 
 
 def is_schema_or_dict_with_field(
-    obj: "Any", field_name: str
+    obj: "Any",
+    field_name: str,
 ) -> "TypeGuard[Union[SupportedSchemaModel, dict[str, Any]]]":
     """Check if a value is a msgspec Struct, Pydantic model, or dict with a specific field.
 
@@ -269,7 +270,8 @@ def is_schema_or_dict_with_field(
 
 
 def is_schema_or_dict_without_field(
-    obj: "Any", field_name: str
+    obj: "Any",
+    field_name: str,
 ) -> "TypeGuard[Union[SupportedSchemaModel, dict[str, Any]]]":
     """Check if a value is a msgspec Struct, Pydantic model, or dict without a specific field.
 
@@ -289,7 +291,8 @@ def is_dataclass(obj: "Any") -> "TypeGuard[DataclassProtocol]":
 
 
 def is_dataclass_with_field(
-    obj: "Any", field_name: str
+    obj: "Any",
+    field_name: str,
 ) -> "TypeGuard[object]":  # Can't specify dataclass type directly
     """Check if an object is a dataclass and has a specific field."""
     return is_dataclass(obj) and hasattr(obj, field_name)
@@ -398,8 +401,9 @@ def dataclass_to_dict(
     return cast("dict[str, Any]", ret)
 
 
-def schema_dump(
-    data: "Union[dict[str, Any],   DataclassProtocol, Struct, BaseModel]", exclude_unset: bool = True
+def schema_dump(  # noqa: PLR0911
+    data: "Union[dict[str, Any],   DataclassProtocol, Struct, BaseModel]",
+    exclude_unset: bool = True,
 ) -> "dict[str, Any]":
     """Dump a data object to a dictionary.
 
@@ -472,11 +476,11 @@ __all__ = (
 
 if TYPE_CHECKING:
     if not PYDANTIC_INSTALLED:
-        from ._typing import BaseModel, FailFast, TypeAdapter
+        from sqlspec._typing import BaseModel, FailFast, TypeAdapter
     else:
         from pydantic import BaseModel, FailFast, TypeAdapter  # noqa: TC004
 
     if not MSGSPEC_INSTALLED:
-        from ._typing import UNSET, Struct, UnsetType, convert
+        from sqlspec._typing import UNSET, Struct, UnsetType, convert
     else:
         from msgspec import UNSET, Struct, UnsetType, convert  # noqa: TC004

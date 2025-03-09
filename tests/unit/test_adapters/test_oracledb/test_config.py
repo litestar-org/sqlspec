@@ -42,7 +42,7 @@ def mock_oracle_connection() -> Generator[MagicMock, None, None]:
     async_cm = MagicMock()
     async_cm.__aenter__ = AsyncMock(return_value=connection)
     async_cm.__aexit__ = AsyncMock(return_value=None)
-    yield connection
+    return connection
 
 
 class TestOraclePoolConfig:
@@ -316,7 +316,8 @@ class TestOracleDatabaseConfig:
         """Test create_pool raises error without pool config or instance."""
         config = MockOracleDatabaseConfig()
         with pytest.raises(
-            ImproperConfigurationError, match="One of 'pool_config' or 'pool_instance' must be provided"
+            ImproperConfigurationError,
+            match="One of 'pool_config' or 'pool_instance' must be provided",
         ):
             await config.create_pool()
 

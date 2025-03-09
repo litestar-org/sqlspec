@@ -102,7 +102,7 @@ class TestDuckDBConfig:
                 "extensions": [
                     {"name": "ext1"},
                     {"name": "ext2", "force_install": True, "repository": "repo", "config": {"setting": "value"}},
-                ]
+                ],
             },
         )
         assert isinstance(config.extensions, list)

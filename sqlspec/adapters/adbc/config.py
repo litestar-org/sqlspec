@@ -22,9 +22,6 @@ class AdbcDatabaseConfig(NoPoolSyncConfig["Connection"]):
     ADBC Driver Manager.([1](https://arrow.apache.org/adbc/current/python/api/adbc_driver_manager.html))
     """
 
-    __supports_connection_pooling = False
-    __is_async = False
-
     uri: "Union[str, EmptyType]" = Empty
     """Database URI"""
     driver_name: "Union[str, EmptyType]" = Empty

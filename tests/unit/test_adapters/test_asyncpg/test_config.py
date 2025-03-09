@@ -35,8 +35,7 @@ def mock_asyncpg_pool() -> Generator[MagicMock, None, None]:
 @pytest.fixture
 def mock_asyncpg_connection() -> Generator[MagicMock, None, None]:
     """Create a mock AsyncPG connection."""
-    connection = MagicMock(spec=PoolConnectionProxy)
-    yield connection
+    return MagicMock(spec=PoolConnectionProxy)
 
 
 class TestAsyncPgPoolConfig:
@@ -141,7 +140,8 @@ class TestAsyncPgConfig:
         """Test create_pool raises error without pool config or instance."""
         config = MockAsyncPgConfig()
         with pytest.raises(
-            ImproperConfigurationError, match="One of 'pool_config' or 'pool_instance' must be provided"
+            ImproperConfigurationError,
+            match="One of 'pool_config' or 'pool_instance' must be provided",
         ):
             await config.create_pool()
 

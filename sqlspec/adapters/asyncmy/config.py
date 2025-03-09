@@ -78,7 +78,7 @@ class AsyncmyPoolConfig(GenericPoolConfig):
     init_command: "Union[str, EmptyType]" = Empty
     """Initial SQL statement to execute once connected."""
 
-    cursor_class: "Union[type[Cursor], type[DictCursor], EmptyType]" = Empty
+    cursor_class: "Union[type[Union[Cursor, DictCursor]], EmptyType]" = Empty
     """Custom cursor class to use."""
 
     minsize: "Union[int, EmptyType]" = Empty
@@ -125,6 +125,9 @@ class AsyncMyConfig(AsyncDatabaseConfig[Connection, Pool]):
 
         Returns:
             A string keyed dict of config kwargs for the Asyncmy create_pool function.
+
+        Raises:
+            ImproperConfigurationError: If the pool configuration is not provided.
         """
         if self.pool_config:
             return dataclass_to_dict(self.pool_config, exclude_empty=True, convert_nested=False)
@@ -151,10 +154,11 @@ class AsyncMyConfig(AsyncDatabaseConfig[Connection, Pool]):
             import asyncmy  # pyright: ignore[reportMissingTypeStubs]
 
             self.pool_instance = await asyncmy.create_pool(**self.pool_config_dict)  # pyright: ignore[reportUnknownMemberType]
-            return self.pool_instance  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
         except Exception as e:
             msg = f"Could not configure the Asyncmy pool. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e
+        else:
+            return self.pool_instance  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
 
     async def provide_pool(self, *args: "Any", **kwargs: "Any") -> "Pool":  # pyright: ignore[reportUnknownParameterType]
         """Create a pool instance.
@@ -171,8 +175,6 @@ class AsyncMyConfig(AsyncDatabaseConfig[Connection, Pool]):
         Yields:
             An Asyncmy connection instance.
 
-        Raises:
-            ImproperConfigurationError: If the connection could not be established.
         """
         pool = await self.provide_pool(*args, **kwargs)  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
         async with pool.acquire() as connection:  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
