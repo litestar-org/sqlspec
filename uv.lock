@@ -3419,7 +3419,7 @@ wheels = [
 
 [[package]]
 name = "sqlspec"
-version = "0.7.0"
+version = "0.7.1"
 source = { editable = "." }
 dependencies = [
     { name = "eval-type-backport", marker = "python_full_version < '3.10'" },

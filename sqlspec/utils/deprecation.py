@@ -50,7 +50,7 @@ def warn_deprecation(
 
     parts.extend(  # pyright: ignore[reportUnknownMemberType]
         (
-            f"Deprecated in advanced-alchemy {version}",
+            f"Deprecated in SQLSpec {version}",
             f"This {kind} will be removed in {removal_in or 'the next major version'}",
         ),
     )
