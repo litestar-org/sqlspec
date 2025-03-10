@@ -35,6 +35,9 @@ class SQLSpecPlugin(InitPluginProtocol):
 
         Args:
             app_config: The :class:`AppConfig <.config.app.AppConfig>` instance.
+
+        Returns:
+            The updated :class:`AppConfig <.config.app.AppConfig>` instance.
         """
 
         from sqlspec.base import ConfigManager
