@@ -103,8 +103,8 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBPyConnection]):
         Args:
             connection: The DuckDB connection to configure.
         """
-        for config in cast("list[str]", self.config):
-            connection.execute(config)
+        for key, value in cast("dict[str,Any]", self.config).items():
+            connection.execute(f"SET {key}='{value}'")
 
     def _configure_extensions(self, connection: "DuckDBPyConnection") -> None:
         """Configure extensions for the connection.
