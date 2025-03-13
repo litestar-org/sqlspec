@@ -1,8 +1,9 @@
+# ruff: noqa: PLR6301
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Generator
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from dataclasses import dataclass
-from typing import Annotated, Any, ClassVar, Generic, TypeVar, Union, cast, overload
+from typing import Annotated, Any, ClassVar, Generic, Optional, TypeVar, Union, cast, overload
 
 __all__ = (
     "AsyncDatabaseConfig",
@@ -17,14 +18,19 @@ ConnectionT = TypeVar("ConnectionT")
 PoolT = TypeVar("PoolT")
 AsyncConfigT = TypeVar("AsyncConfigT", bound="Union[AsyncDatabaseConfig[Any, Any], NoPoolAsyncConfig[Any]]")
 SyncConfigT = TypeVar("SyncConfigT", bound="Union[SyncDatabaseConfig[Any, Any], NoPoolSyncConfig[Any]]")
+ConfigT = TypeVar(
+    "ConfigT",
+    bound="Union[Union[AsyncDatabaseConfig[Any, Any], NoPoolAsyncConfig[Any]], SyncDatabaseConfig[Any, Any], NoPoolSyncConfig[Any]]",
+)
 
 
 @dataclass
-class DatabaseConfigProtocol(Generic[ConnectionT, PoolT], ABC):
+class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT]):
     """Protocol defining the interface for database configurations."""
 
     __is_async__: ClassVar[bool] = False
     __supports_connection_pooling__: ClassVar[bool] = False
+    pool_instance: Union[PoolT, None] = None
 
     def __hash__(self) -> int:
         return id(self)
@@ -60,6 +66,11 @@ class DatabaseConfigProtocol(Generic[ConnectionT, PoolT], ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def close_pool(self) -> Optional[Awaitable[None]]:
+        """Terminate the connection pool."""
+        raise NotImplementedError
+
+    @abstractmethod
     def provide_pool(
         self,
         *args: Any,
@@ -84,9 +95,13 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None]):
 
     __is_async__ = False
     __supports_connection_pooling__ = False
+    pool_instance: None = None
 
     def create_pool(self) -> None:
         """This database backend has not implemented the pooling configurations."""
+        return
+
+    def close_pool(self) -> None:
         return
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> None:
@@ -99,9 +114,13 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None]):
 
     __is_async__ = True
     __supports_connection_pooling__ = False
+    pool_instance: None = None
 
     async def create_pool(self) -> None:
         """This database backend has not implemented the pooling configurations."""
+        return
+
+    async def close_pool(self) -> None:
         return
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> None:
@@ -133,6 +152,8 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT]):
 class ConfigManager:
     """Type-safe configuration manager with literal inference."""
 
+    __slots__ = ("_configs",)
+
     def __init__(self) -> None:
         self._configs: dict[Any, DatabaseConfigProtocol[Any, Any]] = {}
 
@@ -149,7 +170,11 @@ class ConfigManager:
             AsyncConfigT,
         ],
     ) -> Union[Annotated[type[SyncConfigT], int], Annotated[type[AsyncConfigT], int]]:  # pyright: ignore[reportInvalidTypeVarUse]
-        """Add a new configuration to the manager."""
+        """Add a new configuration to the manager.
+
+        Returns:
+            A unique type key that can be used to retrieve the configuration later.
+        """
         key = Annotated[type(config), id(config)]  # type: ignore[valid-type]
         self._configs[key] = config
         return key  # type: ignore[return-value]  # pyright: ignore[reportReturnType]
@@ -164,7 +189,14 @@ class ConfigManager:
         self,
         name: Union[type[DatabaseConfigProtocol[ConnectionT, PoolT]], Any],
     ) -> DatabaseConfigProtocol[ConnectionT, PoolT]:
-        """Retrieve a configuration by its type."""
+        """Retrieve a configuration by its type.
+
+        Returns:
+            DatabaseConfigProtocol: The configuration instance for the given type.
+
+        Raises:
+            KeyError: If no configuration is found for the given type.
+        """
         config = self._configs.get(name)
         if not config:
             msg = f"No configuration found for {name}"
@@ -198,7 +230,15 @@ class ConfigManager:
             type[AsyncDatabaseConfig[ConnectionT, PoolT]],
         ],
     ) -> Union[ConnectionT, Awaitable[ConnectionT]]:
-        """Create and return a connection from the specified configuration."""
+        """Create and return a connection from the specified configuration.
+
+        Args:
+            name: The configuration type to use for creating the connection.
+
+        Returns:
+            Either a connection instance or an awaitable that resolves to a connection,
+            depending on whether the configuration is sync or async.
+        """
         config = self.get_config(name)
         return config.create_connection()
 
@@ -220,7 +260,15 @@ class ConfigManager:
             type[AsyncDatabaseConfig[ConnectionT, PoolT]],
         ],
     ) -> Union[type[PoolT], Awaitable[type[PoolT]], None]:
-        """Create and return a connection pool from the specified configuration."""
+        """Create and return a connection pool from the specified configuration.
+
+        Args:
+            name: The configuration type to use for creating the pool.
+
+        Returns:
+            Either a pool instance, an awaitable that resolves to a pool instance, or None
+            if the configuration does not support connection pooling.
+        """
         config = self.get_config(name)
         if isinstance(config, (NoPoolSyncConfig, NoPoolAsyncConfig)):
             return None

@@ -179,3 +179,9 @@ class AsyncMyConfig(AsyncDatabaseConfig[Connection, Pool]):
         pool = await self.provide_pool(*args, **kwargs)  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
         async with pool.acquire() as connection:  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             yield connection  # pyright: ignore[reportUnknownMemberType]
+
+    async def close_pool(self) -> None:
+        """Close the connection pool."""
+        if self.pool_instance is not None:
+            await self.pool_instance.close()
+            self.pool_instance = None

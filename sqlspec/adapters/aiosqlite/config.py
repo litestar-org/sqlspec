@@ -76,8 +76,6 @@ class AiosqliteConfig(NoPoolSyncConfig["Connection"]):
         Yields:
             An Aiosqlite connection instance.
 
-        Raises:
-            ImproperConfigurationError: If the connection could not be established.
         """
         connection = await self.create_connection()
         try:

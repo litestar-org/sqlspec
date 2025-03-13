@@ -29,6 +29,10 @@ class MockPsycoPgSyncDatabaseConfig(PsycoPgSyncDatabaseConfig):
         """Mock connection_config_dict property."""
         return {}
 
+    def close_pool(self) -> None:
+        """Mock close_pool method."""
+        pass
+
 
 @pytest.fixture
 def mock_psycopg_pool() -> Generator[MagicMock, None, None]:
