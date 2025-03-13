@@ -156,7 +156,12 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBPyConnection]):
         Returns:
             A string keyed dict of config kwargs for the duckdb.connect() function.
         """
-        config = dataclass_to_dict(self, exclude_empty=True, exclude={"extensions"}, convert_nested=False)
+        config = dataclass_to_dict(
+            self,
+            exclude_empty=True,
+            exclude={"extensions", "pool_instance"},
+            convert_nested=False,
+        )
         if not config.get("database"):
             config["database"] = ":memory:"
         return config

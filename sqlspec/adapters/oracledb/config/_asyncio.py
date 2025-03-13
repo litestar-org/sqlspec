@@ -54,17 +54,26 @@ class OracleAsyncDatabaseConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConnec
     def pool_config_dict(self) -> "dict[str, Any]":
         """Return the pool configuration as a dict.
 
+        Raises:
+            ImproperConfigurationError: If no pool_config is provided but a pool_instance
+
         Returns:
             A string keyed dict of config kwargs for the Asyncpg :func:`create_pool <oracledb.pool.create_pool>`
             function.
         """
         if self.pool_config is not None:
-            return dataclass_to_dict(self.pool_config, exclude_empty=True, convert_nested=False)
+            return dataclass_to_dict(
+                self.pool_config, exclude_empty=True, convert_nested=False, exclude={"pool_instance"}
+            )
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 
     async def create_pool(self) -> "AsyncConnectionPool":
         """Return a pool. If none exists yet, create one.
+
+        Raises:
+            ImproperConfigurationError: If neither pool_config nor pool_instance are provided,
+                or if the pool could not be configured.
 
         Returns:
             Getter that returns the pool instance used by the plugin.
@@ -95,8 +104,8 @@ class OracleAsyncDatabaseConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConnec
     async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[AsyncConnection, None]":
         """Create a connection instance.
 
-        Returns:
-            A connection instance.
+        Yields:
+            AsyncConnection: A connection instance.
         """
         db_pool = await self.provide_pool(*args, **kwargs)
         async with db_pool.acquire() as connection:  # pyright: ignore[reportUnknownMemberType]

@@ -268,6 +268,7 @@ ignore = [
   "ARG001",  # Unused function argument
   "CPY001",  # pycodestyle - Missing Copywrite notice at the top of the file
   "RUF029",  # Ruff - function is declared as async but has no awaitable calls
+  "COM812",  # flake8-comma - Missing trailing comma
 ]
 select = ["ALL"]
 

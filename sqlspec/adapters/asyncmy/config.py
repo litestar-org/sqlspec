@@ -130,7 +130,12 @@ class AsyncMyConfig(AsyncDatabaseConfig[Connection, Pool]):
             ImproperConfigurationError: If the pool configuration is not provided.
         """
         if self.pool_config:
-            return dataclass_to_dict(self.pool_config, exclude_empty=True, convert_nested=False)
+            return dataclass_to_dict(
+                self.pool_config,
+                exclude_empty=True,
+                convert_nested=False,
+                exclude={"pool_instance"},
+            )
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 

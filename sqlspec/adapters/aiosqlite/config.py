@@ -50,7 +50,7 @@ class AiosqliteConfig(NoPoolSyncConfig["Connection"]):
         Returns:
             A string keyed dict of config kwargs for the aiosqlite.connect() function.
         """
-        return dataclass_to_dict(self, exclude_empty=True, convert_nested=False)
+        return dataclass_to_dict(self, exclude_empty=True, convert_nested=False, exclude={"pool_instance"})
 
     async def create_connection(self) -> "Connection":
         """Create and return a new database connection.

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Literal, Union
+from typing import TYPE_CHECKING, Any, Literal, Union
 
 from litestar.di import Provide
 from litestar.plugins import InitPluginProtocol
@@ -6,7 +6,9 @@ from litestar.plugins import InitPluginProtocol
 from sqlspec.base import (
     AsyncConfigT,
     ConfigManager,
+    ConnectionT,
     DatabaseConfigProtocol,
+    PoolT,
     SyncConfigT,
 )
 from sqlspec.exceptions import ImproperConfigurationError
@@ -23,7 +25,7 @@ DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
 
 
-class SQLSpecPlugin(InitPluginProtocol, ConfigManager):
+class SQLSpec(InitPluginProtocol, ConfigManager):
     """SQLSpec plugin."""
 
     __slots__ = ("_config", "_plugin_configs")
@@ -37,7 +39,7 @@ class SQLSpecPlugin(InitPluginProtocol, ConfigManager):
         Args:
             config: configure SQLSpec plugin for use with Litestar.
         """
-        super().__init__()
+        self._configs: dict[Any, DatabaseConfigProtocol[Any, Any]] = {}
         if isinstance(config, DatabaseConfigProtocol):
             self._plugin_configs: list[DatabaseConfig] = [DatabaseConfig(config=config)]
         elif isinstance(config, DatabaseConfig):
@@ -67,7 +69,17 @@ class SQLSpecPlugin(InitPluginProtocol, ConfigManager):
             The updated :class:`AppConfig <.config.app.AppConfig>` instance.
         """
         self._validate_dependency_keys()
-        app_config.signature_types.append(ConfigManager)
+        app_config.signature_types.extend(
+            [
+                ConfigManager,
+                ConnectionT,
+                PoolT,
+                DatabaseConfig,
+                DatabaseConfigProtocol,
+                SyncConfigT,
+                AsyncConfigT,
+            ]
+        )
         for c in self._plugin_configs:
             c.annotation = self.add_config(c.config)
             app_config.before_send.append(c.before_send_handler)

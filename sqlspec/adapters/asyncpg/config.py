@@ -101,7 +101,9 @@ class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):  # pyright: ignore
             ImproperConfigurationError: If no pool_config is provided but a pool_instance is set.
         """
         if self.pool_config:
-            return dataclass_to_dict(self.pool_config, exclude_empty=True, convert_nested=False)
+            return dataclass_to_dict(
+                self.pool_config, exclude_empty=True, exclude={"pool_instance"}, convert_nested=False
+            )
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 

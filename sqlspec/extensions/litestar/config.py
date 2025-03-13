@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Callable, Literal, Optional, Union
 
 from sqlspec.base import (
     ConnectionT,
+    PoolT,
 )
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.handlers import (
@@ -53,6 +54,9 @@ class DatabaseConfig:
     annotation: "type[Union[SyncConfigT, AsyncConfigT]]" = field(init=False, repr=False, hash=False)  # type: ignore[valid-type]   # pyright: ignore[reportGeneralTypeIssues]
 
     def __post_init__(self) -> None:
+        if not self.config.support_connection_pooling and self.pool_key == DEFAULT_POOL_KEY:  # type: ignore[union-attr,unused-ignore]
+            """If the database configuration does not support connection pooling, the pool key must be unique.  We just automatically generate a unique identify so it won't conflict with other configs that may get added"""
+            self.pool_key = f"_{self.pool_key}_{id(self.config)}"
         if self.commit_mode == "manual":
             self.before_send_handler = manual_handler_maker(connection_scope_key=self.connection_key)
         elif self.commit_mode == "autocommit":

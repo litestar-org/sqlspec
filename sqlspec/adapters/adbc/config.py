@@ -40,7 +40,11 @@ class AdbcDatabaseConfig(NoPoolSyncConfig["Connection"]):
 
     @contextmanager
     def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[Connection, None, None]":
-        """Create and provide a database connection."""
+        """Create and provide a database connection.
+
+        Yields:
+            Connection: A database connection instance.
+        """
         from adbc_driver_manager.dbapi import connect
 
         with connect(**self.connection_params) as connection:

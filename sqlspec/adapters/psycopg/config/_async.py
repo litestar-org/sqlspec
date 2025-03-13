@@ -44,14 +44,31 @@ class PsycoPgAsyncDatabaseConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConne
 
     @property
     def pool_config_dict(self) -> "dict[str, Any]":
-        """Return the pool configuration as a dict."""
+        """Return the pool configuration as a dict.
+
+        Raises:
+            ImproperConfigurationError: If pool_config is not set but pool_instance is provided.
+        """
         if self.pool_config:
-            return dataclass_to_dict(self.pool_config, exclude_empty=True, convert_nested=False)
+            return dataclass_to_dict(
+                self.pool_config,
+                exclude_empty=True,
+                convert_nested=False,
+                exclude={"pool_instance"},
+            )
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 
     async def create_pool(self) -> "AsyncConnectionPool":
-        """Create and return a connection pool."""
+        """Create and return a connection pool.
+
+        Returns:
+            AsyncConnectionPool: The configured connection pool.
+
+        Raises:
+            ImproperConfigurationError: If neither pool_config nor pool_instance are provided
+                or if pool creation fails.
+        """
         if self.pool_instance is not None:
             return self.pool_instance
 
@@ -67,12 +84,20 @@ class PsycoPgAsyncDatabaseConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConne
         return self.pool_instance
 
     def provide_pool(self, *args: "Any", **kwargs: "Any") -> "Awaitable[AsyncConnectionPool]":
-        """Create and return a connection pool."""
+        """Create and return a connection pool.
+
+        Returns:
+            Awaitable[AsyncConnectionPool]: The configured connection pool.
+        """
         return self.create_pool()
 
     @asynccontextmanager
     async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[AsyncConnection, None]":
-        """Create and provide a database connection."""
+        """Create and provide a database connection.
+
+        Yields:
+            AsyncConnection: A database connection from the pool.
+        """
         pool = await self.provide_pool(*args, **kwargs)
         async with pool.connection() as connection:
             yield connection
