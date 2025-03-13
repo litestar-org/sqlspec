@@ -270,6 +270,28 @@ class ConfigManager:
             if the configuration does not support connection pooling.
         """
         config = self.get_config(name)
-        if isinstance(config, (NoPoolSyncConfig, NoPoolAsyncConfig)):
-            return None
-        return cast("Union[type[PoolT], Awaitable[type[PoolT]]]", config.create_pool())
+        if config.support_connection_pooling:
+            return cast("Union[type[PoolT], Awaitable[type[PoolT]]]", config.create_pool())
+        return None
+
+    def close_pool(
+        self,
+        name: Union[
+            type[NoPoolSyncConfig[ConnectionT]],
+            type[NoPoolAsyncConfig[ConnectionT]],
+            type[SyncDatabaseConfig[ConnectionT, PoolT]],
+            type[AsyncDatabaseConfig[ConnectionT, PoolT]],
+        ],
+    ) -> Optional[Awaitable[None]]:
+        """Close the connection pool for the specified configuration.
+
+        Args:
+            name: The configuration type whose pool to close.
+
+        Returns:
+            An awaitable if the configuration is async, otherwise None.
+        """
+        config = self.get_config(name)
+        if config.support_connection_pooling:
+            return config.close_pool()
+        return None
