@@ -45,7 +45,7 @@ PY_ATTR = "py:attr"
 PY_OBJ = "py:obj"
 
 nitpicky = True
-nitpick_ignore = []
+nitpick_ignore: list[str] = []
 nitpick_ignore_regex = [
     (PY_RE, r"sqlspec.*\.T"),
 ]

@@ -267,6 +267,8 @@ ignore = [
   "ARG002",  # Unused method argument
   "ARG001",  # Unused function argument
   "CPY001",  # pycodestyle - Missing Copywrite notice at the top of the file
+  "RUF029",  # Ruff - function is declared as async but has no awaitable calls
+  "COM812",  # flake8-comma - Missing trailing comma
 ]
 select = ["ALL"]
 
@@ -310,6 +312,8 @@ known-first-party = ["sqlspec", "tests"]
   "TRY",
   "PT012",
   "INP001",
+  "DOC",
+  "PLC",
 ]
 "tools/**/*.*" = ["D", "ARG", "EM", "TRY", "G", "FBT", "S603", "F811", "PLW0127", "PLR0911"]
 "tools/prepare_release.py" = ["S603", "S607"]

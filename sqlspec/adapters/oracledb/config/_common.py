@@ -27,7 +27,7 @@ PoolT = TypeVar("PoolT", bound="Union[ConnectionPool, AsyncConnectionPool]")
 
 
 @dataclass
-class OracleGenericPoolConfig(Generic[ConnectionT, PoolT], GenericPoolConfig):
+class OracleGenericPoolConfig(GenericPoolConfig, Generic[ConnectionT, PoolT]):
     """Configuration for Oracle database connection pools.
 
     This class provides configuration options for both synchronous and asynchronous Oracle

@@ -86,7 +86,7 @@ def on_warn_missing_reference(app: "Sphinx", domain: str, node: Node) -> "Option
             continue
         if isinstance(targets, set) and target in targets:
             return True
-        if targets.match(target):  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType]
+        if targets.match(target):  # type: ignore[union-attr]  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType]
             return True
 
     return None
@@ -118,7 +118,7 @@ def on_missing_reference(
 def on_env_before_read_docs(app: "Sphinx", env: "BuildEnvironment", docnames: "set[str]") -> None:
     tmp_examples_path = Path.cwd() / "docs/_build/_tmp_examples"
     tmp_examples_path.mkdir(exist_ok=True, parents=True)
-    env.tmp_examples_path = tmp_examples_path  # pyright: ignore[reportAttributeAccessIssue]
+    env.tmp_examples_path = tmp_examples_path  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def setup(app: "Sphinx") -> "dict[str, bool]":

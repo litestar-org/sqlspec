@@ -54,7 +54,7 @@ class SqliteConfig(NoPoolSyncConfig["Connection"]):
         Returns:
             A string keyed dict of config kwargs for the sqlite3.connect() function.
         """
-        return dataclass_to_dict(self, exclude_empty=True, convert_nested=False)
+        return dataclass_to_dict(self, exclude_empty=True, convert_nested=False, exclude={"pool_instance"})
 
     def create_connection(self) -> "Connection":
         """Create and return a new database connection.
@@ -80,8 +80,6 @@ class SqliteConfig(NoPoolSyncConfig["Connection"]):
         Yields:
             A SQLite connection instance.
 
-        Raises:
-            ImproperConfigurationError: If the connection could not be established.
         """
         connection = self.create_connection()
         try:

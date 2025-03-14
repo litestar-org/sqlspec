@@ -43,14 +43,31 @@ class PsycoPgSyncDatabaseConfig(SyncDatabaseConfig[Connection, ConnectionPool]):
 
     @property
     def pool_config_dict(self) -> "dict[str, Any]":
-        """Return the pool configuration as a dict."""
+        """Return the pool configuration as a dict.
+
+        Raises:
+            ImproperConfigurationError: If pool_config is not provided and instead pool_instance is used.
+        """
         if self.pool_config:
-            return dataclass_to_dict(self.pool_config, exclude_empty=True, convert_nested=False)
+            return dataclass_to_dict(
+                self.pool_config,
+                exclude_empty=True,
+                convert_nested=False,
+                exclude={"pool_instance"},
+            )
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 
     def create_pool(self) -> "ConnectionPool":
-        """Create and return a connection pool."""
+        """Create and return a connection pool.
+
+        Returns:
+            ConnectionPool: The configured connection pool instance.
+
+        Raises:
+            ImproperConfigurationError: If neither pool_config nor pool_instance is provided,
+                or if the pool could not be configured.
+        """
         if self.pool_instance is not None:
             return self.pool_instance
 
@@ -66,12 +83,20 @@ class PsycoPgSyncDatabaseConfig(SyncDatabaseConfig[Connection, ConnectionPool]):
         return self.pool_instance
 
     def provide_pool(self, *args: "Any", **kwargs: "Any") -> "ConnectionPool":
-        """Create and return a connection pool."""
+        """Create and return a connection pool.
+
+        Returns:
+            ConnectionPool: The configured connection pool instance.
+        """
         return self.create_pool()
 
     @contextmanager
     def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[Connection, None, None]":
-        """Create and provide a database connection."""
+        """Create and provide a database connection.
+
+        Yields:
+            Connection: A database connection from the pool.
+        """
         pool = self.provide_pool(*args, **kwargs)
         with pool.connection() as connection:
             yield connection

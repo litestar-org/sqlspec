@@ -22,7 +22,7 @@ PoolT = TypeVar("PoolT", bound="Union[ConnectionPool, AsyncConnectionPool]")
 
 
 @dataclass
-class PsycoPgGenericPoolConfig(Generic[ConnectionT, PoolT], GenericPoolConfig):
+class PsycoPgGenericPoolConfig(GenericPoolConfig, Generic[ConnectionT, PoolT]):
     """Configuration for Psycopg connection pools.
 
     This class provides configuration options for both synchronous and asynchronous Psycopg

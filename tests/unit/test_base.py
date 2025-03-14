@@ -58,6 +58,9 @@ class MockDatabaseConfig(SyncDatabaseConfig[MockConnection, MockPool]):
     def create_pool(self) -> MockPool:
         return MockPool()
 
+    def close_pool(self) -> None:
+        pass
+
     def provide_pool(self, *args: Any, **kwargs: Any) -> AbstractContextManager[MockPool]:
         @contextmanager
         def _provide_pool() -> Generator[MockPool, None, None]:
@@ -84,6 +87,9 @@ class MockNonPoolConfig(NoPoolSyncConfig[MockConnection]):
         finally:
             connection.close()
 
+    def close_pool(self) -> None:
+        pass
+
     @property
     def connection_config_dict(self) -> dict[str, Any]:
         return {"host": "localhost", "port": 5432}
@@ -102,6 +108,9 @@ class MockAsyncNonPoolConfig(NoPoolAsyncConfig[MockAsyncConnection]):
             yield connection
         finally:
             await connection.close()
+
+    async def close_pool(self) -> None:
+        pass
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:

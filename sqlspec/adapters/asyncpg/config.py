@@ -96,9 +96,14 @@ class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):  # pyright: ignore
         Returns:
             A string keyed dict of config kwargs for the Asyncpg :func:`create_pool <asyncpg.pool.create_pool>`
             function.
+
+        Raises:
+            ImproperConfigurationError: If no pool_config is provided but a pool_instance is set.
         """
         if self.pool_config:
-            return dataclass_to_dict(self.pool_config, exclude_empty=True, convert_nested=False)
+            return dataclass_to_dict(
+                self.pool_config, exclude_empty=True, exclude={"pool_instance"}, convert_nested=False
+            )
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 
@@ -107,6 +112,10 @@ class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):  # pyright: ignore
 
         Returns:
             Getter that returns the pool instance used by the plugin.
+
+        Raises:
+            ImproperConfigurationError: If neither pool_config nor pool_instance are provided,
+                or if the pool could not be configured.
         """
         if self.pool_instance is not None:
             return self.pool_instance
@@ -136,9 +145,15 @@ class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):  # pyright: ignore
     async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[PoolConnectionProxy, None]":  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]
         """Create a connection instance.
 
-        Returns:
+        Yields:
             A connection instance.
         """
         db_pool = await self.provide_pool(*args, **kwargs)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
         async with db_pool.acquire() as connection:  # pyright: ignore[reportUnknownVariableType]
             yield connection
+
+    async def close_pool(self) -> None:
+        """Close the pool."""
+        if self.pool_instance is not None:
+            await self.pool_instance.close()
+            self.pool_instance = None

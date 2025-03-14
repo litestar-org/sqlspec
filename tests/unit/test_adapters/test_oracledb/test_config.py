@@ -214,6 +214,10 @@ class MockOracleDatabaseConfig(AsyncDatabaseConfig[Connection, ConnectionPool]):
         """Mock create_connection method."""
         return MagicMock(spec=Connection)
 
+    async def close_pool(self) -> None:
+        """Mock close_pool method."""
+        pass
+
     @property
     def connection_config_dict(self) -> dict[str, Any]:
         """Mock connection_config_dict property."""
