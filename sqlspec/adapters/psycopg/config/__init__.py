@@ -1,9 +1,9 @@
-from sqlspec.adapters.psycopg.config._async import PsycoPgAsyncDatabaseConfig, PsycoPgAsyncPoolConfig
-from sqlspec.adapters.psycopg.config._sync import PsycoPgSyncDatabaseConfig, PsycoPgSyncPoolConfig
+from sqlspec.adapters.psycopg.config._async import PsycoPgAsync, PsycoPgAsyncPool
+from sqlspec.adapters.psycopg.config._sync import PsycoPgSync, PsycoPgSyncPool
 
 __all__ = (
-    "PsycoPgAsyncDatabaseConfig",
-    "PsycoPgAsyncPoolConfig",
-    "PsycoPgSyncDatabaseConfig",
-    "PsycoPgSyncPoolConfig",
+    "PsycoPgAsync",
+    "PsycoPgAsyncPool",
+    "PsycoPgSync",
+    "PsycoPgSyncPool",
 )

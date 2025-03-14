@@ -2,8 +2,8 @@ from aiosqlite import Connection
 from duckdb import DuckDBPyConnection
 from litestar import Litestar, get
 
-from sqlspec.adapters.aiosqlite import AiosqliteConfig
-from sqlspec.adapters.duckdb import DuckDBConfig
+from sqlspec.adapters.aiosqlite import Aiosqlite
+from sqlspec.adapters.duckdb import DuckDB
 from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
 
 
@@ -21,8 +21,8 @@ async def simple_sqlite(db_connection: Connection) -> dict[str, str]:
 
 sqlspec = SQLSpec(
     config=[
-        DatabaseConfig(config=AiosqliteConfig(), commit_mode="autocommit"),
-        DatabaseConfig(config=DuckDBConfig(), connection_key="etl_session"),
+        DatabaseConfig(config=Aiosqlite(), commit_mode="autocommit"),
+        DatabaseConfig(config=DuckDB(), connection_key="etl_session"),
     ],
 )
 app = Litestar(route_handlers=[simple_sqlite, simple_select], plugins=[sqlspec])

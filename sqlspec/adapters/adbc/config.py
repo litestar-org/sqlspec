@@ -11,11 +11,11 @@ if TYPE_CHECKING:
 
     from adbc_driver_manager.dbapi import Connection
 
-__all__ = ("AdbcDatabaseConfig",)
+__all__ = ("Adbc",)
 
 
 @dataclass
-class AdbcDatabaseConfig(NoPoolSyncConfig["Connection"]):
+class Adbc(NoPoolSyncConfig["Connection"]):
     """Configuration for ADBC connections.
 
     This class provides configuration options for ADBC database connections using the

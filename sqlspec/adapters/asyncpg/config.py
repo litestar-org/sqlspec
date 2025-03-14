@@ -20,8 +20,8 @@ if TYPE_CHECKING:
 
 
 __all__ = (
-    "AsyncPgConfig",
-    "AsyncPgPoolConfig",
+    "AsyncPg",
+    "AsyncPgPool",
 )
 
 
@@ -31,7 +31,7 @@ PgConnection: TypeAlias = "Union[Connection, PoolConnectionProxy]"  # pyright: i
 
 
 @dataclass
-class AsyncPgPoolConfig(GenericPoolConfig):
+class AsyncPgPool(GenericPoolConfig):
     """Configuration for Asyncpg's :class:`Pool <asyncpg.pool.Pool>`.
 
     For details see: https://magicstack.github.io/asyncpg/current/api/index.html#connection-pools
@@ -71,10 +71,10 @@ class AsyncPgPoolConfig(GenericPoolConfig):
 
 
 @dataclass
-class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):  # pyright: ignore[reportMissingTypeArgument]
+class AsyncPg(AsyncDatabaseConfig[PgConnection, Pool]):  # pyright: ignore[reportMissingTypeArgument]
     """Asyncpg Configuration."""
 
-    pool_config: "Optional[AsyncPgPoolConfig]" = None
+    pool_config: "Optional[AsyncPgPool]" = None
     """Asyncpg Pool configuration"""
     json_deserializer: "Callable[[str], Any]" = decode_json
     """For dialects that support the :class:`JSON <sqlalchemy.types.JSON>` datatype, this is a Python callable that will
@@ -126,11 +126,9 @@ class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):  # pyright: ignore
 
         pool_config = self.pool_config_dict
         self.pool_instance = await asyncpg_create_pool(**pool_config)
-        if self.pool_instance is None:
-            msg = "Could not configure the 'pool_instance'. Please check your configuration."
-            raise ImproperConfigurationError(
-                msg,
-            )
+        if self.pool_instance is None:  # pyright: ignore[reportUnnecessaryComparison]
+            msg = "Could not configure the 'pool_instance'. Please check your configuration."  # type: ignore[unreachable]
+            raise ImproperConfigurationError(msg)
         return self.pool_instance
 
     def provide_pool(self, *args: "Any", **kwargs: "Any") -> "Awaitable[Pool]":  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]

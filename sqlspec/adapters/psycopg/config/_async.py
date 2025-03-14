@@ -16,18 +16,18 @@ if TYPE_CHECKING:
 
 
 __all__ = (
-    "PsycoPgAsyncDatabaseConfig",
-    "PsycoPgAsyncPoolConfig",
+    "PsycoPgAsync",
+    "PsycoPgAsyncPool",
 )
 
 
 @dataclass
-class PsycoPgAsyncPoolConfig(PsycoPgGenericPoolConfig[AsyncConnection, AsyncConnectionPool]):
+class PsycoPgAsyncPool(PsycoPgGenericPoolConfig[AsyncConnection, AsyncConnectionPool]):
     """Async Psycopg Pool Config"""
 
 
 @dataclass
-class PsycoPgAsyncDatabaseConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPool]):
+class PsycoPgAsync(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPool]):
     """Async Psycopg database Configuration.
 
     This class provides the base configuration for Psycopg database connections, extending
@@ -37,7 +37,7 @@ class PsycoPgAsyncDatabaseConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConne
     with both synchronous and asynchronous connections.([2](https://www.psycopg.org/psycopg3/docs/api/connections.html))
     """
 
-    pool_config: "Optional[PsycoPgAsyncPoolConfig]" = None
+    pool_config: "Optional[PsycoPgAsyncPool]" = None
     """Psycopg Pool configuration"""
     pool_instance: "Optional[AsyncConnectionPool]" = None
     """Optional pool to use"""

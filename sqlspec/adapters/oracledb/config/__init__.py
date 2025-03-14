@@ -1,9 +1,9 @@
-from sqlspec.adapters.oracledb.config._asyncio import OracleAsyncDatabaseConfig, OracleAsyncPoolConfig
-from sqlspec.adapters.oracledb.config._sync import OracleSyncDatabaseConfig, OracleSyncPoolConfig
+from sqlspec.adapters.oracledb.config._asyncio import OracleAsync, OracleAsyncPool
+from sqlspec.adapters.oracledb.config._sync import OracleSync, OracleSyncPool
 
 __all__ = (
-    "OracleAsyncDatabaseConfig",
-    "OracleAsyncPoolConfig",
-    "OracleSyncDatabaseConfig",
-    "OracleSyncPoolConfig",
+    "OracleAsync",
+    "OracleAsyncPool",
+    "OracleSync",
+    "OracleSyncPool",
 )

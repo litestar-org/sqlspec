@@ -13,11 +13,11 @@ if TYPE_CHECKING:
 
     from aiosqlite import Connection
 
-__all__ = ("AiosqliteConfig",)
+__all__ = ("Aiosqlite",)
 
 
 @dataclass
-class AiosqliteConfig(NoPoolSyncConfig["Connection"]):
+class Aiosqlite(NoPoolSyncConfig["Connection"]):
     """Configuration for Aiosqlite database connections.
 
     This class provides configuration options for Aiosqlite database connections, wrapping all parameters

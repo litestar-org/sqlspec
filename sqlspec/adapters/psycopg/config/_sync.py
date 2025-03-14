@@ -16,18 +16,18 @@ if TYPE_CHECKING:
 
 
 __all__ = (
-    "PsycoPgSyncDatabaseConfig",
-    "PsycoPgSyncPoolConfig",
+    "PsycoPgSync",
+    "PsycoPgSyncPool",
 )
 
 
 @dataclass
-class PsycoPgSyncPoolConfig(PsycoPgGenericPoolConfig[Connection, ConnectionPool]):
+class PsycoPgSyncPool(PsycoPgGenericPoolConfig[Connection, ConnectionPool]):
     """Sync Psycopg Pool Config"""
 
 
 @dataclass
-class PsycoPgSyncDatabaseConfig(SyncDatabaseConfig[Connection, ConnectionPool]):
+class PsycoPgSync(SyncDatabaseConfig[Connection, ConnectionPool]):
     """Sync Psycopg database Configuration.
     This class provides the base configuration for Psycopg database connections, extending
     the generic database configuration with Psycopg-specific settings.([1](https://www.psycopg.org/psycopg3/docs/api/connections.html))
@@ -36,7 +36,7 @@ class PsycoPgSyncDatabaseConfig(SyncDatabaseConfig[Connection, ConnectionPool]):
     with both synchronous and asynchronous connections.([2](https://www.psycopg.org/psycopg3/docs/api/connections.html))
     """
 
-    pool_config: "Optional[PsycoPgSyncPoolConfig]" = None
+    pool_config: "Optional[PsycoPgSyncPool]" = None
     """Psycopg Pool configuration"""
     pool_instance: "Optional[ConnectionPool]" = None
     """Optional pool to use"""

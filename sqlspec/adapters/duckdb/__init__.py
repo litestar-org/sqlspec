@@ -1,3 +1,3 @@
-from sqlspec.adapters.duckdb.config import DuckDBConfig
+from sqlspec.adapters.duckdb.config import DuckDB
 
-__all__ = ("DuckDBConfig",)
+__all__ = ("DuckDB",)

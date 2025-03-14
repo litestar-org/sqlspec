@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiosqlite import Connection
 
-from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
+from sqlspec.adapters.aiosqlite.config import Aiosqlite
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty
 
@@ -25,12 +25,12 @@ def mock_aiosqlite_connection() -> Generator[MagicMock, None, None]:
     return connection
 
 
-class TestAiosqliteConfig:
-    """Test AiosqliteConfig class."""
+class TestAiosqlite:
+    """Test Aiosqlite class."""
 
     def test_minimal_config(self) -> None:
         """Test minimal configuration with only required values."""
-        config = AiosqliteConfig()
+        config = Aiosqlite()
         assert config.database == ":memory:"
         assert config.timeout is Empty
         assert config.detect_types is Empty
@@ -42,7 +42,7 @@ class TestAiosqliteConfig:
 
     def test_full_config(self) -> None:
         """Test configuration with all values set."""
-        config = AiosqliteConfig(
+        config = Aiosqlite(
             database=":memory:",
             timeout=5.0,
             detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
@@ -64,7 +64,7 @@ class TestAiosqliteConfig:
 
     def test_connection_config_dict(self) -> None:
         """Test connection_config_dict property."""
-        config = AiosqliteConfig(
+        config = Aiosqlite(
             database=":memory:",
             timeout=5.0,
             detect_types=sqlite3.PARSE_DECLTYPES,
@@ -82,7 +82,7 @@ class TestAiosqliteConfig:
     async def test_create_connection_success(self, mock_aiosqlite_connection: MagicMock) -> None:
         """Test successful connection creation."""
         with patch("aiosqlite.connect", AsyncMock(return_value=mock_aiosqlite_connection)) as mock_connect:
-            config = AiosqliteConfig(database=":memory:")
+            config = Aiosqlite(database=":memory:")
             connection = await config.create_connection()
 
             assert connection is mock_aiosqlite_connection
@@ -92,7 +92,7 @@ class TestAiosqliteConfig:
     async def test_create_connection_failure(self) -> None:
         """Test connection creation failure."""
         with patch("aiosqlite.connect", AsyncMock(side_effect=Exception("Connection failed"))):
-            config = AiosqliteConfig(database=":memory:")
+            config = Aiosqlite(database=":memory:")
             with pytest.raises(ImproperConfigurationError, match="Could not configure the Aiosqlite connection"):
                 await config.create_connection()
 
@@ -100,7 +100,7 @@ class TestAiosqliteConfig:
     async def test_provide_connection(self, mock_aiosqlite_connection: MagicMock) -> None:
         """Test provide_connection context manager."""
         with patch("aiosqlite.connect", AsyncMock(return_value=mock_aiosqlite_connection)):
-            config = AiosqliteConfig(database=":memory:")
+            config = Aiosqlite(database=":memory:")
             async with config.provide_connection() as conn:
                 assert conn is mock_aiosqlite_connection
 
