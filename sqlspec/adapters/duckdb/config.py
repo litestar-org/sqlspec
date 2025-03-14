@@ -1,9 +1,9 @@
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Union, cast
 
 from duckdb import DuckDBPyConnection
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import Literal, NotRequired, TypedDict
 
 from sqlspec.base import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
 
 
-__all__ = ("DuckDBConfig", "ExtensionConfig")
+__all__ = ("DuckDB", "ExtensionConfig")
 
 
 class ExtensionConfig(TypedDict):
@@ -39,29 +39,30 @@ class ExtensionConfig(TypedDict):
     """Optional version of the extension to install"""
 
 
-@dataclass
-class SecretConfig:
+class SecretConfig(TypedDict):
     """Configuration for a secret to store in a connection.
 
     This class provides configuration options for storing a secret in a connection for later retrieval.
 
-    For details see: https://duckdb.org/docs/api/python/overview#connection-options
+    For details see: https://duckdb.org/docs/stable/configuration/secrets_manager
     """
 
-    secret_type: str = field()
+    secret_type: Union[
+        Literal["azure", "gcs", "s3", "r2", "huggingface", "http", "mysql", "postgres", "bigquery"], str  # noqa: PYI051
+    ]
     """The type of secret to store"""
-    name: str = field()
+    name: str
     """The name of the secret to store"""
-    persist: bool = field(default=False)
-    """Whether to persist the secret"""
-    value: dict[str, Any] = field(default_factory=dict)
+    value: dict[str, Any]
     """The secret value to store"""
-    replace_if_exists: bool = field(default=True)
+    persist: NotRequired[bool]
+    """Whether to persist the secret"""
+    replace_if_exists: NotRequired[bool]
     """Whether to replace the secret if it already exists"""
 
 
 @dataclass
-class DuckDBConfig(NoPoolSyncConfig[DuckDBPyConnection]):
+class DuckDB(NoPoolSyncConfig[DuckDBPyConnection]):
     """Configuration for DuckDB database connections.
 
     This class provides configuration options for DuckDB database connections, wrapping all parameters
@@ -155,7 +156,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBPyConnection]):
         Returns:
             bool: True if the secret exists, False otherwise.
         """
-        results = connection.execute("select 1 from duckdb_secrets() where name=?", name).fetchone()
+        results = connection.execute("select 1 from duckdb_secrets() where name=?", name).fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
         return results is not None
 
     @classmethod
@@ -175,12 +176,14 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBPyConnection]):
         """
         try:
             for secret in secrets:
-                secret_exists = cls._secret_exists(connection, secret.name)
-                if not secret_exists or secret.replace_if_exists:
-                    connection.execute(f"""create or replace {"persistent" if secret.persist else ""} secret {secret.name} (
-                        type {secret.secret_type},
-                        {" ,".join([f"{k} '{v}'" for k, v in secret.value.items()])}
-                    ) """)
+                secret_exists = cls._secret_exists(connection, secret["name"])
+                if not secret_exists or secret.get("replace_if_exists", False):
+                    connection.execute(
+                        f"""create or replace {"persistent" if secret.get("persist", False) else ""} secret {secret["name"]} (
+                        type {secret["secret_type"]},
+                        {" ,".join([f"{k} '{v}'" for k, v in secret["value"].items()])}
+                    ) """
+                    )
         except Exception as e:
             msg = f"Failed to store secret. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e

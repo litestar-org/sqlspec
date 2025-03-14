@@ -83,7 +83,7 @@ class SQLSpec(InitPluginProtocol, ConfigManager):
         for c in self._plugin_configs:
             c.annotation = self.add_config(c.config)
             app_config.before_send.append(c.before_send_handler)
-            app_config.lifespan.append(c.lifespan_handler)
+            app_config.lifespan.append(c.lifespan_handler)  # pyright: ignore[reportUnknownMemberType]
             app_config.dependencies.update(
                 {c.connection_key: Provide(c.connection_provider), c.pool_key: Provide(c.pool_provider)},
             )

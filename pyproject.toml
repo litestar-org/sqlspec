@@ -221,6 +221,7 @@ exclude = ["tools", "docs"]
 include = ["sqlspec", "tests"]
 pythonVersion = "3.9"
 reportUnnecessaryTypeIgnoreComments = true
+reportPrivateUsage = false
 
 
 [tool.slotscheck]

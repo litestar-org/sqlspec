@@ -16,8 +16,8 @@ if TYPE_CHECKING:
     from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore[reportUnknownVariableType]
 
 __all__ = (
-    "AsyncMyConfig",
-    "AsyncmyPoolConfig",
+    "AsyncMy",
+    "AsyncMyPool",
 )
 
 
@@ -25,7 +25,7 @@ T = TypeVar("T")
 
 
 @dataclass
-class AsyncmyPoolConfig(GenericPoolConfig):
+class AsyncMyPool(GenericPoolConfig):
     """Configuration for Asyncmy's connection pool.
 
     This class provides configuration options for Asyncmy database connection pools.
@@ -104,13 +104,13 @@ class AsyncmyPoolConfig(GenericPoolConfig):
 
 
 @dataclass
-class AsyncMyConfig(AsyncDatabaseConfig[Connection, Pool]):
+class AsyncMy(AsyncDatabaseConfig[Connection, Pool]):
     """Asyncmy Configuration."""
 
     __is_async__ = True
     __supports_connection_pooling__ = True
 
-    pool_config: "Optional[AsyncmyPoolConfig]" = None
+    pool_config: "Optional[AsyncMyPool]" = None
     """Asyncmy Pool configuration"""
 
     pool_instance: "Optional[Pool]" = None  # pyright: ignore[reportUnknownVariableType]
@@ -187,6 +187,6 @@ class AsyncMyConfig(AsyncDatabaseConfig[Connection, Pool]):
 
     async def close_pool(self) -> None:
         """Close the connection pool."""
-        if self.pool_instance is not None:
-            await self.pool_instance.close()
+        if self.pool_instance is not None:  # pyright: ignore[reportUnknownMemberType]
+            await self.pool_instance.close()  # pyright: ignore[reportUnknownMemberType]
             self.pool_instance = None

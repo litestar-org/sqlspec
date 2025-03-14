@@ -13,6 +13,7 @@ from sqlspec.utils.sync_tools import maybe_async_
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Coroutine
+    from contextlib import AbstractAsyncContextManager
 
     from litestar import Litestar
     from litestar.datastructures.state import State
@@ -111,7 +112,7 @@ def autocommit_handler_maker(
 def lifespan_handler_maker(
     config: "DatabaseConfigProtocol[Any, Any]",
     pool_key: str,
-) -> "Callable[[Litestar], contextlib._AsyncGeneratorContextManager[None, None]]":
+) -> "Callable[[Litestar], AbstractAsyncContextManager[None]]":
     """Build the lifespan handler for the database configuration.
 
     Args:

@@ -1,3 +1,3 @@
-from sqlspec.adapters.asyncmy.config import AsyncMyConfig, AsyncmyPoolConfig
+from sqlspec.adapters.asyncmy.config import AsyncMy, AsyncMyPool
 
-__all__ = ("AsyncMyConfig", "AsyncmyPoolConfig")
+__all__ = ("AsyncMy", "AsyncMyPool")

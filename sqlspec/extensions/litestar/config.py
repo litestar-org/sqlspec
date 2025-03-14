@@ -16,7 +16,7 @@ from sqlspec.extensions.litestar.handlers import (
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
-    from contextlib import _AsyncGeneratorContextManager
+    from contextlib import AbstractAsyncContextManager
 
     from litestar import Litestar
     from litestar.datastructures.state import State
@@ -46,7 +46,7 @@ class DatabaseConfig:
     connection_provider: "Callable[[State,Scope], Awaitable[ConnectionT]]" = field(init=False, repr=False, hash=False)  # pyright: ignore[reportGeneralTypeIssues]
     pool_provider: "Callable[[State,Scope], Awaitable[PoolT]]" = field(init=False, repr=False, hash=False)  # pyright: ignore[reportGeneralTypeIssues]
     before_send_handler: "BeforeMessageSendHookHandler" = field(init=False, repr=False, hash=False)
-    lifespan_handler: "Callable[[Litestar], _AsyncGeneratorContextManager[None, None]]" = field(
+    lifespan_handler: "Callable[[Litestar], AbstractAsyncContextManager[None]]" = field(
         init=False,
         repr=False,
         hash=False,

@@ -1,13 +1,13 @@
 from sqlspec.adapters.oracledb.config import (
-    OracleAsyncDatabaseConfig,
-    OracleAsyncPoolConfig,
-    OracleSyncDatabaseConfig,
-    OracleSyncPoolConfig,
+    OracleAsync,
+    OracleAsyncPool,
+    OracleSync,
+    OracleSyncPool,
 )
 
 __all__ = (
-    "OracleAsyncDatabaseConfig",
-    "OracleAsyncPoolConfig",
-    "OracleSyncDatabaseConfig",
-    "OracleSyncPoolConfig",
+    "OracleAsync",
+    "OracleAsyncPool",
+    "OracleSync",
+    "OracleSyncPool",
 )

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from _pytest.fixtures import FixtureRequest
 
-from sqlspec.adapters.duckdb.config import DuckDBConfig, ExtensionConfig
+from sqlspec.adapters.duckdb.config import DuckDB, ExtensionConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty
 
@@ -73,12 +73,12 @@ class TestExtensionConfig:
         assert config.get("force_install") is None
 
 
-class TestDuckDBConfig:
-    """Test DuckDBConfig class."""
+class TestDuckDB:
+    """Test DuckDB class."""
 
     def test_default_values(self) -> None:
-        """Test default values for DuckDBConfig."""
-        config = DuckDBConfig()
+        """Test default values for DuckDB."""
+        config = DuckDB()
         assert config.database is Empty
         assert config.read_only is Empty
         assert config.config == {}
@@ -87,17 +87,17 @@ class TestDuckDBConfig:
 
     def test_connection_config_dict_defaults(self) -> None:
         """Test connection_config_dict with default values."""
-        config = DuckDBConfig()
+        config = DuckDB()
         assert config.connection_config_dict == {"database": ":memory:", "config": {}}
 
     def test_connection_config_dict_with_values(self) -> None:
         """Test connection_config_dict with custom values."""
-        config = DuckDBConfig(database="test.db", read_only=True)
+        config = DuckDB(database="test.db", read_only=True)
         assert config.connection_config_dict == {"database": "test.db", "read_only": True, "config": {}}
 
     def test_extensions_from_config_dict(self) -> None:
         """Test extension configuration from config dictionary."""
-        config = DuckDBConfig(
+        config = DuckDB(
             config={
                 "extensions": [
                     {"name": "ext1"},
@@ -116,7 +116,7 @@ class TestDuckDBConfig:
 
     def test_extensions_from_both_sources(self) -> None:
         """Test extension configuration from both extensions and config."""
-        config = DuckDBConfig(
+        config = DuckDB(
             extensions=[{"name": "ext1"}],
             config={"extensions": [{"name": "ext2", "force_install": True}]},
         )
@@ -127,7 +127,7 @@ class TestDuckDBConfig:
     def test_duplicate_extensions_error(self) -> None:
         """Test error on duplicate extension configuration."""
         with pytest.raises(ImproperConfigurationError, match="Configuring the same extension"):
-            DuckDBConfig(
+            DuckDB(
                 extensions=[{"name": "ext1"}],
                 config={"extensions": {"name": "ext1", "force_install": True}},
             )
@@ -138,7 +138,7 @@ class TestDuckDBConfig:
             ImproperConfigurationError,
             match="When configuring extensions in the 'config' dictionary, the value must be a dictionary or sequence of extension names",
         ):
-            DuckDBConfig(config={"extensions": 123})
+            DuckDB(config={"extensions": 123})
 
     @pytest.mark.parametrize(
         ("extension_config", "expected_calls"),
@@ -212,7 +212,7 @@ class TestDuckDBConfig:
         expected_calls: list[tuple[str, dict[str, Any]]],
     ) -> None:
         """Test extension configuration with various settings."""
-        config = DuckDBConfig(extensions=[extension_config])
+        config = DuckDB(extensions=[extension_config])
 
         # Configure the mock to match expected behavior
         for method_name, _kwargs in expected_calls:
@@ -242,7 +242,7 @@ class TestDuckDBConfig:
         # Force the implementation to call load_extension
         mock_duckdb_connection.install_extension.return_value = None
 
-        config = DuckDBConfig(extensions=[{"name": "test", "force_install": True}])
+        config = DuckDB(extensions=[{"name": "test", "force_install": True}])
 
         with pytest.raises(ImproperConfigurationError, match="Failed to configure extension test"):
             config.create_connection()
@@ -250,6 +250,6 @@ class TestDuckDBConfig:
     def test_connection_creation_error(self) -> None:
         """Test error handling during connection creation."""
         with patch("duckdb.connect", side_effect=Exception("Test error")):
-            config = DuckDBConfig()
+            config = DuckDB()
             with pytest.raises(ImproperConfigurationError, match="Could not configure"):
                 config.create_connection()

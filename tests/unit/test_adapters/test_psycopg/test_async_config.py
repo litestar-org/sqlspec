@@ -9,7 +9,7 @@ import pytest
 from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool
 
-from sqlspec.adapters.psycopg.config import PsycoPgAsyncDatabaseConfig, PsycoPgAsyncPoolConfig
+from sqlspec.adapters.psycopg.config import PsycoPgAsync, PsycoPgAsyncPool
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty
 
@@ -17,8 +17,8 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 
-class MockPsycoPgAsyncDatabaseConfig(PsycoPgAsyncDatabaseConfig):
-    """Mock implementation of PsycoPgAsyncDatabaseConfig for testing."""
+class MockPsycoPgAsync(PsycoPgAsync):
+    """Mock implementation of PsycoPgAsync for testing."""
 
     async def create_connection(self, *args: Any, **kwargs: Any) -> AsyncConnection:
         """Mock create_connection method."""
@@ -53,12 +53,12 @@ def mock_psycopg_connection() -> Generator[MagicMock, None, None]:
     return MagicMock(spec=AsyncConnection)
 
 
-class TestPsycoPgAsyncPoolConfig:
-    """Test PsycoPgAsyncPoolConfig class."""
+class TestPsycoPgAsyncPool:
+    """Test PsycoPgAsyncPool class."""
 
     def test_default_values(self) -> None:
-        """Test default values for PsycoPgAsyncPoolConfig."""
-        config = PsycoPgAsyncPoolConfig()
+        """Test default values for PsycoPgAsyncPool."""
+        config = PsycoPgAsyncPool()
         assert config.conninfo is Empty
         assert config.kwargs is Empty
         assert config.min_size is Empty
@@ -78,7 +78,7 @@ class TestPsycoPgAsyncPoolConfig:
         def configure_connection(conn: AsyncConnection) -> None:
             """Configure connection."""
 
-        config = PsycoPgAsyncPoolConfig(
+        config = PsycoPgAsyncPool(
             conninfo="postgresql://user:pass@localhost:5432/db",
             kwargs={"application_name": "test"},
             min_size=1,
@@ -107,12 +107,12 @@ class TestPsycoPgAsyncPoolConfig:
         assert config.configure == configure_connection
 
 
-class TestPsycoPgAsyncDatabaseConfig:
-    """Test PsycoPgAsyncDatabaseConfig class."""
+class TestPsycoPgAsync:
+    """Test PsycoPgAsync class."""
 
     def test_default_values(self) -> None:
-        """Test default values for PsycoPgAsyncDatabaseConfig."""
-        config = MockPsycoPgAsyncDatabaseConfig()
+        """Test default values for PsycoPgAsync."""
+        config = MockPsycoPgAsync()
         assert config.pool_config is None
         assert config.pool_instance is None
         assert config.__is_async__ is True
@@ -120,12 +120,12 @@ class TestPsycoPgAsyncDatabaseConfig:
 
     def test_pool_config_dict_with_pool_config(self) -> None:
         """Test pool_config_dict with pool configuration."""
-        pool_config = PsycoPgAsyncPoolConfig(
+        pool_config = PsycoPgAsyncPool(
             conninfo="postgresql://user:pass@localhost:5432/db",
             min_size=1,
             max_size=10,
         )
-        config = MockPsycoPgAsyncDatabaseConfig(pool_config=pool_config)
+        config = MockPsycoPgAsync(pool_config=pool_config)
         config_dict = config.pool_config_dict
         assert config_dict == {
             "conninfo": "postgresql://user:pass@localhost:5432/db",
@@ -135,7 +135,7 @@ class TestPsycoPgAsyncDatabaseConfig:
 
     def test_pool_config_dict_with_pool_instance(self) -> None:
         """Test pool_config_dict raises error with pool instance."""
-        config = MockPsycoPgAsyncDatabaseConfig(pool_instance=MagicMock(spec=AsyncConnectionPool))
+        config = MockPsycoPgAsync(pool_instance=MagicMock(spec=AsyncConnectionPool))
         with pytest.raises(ImproperConfigurationError, match="'pool_config' methods can not be used"):
             config.pool_config_dict
 
@@ -143,14 +143,14 @@ class TestPsycoPgAsyncDatabaseConfig:
     async def test_create_pool_with_existing_pool(self) -> None:
         """Test create_pool with existing pool instance."""
         existing_pool = MagicMock(spec=AsyncConnectionPool)
-        config = MockPsycoPgAsyncDatabaseConfig(pool_instance=existing_pool)
+        config = MockPsycoPgAsync(pool_instance=existing_pool)
         pool = await config.create_pool()
         assert pool is existing_pool
 
     @pytest.mark.asyncio
     async def test_create_pool_without_config_or_instance(self) -> None:
         """Test create_pool raises error without pool config or instance."""
-        config = MockPsycoPgAsyncDatabaseConfig()
+        config = MockPsycoPgAsync()
         with pytest.raises(
             ImproperConfigurationError,
             match="One of 'pool_config' or 'pool_instance' must be provided",
@@ -166,6 +166,6 @@ class TestPsycoPgAsyncDatabaseConfig:
         async_cm.__aexit__ = AsyncMock(return_value=None)
         mock_psycopg_pool.connection.return_value = async_cm
 
-        config = MockPsycoPgAsyncDatabaseConfig(pool_instance=mock_psycopg_pool)
+        config = MockPsycoPgAsync(pool_instance=mock_psycopg_pool)
         async with config.provide_connection() as conn:
             assert conn is mock_psycopg_connection

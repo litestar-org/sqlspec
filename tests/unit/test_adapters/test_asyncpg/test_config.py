@@ -9,7 +9,7 @@ import pytest
 from asyncpg import Connection, Pool, Record
 from asyncpg.pool import PoolConnectionProxy
 
-from sqlspec.adapters.asyncpg.config import AsyncPgConfig, AsyncPgPoolConfig
+from sqlspec.adapters.asyncpg.config import AsyncPg, AsyncPgPool
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty
 
@@ -46,12 +46,12 @@ def mock_asyncpg_connection() -> Generator[MagicMock, None, None]:
     return MagicMock(spec=PoolConnectionProxy)
 
 
-class TestAsyncPgPoolConfig:
-    """Test AsyncPgPoolConfig class."""
+class TestAsyncPgPool:
+    """Test AsyncPgPool class."""
 
     def test_default_values(self) -> None:
-        """Test default values for AsyncPgPoolConfig."""
-        config = AsyncPgPoolConfig(dsn="postgresql://localhost/test")
+        """Test default values for AsyncPgPool."""
+        config = AsyncPgPool(dsn="postgresql://localhost/test")
         assert config.dsn == "postgresql://localhost/test"
         assert config.connect_kwargs is Empty
         assert config.connection_class is Empty  # pyright: ignore[reportUnknownMemberType]
@@ -65,8 +65,8 @@ class TestAsyncPgPoolConfig:
         assert config.loop is Empty
 
     def test_with_all_values(self) -> None:
-        """Test AsyncPgPoolConfig with all values set."""
-        config = AsyncPgPoolConfig(
+        """Test AsyncPgPool with all values set."""
+        config = AsyncPgPool(
             dsn="postgresql://localhost/test",
             connect_kwargs={"ssl": True},
             connection_class=Connection,
@@ -90,8 +90,8 @@ class TestAsyncPgPoolConfig:
         assert config.loop is not Empty
 
 
-class MockAsyncPgConfig(AsyncPgConfig):
-    """Mock AsyncPgConfig for testing."""
+class MockAsyncPg(AsyncPg):
+    """Mock AsyncPg for testing."""
 
     async def create_connection(self, *args: Any, **kwargs: Any) -> PoolConnectionProxy:  # pyright: ignore[reportUnknownParameterType,reportMissingTypeArgument]
         """Mock create_connection method."""
@@ -107,12 +107,12 @@ class MockAsyncPgConfig(AsyncPgConfig):
         return {}
 
 
-class TestAsyncPgConfig:
-    """Test AsyncPgConfig class."""
+class TestAsyncPg:
+    """Test AsyncPg class."""
 
     def test_default_values(self) -> None:
-        """Test default values for AsyncPgConfig."""
-        config = MockAsyncPgConfig()
+        """Test default values for AsyncPg."""
+        config = MockAsyncPg()
         assert config.pool_config is None
         assert config.pool_instance is None
         assert callable(config.json_deserializer)
@@ -120,22 +120,22 @@ class TestAsyncPgConfig:
 
     def test_pool_config_dict_with_pool_config(self) -> None:
         """Test pool_config_dict with pool configuration."""
-        pool_config = AsyncPgPoolConfig(dsn="postgresql://localhost/test", min_size=1, max_size=10)
-        config = MockAsyncPgConfig(pool_config=pool_config)
+        pool_config = AsyncPgPool(dsn="postgresql://localhost/test", min_size=1, max_size=10)
+        config = MockAsyncPg(pool_config=pool_config)
         config_dict = config.pool_config_dict
         assert config_dict == {"dsn": "postgresql://localhost/test", "min_size": 1, "max_size": 10}
 
     def test_pool_config_dict_with_pool_instance(self) -> None:
         """Test pool_config_dict raises error with pool instance."""
-        config = MockAsyncPgConfig(pool_instance=MagicMock(spec=Pool))
+        config = MockAsyncPg(pool_instance=MagicMock(spec=Pool))
         with pytest.raises(ImproperConfigurationError, match="'pool_config' methods can not be used"):
             config.pool_config_dict
 
     @pytest.mark.asyncio
     async def test_create_pool_with_pool_config(self, mock_asyncpg_pool: MagicMock) -> None:
         """Test create_pool with pool configuration."""
-        pool_config = AsyncPgPoolConfig(dsn="postgresql://localhost/test")
-        config = MockAsyncPgConfig(pool_config=pool_config)
+        pool_config = AsyncPgPool(dsn="postgresql://localhost/test")
+        config = MockAsyncPg(pool_config=pool_config)
         pool = await config.create_pool()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
         assert pool is mock_asyncpg_pool
 
@@ -143,14 +143,14 @@ class TestAsyncPgConfig:
     async def test_create_pool_with_existing_pool(self) -> None:
         """Test create_pool with existing pool instance."""
         existing_pool = MagicMock(spec=Pool)
-        config = MockAsyncPgConfig(pool_instance=existing_pool)
+        config = MockAsyncPg(pool_instance=existing_pool)
         pool = await config.create_pool()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
         assert pool is existing_pool
 
     @pytest.mark.asyncio
     async def test_create_pool_without_config_or_instance(self) -> None:
         """Test create_pool raises error without pool config or instance."""
-        config = MockAsyncPgConfig()
+        config = MockAsyncPg()
         with pytest.raises(
             ImproperConfigurationError,
             match="One of 'pool_config' or 'pool_instance' must be provided",
@@ -165,7 +165,7 @@ class TestAsyncPgConfig:
         acquire_context.__aenter__.return_value = mock_asyncpg_connection
         mock_asyncpg_pool.acquire.return_value = acquire_context
 
-        config = MockAsyncPgConfig(pool_config=AsyncPgPoolConfig(dsn="postgresql://localhost/test"))
+        config = MockAsyncPg(pool_config=AsyncPgPool(dsn="postgresql://localhost/test"))
 
         async with config.provide_connection() as conn:  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             assert conn is mock_asyncpg_connection

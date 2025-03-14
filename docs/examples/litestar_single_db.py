@@ -1,7 +1,7 @@
 from aiosqlite import Connection
 from litestar import Litestar, get
 
-from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.aiosqlite import Aiosqlite
 from sqlspec.extensions.litestar import SQLSpec
 
 
@@ -16,5 +16,5 @@ async def simple_sqlite(db_session: Connection) -> dict[str, str]:
     return {"greeting": result[0][0]}  # type: ignore  # noqa: PGH003
 
 
-sqlspec = SQLSpec(config=AiosqliteConfig())
+sqlspec = SQLSpec(config=Aiosqlite())
 app = Litestar(route_handlers=[simple_sqlite], plugins=[sqlspec])
