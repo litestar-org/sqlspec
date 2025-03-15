@@ -267,11 +267,11 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection]):
                 and extension.get("install_if_missing", True)
             ) or extension.get("force_install"):
                 repository = extension.get("repository", None)
-                if repository is None and cls._is_community_extension(connection, extension["name"]):
-                    repository = "community"
                 repository_url = (
                     "https://community-extensions.duckdb.org"
-                    if repository == "community" and extension.get("repository_url") is None
+                    if repository is None
+                    and cls._is_community_extension(connection, extension["name"])
+                    and extension.get("repository_url") is None
                     else extension.get("repository_url", None)
                 )
                 connection.install_extension(
