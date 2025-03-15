@@ -183,7 +183,7 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection]):
             bool: True if the extension is a community extension, False otherwise.
         """
         results = connection.execute(  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-            "select 1 from duckdb_extensions() where name=?", [name]
+            "select 1 from duckdb_extensions() where extension_name=?", [name]
         ).fetchone()
         return results is None
 
@@ -199,7 +199,7 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection]):
             bool: True if the extension is installed, False otherwise.
         """
         results = connection.execute(  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-            "select 1 from duckdb_extensions() where name=? and installed=true", [name]
+            "select 1 from duckdb_extensions() where extension_name=? and installed=true", [name]
         ).fetchone()
         return results is not None
 
@@ -215,7 +215,7 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection]):
             bool: True if the extension is loaded, False otherwise.
         """
         results = connection.execute(  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-            "select 1 from duckdb_extensions() where name=? and loaded=true", [name]
+            "select 1 from duckdb_extensions() where extension_name=? and loaded=true", [name]
         ).fetchone()
         return results is not None
 
