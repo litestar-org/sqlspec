@@ -322,9 +322,8 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection]):
 
         try:
             connection = duckdb.connect(**self.connection_config_dict)  # pyright: ignore[reportUnknownMemberType]
-
-            self._configure_secrets(connection, cast("list[SecretConfig]", self.secrets))
             self._configure_extensions(connection)
+            self._configure_secrets(connection, cast("list[SecretConfig]", self.secrets))
             self._configure_connection(connection)
             if self.on_connection_create:
                 self.on_connection_create(connection)

@@ -38,10 +38,9 @@ sqlspec = SQLSpec(
             {
                 "secret_type": "open_prompt",
                 "name": "open_prompt",
-                "provider": "config",
                 "value": {
                     "api_token": "sk-1234567890",
-                    "api_url": "http://localhost:11434/v1",
+                    "api_url": "http://127.0.0.1:11434/v1/chat/completions",
                     "model_name": "deepseek-r1:7b",
                     "api_timeout": "120",
                 },
