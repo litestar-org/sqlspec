@@ -1,6 +1,6 @@
 # ruff: noqa: PLR6301
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, Awaitable, Generator, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Generator
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from dataclasses import dataclass
 from typing import (
@@ -16,9 +16,7 @@ from typing import (
     overload,
 )
 
-from typing_extensions import Literal
-
-from sqlspec.typing import ModelDictListT, ModelDictT, ModelT
+from sqlspec.typing import ModelDTOT
 
 __all__ = (
     "AsyncDatabaseConfig",
@@ -167,8 +165,8 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT]):
     __supports_connection_pooling__ = True
 
 
-class ConfigManager:
-    """Type-safe configuration manager with literal inference."""
+class SQLSpec:
+    """Type-safe configuration manager and registry for database connections and pools."""
 
     __slots__ = ("_configs",)
 
@@ -321,56 +319,19 @@ ParamType = Union[dict[str, Any], list[Any], None]
 class SyncDriverAdapterProtocol(Protocol, Generic[ConnectionT]):
     connection: ConnectionT
 
+    def __init__(self, connection: ConnectionT) -> None:
+        self.connection = connection
+
     def process_sql(self, sql: str) -> str: ...  # pragma: no cover
 
-    @overload
     def select(
         self,
         conn: ConnectionT,
         sql: str,
         parameters: ParamType,
         /,
-        schema_type: type[ModelT],
-    ) -> "Sequence[ModelT]": ...  # pragma: no cover
-
-    @overload
-    def select(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: None = None,
-    ) -> "Sequence[dict[str,Any]]": ...  # pragma: no cover
-
-    def select(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: Optional[type[ModelT]] = None,
-    ) -> ModelDictListT: ...  # pragma: no cover
-
-    @overload
-    def select_one(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: type[ModelT],
-    ) -> "Optional[ModelT]": ...  # pragma: no cover
-
-    @overload
-    def select_one(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: None = None,
-    ) -> "Optional[dict[str,Any]]": ...  # pragma: no cover
+        schema_type: Optional[type[ModelDTOT]] = None,
+    ) -> Generator[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]], None, None]: ...  # pragma: no cover
 
     def select_one(
         self,
@@ -378,28 +339,8 @@ class SyncDriverAdapterProtocol(Protocol, Generic[ConnectionT]):
         sql: str,
         parameters: ParamType,
         /,
-        schema_type: Optional[type[ModelT]] = None,
-    ) -> "Optional[ModelDictT]": ...  # pragma: no cover
-
-    @overload
-    def select_value(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: type[T],
-    ) -> "Optional[T]": ...  # pragma: no cover
-
-    @overload
-    def select_value(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: None = None,
-    ) -> "Optional[Any]": ...  # pragma: no cover
+        schema_type: Optional[type[ModelDTOT]] = None,
+    ) -> "Optional[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
 
     def select_value(
         self,
@@ -410,134 +351,25 @@ class SyncDriverAdapterProtocol(Protocol, Generic[ConnectionT]):
         schema_type: Optional[type[T]] = None,
     ) -> "Optional[Union[Any, T]]": ...  # pragma: no cover
 
-    @overload
-    def insert(
+    def insert_update_delete(
         self,
         conn: ConnectionT,
         sql: str,
         parameters: ParamType,
         /,
-        schema_type: type[ModelT],
-        returning: Literal[True],
-    ) -> "ModelT": ...  # pragma: no cover
-
-    @overload
-    def insert(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: None = None,
-        returning: Literal[True] = True,
-    ) -> Any: ...  # pragma: no cover
-
-    @overload
-    def insert(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: Optional[type[ModelT]] = None,
-        returning: Literal[False] = False,
-    ) -> None: ...  # pragma: no cover
-
-    def insert(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: Optional[type[ModelT]] = None,
+        schema_type: Optional[type[ModelDTOT]] = None,
         returning: bool = False,
-    ) -> "Optional[Union[Any,ModelT]]": ...  # pragma: no cover
+    ) -> "Optional[Union[Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
 
-    @overload
-    def update(
+    def execute_script(
         self,
         conn: ConnectionT,
         sql: str,
         parameters: ParamType,
         /,
-        schema_type: type[ModelT],
-        returning: Literal[True],
-    ) -> "ModelT": ...  # pragma: no cover
-
-    @overload
-    def update(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: None = None,
-        returning: Literal[True] = True,
-    ) -> Any: ...  # pragma: no cover
-
-    @overload
-    def update(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: Optional[type[ModelT]] = None,
-        returning: Literal[False] = False,
-    ) -> None: ...  # pragma: no cover
-
-    def update(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: Optional[type[ModelT]] = None,
+        schema_type: Optional[type[ModelDTOT]] = None,
         returning: bool = False,
-    ) -> "Optional[Union[Any,ModelT]]": ...  # pragma: no cover
-
-    @overload
-    def delete(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: type[ModelT],
-        returning: Literal[True],
-    ) -> "ModelT": ...  # pragma: no cover
-
-    @overload
-    def delete(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: None = None,
-        returning: Literal[True] = True,
-    ) -> Any: ...  # pragma: no cover
-
-    @overload
-    def delete(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: Optional[type[ModelT]] = None,
-        returning: Literal[False] = False,
-    ) -> None: ...  # pragma: no cover
-
-    def delete(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: Optional[type[ModelT]] = None,
-        returning: bool = False,
-    ) -> "Optional[Union[Any,ModelT]]": ...  # pragma: no cover
+    ) -> "Optional[Union[Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
 
 
 class AsyncDriverAdapterProtocol(Protocol, Generic[ConnectionT]):
@@ -545,54 +377,14 @@ class AsyncDriverAdapterProtocol(Protocol, Generic[ConnectionT]):
 
     def process_sql(self, sql: str) -> str: ...  # pragma: no cover
 
-    @overload
     async def select(
         self,
         conn: ConnectionT,
         sql: str,
         parameters: ParamType,
         /,
-        schema_type: type[ModelT],
-    ) -> "Sequence[ModelT]": ...  # pragma: no cover
-
-    @overload
-    async def select(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: None = None,
-    ) -> "Sequence[dict[str,Any]]": ...  # pragma: no cover
-
-    async def select(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: Optional[type[ModelT]] = None,
-    ) -> ModelDictListT: ...  # pragma: no cover
-
-    @overload
-    async def select_one(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: type[ModelT],
-    ) -> "Optional[ModelT]": ...  # pragma: no cover
-
-    @overload
-    async def select_one(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: None = None,
-    ) -> "Optional[dict[str,Any]]": ...  # pragma: no cover
+        schema_type: Optional[type[ModelDTOT]] = None,
+    ) -> AsyncGenerator[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]], None]: ...  # pragma: no cover
 
     async def select_one(
         self,
@@ -600,28 +392,8 @@ class AsyncDriverAdapterProtocol(Protocol, Generic[ConnectionT]):
         sql: str,
         parameters: ParamType,
         /,
-        schema_type: Optional[type[ModelT]] = None,
-    ) -> "Optional[ModelDictT]": ...  # pragma: no cover
-
-    @overload
-    async def select_value(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: type[T],
-    ) -> "Optional[T]": ...  # pragma: no cover
-
-    @overload
-    async def select_value(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: None = None,
-    ) -> "Optional[Any]": ...  # pragma: no cover
+        schema_type: Optional[type[ModelDTOT]] = None,
+    ) -> "Optional[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
 
     async def select_value(
         self,
@@ -632,134 +404,25 @@ class AsyncDriverAdapterProtocol(Protocol, Generic[ConnectionT]):
         schema_type: Optional[type[T]] = None,
     ) -> "Optional[Union[Any, T]]": ...  # pragma: no cover
 
-    @overload
-    async def insert(
+    async def insert_update_delete(
         self,
         conn: ConnectionT,
         sql: str,
         parameters: ParamType,
         /,
-        schema_type: type[ModelT],
-        returning: Literal[True],
-    ) -> "ModelT": ...  # pragma: no cover
-
-    @overload
-    async def insert(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: None = None,
-        returning: Literal[True] = True,
-    ) -> Any: ...  # pragma: no cover
-
-    @overload
-    async def insert(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: Optional[type[ModelT]] = None,
-        returning: Literal[False] = False,
-    ) -> None: ...  # pragma: no cover
-
-    async def insert(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: Optional[type[ModelT]] = None,
+        schema_type: Optional[type[ModelDTOT]] = None,
         returning: bool = False,
-    ) -> "Optional[Union[Any,ModelT]]": ...  # pragma: no cover
+    ) -> "Optional[Union[Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
 
-    @overload
-    async def update(
+    async def execute_script(
         self,
         conn: ConnectionT,
         sql: str,
         parameters: ParamType,
         /,
-        schema_type: type[ModelT],
-        returning: Literal[True],
-    ) -> "ModelT": ...  # pragma: no cover
-
-    @overload
-    async def update(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: None = None,
-        returning: Literal[True] = True,
-    ) -> Any: ...  # pragma: no cover
-
-    @overload
-    async def update(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: Optional[type[ModelT]] = None,
-        returning: Literal[False] = False,
-    ) -> None: ...  # pragma: no cover
-
-    async def update(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: Optional[type[ModelT]] = None,
+        schema_type: Optional[type[ModelDTOT]] = None,
         returning: bool = False,
-    ) -> "Optional[Union[Any,ModelT]]": ...  # pragma: no cover
-
-    @overload
-    async def delete(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: type[ModelT],
-        returning: Literal[True],
-    ) -> "ModelT": ...  # pragma: no cover
-
-    @overload
-    async def delete(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: None = None,
-        returning: Literal[True] = True,
-    ) -> Any: ...  # pragma: no cover
-
-    @overload
-    async def delete(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: Optional[type[ModelT]] = None,
-        returning: Literal[False] = False,
-    ) -> None: ...  # pragma: no cover
-
-    async def delete(
-        self,
-        conn: ConnectionT,
-        sql: str,
-        parameters: ParamType,
-        /,
-        schema_type: Optional[type[ModelT]] = None,
-        returning: bool = False,
-    ) -> "Optional[Union[Any,ModelT]]": ...  # pragma: no cover
+    ) -> "Optional[Union[Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
 
 
 DriverAdapterProtocol = Union[SyncDriverAdapterProtocol[ConnectionT], AsyncDriverAdapterProtocol[ConnectionT]]

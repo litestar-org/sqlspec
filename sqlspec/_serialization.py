@@ -60,12 +60,26 @@ __all__ = (
 
 
 def convert_datetime_to_gmt_iso(dt: datetime.datetime) -> str:  # pragma: no cover
-    """Handle datetime serialization for nested timestamps."""
+    """Handle datetime serialization for nested timestamps.
+
+    Args:
+        dt: The datetime to convert.
+
+    Returns:
+        The ISO formatted datetime string.
+    """
     if not dt.tzinfo:
         dt = dt.replace(tzinfo=datetime.timezone.utc)
     return dt.isoformat().replace("+00:00", "Z")
 
 
 def convert_date_to_iso(dt: datetime.date) -> str:  # pragma: no cover
-    """Handle datetime serialization for nested timestamps."""
+    """Handle datetime serialization for nested timestamps.
+
+    Args:
+        dt: The date to convert.
+
+    Returns:
+        The ISO formatted date string.
+    """
     return dt.isoformat()

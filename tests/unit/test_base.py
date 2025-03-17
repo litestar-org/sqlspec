@@ -5,7 +5,7 @@ from typing import Annotated, Any
 
 import pytest
 
-from sqlspec.base import ConfigManager, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
+from sqlspec.base import NoPoolAsyncConfig, NoPoolSyncConfig, SQLSpec, SyncDatabaseConfig
 
 
 class MockConnection:
@@ -122,7 +122,7 @@ class TestConfigManager:
 
     def setup_method(self) -> None:
         """Set up test fixtures."""
-        self.config_manager = ConfigManager()
+        self.config_manager = SQLSpec()
         self.pool_config = MockDatabaseConfig()
         self.non_pool_config = MockNonPoolConfig()
 

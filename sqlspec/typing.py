@@ -1,4 +1,3 @@
-from collections.abc import Sequence
 from dataclasses import Field, fields
 from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated, Any, Optional, TypeVar, Union, cast
@@ -12,6 +11,7 @@ from sqlspec._typing import (
     UNSET,
     BaseModel,
     DataclassProtocol,
+    DTOData,
     Empty,
     EmptyType,
     Struct,
@@ -21,7 +21,7 @@ from sqlspec._typing import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
     from collections.abc import Set as AbstractSet
 
     from sqlspec.filters import StatementFilter
@@ -39,25 +39,51 @@ FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
 
 :class:`~advanced_alchemy.filters.StatementFilter`
 """
+SupportedSchemaModel: TypeAlias = "Union[Struct, BaseModel, DataclassProtocol]"
+"""Type alias for pydantic or msgspec models.
 
+:class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol`
+"""
+ModelDTOT = TypeVar("ModelDTOT", bound="SupportedSchemaModel")
+"""Type variable for model DTOs.
 
-SupportedSchemaModel: TypeAlias = Union[Struct, BaseModel]
+:class:`msgspec.Struct`|:class:`pydantic.BaseModel`
+"""
+PydanticOrMsgspecT = SupportedSchemaModel
 """Type alias for pydantic or msgspec models.
 
 :class:`msgspec.Struct` or :class:`pydantic.BaseModel`
 """
-ModelDictT: TypeAlias = Union[dict[str, Any], ModelT]
+ModelDict: TypeAlias = "Union[dict[str, Any], SupportedSchemaModel, DTOData[SupportedSchemaModel]]"
 """Type alias for model dictionaries.
 
 Represents:
 - :type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` |  :class:`pydantic.BaseModel`
 """
-ModelDictListT: TypeAlias = Sequence[Union[dict[str, Any], ModelT]]
+ModelDictList: TypeAlias = "Sequence[Union[dict[str, Any], SupportedSchemaModel]]"
 """Type alias for model dictionary lists.
 
 A list or sequence of any of the following:
 - :type:`Sequence`[:type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel`]
 
+"""
+BulkModelDict: TypeAlias = (
+    "Union[Sequence[Union[dict[str, Any], SupportedSchemaModel]], DTOData[list[SupportedSchemaModel]]]"
+)
+"""Type alias for bulk model dictionaries.
+
+Represents:
+- :type:`Sequence`[:type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel`]
+- :class:`DTOData`[:type:`list[ModelT]`]
+"""
+
+StatementParameterType: TypeAlias = "Union[dict[str, Any], list[Any], None]"
+"""Type alias for parameter types.
+
+Represents:
+- :type:`dict[str, Any]`
+- :type:`list[Any]`
+- :type:`None`
 """
 
 
@@ -468,8 +494,9 @@ __all__ = (
     "EmptyType",
     "FailFast",
     "FilterTypeT",
-    "ModelDictListT",
-    "ModelDictT",
+    "ModelDict",
+    "ModelDictList",
+    "StatementParameterType",
     "Struct",
     "SupportedSchemaModel",
     "TypeAdapter",
