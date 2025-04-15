@@ -101,6 +101,10 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection, Driver]):
     """Whether to automatically update on connection creation"""
     on_connection_create: "Optional[Callable[[DuckDBPyConnection], Optional[DuckDBPyConnection]]]" = None
     """A callable to be called after the connection is created."""
+    connection_type: "type[DuckDBPyConnection]" = DuckDBPyConnection
+    """The type of connection to create. Defaults to DuckDBPyConnection."""
+    driver_type: "type[Driver]" = DuckDBDriver
+    """The type of driver to use. Defaults to DuckDBDriver."""
 
     def __post_init__(self) -> None:
         """Post-initialization validation and processing.
