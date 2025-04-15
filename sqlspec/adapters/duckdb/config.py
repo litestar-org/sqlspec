@@ -99,7 +99,7 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection, Driver]):
     """A dictionary of secrets to store in the connection for later retrieval."""
     auto_update_extensions: "bool" = False
     """Whether to automatically update on connection creation"""
-    on_connection_create: "Optional[Callable[[DuckDBPyConnection], DuckDBPyConnection]]" = None
+    on_connection_create: "Optional[Callable[[DuckDBPyConnection], Optional[DuckDBPyConnection]]]" = None
     """A callable to be called after the connection is created."""
 
     def __post_init__(self) -> None:

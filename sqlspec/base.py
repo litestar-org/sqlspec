@@ -378,7 +378,7 @@ class AsyncDriverAdapterProtocol(Protocol, Generic[ConnectionT]):
 
     def process_sql(self, sql: str) -> str: ...  # pragma: no cover
 
-    def select(
+    async def select(
         self,
         sql: str,
         parameters: StatementParameterType,
