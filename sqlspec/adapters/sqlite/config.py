@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 from typing_extensions import TypeAlias
@@ -52,9 +52,6 @@ class Sqlite(NoPoolSyncConfig["Connection", "Driver"]):
 
     uri: "Union[bool, EmptyType]" = Empty
     """If set to True, database is interpreted as a URI with supported options."""
-
-    driver_type: "type[Driver]" = field(default=Driver)
-    """The driver type to use for the connection. Defaults to SQLiteDriver."""
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":

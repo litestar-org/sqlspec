@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, TypeVar, Union
 
 from asyncpg import Record
@@ -28,7 +28,7 @@ __all__ = (
 
 T = TypeVar("T")
 
-PgConnection: TypeAlias = "Union[Connection, PoolConnectionProxy]"  # pyright: ignore[reportMissingTypeArgument]
+PgConnection: TypeAlias = "Union[Connection[Any], PoolConnectionProxy[Any]]"
 Driver: TypeAlias = AsyncPGDriver
 
 
@@ -70,8 +70,6 @@ class AsyncPgPool(GenericPoolConfig):
 
     loop: "Union[AbstractEventLoop, EmptyType]" = Empty
     """An asyncio event loop instance. If None, the default event loop will be used."""
-    driver_type: "type[Driver]" = field(default=Driver)
-    """The driver type to use for the connection. Defaults to SQLiteDriver."""
 
 
 @dataclass
@@ -87,11 +85,6 @@ class AsyncPg(AsyncDatabaseConfig["PgConnection", "Pool", "Driver"]):  # pyright
     json_serializer: "Callable[[Any], str]" = encode_json
     """For dialects that support the JSON datatype, this is a Python callable that will render a given object as JSON.
     By default, SQLSpec's :attr:`encode_json() <sqlspec._serialization.encode_json>` is used."""
-    pool_instance: "Optional[Pool[Any]]" = None
-    """Optional pool to use.
-
-    If set, the plugin will use the provided pool rather than instantiate one.
-    """
 
     @property
     def pool_config_dict(self) -> "dict[str, Any]":

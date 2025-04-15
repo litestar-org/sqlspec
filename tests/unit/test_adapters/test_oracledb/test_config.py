@@ -198,7 +198,7 @@ class TestOraclePoolConfig:
         assert config.handle == 12345
 
 
-class MockOracleDatabaseConfig(AsyncDatabaseConfig[Connection, ConnectionPool]):
+class MockOracleDatabaseConfig(AsyncDatabaseConfig[Connection, ConnectionPool, Any]):
     """Mock OracleDatabaseConfig for testing."""
 
     def __init__(

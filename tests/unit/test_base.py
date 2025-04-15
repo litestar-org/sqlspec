@@ -37,7 +37,7 @@ class MockAsyncPool:
 
 
 @dataclass
-class MockDatabaseConfig(SyncDatabaseConfig[MockConnection, MockPool]):
+class MockDatabaseConfig(SyncDatabaseConfig[MockConnection, MockPool, Any]):
     """Mock database configuration that supports pooling."""
 
     def create_connection(self) -> MockConnection:
@@ -73,7 +73,7 @@ class MockDatabaseConfig(SyncDatabaseConfig[MockConnection, MockPool]):
         return _provide_pool()
 
 
-class MockNonPoolConfig(NoPoolSyncConfig[MockConnection]):
+class MockNonPoolConfig(NoPoolSyncConfig[MockConnection, Any]):
     """Mock database configuration that doesn't support pooling."""
 
     def create_connection(self) -> MockConnection:
@@ -95,7 +95,7 @@ class MockNonPoolConfig(NoPoolSyncConfig[MockConnection]):
         return {"host": "localhost", "port": 5432}
 
 
-class MockAsyncNonPoolConfig(NoPoolAsyncConfig[MockAsyncConnection]):
+class MockAsyncNonPoolConfig(NoPoolAsyncConfig[MockAsyncConnection, Any]):
     """Mock database configuration that doesn't support pooling."""
 
     def create_connection(self) -> MockAsyncConnection:

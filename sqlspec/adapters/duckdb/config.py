@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
 from duckdb import DuckDBPyConnection
@@ -101,10 +101,6 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection, Driver]):
     """Whether to automatically update on connection creation"""
     on_connection_create: "Optional[Callable[[DuckDBPyConnection], DuckDBPyConnection]]" = None
     """A callable to be called after the connection is created."""
-    driver_type: "type[Driver]" = field(default=Driver)
-    """The driver type to use for the connection. Defaults to DuckDBSyncDriver."""
-    connection_type: "type[DuckDBPyConnection]" = DuckDBPyConnection
-    """The connection type to use for the connection. Defaults to DuckDBPyConnection."""
 
     def __post_init__(self) -> None:
         """Post-initialization validation and processing.
@@ -309,7 +305,14 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection, Driver]):
         config = dataclass_to_dict(
             self,
             exclude_empty=True,
-            exclude={"extensions", "pool_instance", "secrets", "on_connection_create", "auto_update_extensions"},
+            exclude={
+                "extensions",
+                "pool_instance",
+                "secrets",
+                "on_connection_create",
+                "auto_update_extensions",
+                "driver_type",
+            },
             convert_nested=False,
         )
         if not config.get("database"):

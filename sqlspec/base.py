@@ -2,7 +2,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Generator, Iterable
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (
     Annotated,
     Any,
@@ -44,9 +44,9 @@ DriverT = TypeVar("DriverT", bound="Union[SyncDriverAdapterProtocol[Any], AsyncD
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Protocol defining the interface for database configurations."""
 
-    connection_type: "type[ConnectionT]"
-    driver_type: "type[DriverT]"
-    pool_instance: Union[PoolT, None] = None
+    connection_type: "type[ConnectionT]" = field(init=False)
+    driver_type: "type[DriverT]" = field(init=False)
+    pool_instance: "Optional[PoolT]" = field(default=None)
     __is_async__: ClassVar[bool] = False
     __supports_connection_pooling__: ClassVar[bool] = False
 
@@ -378,7 +378,7 @@ class AsyncDriverAdapterProtocol(Protocol, Generic[ConnectionT]):
 
     def process_sql(self, sql: str) -> str: ...  # pragma: no cover
 
-    async def select(
+    def select(
         self,
         sql: str,
         parameters: StatementParameterType,

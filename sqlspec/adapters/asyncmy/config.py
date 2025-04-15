@@ -112,12 +112,6 @@ class AsyncMy(AsyncDatabaseConfig[Connection, Pool, Any]):
     pool_config: "Optional[AsyncMyPool]" = None
     """Asyncmy Pool configuration"""
 
-    pool_instance: "Optional[Pool]" = None  # pyright: ignore[reportUnknownVariableType]
-    """Optional pool to use.
-
-    If set, the plugin will use the provided pool rather than instantiate one.
-    """
-
     @property
     def pool_config_dict(self) -> "dict[str, Any]":
         """Return the pool configuration as a dict.

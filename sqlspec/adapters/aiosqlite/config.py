@@ -47,8 +47,6 @@ class Aiosqlite(NoPoolSyncConfig["Connection", "Driver"]):
     """The number of statements that SQLite will cache for this connection. The default is 128."""
     uri: "Union[bool, EmptyType]" = field(default=Empty)
     """If set to True, database is interpreted as a URI with supported options."""
-    driver_type: "type[Driver]" = field(default=Driver)
-    """The driver type to use for the connection. Defaults to SQLiteDriver."""
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":

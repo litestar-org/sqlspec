@@ -70,7 +70,7 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol[Connection]):
                     if first:
                         column_names = [c[0] for c in cursor.description or []]
                         first = False
-                    yield schema_type(**dict(zip(column_names, row)))
+                    yield cast("ModelDTOT", schema_type(**dict(zip(column_names, row))))
 
     async def select_one(
         self,
@@ -98,7 +98,7 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol[Connection]):
                 return dict(zip(column_names, result))
             if schema_type is not None:
                 column_names = [c[0] for c in cursor.description or []]
-                return schema_type(**dict(zip(column_names, result)))
+                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))  # pyright: ignore[reportCallIssue]
             return tuple(result)
 
     async def select_value(

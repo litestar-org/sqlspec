@@ -1,34 +1,37 @@
-from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Optional, Union, cast
-
-from duckdb import DuckDBPyConnection
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from sqlspec.base import SyncDriverAdapterProtocol, T
-from sqlspec.typing import ModelDTOT, StatementParameterType
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+    from duckdb import DuckDBPyConnection
+
+    from sqlspec.typing import ModelDTOT, StatementParameterType
 
 __all__ = ("DuckDBDriver",)
 
 
-class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
+class DuckDBDriver(SyncDriverAdapterProtocol["DuckDBPyConnection"]):
     """DuckDB Sync Driver Adapter."""
 
-    connection: DuckDBPyConnection
+    connection: "DuckDBPyConnection"
     use_cursor: bool = True
     results_as_dict: bool = True
 
-    def __init__(self, connection: DuckDBPyConnection, use_cursor: bool = True, results_as_dict: bool = True) -> None:
+    def __init__(self, connection: "DuckDBPyConnection", use_cursor: bool = True, results_as_dict: bool = True) -> None:
         self.connection = connection
         self.use_cursor = use_cursor
         self.results_as_dict = results_as_dict
 
-    def _cursor(self, connection: DuckDBPyConnection) -> DuckDBPyConnection:
+    def _cursor(self, connection: "DuckDBPyConnection") -> "DuckDBPyConnection":
         if self.use_cursor:
             return connection.cursor()
         return connection
 
     @contextmanager
-    def _with_cursor(self, connection: DuckDBPyConnection) -> Generator[DuckDBPyConnection, None, None]:
+    def _with_cursor(self, connection: "DuckDBPyConnection") -> "Generator[DuckDBPyConnection, None, None]":
         cursor = self._cursor(connection)
         try:
             yield cursor
@@ -39,9 +42,9 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
     def select(
         self,
         sql: str,
-        parameters: StatementParameterType,
+        parameters: "StatementParameterType",
         /,
-        connection: Optional[DuckDBPyConnection] = None,
+        connection: "Optional[DuckDBPyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
     ) -> "Generator[Union[ModelDTOT, dict[str, Any]], None, None]":
         """Fetch data from the database.
@@ -76,9 +79,9 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
     def select_one(
         self,
         sql: str,
-        parameters: StatementParameterType,
+        parameters: "StatementParameterType",
         /,
-        connection: Optional[DuckDBPyConnection] = None,
+        connection: "Optional[DuckDBPyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
         """Fetch one row from the database.
@@ -104,9 +107,9 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
     def select_value(
         self,
         sql: str,
-        parameters: StatementParameterType,
+        parameters: "StatementParameterType",
         /,
-        connection: Optional[DuckDBPyConnection] = None,
+        connection: "Optional[DuckDBPyConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
     ) -> "Optional[Union[T, Any]]":
         """Fetch a single value from the database.
@@ -122,17 +125,17 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
                 return None
             if schema_type is None:
                 return result[0]
-            return schema_type(result[0])  # pyright: ignore[reportCallIssue]
+            return schema_type(result[0])  # type: ignore[call-arg]
 
     def insert_update_delete(
         self,
         sql: str,
-        parameters: StatementParameterType,
+        parameters: "StatementParameterType",
         /,
-        connection: Optional[DuckDBPyConnection] = None,
+        connection: "Optional[DuckDBPyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         returning: bool = False,
-    ) -> "Optional[Union[int, Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
+    ) -> "Optional[Union[int, Any, ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
         """Insert, update, or delete data from the database.
 
         Returns:
@@ -158,12 +161,12 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
     def execute_script(
         self,
         sql: str,
-        parameters: StatementParameterType,
+        parameters: "StatementParameterType",
         /,
-        connection: Optional[DuckDBPyConnection] = None,
+        connection: "Optional[DuckDBPyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         returning: bool = False,
-    ) -> "Optional[Union[Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
+    ) -> "Optional[Union[Any, ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
         """Execute a script.
 
         Returns:

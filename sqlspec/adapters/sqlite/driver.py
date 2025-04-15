@@ -1,30 +1,33 @@
-from collections.abc import Generator, Iterable
 from contextlib import contextmanager
 from sqlite3 import Connection, Cursor
-from typing import Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from sqlspec.base import SyncDriverAdapterProtocol, T
-from sqlspec.typing import ModelDTOT, StatementParameterType
+
+if TYPE_CHECKING:
+    from collections.abc import Generator, Iterable
+
+    from sqlspec.typing import ModelDTOT, StatementParameterType
 
 __all__ = ("SQLiteDriver",)
 
 
-class SQLiteDriver(SyncDriverAdapterProtocol[Connection]):
+class SQLiteDriver(SyncDriverAdapterProtocol["Connection"]):
     """SQLite Sync Driver Adapter."""
 
-    connection: Connection
+    connection: "Connection"
     results_as_dict: bool = True
 
-    def __init__(self, connection: Connection, results_as_dict: bool = True) -> None:
+    def __init__(self, connection: "Connection", results_as_dict: bool = True) -> None:
         self.connection = connection
         self.results_as_dict = results_as_dict
 
     @staticmethod
-    def _cursor(connection: Connection, *args: Any, **kwargs: Any) -> Cursor:
+    def _cursor(connection: "Connection", *args: Any, **kwargs: Any) -> Cursor:
         return connection.cursor(*args, **kwargs)
 
     @contextmanager
-    def _with_cursor(self, connection: Connection) -> Generator[Cursor, None, None]:
+    def _with_cursor(self, connection: "Connection") -> "Generator[Cursor, None, None]":
         cursor = self._cursor(connection)
         try:
             yield cursor
@@ -34,9 +37,9 @@ class SQLiteDriver(SyncDriverAdapterProtocol[Connection]):
     def select(
         self,
         sql: str,
-        parameters: StatementParameterType,
+        parameters: "StatementParameterType",
         /,
-        connection: Optional[Connection] = None,
+        connection: "Optional[Connection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
     ) -> "Iterable[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
         """Fetch data from the database.
@@ -67,14 +70,14 @@ class SQLiteDriver(SyncDriverAdapterProtocol[Connection]):
                     if first:
                         column_names = [c[0] for c in cursor.description or []]
                         first = False
-                    yield schema_type(**dict(zip(column_names, row)))
+                    yield cast("ModelDTOT", schema_type(**dict(zip(column_names, row))))
 
     def select_one(
         self,
         sql: str,
-        parameters: StatementParameterType,
+        parameters: "StatementParameterType",
         /,
-        connection: Optional[Connection] = None,
+        connection: "Optional[Connection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
         """Fetch one row from the database.
@@ -101,9 +104,9 @@ class SQLiteDriver(SyncDriverAdapterProtocol[Connection]):
     def select_value(
         self,
         sql: str,
-        parameters: StatementParameterType,
+        parameters: "StatementParameterType",
         /,
-        connection: Optional[Connection] = None,
+        connection: "Optional[Connection]" = None,
         schema_type: "Optional[type[T]]" = None,
     ) -> "Optional[Union[T, Any]]":
         """Fetch a single value from the database.
@@ -125,9 +128,9 @@ class SQLiteDriver(SyncDriverAdapterProtocol[Connection]):
     def insert_update_delete(
         self,
         sql: str,
-        parameters: StatementParameterType,
+        parameters: "StatementParameterType",
         /,
-        connection: Optional[Connection] = None,
+        connection: "Optional[Connection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         returning: bool = False,
     ) -> "Optional[Union[int, Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
@@ -157,9 +160,9 @@ class SQLiteDriver(SyncDriverAdapterProtocol[Connection]):
     def execute_script(
         self,
         sql: str,
-        parameters: StatementParameterType,
+        parameters: "StatementParameterType",
         /,
-        connection: Optional[Connection] = None,
+        connection: "Optional[Connection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         returning: bool = False,
     ) -> "Optional[Union[Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
