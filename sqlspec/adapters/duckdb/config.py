@@ -312,6 +312,7 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection, Driver]):
                 "on_connection_create",
                 "auto_update_extensions",
                 "driver_type",
+                "connection_type",
             },
             convert_nested=False,
         )
