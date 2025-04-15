@@ -29,7 +29,7 @@ T_co = TypeVar("T_co", covariant=True)
 
 try:
     from pydantic import (
-        BaseModel,
+        BaseModel,  # pyright: ignore[reportAssignmentType]
         FailFast,  # pyright: ignore[reportGeneralTypeIssues,reportAssignmentType]
         TypeAdapter,
     )

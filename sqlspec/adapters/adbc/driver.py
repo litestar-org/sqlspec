@@ -1,56 +1,67 @@
 from collections.abc import Generator
 from contextlib import contextmanager
+from sqlite3 import Connection, Cursor
 from typing import Any, Optional, Union, cast
-
-from duckdb import DuckDBPyConnection
 
 from sqlspec.base import SyncDriverAdapterProtocol, T
 from sqlspec.typing import ModelDTOT, StatementParameterType
 
-__all__ = ("DuckDBDriver",)
+__all__ = ("SQLiteDriver",)
 
 
-class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
-    """DuckDB Sync Driver Adapter."""
+class SQLiteDriver(SyncDriverAdapterProtocol[Connection]):
+    """SQLite Sync Driver Adapter."""
 
-    connection: DuckDBPyConnection
-    use_cursor: bool = True
+    connection: Connection
     results_as_dict: bool = True
 
-    def __init__(self, connection: DuckDBPyConnection, use_cursor: bool = True, results_as_dict: bool = True) -> None:
+    def __init__(self, connection: Connection, results_as_dict: bool = True) -> None:
         self.connection = connection
-        self.use_cursor = use_cursor
         self.results_as_dict = results_as_dict
 
-    def _cursor(self, connection: DuckDBPyConnection) -> DuckDBPyConnection:
-        if self.use_cursor:
-            return connection.cursor()
-        return connection
+    @staticmethod
+    def _execute(connection: Connection, sql: str, parameters: StatementParameterType) -> "list[Any]":
+        """Execute a query and return the results.
+
+        Args:
+            connection: The SQLite connection.
+            sql: The SQL query to execute.
+            parameters: The query parameters.
+
+        Returns:
+            A list of query results.
+        """
+        parameters = parameters if parameters is not None else {}
+        return connection.execute(sql, parameters).fetchall()
+
+    @staticmethod
+    def _cursor(connection: Connection, *args: Any, **kwargs: Any) -> Cursor:
+        return connection.cursor(*args, **kwargs)
 
     @contextmanager
-    def _with_cursor(self, connection: DuckDBPyConnection) -> Generator[DuckDBPyConnection, None, None]:
+    def _with_cursor(self, connection: Connection) -> Generator[Cursor, None, None]:
         cursor = self._cursor(connection)
         try:
             yield cursor
         finally:
-            if self.use_cursor:
-                cursor.close()
+            cursor.close()
 
     def select(
         self,
         sql: str,
         parameters: StatementParameterType,
         /,
-        connection: Optional[DuckDBPyConnection] = None,
+        connection: Optional[Connection] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
-    ) -> "Generator[Union[ModelDTOT, dict[str, Any]], None, None]":
+    ) -> "Generator[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]], None, None]":
         """Fetch data from the database.
 
         Yields:
             Row data as either model instances or dictionaries.
         """
-        column_names: list[str] = []
         connection = connection if connection is not None else self.connection
+        parameters = parameters if parameters is not None else {}
+        column_names: list[str] = []
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
 
@@ -71,14 +82,14 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
                     if first:
                         column_names = [c[0] for c in cursor.description or []]
                         first = False
-                    yield cast("ModelDTOT", dict(zip(column_names, row)))
+                    yield schema_type(**dict(zip(column_names, row)))
 
     def select_one(
         self,
         sql: str,
         parameters: StatementParameterType,
         /,
-        connection: Optional[DuckDBPyConnection] = None,
+        connection: Optional[Connection] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
         """Fetch one row from the database.
@@ -88,6 +99,7 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
         """
         column_names: list[str] = []
         connection = connection if connection is not None else self.connection
+        parameters = parameters if parameters is not None else {}
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
             result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType]
@@ -98,7 +110,7 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
                 return dict(zip(column_names, result))
             if schema_type is not None:
                 column_names = [c[0] for c in cursor.description or []]
-                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
+                return schema_type(**dict(zip(column_names, result)))
             return result
 
     def select_value(
@@ -106,7 +118,7 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
         sql: str,
         parameters: StatementParameterType,
         /,
-        connection: Optional[DuckDBPyConnection] = None,
+        connection: Optional[Connection] = None,
         schema_type: "Optional[type[T]]" = None,
     ) -> "Optional[Union[T, Any]]":
         """Fetch a single value from the database.
@@ -115,9 +127,10 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
             The first value from the first row of results, or None if no results.
         """
         connection = connection if connection is not None else self.connection
+        parameters = parameters if parameters is not None else {}
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
-            result = cursor.fetchone()
+            result = cast("Optional[tuple[Any, ...]]", cursor.fetchone())  # pyright: ignore[reportUnknownMemberType]
             if result is None:
                 return None
             if schema_type is None:
@@ -129,7 +142,7 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
         sql: str,
         parameters: StatementParameterType,
         /,
-        connection: Optional[DuckDBPyConnection] = None,
+        connection: Optional[Connection] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         returning: bool = False,
     ) -> "Optional[Union[int, Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
@@ -138,8 +151,9 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
         Returns:
             Row count if not returning data, otherwise the first row of results.
         """
-        column_names: list[str] = []
         connection = connection if connection is not None else self.connection
+        parameters = parameters if parameters is not None else {}
+        column_names: list[str] = []
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
             if returning is False:
@@ -160,7 +174,7 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
         sql: str,
         parameters: StatementParameterType,
         /,
-        connection: Optional[DuckDBPyConnection] = None,
+        connection: Optional[Connection] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         returning: bool = False,
     ) -> "Optional[Union[Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
@@ -169,8 +183,9 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
         Returns:
             The number of rows affected by the script.
         """
-        column_names: list[str] = []
         connection = connection if connection is not None else self.connection
+        parameters = parameters if parameters is not None else {}
+        column_names: list[str] = []
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
             if returning is False:

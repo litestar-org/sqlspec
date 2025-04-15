@@ -29,7 +29,7 @@ class OracleAsyncPool(OracleGenericPoolConfig[AsyncConnection, AsyncConnectionPo
 
 
 @dataclass
-class OracleAsync(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPool]):
+class OracleAsync(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPool, Any]):
     """Oracle Async database Configuration.
 
     This class provides the base configuration for Oracle database connections, extending

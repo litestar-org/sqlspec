@@ -39,7 +39,7 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
         Args:
             config: configure SQLSpec plugin for use with Litestar.
         """
-        self._configs: dict[Any, DatabaseConfigProtocol[Any, Any]] = {}
+        self._configs: dict[Any, DatabaseConfigProtocol[Any, Any, Any]] = {}
         if isinstance(config, DatabaseConfigProtocol):
             self._plugin_configs: list[DatabaseConfig] = [DatabaseConfig(config=config)]
         elif isinstance(config, DatabaseConfig):
@@ -69,15 +69,17 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
             The updated :class:`AppConfig <.config.app.AppConfig>` instance.
         """
         self._validate_dependency_keys()
-        app_config.signature_types.extend([
-            SQLSpec,
-            ConnectionT,
-            PoolT,
-            DatabaseConfig,
-            DatabaseConfigProtocol,
-            SyncConfigT,
-            AsyncConfigT,
-        ])
+        app_config.signature_types.extend(
+            [
+                SQLSpec,
+                ConnectionT,
+                PoolT,
+                DatabaseConfig,
+                DatabaseConfigProtocol,
+                SyncConfigT,
+                AsyncConfigT,
+            ]
+        )
         for c in self._plugin_configs:
             c.annotation = self.add_config(c.config)
             app_config.before_send.append(c.before_send_handler)

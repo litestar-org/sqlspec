@@ -1,6 +1,6 @@
 # ruff: noqa: PLR6301
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, Awaitable, Generator
+from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Generator, Iterable
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from dataclasses import dataclass
 from typing import (
@@ -16,7 +16,7 @@ from typing import (
     overload,
 )
 
-from sqlspec.typing import ModelDTOT
+from sqlspec.typing import ModelDTOT, StatementParameterType
 
 __all__ = (
     "AsyncDatabaseConfig",
@@ -30,23 +30,25 @@ __all__ = (
 T = TypeVar("T")
 ConnectionT = TypeVar("ConnectionT")
 PoolT = TypeVar("PoolT")
-ConnectionT_contra = TypeVar("ConnectionT_contra", contravariant=True)
 PoolT_co = TypeVar("PoolT_co", covariant=True)
-AsyncConfigT = TypeVar("AsyncConfigT", bound="Union[AsyncDatabaseConfig[Any, Any], NoPoolAsyncConfig[Any]]")
-SyncConfigT = TypeVar("SyncConfigT", bound="Union[SyncDatabaseConfig[Any, Any], NoPoolSyncConfig[Any]]")
+AsyncConfigT = TypeVar("AsyncConfigT", bound="Union[AsyncDatabaseConfig[Any, Any, Any], NoPoolAsyncConfig[Any, Any]]")
+SyncConfigT = TypeVar("SyncConfigT", bound="Union[SyncDatabaseConfig[Any, Any, Any], NoPoolSyncConfig[Any, Any]]")
 ConfigT = TypeVar(
     "ConfigT",
-    bound="Union[Union[AsyncDatabaseConfig[Any, Any], NoPoolAsyncConfig[Any]], SyncDatabaseConfig[Any, Any], NoPoolSyncConfig[Any]]",
+    bound="Union[Union[AsyncDatabaseConfig[Any, Any, Any], NoPoolAsyncConfig[Any, Any]], SyncDatabaseConfig[Any, Any, Any], NoPoolSyncConfig[Any, Any]]",
 )
+DriverT = TypeVar("DriverT", bound="Union[SyncDriverAdapterProtocol[Any], AsyncDriverAdapterProtocol[Any]]")
 
 
 @dataclass
-class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT]):
+class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Protocol defining the interface for database configurations."""
 
+    connection_type: "type[ConnectionT]"
+    driver_type: "type[DriverT]"
+    pool_instance: Union[PoolT, None] = None
     __is_async__: ClassVar[bool] = False
     __supports_connection_pooling__: ClassVar[bool] = False
-    pool_instance: Union[PoolT, None] = None
 
     def __hash__(self) -> int:
         return id(self)
@@ -106,7 +108,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT]):
         return self.__supports_connection_pooling__
 
 
-class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None]):
+class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for a sync database configurations that do not implement a pool."""
 
     __is_async__ = False
@@ -125,7 +127,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None]):
         return
 
 
-class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None]):
+class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for an async database configurations that do not implement a pool."""
 
     __is_async__ = True
@@ -150,7 +152,7 @@ class GenericPoolConfig:
 
 
 @dataclass
-class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT]):
+class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Generic Sync Database Configuration."""
 
     __is_async__ = False
@@ -158,7 +160,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT]):
 
 
 @dataclass
-class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT]):
+class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Generic Async Database Configuration."""
 
     __is_async__ = True
@@ -171,7 +173,7 @@ class SQLSpec:
     __slots__ = ("_configs",)
 
     def __init__(self) -> None:
-        self._configs: dict[Any, DatabaseConfigProtocol[Any, Any]] = {}
+        self._configs: dict[Any, DatabaseConfigProtocol[Any, Any, Any]] = {}
 
     @overload
     def add_config(self, config: SyncConfigT) -> type[SyncConfigT]: ...
@@ -203,8 +205,8 @@ class SQLSpec:
 
     def get_config(
         self,
-        name: Union[type[DatabaseConfigProtocol[ConnectionT, PoolT]], Any],
-    ) -> DatabaseConfigProtocol[ConnectionT, PoolT]:
+        name: Union[type[DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]], Any],
+    ) -> DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]:
         """Retrieve a configuration by its type.
 
         Returns:
@@ -223,8 +225,8 @@ class SQLSpec:
     def get_connection(
         self,
         name: Union[
-            type[NoPoolSyncConfig[ConnectionT]],
-            type[SyncDatabaseConfig[ConnectionT, PoolT]],  # pyright: ignore[reportInvalidTypeVarUse]
+            type[NoPoolSyncConfig[ConnectionT, DriverT]],
+            type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]],  # pyright: ignore[reportInvalidTypeVarUse]
         ],
     ) -> ConnectionT: ...
 
@@ -232,18 +234,18 @@ class SQLSpec:
     def get_connection(
         self,
         name: Union[
-            type[NoPoolAsyncConfig[ConnectionT]],
-            type[AsyncDatabaseConfig[ConnectionT, PoolT]],  # pyright: ignore[reportInvalidTypeVarUse]
+            type[NoPoolAsyncConfig[ConnectionT, DriverT]],
+            type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]],  # pyright: ignore[reportInvalidTypeVarUse]
         ],
     ) -> Awaitable[ConnectionT]: ...
 
     def get_connection(
         self,
         name: Union[
-            type[NoPoolSyncConfig[ConnectionT]],
-            type[NoPoolAsyncConfig[ConnectionT]],
-            type[SyncDatabaseConfig[ConnectionT, PoolT]],
-            type[AsyncDatabaseConfig[ConnectionT, PoolT]],
+            type[NoPoolSyncConfig[ConnectionT, DriverT]],
+            type[NoPoolAsyncConfig[ConnectionT, DriverT]],
+            type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]],
+            type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]],
         ],
     ) -> Union[ConnectionT, Awaitable[ConnectionT]]:
         """Create and return a connection from the specified configuration.
@@ -259,21 +261,23 @@ class SQLSpec:
         return config.create_connection()
 
     @overload
-    def get_pool(self, name: type[Union[NoPoolSyncConfig[ConnectionT], NoPoolAsyncConfig[ConnectionT]]]) -> None: ...  # pyright: ignore[reportInvalidTypeVarUse]
+    def get_pool(
+        self, name: type[Union[NoPoolSyncConfig[ConnectionT, DriverT], NoPoolAsyncConfig[ConnectionT, DriverT]]]
+    ) -> None: ...  # pyright: ignore[reportInvalidTypeVarUse]
 
     @overload
-    def get_pool(self, name: type[SyncDatabaseConfig[ConnectionT, PoolT]]) -> type[PoolT]: ...  # pyright: ignore[reportInvalidTypeVarUse]
+    def get_pool(self, name: type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]) -> type[PoolT]: ...  # pyright: ignore[reportInvalidTypeVarUse]
 
     @overload
-    def get_pool(self, name: type[AsyncDatabaseConfig[ConnectionT, PoolT]]) -> Awaitable[type[PoolT]]: ...  # pyright: ignore[reportInvalidTypeVarUse]
+    def get_pool(self, name: type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]) -> Awaitable[type[PoolT]]: ...  # pyright: ignore[reportInvalidTypeVarUse]
 
     def get_pool(
         self,
         name: Union[
-            type[NoPoolSyncConfig[ConnectionT]],
-            type[NoPoolAsyncConfig[ConnectionT]],
-            type[SyncDatabaseConfig[ConnectionT, PoolT]],
-            type[AsyncDatabaseConfig[ConnectionT, PoolT]],
+            type[NoPoolSyncConfig[ConnectionT, DriverT]],
+            type[NoPoolAsyncConfig[ConnectionT, DriverT]],
+            type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]],
+            type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]],
         ],
     ) -> Union[type[PoolT], Awaitable[type[PoolT]], None]:
         """Create and return a connection pool from the specified configuration.
@@ -293,10 +297,10 @@ class SQLSpec:
     def close_pool(
         self,
         name: Union[
-            type[NoPoolSyncConfig[ConnectionT]],
-            type[NoPoolAsyncConfig[ConnectionT]],
-            type[SyncDatabaseConfig[ConnectionT, PoolT]],
-            type[AsyncDatabaseConfig[ConnectionT, PoolT]],
+            type[NoPoolSyncConfig[ConnectionT, DriverT]],
+            type[NoPoolAsyncConfig[ConnectionT, DriverT]],
+            type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]],
+            type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]],
         ],
     ) -> Optional[Awaitable[None]]:
         """Close the connection pool for the specified configuration.
@@ -313,9 +317,6 @@ class SQLSpec:
         return None
 
 
-ParamType = Union[dict[str, Any], list[Any], None]
-
-
 class SyncDriverAdapterProtocol(Protocol, Generic[ConnectionT]):
     connection: ConnectionT
 
@@ -326,50 +327,50 @@ class SyncDriverAdapterProtocol(Protocol, Generic[ConnectionT]):
 
     def select(
         self,
-        conn: ConnectionT,
         sql: str,
-        parameters: ParamType,
+        parameters: StatementParameterType,
         /,
+        connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
-    ) -> Generator[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]], None, None]: ...  # pragma: no cover
+    ) -> "Iterable[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
 
     def select_one(
         self,
-        conn: ConnectionT,
         sql: str,
-        parameters: ParamType,
+        parameters: StatementParameterType,
         /,
+        connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
 
     def select_value(
         self,
-        conn: ConnectionT,
         sql: str,
-        parameters: ParamType,
+        parameters: StatementParameterType,
         /,
+        connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[T]] = None,
     ) -> "Optional[Union[Any, T]]": ...  # pragma: no cover
 
     def insert_update_delete(
         self,
-        conn: ConnectionT,
         sql: str,
-        parameters: ParamType,
+        parameters: StatementParameterType,
         /,
+        connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
         returning: bool = False,
-    ) -> "Optional[Union[Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
+    ) -> "Optional[Union[Any,ModelDTOT,int, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
 
     def execute_script(
         self,
-        conn: ConnectionT,
         sql: str,
-        parameters: ParamType,
+        parameters: StatementParameterType,
         /,
+        connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
         returning: bool = False,
-    ) -> "Optional[Union[Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
+    ) -> "Optional[Union[Any, str ,ModelDTOT, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
 
 
 class AsyncDriverAdapterProtocol(Protocol, Generic[ConnectionT]):
@@ -379,50 +380,50 @@ class AsyncDriverAdapterProtocol(Protocol, Generic[ConnectionT]):
 
     async def select(
         self,
-        conn: ConnectionT,
         sql: str,
-        parameters: ParamType,
+        parameters: StatementParameterType,
         /,
+        connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
-    ) -> AsyncGenerator[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]], None]: ...  # pragma: no cover
+    ) -> "AsyncIterable[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
 
     async def select_one(
         self,
-        conn: ConnectionT,
         sql: str,
-        parameters: ParamType,
+        parameters: StatementParameterType,
         /,
+        connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
 
     async def select_value(
         self,
-        conn: ConnectionT,
         sql: str,
-        parameters: ParamType,
+        parameters: StatementParameterType,
         /,
+        connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[T]] = None,
     ) -> "Optional[Union[Any, T]]": ...  # pragma: no cover
 
     async def insert_update_delete(
         self,
-        conn: ConnectionT,
         sql: str,
-        parameters: ParamType,
+        parameters: StatementParameterType,
         /,
+        connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
         returning: bool = False,
-    ) -> "Optional[Union[Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
+    ) -> "Optional[Union[Any,ModelDTOT, int, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
 
     async def execute_script(
         self,
-        conn: ConnectionT,
         sql: str,
-        parameters: ParamType,
+        parameters: StatementParameterType,
         /,
+        connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
         returning: bool = False,
-    ) -> "Optional[Union[Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
+    ) -> "Optional[Union[Any, str, ModelDTOT, dict[str, Any], tuple[Any, ...]]]": ...  # pragma: no cover
 
 
 DriverAdapterProtocol = Union[SyncDriverAdapterProtocol[ConnectionT], AsyncDriverAdapterProtocol[ConnectionT]]

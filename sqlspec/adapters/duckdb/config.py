@@ -1,10 +1,11 @@
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
 from duckdb import DuckDBPyConnection
-from typing_extensions import Literal, NotRequired, TypedDict
+from typing_extensions import Literal, NotRequired, TypeAlias, TypedDict
 
+from sqlspec.adapters.duckdb.driver import DuckDBDriver
 from sqlspec.base import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
@@ -67,8 +68,11 @@ class SecretConfig(TypedDict):
     """Whether to replace the secret if it already exists"""
 
 
+Driver: TypeAlias = DuckDBDriver
+
+
 @dataclass
-class DuckDB(NoPoolSyncConfig[DuckDBPyConnection]):
+class DuckDB(NoPoolSyncConfig[DuckDBPyConnection, Driver]):
     """Configuration for DuckDB database connections.
 
     This class provides configuration options for DuckDB database connections, wrapping all parameters
@@ -95,8 +99,12 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection]):
     """A dictionary of secrets to store in the connection for later retrieval."""
     auto_update_extensions: "bool" = False
     """Whether to automatically update on connection creation"""
-    on_connection_create: "Optional[Callable[[DuckDBPyConnection], None]]" = None
+    on_connection_create: "Optional[Callable[[DuckDBPyConnection], DuckDBPyConnection]]" = None
     """A callable to be called after the connection is created."""
+    driver_type: "type[Driver]" = field(default=Driver)
+    """The driver type to use for the connection. Defaults to DuckDBSyncDriver."""
+    connection_type: "type[DuckDBPyConnection]" = DuckDBPyConnection
+    """The connection type to use for the connection. Defaults to DuckDBPyConnection."""
 
     def __post_init__(self) -> None:
         """Post-initialization validation and processing.
@@ -347,3 +355,15 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection]):
             yield connection
         finally:
             connection.close()
+
+    @contextmanager
+    def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[Driver, None, None]":
+        """Create and provide a database connection.
+
+        Yields:
+            A DuckDB connection instance.
+
+
+        """
+        with self.provide_connection(*args, **kwargs) as connection:
+            yield self.driver_type(connection, use_cursor=True, results_as_dict=True)

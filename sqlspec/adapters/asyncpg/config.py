@@ -1,13 +1,13 @@
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional, TypeVar, Union
 
 from asyncpg import Record
 from asyncpg import create_pool as asyncpg_create_pool
-from asyncpg.pool import Pool, PoolConnectionProxy
 from typing_extensions import TypeAlias
 
 from sqlspec._serialization import decode_json, encode_json
+from sqlspec.adapters.asyncpg.driver import AsyncPGDriver
 from sqlspec.base import AsyncDatabaseConfig, GenericPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 
     from asyncpg.connection import Connection
+    from asyncpg.pool import Pool, PoolConnectionProxy
 
 
 __all__ = (
@@ -28,6 +29,7 @@ __all__ = (
 T = TypeVar("T")
 
 PgConnection: TypeAlias = "Union[Connection, PoolConnectionProxy]"  # pyright: ignore[reportMissingTypeArgument]
+Driver: TypeAlias = AsyncPGDriver
 
 
 @dataclass
@@ -68,10 +70,12 @@ class AsyncPgPool(GenericPoolConfig):
 
     loop: "Union[AbstractEventLoop, EmptyType]" = Empty
     """An asyncio event loop instance. If None, the default event loop will be used."""
+    driver_type: "type[Driver]" = field(default=Driver)
+    """The driver type to use for the connection. Defaults to SQLiteDriver."""
 
 
 @dataclass
-class AsyncPg(AsyncDatabaseConfig[PgConnection, Pool]):  # pyright: ignore[reportMissingTypeArgument]
+class AsyncPg(AsyncDatabaseConfig["PgConnection", "Pool", "Driver"]):  # pyright: ignore[reportMissingTypeArgument]
     """Asyncpg Configuration."""
 
     pool_config: "Optional[AsyncPgPool]" = None
@@ -155,3 +159,15 @@ class AsyncPg(AsyncDatabaseConfig[PgConnection, Pool]):  # pyright: ignore[repor
         if self.pool_instance is not None:
             await self.pool_instance.close()
             self.pool_instance = None
+
+    @asynccontextmanager
+    async def provide_session(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[Driver, None]":
+        """Create and provide a database connection.
+
+        Yields:
+            A Aiosqlite driver instance.
+
+
+        """
+        async with self.provide_connection(*args, **kwargs) as connection:
+            yield self.driver_type(connection, results_as_dict=True)

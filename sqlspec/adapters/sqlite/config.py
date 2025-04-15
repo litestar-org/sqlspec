@@ -1,7 +1,10 @@
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
+from typing_extensions import TypeAlias
+
+from sqlspec.adapters.sqlite.driver import SQLiteDriver
 from sqlspec.base import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
@@ -10,11 +13,14 @@ if TYPE_CHECKING:
     from collections.abc import Generator
     from sqlite3 import Connection
 
+
 __all__ = ("Sqlite",)
+
+Driver: TypeAlias = SQLiteDriver
 
 
 @dataclass
-class Sqlite(NoPoolSyncConfig["Connection"]):
+class Sqlite(NoPoolSyncConfig["Connection", "Driver"]):
     """Configuration for SQLite database connections.
 
     This class provides configuration options for SQLite database connections, wrapping all parameters
@@ -46,6 +52,9 @@ class Sqlite(NoPoolSyncConfig["Connection"]):
 
     uri: "Union[bool, EmptyType]" = Empty
     """If set to True, database is interpreted as a URI with supported options."""
+
+    driver_type: "type[Driver]" = field(default=Driver)
+    """The driver type to use for the connection. Defaults to SQLiteDriver."""
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -86,3 +95,15 @@ class Sqlite(NoPoolSyncConfig["Connection"]):
             yield connection
         finally:
             connection.close()
+
+    @contextmanager
+    def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[Driver, None, None]":
+        """Create and provide a database connection.
+
+        Yields:
+            A DuckDB driver instance.
+
+
+        """
+        with self.provide_connection(*args, **kwargs) as connection:
+            yield self.driver_type(connection, results_as_dict=True)

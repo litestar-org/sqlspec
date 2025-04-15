@@ -15,7 +15,7 @@ __all__ = ("Adbc",)
 
 
 @dataclass
-class Adbc(NoPoolSyncConfig["Connection"]):
+class Adbc(NoPoolSyncConfig["Connection", "Any"]):
     """Configuration for ADBC connections.
 
     This class provides configuration options for ADBC database connections using the

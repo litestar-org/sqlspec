@@ -1,62 +1,60 @@
-from collections.abc import Generator
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, AsyncIterable
+from contextlib import asynccontextmanager
 from typing import Any, Optional, Union, cast
 
-from duckdb import DuckDBPyConnection
+from aiosqlite import Connection, Cursor, Row
 
-from sqlspec.base import SyncDriverAdapterProtocol, T
+from sqlspec.base import AsyncDriverAdapterProtocol, T
 from sqlspec.typing import ModelDTOT, StatementParameterType
 
-__all__ = ("DuckDBDriver",)
+__all__ = ("AiosqliteDriver",)
 
 
-class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
-    """DuckDB Sync Driver Adapter."""
+class AiosqliteDriver(AsyncDriverAdapterProtocol[Connection]):
+    """SQLite Async Driver Adapter."""
 
-    connection: DuckDBPyConnection
-    use_cursor: bool = True
+    connection: Connection
     results_as_dict: bool = True
 
-    def __init__(self, connection: DuckDBPyConnection, use_cursor: bool = True, results_as_dict: bool = True) -> None:
+    def __init__(self, connection: Connection, results_as_dict: bool = True) -> None:
         self.connection = connection
-        self.use_cursor = use_cursor
         self.results_as_dict = results_as_dict
 
-    def _cursor(self, connection: DuckDBPyConnection) -> DuckDBPyConnection:
-        if self.use_cursor:
-            return connection.cursor()
-        return connection
+    @staticmethod
+    async def _cursor(connection: Connection, *args: Any, **kwargs: Any) -> Cursor:
+        return await connection.cursor(*args, **kwargs)
 
-    @contextmanager
-    def _with_cursor(self, connection: DuckDBPyConnection) -> Generator[DuckDBPyConnection, None, None]:
-        cursor = self._cursor(connection)
+    @asynccontextmanager
+    async def _with_cursor(self, connection: Connection) -> AsyncGenerator[Cursor, None]:
+        cursor = await self._cursor(connection)
         try:
             yield cursor
         finally:
-            if self.use_cursor:
-                cursor.close()
+            await cursor.close()
 
-    def select(
+    async def select(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,
         sql: str,
         parameters: StatementParameterType,
         /,
-        connection: Optional[DuckDBPyConnection] = None,
+        connection: Optional[Connection] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
-    ) -> "Generator[Union[ModelDTOT, dict[str, Any]], None, None]":
+    ) -> "AsyncIterable[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
         """Fetch data from the database.
 
         Yields:
             Row data as either model instances or dictionaries.
         """
-        column_names: list[str] = []
         connection = connection if connection is not None else self.connection
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
+        parameters = parameters if parameters is not None else {}
+        column_names: list[str] = []
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters)
 
             if schema_type is None:
                 first = True
-                for row in cursor.fetchall():
+                results = await cursor.fetchall()
+                for row in results:
                     if first:  # get column names on the fly
                         column_names = [c[0] for c in cursor.description or []]
                         first = False
@@ -64,21 +62,22 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
                         # strict=False: requires 3.10
                         yield dict(zip(column_names, row))
                     else:
-                        yield row
+                        yield tuple(row)
             else:  # pragma: no cover
                 first = True
-                for row in cursor.fetchall():
+                results = await cursor.fetchall()
+                for row in results:
                     if first:
                         column_names = [c[0] for c in cursor.description or []]
                         first = False
-                    yield cast("ModelDTOT", dict(zip(column_names, row)))
+                    yield schema_type(**dict(zip(column_names, row)))
 
-    def select_one(
+    async def select_one(
         self,
         sql: str,
         parameters: StatementParameterType,
         /,
-        connection: Optional[DuckDBPyConnection] = None,
+        connection: Optional[Connection] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
         """Fetch one row from the database.
@@ -88,9 +87,10 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
         """
         column_names: list[str] = []
         connection = connection if connection is not None else self.connection
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
-            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType]
+        parameters = parameters if parameters is not None else {}
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters)
+            result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType]
             if result is None:
                 return None
             if schema_type is None and self.results_as_dict:
@@ -98,15 +98,15 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
                 return dict(zip(column_names, result))
             if schema_type is not None:
                 column_names = [c[0] for c in cursor.description or []]
-                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
-            return result
+                return schema_type(**dict(zip(column_names, result)))
+            return tuple(result)
 
-    def select_value(
+    async def select_value(
         self,
         sql: str,
         parameters: StatementParameterType,
         /,
-        connection: Optional[DuckDBPyConnection] = None,
+        connection: Optional[Connection] = None,
         schema_type: "Optional[type[T]]" = None,
     ) -> "Optional[Union[T, Any]]":
         """Fetch a single value from the database.
@@ -115,21 +115,22 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
             The first value from the first row of results, or None if no results.
         """
         connection = connection if connection is not None else self.connection
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
-            result = cursor.fetchone()
+        parameters = parameters if parameters is not None else {}
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters)
+            result = cast("Optional[Row]", await cursor.fetchone())  # pyright: ignore[reportUnknownMemberType]
             if result is None:
                 return None
             if schema_type is None:
                 return result[0]
             return schema_type(result[0])  # pyright: ignore[reportCallIssue]
 
-    def insert_update_delete(
+    async def insert_update_delete(
         self,
         sql: str,
         parameters: StatementParameterType,
         /,
-        connection: Optional[DuckDBPyConnection] = None,
+        connection: Optional[Connection] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         returning: bool = False,
     ) -> "Optional[Union[int, Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
@@ -138,29 +139,30 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
         Returns:
             Row count if not returning data, otherwise the first row of results.
         """
-        column_names: list[str] = []
         connection = connection if connection is not None else self.connection
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
+        parameters = parameters if parameters is not None else {}
+        column_names: list[str] = []
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters)
             if returning is False:
                 return cursor.rowcount if hasattr(cursor, "rowcount") else -1
-            result = cursor.fetchall()
-            if len(result) == 0:
+            result = await cursor.fetchall()
+            if len(list(result)) == 0:
                 return None
             if schema_type:
                 column_names = [c[0] for c in cursor.description or []]
-                return schema_type(**dict(zip(column_names, result[0])))
+                return schema_type(**dict(zip(column_names, iter(result))))
             if self.results_as_dict:
                 column_names = [c[0] for c in cursor.description or []]
-                return dict(zip(column_names, result[0]))
-            return result[0]
+                return dict(zip(column_names, iter(result)))
+            return tuple(iter(result))
 
-    def execute_script(
+    async def execute_script(
         self,
         sql: str,
         parameters: StatementParameterType,
         /,
-        connection: Optional[DuckDBPyConnection] = None,
+        connection: Optional[Connection] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         returning: bool = False,
     ) -> "Optional[Union[Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
@@ -169,19 +171,20 @@ class DuckDBDriver(SyncDriverAdapterProtocol[DuckDBPyConnection]):
         Returns:
             The number of rows affected by the script.
         """
-        column_names: list[str] = []
         connection = connection if connection is not None else self.connection
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
+        parameters = parameters if parameters is not None else {}
+        column_names: list[str] = []
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters)
             if returning is False:
                 return cast("str", cursor.statusmessage) if hasattr(cursor, "statusmessage") else "DONE"  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
-            result = cursor.fetchall()
-            if len(result) == 0:
+            result = await cursor.fetchall()
+            if len(list(result)) == 0:
                 return None
             if schema_type:
                 column_names = [c[0] for c in cursor.description or []]
-                return schema_type(**dict(zip(column_names, result[0])))
+                return schema_type(**dict(zip(column_names, iter(result))))
             if self.results_as_dict:
                 column_names = [c[0] for c in cursor.description or []]
-                return dict(zip(column_names, result[0]))
-            return result[0]
+                return dict(zip(column_names, iter(result)))
+            return tuple(iter(result))

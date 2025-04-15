@@ -15,7 +15,6 @@ from sqlspec.typing import dataclass_to_dict
 
 if TYPE_CHECKING:
     from collections.abc import Generator
-    from typing import Any
 
 __all__ = (
     "OracleSync",
@@ -29,7 +28,7 @@ class OracleSyncPool(OracleGenericPoolConfig[Connection, ConnectionPool]):
 
 
 @dataclass
-class OracleSync(SyncDatabaseConfig[Connection, ConnectionPool]):
+class OracleSync(SyncDatabaseConfig[Connection, ConnectionPool, Any]):
     """Oracle Sync database Configuration.
 
     This class provides the base configuration for Oracle database connections, extending

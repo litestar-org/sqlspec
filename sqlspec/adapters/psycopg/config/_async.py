@@ -12,7 +12,6 @@ from sqlspec.typing import dataclass_to_dict
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable
-    from typing import Any
 
 
 __all__ = (
@@ -27,7 +26,7 @@ class PsycoPgAsyncPool(PsycoPgGenericPoolConfig[AsyncConnection, AsyncConnection
 
 
 @dataclass
-class PsycoPgAsync(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPool]):
+class PsycoPgAsync(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPool, Any]):
     """Async Psycopg database Configuration.
 
     This class provides the base configuration for Psycopg database connections, extending

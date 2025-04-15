@@ -12,7 +12,6 @@ from sqlspec.typing import dataclass_to_dict
 
 if TYPE_CHECKING:
     from collections.abc import Generator
-    from typing import Any
 
 
 __all__ = (
@@ -27,7 +26,7 @@ class PsycoPgSyncPool(PsycoPgGenericPoolConfig[Connection, ConnectionPool]):
 
 
 @dataclass
-class PsycoPgSync(SyncDatabaseConfig[Connection, ConnectionPool]):
+class PsycoPgSync(SyncDatabaseConfig[Connection, ConnectionPool, Any]):
     """Sync Psycopg database Configuration.
     This class provides the base configuration for Psycopg database connections, extending
     the generic database configuration with Psycopg-specific settings.([1](https://www.psycopg.org/psycopg3/docs/api/connections.html))

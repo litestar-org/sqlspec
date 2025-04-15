@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Optional, TypeVar, Union
 
 from asyncmy.connection import Connection  # pyright: ignore[reportUnknownVariableType]
 from asyncmy.pool import Pool  # pyright: ignore[reportUnknownVariableType]
@@ -11,7 +11,6 @@ from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
-    from typing import Any
 
     from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore[reportUnknownVariableType]
 
@@ -104,7 +103,7 @@ class AsyncMyPool(GenericPoolConfig):
 
 
 @dataclass
-class AsyncMy(AsyncDatabaseConfig[Connection, Pool]):
+class AsyncMy(AsyncDatabaseConfig[Connection, Pool, Any]):
     """Asyncmy Configuration."""
 
     __is_async__ = True
