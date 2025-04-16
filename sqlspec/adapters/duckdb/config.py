@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
 from duckdb import DuckDBPyConnection
-from typing_extensions import Literal, NotRequired, TypeAlias, TypedDict
+from typing_extensions import Literal, NotRequired, TypedDict
 
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
 from sqlspec.base import NoPoolSyncConfig
@@ -68,11 +68,8 @@ class SecretConfig(TypedDict):
     """Whether to replace the secret if it already exists"""
 
 
-Driver: TypeAlias = DuckDBDriver
-
-
 @dataclass
-class DuckDB(NoPoolSyncConfig[DuckDBPyConnection, Driver]):
+class DuckDB(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
     """Configuration for DuckDB database connections.
 
     This class provides configuration options for DuckDB database connections, wrapping all parameters
@@ -103,7 +100,7 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection, Driver]):
     """A callable to be called after the connection is created."""
     connection_type: "type[DuckDBPyConnection]" = DuckDBPyConnection
     """The type of connection to create. Defaults to DuckDBPyConnection."""
-    driver_type: "type[Driver]" = DuckDBDriver
+    driver_type: "type[DuckDBDriver]" = DuckDBDriver  # type: ignore[type-abstract]
     """The type of driver to use. Defaults to DuckDBDriver."""
 
     def __post_init__(self) -> None:
@@ -259,7 +256,7 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection, Driver]):
             raise ImproperConfigurationError(msg) from e
 
     @classmethod
-    def _configure_extension(cls, connection: "DuckDBPyConnection", extension: ExtensionConfig) -> None:
+    def _configure_extension(cls, connection: "DuckDBPyConnection", extension: "ExtensionConfig") -> None:
         """Configure a single extension for the connection.
 
         Args:
@@ -270,10 +267,11 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection, Driver]):
             ImproperConfigurationError: If extension installation or configuration fails.
         """
         try:
+            # Install extension if needed
             if (
                 not cls._extension_installed(connection, extension["name"])
                 and extension.get("install_if_missing", True)
-            ) or extension.get("force_install"):
+            ) or extension.get("force_install", False):
                 repository = extension.get("repository", None)
                 repository_url = (
                     "https://community-extensions.duckdb.org"
@@ -289,9 +287,12 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection, Driver]):
                     repository_url=repository_url,
                     version=extension.get("version"),
                 )
+
+            # Load extension if not already loaded
             if not cls._extension_loaded(connection, extension["name"]):
                 connection.load_extension(extension["name"])
 
+            # Apply any configuration settings
             if extension.get("config"):
                 for key, value in extension.get("config", {}).items():
                     connection.execute(f"SET {key}={value}")
@@ -365,7 +366,7 @@ class DuckDB(NoPoolSyncConfig[DuckDBPyConnection, Driver]):
             connection.close()
 
     @contextmanager
-    def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[Driver, None, None]":
+    def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[DuckDBDriver, None, None]":
         """Create and provide a database connection.
 
         Yields:

@@ -51,26 +51,26 @@ class AdbcDriver(SyncDriverAdapterProtocol["Connection"]):
         parameters = parameters if parameters is not None else {}
         column_names: list[str] = []
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
+            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
 
             if schema_type is None:
                 first = True
-                for row in cursor.fetchall():
+                for row in cursor.fetchall():  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
                     if first:  # get column names on the fly
-                        column_names = [c[0] for c in cursor.description or []]
+                        column_names = [c[0] for c in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
                         first = False
                     if self.results_as_dict:  # pragma: no cover
                         # strict=False: requires 3.10
-                        yield dict(zip(column_names, row))
+                        yield dict(zip(column_names, row))  # pyright: ignore[reportUnknownArgumentType]
                     else:
                         yield row
             else:  # pragma: no cover
                 first = True
-                for row in cursor.fetchall():
+                for row in cursor.fetchall():  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
                     if first:
-                        column_names = [c[0] for c in cursor.description or []]
+                        column_names = [c[0] for c in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
                         first = False
-                    yield cast("ModelDTOT", schema_type(**dict(zip(column_names, row))))
+                    yield cast("ModelDTOT", schema_type(**dict(zip(column_names, row))))  # pyright: ignore[reportUnknownArgumentType]
 
     def select_one(
         self,
@@ -89,17 +89,17 @@ class AdbcDriver(SyncDriverAdapterProtocol["Connection"]):
         connection = connection if connection is not None else self.connection
         parameters = parameters if parameters is not None else {}
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
-            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType]
+            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
+            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             if result is None:
                 return None
             if schema_type is None and self.results_as_dict:
-                column_names = [c[0] for c in cursor.description or []]
-                return dict(zip(column_names, result))
+                column_names = [c[0] for c in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+                return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
             if schema_type is not None:
-                column_names = [c[0] for c in cursor.description or []]
-                return schema_type(**dict(zip(column_names, result)))
-            return result
+                column_names = [c[0] for c in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+                return schema_type(**dict(zip(column_names, result)))  # type: ignore[return-value]
+            return result  # pyright: ignore[reportUnknownVariableType]
 
     def select_value(
         self,
@@ -117,13 +117,13 @@ class AdbcDriver(SyncDriverAdapterProtocol["Connection"]):
         connection = connection if connection is not None else self.connection
         parameters = parameters if parameters is not None else {}
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
-            result = cast("Optional[tuple[Any, ...]]", cursor.fetchone())  # pyright: ignore[reportUnknownMemberType]
+            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
+            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             if result is None:
                 return None
             if schema_type is None:
-                return result[0]
-            return schema_type(result[0])  # pyright: ignore[reportCallIssue]
+                return result[0]  # pyright: ignore[reportUnknownVariableType]
+            return schema_type(result[0])  # type: ignore[call-arg]
 
     def insert_update_delete(
         self,
@@ -143,19 +143,19 @@ class AdbcDriver(SyncDriverAdapterProtocol["Connection"]):
         parameters = parameters if parameters is not None else {}
         column_names: list[str] = []
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
+            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             if returning is False:
                 return cursor.rowcount if hasattr(cursor, "rowcount") else -1
-            result = cursor.fetchall()
-            if len(result) == 0:
+            result = cursor.fetchall()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+            if len(result) == 0:  # pyright: ignore[reportUnknownArgumentType]
                 return None
             if schema_type:
-                column_names = [c[0] for c in cursor.description or []]
-                return schema_type(**dict(zip(column_names, result[0])))
+                column_names = [c[0] for c in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+                return schema_type(**dict(zip(column_names, result[0])))  # pyright: ignore[reportUnknownArgumentType]
             if self.results_as_dict:
-                column_names = [c[0] for c in cursor.description or []]
-                return dict(zip(column_names, result[0]))
-            return result[0]
+                column_names = [c[0] for c in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+                return dict(zip(column_names, result[0]))  # pyright: ignore[reportUnknownVariableType,reportUnknownArgumentType]
+            return result[0]  # pyright: ignore[reportUnknownVariableType]
 
     def execute_script(
         self,
@@ -175,16 +175,16 @@ class AdbcDriver(SyncDriverAdapterProtocol["Connection"]):
         parameters = parameters if parameters is not None else {}
         column_names: list[str] = []
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
+            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             if returning is False:
                 return cast("str", cursor.statusmessage) if hasattr(cursor, "statusmessage") else "DONE"  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
-            result = cursor.fetchall()
-            if len(result) == 0:
+            result = cursor.fetchall()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+            if len(result) == 0:  # pyright: ignore[reportUnknownArgumentType]
                 return None
             if schema_type:
-                column_names = [c[0] for c in cursor.description or []]
-                return schema_type(**dict(zip(column_names, result[0])))
+                column_names = [c[0] for c in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+                return schema_type(**dict(zip(column_names, result[0])))  # pyright: ignore[reportUnknownArgumentType]
             if self.results_as_dict:
-                column_names = [c[0] for c in cursor.description or []]
-                return dict(zip(column_names, result[0]))
-            return result[0]
+                column_names = [c[0] for c in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+                return dict(zip(column_names, result[0]))  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
+            return result[0]  # pyright: ignore[reportUnknownVariableType]

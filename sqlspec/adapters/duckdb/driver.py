@@ -93,16 +93,17 @@ class DuckDBDriver(SyncDriverAdapterProtocol["DuckDBPyConnection"]):
         connection = connection if connection is not None else self.connection
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
-            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType]
+            # DuckDB's fetchone returns a tuple of values or None
+            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             if result is None:
                 return None
             if schema_type is None and self.results_as_dict:
                 column_names = [c[0] for c in cursor.description or []]
-                return dict(zip(column_names, result))
+                return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
             if schema_type is not None:
                 column_names = [c[0] for c in cursor.description or []]
-                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
-            return result
+                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))  # pyright: ignore[reportUnknownArgumentType]
+            return result  # pyright: ignore[reportUnknownReturnType, reportUnknownVariableType]
 
     def select_value(
         self,
@@ -120,11 +121,12 @@ class DuckDBDriver(SyncDriverAdapterProtocol["DuckDBPyConnection"]):
         connection = connection if connection is not None else self.connection
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
-            result = cursor.fetchone()
+            # DuckDB's fetchone returns a tuple of values or None
+            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             if result is None:
                 return None
             if schema_type is None:
-                return result[0]
+                return result[0]  # pyright: ignore[reportUnknownReturnType, reportUnknownVariableType]
             return schema_type(result[0])  # type: ignore[call-arg]
 
     def insert_update_delete(
@@ -175,9 +177,10 @@ class DuckDBDriver(SyncDriverAdapterProtocol["DuckDBPyConnection"]):
         column_names: list[str] = []
         connection = connection if connection is not None else self.connection
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
             if returning is False:
-                return cast("str", cursor.statusmessage) if hasattr(cursor, "statusmessage") else "DONE"  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+                cursor.execute(sql, parameters)
+                # DuckDB doesn't have a statusmessage attribute, so we return a default value
+                return "DONE"
             result = cursor.fetchall()
             if len(result) == 0:
                 return None

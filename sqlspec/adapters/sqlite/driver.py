@@ -9,10 +9,10 @@ if TYPE_CHECKING:
 
     from sqlspec.typing import ModelDTOT, StatementParameterType
 
-__all__ = ("SQLiteDriver",)
+__all__ = ("SqliteDriver",)
 
 
-class SQLiteDriver(SyncDriverAdapterProtocol["Connection"]):
+class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
     """SQLite Sync Driver Adapter."""
 
     connection: "Connection"
@@ -24,7 +24,7 @@ class SQLiteDriver(SyncDriverAdapterProtocol["Connection"]):
 
     @staticmethod
     def _cursor(connection: "Connection", *args: Any, **kwargs: Any) -> Cursor:
-        return connection.cursor(*args, **kwargs)
+        return connection.cursor(*args, **kwargs)  # type: ignore[no-any-return]
 
     @contextmanager
     def _with_cursor(self, connection: "Connection") -> "Generator[Cursor, None, None]":
@@ -98,8 +98,8 @@ class SQLiteDriver(SyncDriverAdapterProtocol["Connection"]):
                 return dict(zip(column_names, result))
             if schema_type is not None:
                 column_names = [c[0] for c in cursor.description or []]
-                return schema_type(**dict(zip(column_names, result)))
-            return result
+                return schema_type(**dict(zip(column_names, result)))  # type: ignore[return-value]
+            return result  # type: ignore[no-any-return]
 
     def select_value(
         self,
@@ -123,7 +123,7 @@ class SQLiteDriver(SyncDriverAdapterProtocol["Connection"]):
                 return None
             if schema_type is None:
                 return result[0]
-            return schema_type(result[0])  # pyright: ignore[reportCallIssue]
+            return schema_type(result[0])  # type: ignore[call-arg]
 
     def insert_update_delete(
         self,

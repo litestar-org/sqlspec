@@ -13,13 +13,13 @@ if TYPE_CHECKING:
 
     from sqlspec.typing import ModelDTOT, StatementParameterType
 
-__all__ = ("AsyncPGDriver",)
+__all__ = ("AsyncPgDriver",)
 
 
-PgConnection: TypeAlias = "Union[Connection, PoolConnectionProxy]"  # pyright: ignore[reportMissingTypeArgument]
+PgConnection: TypeAlias = "Union[Connection[Any], PoolConnectionProxy[Any]]"  # pyright: ignore[reportMissingTypeArgument]
 
 
-class AsyncPGDriver(AsyncDriverAdapterProtocol["PgConnection"]):
+class AsyncPgDriver(AsyncDriverAdapterProtocol["PgConnection"]):
     """AsyncPG Postgres Driver Adapter."""
 
     connection: "PgConnection"
@@ -50,21 +50,24 @@ class AsyncPGDriver(AsyncDriverAdapterProtocol["PgConnection"]):
     ) -> "AsyncIterable[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
         """Fetch data from the database.
 
-        Yields:
+        Returns:
             Row data as either model instances or dictionaries.
         """
         connection = connection if connection is not None else self.connection
         parameters = parameters if parameters is not None else {}
         results = await connection.fetch(sql, *self._handle_statement_parameters(parameters))
 
-        for row in results:
-            if schema_type is not None:
-                yield schema_type(**dict(row))
-            if self.results_as_dict:  # pragma: no cover
-                # strict=False: requires 3.10
-                yield dict(row)
-            else:
-                yield tuple(row)
+        async def _fetch_results() -> "AsyncIterable[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
+            for row in results:
+                if schema_type is not None:
+                    yield cast("ModelDTOT", schema_type(**dict(row)))
+                if self.results_as_dict:  # pragma: no cover
+                    # strict=False: requires 3.10
+                    yield dict(row)
+                else:
+                    yield tuple(row)
+
+        return _fetch_results()
 
     async def select_one(
         self,
@@ -130,10 +133,7 @@ class AsyncPGDriver(AsyncDriverAdapterProtocol["PgConnection"]):
         connection = connection if connection is not None else self.connection
         parameters = parameters if parameters is not None else {}
         if returning is False:
-            result = await connection.execute(sql, *self._handle_statement_parameters(parameters))
-            if result is None:
-                return None
-            return result
+            return await connection.execute(sql, *self._handle_statement_parameters(parameters))
         result = await connection.fetchrow(sql, *self._handle_statement_parameters(parameters))
         if result is None:
             return None
@@ -161,16 +161,13 @@ class AsyncPGDriver(AsyncDriverAdapterProtocol["PgConnection"]):
         parameters = parameters if parameters is not None else {}
 
         if returning is False:
-            results = await connection.execute(sql, parameters)
-            if results is None:
-                return None
-            return results
+            return await connection.execute(sql, parameters)
 
         result = await connection.fetch(sql, *self._handle_statement_parameters(parameters))
-        if result is None or len(result) == 0:
+        if len(result) == 0:
             return None
         if schema_type is None and self.results_as_dict:
             return dict(result)
         if schema_type is not None:
             return cast("ModelDTOT", schema_type(**dict(result)))
-        return tuple(result.values())  # pyright: ignore[reportAttributeAccessIssue]
+        return tuple(result)

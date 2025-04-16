@@ -1,26 +1,22 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
+from sqlite3 import Connection
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
-from typing_extensions import TypeAlias
-
-from sqlspec.adapters.sqlite.driver import SQLiteDriver
+from sqlspec.adapters.sqlite.driver import SqliteDriver
 from sqlspec.base import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
 if TYPE_CHECKING:
     from collections.abc import Generator
-    from sqlite3 import Connection
 
 
 __all__ = ("Sqlite",)
 
-Driver: TypeAlias = SQLiteDriver
-
 
 @dataclass
-class Sqlite(NoPoolSyncConfig["Connection", "Driver"]):
+class Sqlite(NoPoolSyncConfig["Connection", "SqliteDriver"]):
     """Configuration for SQLite database connections.
 
     This class provides configuration options for SQLite database connections, wrapping all parameters
@@ -52,6 +48,10 @@ class Sqlite(NoPoolSyncConfig["Connection", "Driver"]):
 
     uri: "Union[bool, EmptyType]" = Empty
     """If set to True, database is interpreted as a URI with supported options."""
+    driver_type: "type[SqliteDriver]" = SqliteDriver  # type: ignore[type-abstract]
+    """Type of the driver object"""
+    connection_type: "type[Connection]" = Connection
+    """Type of the connection object"""
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -60,7 +60,9 @@ class Sqlite(NoPoolSyncConfig["Connection", "Driver"]):
         Returns:
             A string keyed dict of config kwargs for the sqlite3.connect() function.
         """
-        return dataclass_to_dict(self, exclude_empty=True, convert_nested=False, exclude={"pool_instance"})
+        return dataclass_to_dict(
+            self, exclude_empty=True, convert_nested=False, exclude={"pool_instance", "driver_type", "connection_type"}
+        )
 
     def create_connection(self) -> "Connection":
         """Create and return a new database connection.
@@ -94,7 +96,7 @@ class Sqlite(NoPoolSyncConfig["Connection", "Driver"]):
             connection.close()
 
     @contextmanager
-    def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[Driver, None, None]":
+    def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[SqliteDriver, None, None]":
         """Create and provide a database connection.
 
         Yields:

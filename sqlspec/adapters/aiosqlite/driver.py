@@ -2,7 +2,7 @@ from collections.abc import AsyncGenerator, AsyncIterable
 from contextlib import asynccontextmanager
 from typing import Any, Optional, Union, cast
 
-from aiosqlite import Connection, Cursor, Row
+from aiosqlite import Connection, Cursor
 
 from sqlspec.base import AsyncDriverAdapterProtocol, T
 from sqlspec.typing import ModelDTOT, StatementParameterType
@@ -42,35 +42,29 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol[Connection]):
     ) -> "AsyncIterable[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
         """Fetch data from the database.
 
-        Yields:
+        Returns:
             Row data as either model instances or dictionaries.
         """
         connection = connection if connection is not None else self.connection
         parameters = parameters if parameters is not None else {}
-        column_names: list[str] = []
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
 
-            if schema_type is None:
-                first = True
+        async def _fetch_results() -> AsyncIterable[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]:
+            async with self._with_cursor(connection) as cursor:
+                await cursor.execute(sql, parameters)
+
+                # Get column names once
+                column_names = [c[0] for c in cursor.description or []]
                 results = await cursor.fetchall()
+
                 for row in results:
-                    if first:  # get column names on the fly
-                        column_names = [c[0] for c in cursor.description or []]
-                        first = False
-                    if self.results_as_dict:  # pragma: no cover
-                        # strict=False: requires 3.10
+                    if schema_type is not None:
+                        yield cast("ModelDTOT", schema_type(**dict(zip(column_names, row))))
+                    elif self.results_as_dict:
                         yield dict(zip(column_names, row))
                     else:
                         yield tuple(row)
-            else:  # pragma: no cover
-                first = True
-                results = await cursor.fetchall()
-                for row in results:
-                    if first:
-                        column_names = [c[0] for c in cursor.description or []]
-                        first = False
-                    yield cast("ModelDTOT", schema_type(**dict(zip(column_names, row))))
+
+        return _fetch_results()
 
     async def select_one(
         self,
@@ -118,12 +112,12 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol[Connection]):
         parameters = parameters if parameters is not None else {}
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
-            result = cast("Optional[Row]", await cursor.fetchone())  # pyright: ignore[reportUnknownMemberType]
+            result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType]
             if result is None:
                 return None
             if schema_type is None:
                 return result[0]
-            return schema_type(result[0])  # pyright: ignore[reportCallIssue]
+            return schema_type(result[0])  # type: ignore[call-arg]
 
     async def insert_update_delete(
         self,

@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from _pytest.fixtures import FixtureRequest
 
 from sqlspec.adapters.duckdb.config import DuckDB, ExtensionConfig
 from sqlspec.exceptions import ImproperConfigurationError
@@ -152,7 +151,7 @@ class TestDuckDB:
                             "extension": "test",
                             "force_install": True,
                             "repository": None,
-                            "repository_url": None,
+                            "repository_url": "https://community-extensions.duckdb.org",
                             "version": None,
                         },
                     ),
@@ -172,7 +171,7 @@ class TestDuckDB:
                             "extension": "test",
                             "force_install": True,
                             "repository": None,
-                            "repository_url": None,
+                            "repository_url": "https://community-extensions.duckdb.org",
                             "version": None,
                         },
                     ),
@@ -206,7 +205,7 @@ class TestDuckDB:
     )
     def test_configure_extensions(
         self,
-        request: FixtureRequest,
+        request: pytest.FixtureRequest,
         mock_duckdb_connection: MagicMock,
         extension_config: ExtensionConfig,
         expected_calls: list[tuple[str, dict[str, Any]]],
@@ -215,10 +214,23 @@ class TestDuckDB:
         config = DuckDB(extensions=[extension_config])
 
         # Configure the mock to match expected behavior
+        def mock_execute_fetchone(*args: Any) -> list[Any] | None:
+            if not args:
+                return None
+            query = args[0] if isinstance(args[0], str) else args[0][0]
+            if "duckdb_extensions() where extension_name=?" in query:
+                return None  # Extension is a community extension
+            if "installed=true" in query:
+                return None  # Extension not installed
+            if "loaded=true" in query:
+                return None  # Extension not loaded
+            return None
+
+        mock_duckdb_connection.execute.return_value.fetchone.side_effect = mock_execute_fetchone
+
         for method_name, _kwargs in expected_calls:
             if method_name == "execute":
                 continue  # Skip pre-configuring execute calls as they're variable
-
             getattr(mock_duckdb_connection, method_name).return_value = None
 
         connection = config.create_connection()
@@ -236,6 +248,22 @@ class TestDuckDB:
 
     def test_extension_configuration_error(self, mock_duckdb_connection: MagicMock) -> None:
         """Test error handling during extension configuration."""
+
+        # Simulate extension states
+        def mock_execute_fetchone(*args: Any) -> list[Any] | None:
+            if not args:
+                return None
+            query = args[0] if isinstance(args[0], str) else args[0][0]
+            if "duckdb_extensions() where extension_name=?" in query:
+                return None  # Extension is a community extension
+            if "installed=true" in query:
+                return None  # Extension not installed
+            if "loaded=true" in query:
+                return None  # Extension not loaded
+            return None
+
+        mock_duckdb_connection.execute.return_value.fetchone.side_effect = mock_execute_fetchone
+
         # Simulate an error during extension loading
         mock_duckdb_connection.load_extension.side_effect = Exception("Test error")
 

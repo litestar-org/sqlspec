@@ -7,7 +7,7 @@ from asyncpg import create_pool as asyncpg_create_pool
 from typing_extensions import TypeAlias
 
 from sqlspec._serialization import decode_json, encode_json
-from sqlspec.adapters.asyncpg.driver import AsyncPGDriver
+from sqlspec.adapters.asyncpg.driver import AsyncPgDriver
 from sqlspec.base import AsyncDatabaseConfig, GenericPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
@@ -29,7 +29,6 @@ __all__ = (
 T = TypeVar("T")
 
 PgConnection: TypeAlias = "Union[Connection[Any], PoolConnectionProxy[Any]]"
-Driver: TypeAlias = AsyncPGDriver
 
 
 @dataclass
@@ -73,7 +72,7 @@ class AsyncPgPool(GenericPoolConfig):
 
 
 @dataclass
-class AsyncPg(AsyncDatabaseConfig["PgConnection", "Pool", "Driver"]):  # pyright: ignore[reportMissingTypeArgument]
+class AsyncPg(AsyncDatabaseConfig["PgConnection", "Pool", "AsyncPgDriver"]):  # pyright: ignore[reportMissingTypeArgument]
     """Asyncpg Configuration."""
 
     pool_config: "Optional[AsyncPgPool]" = None
@@ -85,6 +84,12 @@ class AsyncPg(AsyncDatabaseConfig["PgConnection", "Pool", "Driver"]):  # pyright
     json_serializer: "Callable[[Any], str]" = encode_json
     """For dialects that support the JSON datatype, this is a Python callable that will render a given object as JSON.
     By default, SQLSpec's :attr:`encode_json() <sqlspec._serialization.encode_json>` is used."""
+    connection_type: "type[PgConnection]" = PgConnection  # type: ignore[assignment]
+    """Type of the connection object"""
+    driver_type: "type[AsyncPgDriver]" = AsyncPgDriver  # type: ignore[type-abstract]
+    """Type of the driver object"""
+    pool_instance: "Optional[Pool[Any]]" = None
+    """The connection pool instance. If set, this will be used instead of creating a new pool."""
 
     @property
     def pool_config_dict(self) -> "dict[str, Any]":
@@ -99,7 +104,10 @@ class AsyncPg(AsyncDatabaseConfig["PgConnection", "Pool", "Driver"]):  # pyright
         """
         if self.pool_config:
             return dataclass_to_dict(
-                self.pool_config, exclude_empty=True, exclude={"pool_instance"}, convert_nested=False
+                self.pool_config,
+                exclude_empty=True,
+                exclude={"pool_instance", "driver_type", "connection_type"},
+                convert_nested=False,
             )
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
@@ -137,7 +145,9 @@ class AsyncPg(AsyncDatabaseConfig["PgConnection", "Pool", "Driver"]):  # pyright
         return self.create_pool()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
 
     @asynccontextmanager
-    async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[PoolConnectionProxy, None]":  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]
+    async def provide_connection(
+        self, *args: "Any", **kwargs: "Any"
+    ) -> "AsyncGenerator[PoolConnectionProxy[Any], None]":  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]
         """Create a connection instance.
 
         Yields:
@@ -154,8 +164,8 @@ class AsyncPg(AsyncDatabaseConfig["PgConnection", "Pool", "Driver"]):  # pyright
             self.pool_instance = None
 
     @asynccontextmanager
-    async def provide_session(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[Driver, None]":
-        """Create and provide a database connection.
+    async def provide_session(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[AsyncPgDriver, None]":
+        """Create and provide a database session.
 
         Yields:
             A Aiosqlite driver instance.

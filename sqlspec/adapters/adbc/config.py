@@ -2,7 +2,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from typing_extensions import TypeAlias
+from adbc_driver_manager.dbapi import Connection
 
 from sqlspec.adapters.adbc.driver import AdbcDriver
 from sqlspec.base import NoPoolSyncConfig
@@ -11,14 +11,12 @@ from sqlspec.typing import Empty, EmptyType
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-    from adbc_driver_manager.dbapi import Connection
 
 __all__ = ("Adbc",)
-Driver: TypeAlias = AdbcDriver
 
 
 @dataclass
-class Adbc(NoPoolSyncConfig["Connection", "Driver"]):
+class Adbc(NoPoolSyncConfig["Connection", "AdbcDriver"]):
     """Configuration for ADBC connections.
 
     This class provides configuration options for ADBC database connections using the
@@ -31,6 +29,10 @@ class Adbc(NoPoolSyncConfig["Connection", "Driver"]):
     """Name of the ADBC driver to use"""
     db_kwargs: "Optional[dict[str, Any]]" = None
     """Additional database-specific connection parameters"""
+    connection_type: "type[Connection]" = Connection
+    """Type of the connection object"""
+    driver_type: "type[AdbcDriver]" = AdbcDriver  # type: ignore[type-abstract]
+    """Type of the driver object"""
 
     @property
     def connection_params(self) -> "dict[str, Any]":
@@ -54,8 +56,8 @@ class Adbc(NoPoolSyncConfig["Connection", "Driver"]):
             yield connection
 
     @contextmanager
-    def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[Driver, None, None]":
-        """Create and provide a database connection.
+    def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[AdbcDriver, None, None]":
+        """Create and provide a database session.
 
         Yields:
             A Aiosqlite driver instance.

@@ -4,17 +4,18 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from oracledb import create_pool as oracledb_create_pool  # pyright: ignore[reportUnknownVariableType]
 from oracledb.connection import Connection
-from oracledb.pool import ConnectionPool
 
-from sqlspec.adapters.oracledb.config._common import (
-    OracleGenericPoolConfig,
-)
+from sqlspec.adapters.oracledb.config._common import OracleGenericPoolConfig
+from sqlspec.adapters.oracledb.driver import OracleSyncDriver
 from sqlspec.base import SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import dataclass_to_dict
 
 if TYPE_CHECKING:
     from collections.abc import Generator
+
+    from oracledb.pool import ConnectionPool
+
 
 __all__ = (
     "OracleSync",
@@ -23,12 +24,12 @@ __all__ = (
 
 
 @dataclass
-class OracleSyncPool(OracleGenericPoolConfig[Connection, ConnectionPool]):
+class OracleSyncPool(OracleGenericPoolConfig["Connection", "ConnectionPool"]):
     """Sync Oracle Pool Config"""
 
 
 @dataclass
-class OracleSync(SyncDatabaseConfig[Connection, ConnectionPool, Any]):
+class OracleSync(SyncDatabaseConfig["Connection", "ConnectionPool", "OracleSyncDriver"]):
     """Oracle Sync database Configuration.
 
     This class provides the base configuration for Oracle database connections, extending
@@ -48,6 +49,16 @@ class OracleSync(SyncDatabaseConfig[Connection, ConnectionPool, Any]):
 
     If set, the plugin will use the provided pool rather than instantiate one.
     """
+    connection_class: "type[Connection]" = Connection
+    """Connection class to use.
+
+    Defaults to :class:`Connection`.
+    """
+    driver_class: "type[OracleSyncDriver]" = OracleSyncDriver  # type: ignore[type-abstract]
+    """Driver class to use.
+
+    Defaults to :class:`OracleSyncDriver`.
+    """
 
     @property
     def pool_config_dict(self) -> "dict[str, Any]":
@@ -62,7 +73,10 @@ class OracleSync(SyncDatabaseConfig[Connection, ConnectionPool, Any]):
         """
         if self.pool_config:
             return dataclass_to_dict(
-                self.pool_config, exclude_empty=True, convert_nested=False, exclude={"pool_instance"}
+                self.pool_config,
+                exclude_empty=True,
+                convert_nested=False,
+                exclude={"pool_instance", "connection_class", "driver_class"},
             )
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
