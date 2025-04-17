@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def mock_aiosqlite_connection() -> Generator[MagicMock, None, None]:
     """Create a mock Aiosqlite connection."""
     connection = MagicMock(spec=Connection)
@@ -25,84 +25,86 @@ def mock_aiosqlite_connection() -> Generator[MagicMock, None, None]:
     return connection
 
 
-class TestAiosqlite:
-    """Test Aiosqlite class."""
+def test_minimal_config() -> None:
+    """Test minimal configuration with only required values."""
+    config = Aiosqlite()
+    assert config.database == ":memory:"
+    assert config.timeout is Empty
+    assert config.detect_types is Empty
+    assert config.isolation_level is Empty
+    assert config.check_same_thread is Empty
+    assert config.factory is Empty
+    assert config.cached_statements is Empty
+    assert config.uri is Empty
 
-    def test_minimal_config(self) -> None:
-        """Test minimal configuration with only required values."""
-        config = Aiosqlite()
-        assert config.database == ":memory:"
-        assert config.timeout is Empty
-        assert config.detect_types is Empty
-        assert config.isolation_level is Empty
-        assert config.check_same_thread is Empty
-        assert config.factory is Empty
-        assert config.cached_statements is Empty
-        assert config.uri is Empty
 
-    def test_full_config(self) -> None:
-        """Test configuration with all values set."""
-        config = Aiosqlite(
-            database=":memory:",
-            timeout=5.0,
-            detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
-            isolation_level="IMMEDIATE",
-            check_same_thread=False,
-            factory=sqlite3.Connection,
-            cached_statements=256,
-            uri=True,
-        )
+def test_full_config() -> None:
+    """Test configuration with all values set."""
+    config = Aiosqlite(
+        database=":memory:",
+        timeout=5.0,
+        detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
+        isolation_level="IMMEDIATE",
+        check_same_thread=False,
+        factory=sqlite3.Connection,
+        cached_statements=256,
+        uri=True,
+    )
 
-        assert config.database == ":memory:"
-        assert config.timeout == 5.0
-        assert config.detect_types == sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES
-        assert config.isolation_level == "IMMEDIATE"
-        assert config.check_same_thread is False
-        assert config.factory == sqlite3.Connection
-        assert config.cached_statements == 256
-        assert config.uri is True
+    assert config.database == ":memory:"
+    assert config.timeout == 5.0
+    assert config.detect_types == sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES
+    assert config.isolation_level == "IMMEDIATE"
+    assert config.check_same_thread is False
+    assert config.factory == sqlite3.Connection
+    assert config.cached_statements == 256
+    assert config.uri is True
 
-    def test_connection_config_dict(self) -> None:
-        """Test connection_config_dict property."""
-        config = Aiosqlite(
-            database=":memory:",
-            timeout=5.0,
-            detect_types=sqlite3.PARSE_DECLTYPES,
-            isolation_level="IMMEDIATE",
-        )
-        config_dict = config.connection_config_dict
-        assert config_dict == {
-            "database": ":memory:",
-            "timeout": 5.0,
-            "detect_types": sqlite3.PARSE_DECLTYPES,
-            "isolation_level": "IMMEDIATE",
-        }
 
-    @pytest.mark.asyncio
-    async def test_create_connection_success(self, mock_aiosqlite_connection: MagicMock) -> None:
-        """Test successful connection creation."""
-        with patch("aiosqlite.connect", AsyncMock(return_value=mock_aiosqlite_connection)) as mock_connect:
-            config = Aiosqlite(database=":memory:")
-            connection = await config.create_connection()
+def test_connection_config_dict() -> None:
+    """Test connection_config_dict property."""
+    config = Aiosqlite(
+        database=":memory:",
+        timeout=5.0,
+        detect_types=sqlite3.PARSE_DECLTYPES,
+        isolation_level="IMMEDIATE",
+    )
+    config_dict = config.connection_config_dict
+    assert config_dict == {
+        "database": ":memory:",
+        "timeout": 5.0,
+        "detect_types": sqlite3.PARSE_DECLTYPES,
+        "isolation_level": "IMMEDIATE",
+    }
 
-            assert connection is mock_aiosqlite_connection
-            mock_connect.assert_called_once_with(database=":memory:")
 
-    @pytest.mark.asyncio
-    async def test_create_connection_failure(self) -> None:
-        """Test connection creation failure."""
-        with patch("aiosqlite.connect", AsyncMock(side_effect=Exception("Connection failed"))):
-            config = Aiosqlite(database=":memory:")
-            with pytest.raises(ImproperConfigurationError, match="Could not configure the Aiosqlite connection"):
-                await config.create_connection()
+@pytest.mark.asyncio
+async def test_create_connection_success(mock_aiosqlite_connection: MagicMock) -> None:
+    """Test successful connection creation."""
+    with patch("aiosqlite.connect", AsyncMock(return_value=mock_aiosqlite_connection)) as mock_connect:
+        config = Aiosqlite(database=":memory:")
+        connection = await config.create_connection()
 
-    @pytest.mark.asyncio
-    async def test_provide_connection(self, mock_aiosqlite_connection: MagicMock) -> None:
-        """Test provide_connection context manager."""
-        with patch("aiosqlite.connect", AsyncMock(return_value=mock_aiosqlite_connection)):
-            config = Aiosqlite(database=":memory:")
-            async with config.provide_connection() as conn:
-                assert conn is mock_aiosqlite_connection
+        assert connection is mock_aiosqlite_connection
+        mock_connect.assert_called_once_with(database=":memory:")
 
-            # Verify connection was closed
-            mock_aiosqlite_connection.close.assert_awaited_once()
+
+@pytest.mark.asyncio
+async def test_create_connection_failure() -> None:
+    """Test connection creation failure."""
+    with patch("aiosqlite.connect", AsyncMock(side_effect=Exception("Connection failed"))):
+        config = Aiosqlite(database=":memory:")
+        with pytest.raises(ImproperConfigurationError, match="Could not configure the Aiosqlite connection"):
+            await config.create_connection()
+
+
+@pytest.mark.asyncio
+async def test_provide_connection(mock_aiosqlite_connection: MagicMock) -> None:
+    """Test provide_connection context manager."""
+    with patch("aiosqlite.connect", AsyncMock(return_value=mock_aiosqlite_connection)):
+        config = Aiosqlite(database=":memory:")
+        async with config.provide_connection() as conn:
+            assert conn is mock_aiosqlite_connection
+
+        # Verify connection was closed
+        mock_aiosqlite_connection.close.assert_awaited_once()

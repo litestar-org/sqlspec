@@ -29,15 +29,18 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
         max_size=5,
     )
     another_config = PsycopgAsync(pool_config=pool_config)
-    create_pool = await another_config.create_pool()
-    assert create_pool is not None
-    async with create_pool.connection() as conn:
-        assert conn is not None
-        # Test basic query
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT 1")
-            result = await cur.fetchone()
-            assert result == (1,)
+    pool = await another_config.create_pool()
+    assert pool is not None
+    try:
+        async with pool.connection() as conn:
+            assert conn is not None
+            # Test basic query
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT 1")
+                result = await cur.fetchone()
+                assert result == (1,)
+    finally:
+        await pool.close()
 
 
 def test_sync_connection(postgres_service: PostgresService) -> None:
@@ -64,12 +67,15 @@ def test_sync_connection(postgres_service: PostgresService) -> None:
         max_size=5,
     )
     another_config = PsycopgSync(pool_config=pool_config)
-    create_pool = another_config.create_pool()
-    assert create_pool is not None
-    with create_pool.connection() as conn:
-        assert conn is not None
-        # Test basic query
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-            result = cur.fetchone()
-            assert result == (1,)
+    pool = another_config.create_pool()
+    assert pool is not None
+    try:
+        with pool.connection() as conn:
+            assert conn is not None
+            # Test basic query
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                result = cur.fetchone()
+                assert result == (1,)
+    finally:
+        pool.close()

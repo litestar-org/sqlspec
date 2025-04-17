@@ -1,92 +1,164 @@
+"""Test SQLite driver implementation."""
+
+from __future__ import annotations
+
 import sqlite3
+from collections.abc import Generator
+from typing import Any, Literal
 
 import pytest
 
-from sqlspec.adapters.sqlite import Sqlite
+from sqlspec.adapters.sqlite import Sqlite, SqliteDriver
+
+ParamStyle = Literal["tuple_binds", "dict_binds"]
 
 
-def test_driver() -> None:
-    """Test driver components."""
+@pytest.fixture(scope="session")
+def sqlite_session() -> Generator[SqliteDriver, None, None]:
+    """Create a SQLite session with a test table.
+
+    Returns:
+        A configured SQLite session with a test table.
+    """
     adapter = Sqlite()
+    create_table_sql = """
+    CREATE TABLE IF NOT EXISTS test_table (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL
+    )
+    """
+    with adapter.provide_session() as session:
+        session.execute_script(create_table_sql, None)
+        yield session
+        # Clean up
+        session.execute_script("DROP TABLE IF EXISTS test_table", None)
 
+
+@pytest.fixture(autouse=True)
+def cleanup_table(sqlite_session: SqliteDriver) -> None:
+    """Clean up the test table before each test."""
+    sqlite_session.execute_script("DELETE FROM test_table", None)
+
+
+@pytest.mark.parametrize(
+    ("params", "style"),
+    [
+        pytest.param(("test_name",), "tuple_binds", id="tuple_binds"),
+        pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
+    ],
+)
+def test_insert_update_delete_returning(sqlite_session: SqliteDriver, params: Any, style: ParamStyle) -> None:
+    """Test insert_update_delete_returning with different parameter styles."""
     # Check SQLite version for RETURNING support (3.35.0+)
     sqlite_version = sqlite3.sqlite_version_info
     returning_supported = sqlite_version >= (3, 35, 0)
 
-    # Test provide_session
-    with adapter.provide_session() as session:
-        assert session is not None
+    if returning_supported:
+        sql = """
+        INSERT INTO test_table (name)
+        VALUES (%s)
+        RETURNING id, name
+        """ % ("?" if style == "tuple_binds" else ":name")
 
-        # Test execute_script for schema changes (no parameters)
-        create_table_sql = """
-        CREATE TABLE IF NOT EXISTS test_table (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL
-        )
-        """
-        # Use execute_script without parameters for DDL
-        session.execute_script(create_table_sql, None)
+        result = sqlite_session.insert_update_delete_returning(sql, params)
+        assert result is not None
+        assert result["name"] == "test_name"
+        assert result["id"] is not None
+    else:
+        # Alternative for older SQLite: Insert and then get last row id
+        insert_sql = """
+        INSERT INTO test_table (name)
+        VALUES (%s)
+        """ % ("?" if style == "tuple_binds" else ":name")
 
-        inserted_id = None
-        try:
-            if returning_supported:
-                # Test insert_update_delete_returning with RETURNING
-                insert_sql = """
-                INSERT INTO test_table (name)
-                VALUES (:name)
-                RETURNING id, name
-                """
-                params = {"name": "test_name"}
-                result = session.insert_update_delete_returning(insert_sql, params)
+        sqlite_session.insert_update_delete(insert_sql, params)
 
-                assert result is not None, "insert_update_delete_returning should return a result"
-                assert isinstance(result, dict), "Result should be a dictionary"
-                assert result.get("name") == "test_name", "Inserted name does not match"
-                assert result.get("id") is not None, "Returned ID should not be None"
-                inserted_id = result["id"]  # Store the returned ID
-            else:
-                # Alternative for older SQLite: Insert and then get last row id
-                insert_sql_no_returning = "INSERT INTO test_table (name) VALUES (:name)"
-                params = {"name": "test_name"}
-                # Use insert_update_delete for single statement with params
-                session.insert_update_delete(insert_sql_no_returning, params)
-                # Get the last inserted ID using select_value
-                select_last_id_sql = "SELECT last_insert_rowid()"
-                # select_value typically doesn't take parameters if the SQL doesn't need them
-                inserted_id = session.select_value(select_last_id_sql)
-                assert inserted_id is not None, "Could not retrieve last inserted ID using last_insert_rowid()"
+        # Get the last inserted ID using select_value
+        select_last_id_sql = "SELECT last_insert_rowid()"
+        inserted_id = sqlite_session.select_value(select_last_id_sql)
+        assert inserted_id is not None
 
-            # Ensure we have an ID before proceeding
-            assert inserted_id is not None, "inserted_id was not set"
 
-            # Test select using the inserted ID
-            select_sql = "SELECT id, name FROM test_table WHERE id = :id"
-            params_select = {"id": inserted_id}
-            results = session.select(select_sql, params_select)
-            assert len(results) == 1, "Select should return one row for the inserted ID"
-            assert results[0].get("name") == "test_name", "Selected name does not match"
-            assert results[0].get("id") == inserted_id, "Selected ID does not match"
+@pytest.mark.parametrize(
+    ("params", "style"),
+    [
+        pytest.param(("test_name",), "tuple_binds", id="tuple_binds"),
+        pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
+    ],
+)
+def test_select(sqlite_session: SqliteDriver, params: Any, style: ParamStyle) -> None:
+    """Test select functionality with different parameter styles."""
+    # Insert test record
+    insert_sql = """
+    INSERT INTO test_table (name)
+    VALUES (%s)
+    """ % ("?" if style == "tuple_binds" else ":name")
+    sqlite_session.insert_update_delete(insert_sql, params)
 
-            # Test select_one using the inserted ID
-            select_one_sql = "SELECT id, name FROM test_table WHERE id = :id"
-            params_select_one = {"id": inserted_id}
-            result_one = session.select_one(select_one_sql, params_select_one)
-            assert result_one is not None, "select_one should return a result for the inserted ID"
-            assert isinstance(result_one, dict), "select_one result should be a dictionary"
-            assert result_one.get("name") == "test_name", "select_one name does not match"
-            assert result_one.get("id") == inserted_id, "select_one ID does not match"
+    # Test select
+    select_sql = "SELECT id, name FROM test_table"
+    empty_params: tuple[()] | dict[str, Any] = () if style == "tuple_binds" else {}
+    results = sqlite_session.select(select_sql, empty_params)
+    assert len(results) == 1
+    assert results[0]["name"] == "test_name"
 
-            # Test select_value using the actual inserted ID
-            value_sql = "SELECT name FROM test_table WHERE id = :id"
-            params_value = {"id": inserted_id}
-            value = session.select_value(value_sql, params_value)
-            assert value == "test_name", "select_value returned incorrect value"
 
-        except Exception as e:
-            # Fail the test if any database operation raises an exception
-            pytest.fail(f"Database operation failed: {e}")
+@pytest.mark.parametrize(
+    ("params", "style"),
+    [
+        pytest.param(("test_name",), "tuple_binds", id="tuple_binds"),
+        pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
+    ],
+)
+def test_select_one(sqlite_session: SqliteDriver, params: Any, style: ParamStyle) -> None:
+    """Test select_one functionality with different parameter styles."""
+    # Insert test record
+    insert_sql = """
+    INSERT INTO test_table (name)
+    VALUES (%s)
+    """ % ("?" if style == "tuple_binds" else ":name")
+    sqlite_session.insert_update_delete(insert_sql, params)
 
-        finally:
-            # Clean up: Drop the test table
-            # Use execute_script without parameters for DDL
-            session.execute_script("DROP TABLE IF EXISTS test_table", None)
+    # Test select_one
+    select_one_sql = """
+    SELECT id, name FROM test_table WHERE name = %s
+    """ % ("?" if style == "tuple_binds" else ":name")
+    select_params = (params[0],) if style == "tuple_binds" else {"name": params["name"]}
+    result = sqlite_session.select_one(select_one_sql, select_params)
+    assert result is not None
+    assert result["name"] == "test_name"
+
+
+@pytest.mark.parametrize(
+    ("name_params", "id_params", "style"),
+    [
+        pytest.param(("test_name",), (1,), "tuple_binds", id="tuple_binds"),
+        pytest.param({"name": "test_name"}, {"id": 1}, "dict_binds", id="dict_binds"),
+    ],
+)
+def test_select_value(
+    sqlite_session: SqliteDriver,
+    name_params: Any,
+    id_params: Any,
+    style: ParamStyle,
+) -> None:
+    """Test select_value functionality with different parameter styles."""
+    # Insert test record and get the ID
+    insert_sql = """
+    INSERT INTO test_table (name)
+    VALUES (%s)
+    """ % ("?" if style == "tuple_binds" else ":name")
+    sqlite_session.insert_update_delete(insert_sql, name_params)
+
+    # Get the last inserted ID
+    select_last_id_sql = "SELECT last_insert_rowid()"
+    inserted_id = sqlite_session.select_value(select_last_id_sql)
+    assert inserted_id is not None
+
+    # Test select_value with the actual inserted ID
+    value_sql = """
+    SELECT name FROM test_table WHERE id = %s
+    """ % ("?" if style == "tuple_binds" else ":id")
+    test_id_params = (inserted_id,) if style == "tuple_binds" else {"id": inserted_id}
+    value = sqlite_session.select_value(value_sql, test_id_params)
+    assert value == "test_name"

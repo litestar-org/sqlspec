@@ -49,12 +49,12 @@ class OracleAsync(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionPool", 
 
     If set, the plugin will use the provided pool rather than instantiate one.
     """
-    connection_class: "type[AsyncConnection]" = field(init=False, default_factory=lambda: AsyncConnection)
+    connection_type: "type[AsyncConnection]" = field(init=False, default_factory=lambda: AsyncConnection)
     """Connection class to use.
 
     Defaults to :class:`AsyncConnection`.
     """
-    driver_class: "type[OracleAsyncDriver]" = field(init=False, default_factory=lambda: OracleAsyncDriver)  # type: ignore[type-abstract,unused-ignore]
+    driver_type: "type[OracleAsyncDriver]" = field(init=False, default_factory=lambda: OracleAsyncDriver)  # type: ignore[type-abstract,unused-ignore]
     """Driver class to use.
 
     Defaults to :class:`OracleAsyncDriver`.
@@ -85,7 +85,7 @@ class OracleAsync(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionPool", 
                 self.pool_config,
                 exclude_empty=True,
                 convert_nested=False,
-                exclude=pool_only_params.union({"pool_instance", "connection_class", "driver_class"}),
+                exclude=pool_only_params.union({"pool_instance", "connection_type", "driver_type"}),
             )
         msg = "You must provide a 'pool_config' for this adapter."
         raise ImproperConfigurationError(msg)
@@ -106,7 +106,7 @@ class OracleAsync(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionPool", 
                 self.pool_config,
                 exclude_empty=True,
                 convert_nested=False,
-                exclude={"pool_instance", "connection_class", "driver_class"},
+                exclude={"pool_instance", "connection_type", "driver_type"},
             )
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
@@ -179,7 +179,7 @@ class OracleAsync(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionPool", 
             OracleAsyncDriver: A driver instance with an active connection.
         """
         async with self.provide_connection(*args, **kwargs) as connection:
-            yield self.driver_class(connection)
+            yield self.driver_type(connection)
 
     async def close_pool(self) -> None:
         """Close the connection pool."""

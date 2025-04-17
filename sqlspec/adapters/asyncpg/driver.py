@@ -25,6 +25,12 @@ class AsyncpgDriver(AsyncDriverAdapterProtocol["PgConnection"]):
     def __init__(self, connection: "PgConnection") -> None:
         self.connection = connection
 
+    def _process_sql_params(
+        self, sql: str, parameters: "Optional[StatementParameterType]" = None
+    ) -> "tuple[str, Union[tuple[Any, ...], list[Any], dict[str, Any]]]":
+        sql, parameters = super()._process_sql_params(sql, parameters)
+        return sql, parameters if parameters is not None else ()
+
     async def select(
         self,
         sql: str,
@@ -45,11 +51,9 @@ class AsyncpgDriver(AsyncDriverAdapterProtocol["PgConnection"]):
             List of row data as either model instances or dictionaries.
         """
         connection = self._connection(connection)
-        sql, params = self._process_sql_params(sql, parameters)
-        # Use empty tuple if params is None
-        params = params if params is not None else ()
+        sql, parameters = self._process_sql_params(sql, parameters)
 
-        results = await connection.fetch(sql, *params)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        results = await connection.fetch(sql, *parameters)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         if not results:
             return []
         if schema_type is None:
@@ -108,11 +112,9 @@ class AsyncpgDriver(AsyncDriverAdapterProtocol["PgConnection"]):
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, params = self._process_sql_params(sql, parameters)
-        # Use empty tuple if params is None
-        params = params if params is not None else ()
+        sql, parameters = self._process_sql_params(sql, parameters)
 
-        result = await connection.fetchrow(sql, *params)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        result = await connection.fetchrow(sql, *parameters)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         result = self.check_not_found(result)
         if schema_type is None:
             # Always return as dictionary
