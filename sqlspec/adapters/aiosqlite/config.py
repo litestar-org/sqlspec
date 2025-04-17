@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 from aiosqlite import Connection
 
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
-from sqlspec.base import NoPoolSyncConfig
+from sqlspec.base import NoPoolAsyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
@@ -19,7 +19,7 @@ __all__ = ("Aiosqlite",)
 
 
 @dataclass
-class Aiosqlite(NoPoolSyncConfig["Connection", "AiosqliteDriver"]):
+class Aiosqlite(NoPoolAsyncConfig["Connection", "AiosqliteDriver"]):
     """Configuration for Aiosqlite database connections.
 
     This class provides configuration options for Aiosqlite database connections, wrapping all parameters
@@ -44,9 +44,9 @@ class Aiosqlite(NoPoolSyncConfig["Connection", "AiosqliteDriver"]):
     """The number of statements that SQLite will cache for this connection. The default is 128."""
     uri: "Union[bool, EmptyType]" = field(default=Empty)
     """If set to True, database is interpreted as a URI with supported options."""
-    connection_type: "type[Connection]" = field(default=Connection)
+    connection_type: "type[Connection]" = field(init=False, default_factory=lambda: Connection)
     """Type of the connection object"""
-    driver_type: "type[AiosqliteDriver]" = field(default=AiosqliteDriver)  # type: ignore[type-abstract]
+    driver_type: "type[AiosqliteDriver]" = field(init=False, default_factory=lambda: AiosqliteDriver)  # type: ignore[type-abstract,unused-ignore]
     """Type of the driver object"""
 
     @property
@@ -101,4 +101,4 @@ class Aiosqlite(NoPoolSyncConfig["Connection", "AiosqliteDriver"]):
 
         """
         async with self.provide_connection(*args, **kwargs) as connection:
-            yield self.driver_type(connection, results_as_dict=True)
+            yield self.driver_type(connection)

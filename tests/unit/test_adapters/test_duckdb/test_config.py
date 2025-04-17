@@ -78,7 +78,7 @@ class TestDuckDB:
     def test_default_values(self) -> None:
         """Test default values for DuckDB."""
         config = DuckDB()
-        assert config.database is Empty
+        assert config.database == ":memory:"
         assert config.read_only is Empty
         assert config.config == {}
         assert isinstance(config.extensions, list)

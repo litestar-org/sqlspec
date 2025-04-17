@@ -75,7 +75,7 @@ test = [
   "pytest>=8.0.0",
   "pytest-asyncio>=0.23.8",
   "pytest-cov>=5.0.0",
-  "pytest-databases>=0.10.0",
+  "pytest-databases[postgres,oracle,mysql,bigquery,spanner]>=0.12.2",
   "pytest-mock>=3.14.0",
   "pytest-sugar>=1.0.0",
   "pytest-xdist>=3.6.1",
@@ -220,8 +220,8 @@ disableBytesTypePromotions = true
 exclude = ["tools", "docs"]
 include = ["sqlspec", "tests"]
 pythonVersion = "3.9"
-reportUnnecessaryTypeIgnoreComments = true
 reportPrivateUsage = false
+reportUnnecessaryTypeIgnoreComments = true
 
 
 [tool.slotscheck]
@@ -270,6 +270,7 @@ ignore = [
   "CPY001",  # pycodestyle - Missing Copywrite notice at the top of the file
   "RUF029",  # Ruff - function is declared as async but has no awaitable calls
   "COM812",  # flake8-comma - Missing trailing comma
+  "PGH003",  # Use Specific ignore for pyright
 ]
 select = ["ALL"]
 

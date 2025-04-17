@@ -18,176 +18,208 @@ class DuckDBDriver(SyncDriverAdapterProtocol["DuckDBPyConnection"]):
 
     connection: "DuckDBPyConnection"
     use_cursor: bool = True
-    results_as_dict: bool = True
+    # param_style is inherited from CommonDriverAttributes
 
-    def __init__(self, connection: "DuckDBPyConnection", use_cursor: bool = True, results_as_dict: bool = True) -> None:
+    def __init__(self, connection: "DuckDBPyConnection", use_cursor: bool = True) -> None:
         self.connection = connection
         self.use_cursor = use_cursor
-        self.results_as_dict = results_as_dict
 
+    # --- Helper Methods --- #
     def _cursor(self, connection: "DuckDBPyConnection") -> "DuckDBPyConnection":
         if self.use_cursor:
+            # Ignore lack of type hint on cursor()
             return connection.cursor()
         return connection
 
     @contextmanager
     def _with_cursor(self, connection: "DuckDBPyConnection") -> "Generator[DuckDBPyConnection, None, None]":
-        cursor = self._cursor(connection)
-        try:
-            yield cursor
-        finally:
-            if self.use_cursor:
+        if self.use_cursor:
+            cursor = self._cursor(connection)
+            try:
+                yield cursor
+            finally:
                 cursor.close()
+        else:
+            yield connection  # Yield the connection directly
+
+    # --- Public API Methods (Original Implementation + _process_sql_params) --- #
 
     def select(
         self,
         sql: str,
-        parameters: "StatementParameterType",
+        parameters: Optional["StatementParameterType"] = None,
         /,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: Optional["DuckDBPyConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
-    ) -> "Generator[Union[ModelDTOT, dict[str, Any]], None, None]":
-        """Fetch data from the database.
-
-        Yields:
-            Row data as either model instances or dictionaries.
-        """
-        column_names: list[str] = []
-        connection = connection if connection is not None else self.connection
+    ) -> "list[Union[ModelDTOT, dict[str, Any]]]":
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
+            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
+            results = cursor.fetchall()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+            if not results:
+                return []
 
-            if schema_type is None:
-                first = True
-                for row in cursor.fetchall():
-                    if first:  # get column names on the fly
-                        column_names = [c[0] for c in cursor.description or []]
-                        first = False
-                    if self.results_as_dict:  # pragma: no cover
-                        # strict=False: requires 3.10
-                        yield dict(zip(column_names, row))
-                    else:
-                        yield row
-            else:  # pragma: no cover
-                first = True
-                for row in cursor.fetchall():
-                    if first:
-                        column_names = [c[0] for c in cursor.description or []]
-                        first = False
-                    yield cast("ModelDTOT", dict(zip(column_names, row)))
+            column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+
+            if schema_type is not None:
+                return [cast("ModelDTOT", schema_type(**dict(zip(column_names, row)))) for row in results]  # pyright: ignore[reportUnknownArgumentType]
+            return [dict(zip(column_names, row)) for row in results]  # pyright: ignore[reportUnknownArgumentType]
 
     def select_one(
         self,
         sql: str,
-        parameters: "StatementParameterType",
+        parameters: Optional["StatementParameterType"] = None,
         /,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: Optional["DuckDBPyConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
-    ) -> "Optional[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
-        """Fetch one row from the database.
+    ) -> "Union[ModelDTOT, dict[str, Any]]":
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
 
-        Returns:
-            The first row of the query results.
-        """
-        column_names: list[str] = []
-        connection = connection if connection is not None else self.connection
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
-            # DuckDB's fetchone returns a tuple of values or None
-            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
+            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+            result = self.check_not_found(result)  #  pyright: ignore
+
+            column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+            if schema_type is not None:
+                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))  # pyright: ignore[reportUnknownArgumentType]
+            # Always return dictionaries
+            return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
+
+    def select_one_or_none(
+        self,
+        sql: str,
+        parameters: Optional["StatementParameterType"] = None,
+        /,
+        connection: Optional["DuckDBPyConnection"] = None,
+        schema_type: "Optional[type[ModelDTOT]]" = None,
+    ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
+
+        with self._with_cursor(connection) as cursor:
+            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
+            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
             if result is None:
                 return None
-            if schema_type is None and self.results_as_dict:
-                column_names = [c[0] for c in cursor.description or []]
-                return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
+
+            column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             if schema_type is not None:
-                column_names = [c[0] for c in cursor.description or []]
                 return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))  # pyright: ignore[reportUnknownArgumentType]
-            return result  # pyright: ignore[reportUnknownReturnType, reportUnknownVariableType]
+            return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
 
     def select_value(
         self,
         sql: str,
-        parameters: "StatementParameterType",
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        connection: "Optional[DuckDBPyConnection]" = None,
+        schema_type: "Optional[type[T]]" = None,
+    ) -> "Union[T, Any]":
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
+
+        with self._with_cursor(connection) as cursor:
+            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
+            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+            result = self.check_not_found(result)  #  pyright: ignore
+            if schema_type is None:
+                return result[0]  # pyright: ignore
+            return schema_type(result[0])  # type: ignore[call-arg]
+
+    def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         connection: "Optional[DuckDBPyConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
     ) -> "Optional[Union[T, Any]]":
-        """Fetch a single value from the database.
-
-        Returns:
-            The first value from the first row of results, or None if no results.
-        """
-        connection = connection if connection is not None else self.connection
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
-            # DuckDB's fetchone returns a tuple of values or None
+            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             if result is None:
                 return None
             if schema_type is None:
-                return result[0]  # pyright: ignore[reportUnknownReturnType, reportUnknownVariableType]
+                return result[0]  # pyright: ignore
             return schema_type(result[0])  # type: ignore[call-arg]
 
     def insert_update_delete(
         self,
         sql: str,
-        parameters: "StatementParameterType",
+        parameters: Optional["StatementParameterType"] = None,
         /,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: Optional["DuckDBPyConnection"] = None,
+    ) -> int:
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
+        with self._with_cursor(connection) as cursor:
+            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
+            return getattr(cursor, "rowcount", -1)  # pyright: ignore[reportUnknownMemberType]
+
+    def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: Optional["StatementParameterType"] = None,
+        /,
+        connection: Optional["DuckDBPyConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
-        returning: bool = False,
-    ) -> "Optional[Union[int, Any, ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
-        """Insert, update, or delete data from the database.
+    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
+        with self._with_cursor(connection) as cursor:
+            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
+            result = cursor.fetchall()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+            if not result:
+                return None  # pyright: ignore[reportUnknownArgumentType]
+            column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+            if schema_type is not None:
+                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result[0]))))  # pyright: ignore[reportUnknownArgumentType]
+            # Always return dictionaries
+            return dict(zip(column_names, result[0]))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
+
+    def _process_sql_params(
+        self, sql: str, parameters: "Optional[StatementParameterType]" = None
+    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
+        """Process SQL query and parameters for DB-API execution.
+
+        Converts named parameters (:name) to positional parameters (?) for DuckDB.
+
+        Args:
+            sql: The SQL query string.
+            parameters: The parameters for the query (dict, tuple, list, or None).
 
         Returns:
-            Row count if not returning data, otherwise the first row of results.
+            A tuple containing the processed SQL string and the processed parameters.
         """
-        column_names: list[str] = []
-        connection = connection if connection is not None else self.connection
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
-            if returning is False:
-                return cursor.rowcount if hasattr(cursor, "rowcount") else -1
-            result = cursor.fetchall()
-            if len(result) == 0:
-                return None
-            if schema_type:
-                column_names = [c[0] for c in cursor.description or []]
-                return schema_type(**dict(zip(column_names, result[0])))
-            if self.results_as_dict:
-                column_names = [c[0] for c in cursor.description or []]
-                return dict(zip(column_names, result[0]))
-            return result[0]
+        if not isinstance(parameters, dict) or not parameters:
+            # If parameters are not a dict, or empty dict, assume positional/no params
+            # Let the underlying driver handle tuples/lists directly
+            return sql, parameters
+
+        # Convert named parameters to positional parameters
+        processed_sql = sql
+        processed_params: list[Any] = []
+        for key, value in parameters.items():
+            # Replace :key with ? in the SQL
+            processed_sql = processed_sql.replace(f":{key}", "?")
+            processed_params.append(value)
+
+        return processed_sql, tuple(processed_params)
 
     def execute_script(
         self,
         sql: str,
-        parameters: "StatementParameterType",
+        parameters: Optional["StatementParameterType"] = None,
         /,
-        connection: "Optional[DuckDBPyConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        returning: bool = False,
-    ) -> "Optional[Union[Any, ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
-        """Execute a script.
-
-        Returns:
-            The number of rows affected by the script.
-        """
-        column_names: list[str] = []
-        connection = connection if connection is not None else self.connection
+        connection: Optional["DuckDBPyConnection"] = None,
+    ) -> str:
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
         with self._with_cursor(connection) as cursor:
-            if returning is False:
-                cursor.execute(sql, parameters)
-                # DuckDB doesn't have a statusmessage attribute, so we return a default value
-                return "DONE"
-            result = cursor.fetchall()
-            if len(result) == 0:
-                return None
-            if schema_type:
-                column_names = [c[0] for c in cursor.description or []]
-                return schema_type(**dict(zip(column_names, result[0])))
-            if self.results_as_dict:
-                column_names = [c[0] for c in cursor.description or []]
-                return dict(zip(column_names, result[0]))
-            return result[0]
+            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
+            return cast("str", getattr(cursor, "statusmessage", "DONE"))  # pyright: ignore[reportUnknownMemberType]

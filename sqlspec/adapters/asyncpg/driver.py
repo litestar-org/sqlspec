@@ -6,98 +6,147 @@ from typing_extensions import TypeAlias
 from sqlspec.base import AsyncDriverAdapterProtocol, T
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterable
-
     from asyncpg.connection import Connection
     from asyncpg.pool import PoolConnectionProxy
 
     from sqlspec.typing import ModelDTOT, StatementParameterType
 
-__all__ = ("AsyncPgDriver",)
+__all__ = ("AsyncpgDriver",)
 
 
 PgConnection: TypeAlias = "Union[Connection[Any], PoolConnectionProxy[Any]]"  # pyright: ignore[reportMissingTypeArgument]
 
 
-class AsyncPgDriver(AsyncDriverAdapterProtocol["PgConnection"]):
+class AsyncpgDriver(AsyncDriverAdapterProtocol["PgConnection"]):
     """AsyncPG Postgres Driver Adapter."""
 
     connection: "PgConnection"
-    results_as_dict: bool = True
 
-    def __init__(self, connection: "PgConnection", results_as_dict: bool = True) -> None:
+    def __init__(self, connection: "PgConnection") -> None:
         self.connection = connection
-        self.results_as_dict = results_as_dict
-
-    @staticmethod
-    def _handle_statement_parameters(
-        parameters: "StatementParameterType",
-    ) -> "Union[list[Any], tuple[Any, ...]]":
-        if isinstance(parameters, dict):
-            return cast("list[Any]", parameters.values())
-        if isinstance(parameters, tuple):
-            return parameters
-        msg = f"Parameters expected to be dict or tuple, received {parameters}"
-        raise TypeError(msg)
 
     async def select(
         self,
         sql: str,
-        parameters: "StatementParameterType",
+        parameters: Optional["StatementParameterType"] = None,
         /,
-        connection: "Optional[PgConnection]" = None,
+        connection: Optional["PgConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
-    ) -> "AsyncIterable[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
+    ) -> "list[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch data from the database.
 
+        Args:
+            sql: SQL statement.
+            parameters: Query parameters.
+            connection: Optional connection to use.
+            schema_type: Optional schema class for the result.
+
         Returns:
-            Row data as either model instances or dictionaries.
+            List of row data as either model instances or dictionaries.
         """
-        connection = connection if connection is not None else self.connection
-        parameters = parameters if parameters is not None else {}
-        results = await connection.fetch(sql, *self._handle_statement_parameters(parameters))
+        connection = self._connection(connection)
+        sql, params = self._process_sql_params(sql, parameters)
+        # Use empty tuple if params is None
+        params = params if params is not None else ()
 
-        async def _fetch_results() -> "AsyncIterable[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
-            for row in results:
-                if schema_type is not None:
-                    yield cast("ModelDTOT", schema_type(**dict(row)))
-                if self.results_as_dict:  # pragma: no cover
-                    # strict=False: requires 3.10
-                    yield dict(row)
-                else:
-                    yield tuple(row)
-
-        return _fetch_results()
+        results = await connection.fetch(sql, *params)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        if not results:
+            return []
+        if schema_type is None:
+            return [dict(row.items()) for row in results]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        return [cast("ModelDTOT", schema_type(**dict(row.items()))) for row in results]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
 
     async def select_one(
         self,
         sql: str,
-        parameters: "StatementParameterType",
+        parameters: Optional["StatementParameterType"] = None,
         /,
-        connection: "Optional[PgConnection]" = None,
+        connection: Optional["PgConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
-    ) -> "Optional[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
+    ) -> "Union[ModelDTOT, dict[str, Any]]":
         """Fetch one row from the database.
+
+        Args:
+            sql: SQL statement.
+            parameters: Query parameters.
+            connection: Optional connection to use.
+            schema_type: Optional schema class for the result.
 
         Returns:
             The first row of the query results.
         """
+        connection = self._connection(connection)
+        sql, params = self._process_sql_params(sql, parameters)
+        # Use empty tuple if params is None
+        params = params if params is not None else ()
 
-        connection = connection if connection is not None else self.connection
-        parameters = parameters if parameters is not None else {}
-        result = await connection.fetchrow(sql, *self._handle_statement_parameters(parameters))
-        if result is None:
-            return None
-        if schema_type is None and self.results_as_dict:
-            return dict(result)
-        if schema_type is not None:
-            return cast("ModelDTOT", schema_type(**dict(result)))
-        return tuple(result.values())
+        result = await connection.fetchrow(sql, *params)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        result = self.check_not_found(result)
+
+        if schema_type is None:
+            # Always return as dictionary
+            return dict(result.items())  # type: ignore[attr-defined]
+        return cast("ModelDTOT", schema_type(**dict(result.items())))  # type: ignore[attr-defined]
+
+    async def select_one_or_none(
+        self,
+        sql: str,
+        parameters: Optional["StatementParameterType"] = None,
+        /,
+        connection: Optional["PgConnection"] = None,
+        schema_type: "Optional[type[ModelDTOT]]" = None,
+    ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
+        """Fetch one row from the database.
+
+        Args:
+            sql: SQL statement.
+            parameters: Query parameters.
+            connection: Optional connection to use.
+            schema_type: Optional schema class for the result.
+
+        Returns:
+            The first row of the query results.
+        """
+        connection = self._connection(connection)
+        sql, params = self._process_sql_params(sql, parameters)
+        # Use empty tuple if params is None
+        params = params if params is not None else ()
+
+        result = await connection.fetchrow(sql, *params)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        result = self.check_not_found(result)
+        if schema_type is None:
+            # Always return as dictionary
+            return dict(result.items())  # type: ignore[attr-defined]
+        return cast("ModelDTOT", schema_type(**dict(result.items())))  # type: ignore[attr-defined]
 
     async def select_value(
         self,
         sql: str,
-        parameters: "StatementParameterType",
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        connection: "Optional[PgConnection]" = None,
+        schema_type: "Optional[type[T]]" = None,
+    ) -> "Union[T, Any]":
+        """Fetch a single value from the database.
+
+        Returns:
+            The first value from the first row of results, or None if no results.
+        """
+        connection = self._connection(connection)
+        sql, params = self._process_sql_params(sql, parameters)
+        # Use empty tuple if params is None
+        params = params if params is not None else ()
+
+        result = await connection.fetchval(sql, *params)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        result = self.check_not_found(result)
+        if schema_type is None:
+            return result[0]
+        return schema_type(result[0])  # type: ignore[call-arg]
+
+    async def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         connection: "Optional[PgConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -107,9 +156,12 @@ class AsyncPgDriver(AsyncDriverAdapterProtocol["PgConnection"]):
         Returns:
             The first value from the first row of results, or None if no results.
         """
-        connection = connection if connection is not None else self.connection
-        parameters = parameters if parameters is not None else {}
-        result = await connection.fetchval(sql, *self._handle_statement_parameters(parameters))
+        connection = self._connection(connection)
+        sql, params = self._process_sql_params(sql, parameters)
+        # Use empty tuple if params is None
+        params = params if params is not None else ()
+
+        result = await connection.fetchval(sql, *params)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         if result is None:
             return None
         if schema_type is None:
@@ -119,55 +171,116 @@ class AsyncPgDriver(AsyncDriverAdapterProtocol["PgConnection"]):
     async def insert_update_delete(
         self,
         sql: str,
-        parameters: "StatementParameterType",
+        parameters: Optional["StatementParameterType"] = None,
         /,
-        connection: "Optional[PgConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        returning: bool = False,
-    ) -> "Optional[Union[int, Any, ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
+        connection: Optional["PgConnection"] = None,
+    ) -> int:
         """Insert, update, or delete data from the database.
 
+        Args:
+            sql: SQL statement.
+            parameters: Query parameters.
+            connection: Optional connection to use.
+
         Returns:
-            Row count if not returning data, otherwise the first row of results.
+            Row count affected by the operation.
         """
-        connection = connection if connection is not None else self.connection
-        parameters = parameters if parameters is not None else {}
-        if returning is False:
-            return await connection.execute(sql, *self._handle_statement_parameters(parameters))
-        result = await connection.fetchrow(sql, *self._handle_statement_parameters(parameters))
+        connection = self._connection(connection)
+        sql, params = self._process_sql_params(sql, parameters)
+        # Use empty tuple if params is None
+        params = params if params is not None else ()
+
+        status = await connection.execute(sql, *params)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        # AsyncPG returns a string like "INSERT 0 1" where the last number is the affected rows
+        try:
+            return int(status.split()[-1])  # pyright: ignore[reportUnknownMemberType]
+        except (ValueError, IndexError, AttributeError):
+            return -1  # Fallback if we can't parse the status
+
+    async def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: Optional["StatementParameterType"] = None,
+        /,
+        connection: Optional["PgConnection"] = None,
+        schema_type: "Optional[type[ModelDTOT]]" = None,
+    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
+        """Insert, update, or delete data from the database and return result.
+
+        Args:
+            sql: SQL statement.
+            parameters: Query parameters.
+            connection: Optional connection to use.
+            schema_type: Optional schema class for the result.
+
+        Returns:
+            The first row of results.
+        """
+        connection = self._connection(connection)
+        sql, params = self._process_sql_params(sql, parameters)
+        # Use empty tuple if params is None
+        params = params if params is not None else ()
+
+        result = await connection.fetchrow(sql, *params)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         if result is None:
             return None
-        if schema_type is None and self.results_as_dict:
-            return dict(result)
-        if schema_type is not None:
-            return cast("ModelDTOT", schema_type(**dict(result)))
-        return tuple(result.values())
+        if schema_type is None:
+            # Always return as dictionary
+            return dict(result.items())  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        return cast("ModelDTOT", schema_type(**dict(result.items())))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType, reportUnknownVariableType]
 
     async def execute_script(
         self,
         sql: str,
-        parameters: "StatementParameterType",
+        parameters: Optional["StatementParameterType"] = None,
         /,
-        connection: "Optional[PgConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        returning: bool = False,
-    ) -> "Optional[Union[Any,ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
+        connection: Optional["PgConnection"] = None,
+    ) -> str:
         """Execute a script.
 
+        Args:
+            sql: SQL statement.
+            parameters: Query parameters.
+            connection: Optional connection to use.
+
         Returns:
-            The number of rows affected by the script.
+            Status message for the operation.
         """
-        connection = connection if connection is not None else self.connection
-        parameters = parameters if parameters is not None else {}
+        connection = self._connection(connection)
+        sql, params = self._process_sql_params(sql, parameters)
+        # Use empty tuple if params is None
+        params = params if params is not None else ()
 
-        if returning is False:
-            return await connection.execute(sql, parameters)
+        return await connection.execute(sql, *params)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
 
-        result = await connection.fetch(sql, *self._handle_statement_parameters(parameters))
-        if len(result) == 0:
+    async def execute_script_returning(
+        self,
+        sql: str,
+        parameters: Optional["StatementParameterType"] = None,
+        /,
+        connection: Optional["PgConnection"] = None,
+        schema_type: "Optional[type[ModelDTOT]]" = None,
+    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
+        """Execute a script and return result.
+
+        Args:
+            sql: SQL statement.
+            parameters: Query parameters.
+            connection: Optional connection to use.
+            schema_type: Optional schema class for the result.
+
+        Returns:
+            The first row of results.
+        """
+        connection = self._connection(connection)
+        sql, params = self._process_sql_params(sql, parameters)
+        # Use empty tuple if params is None
+        params = params if params is not None else ()
+
+        result = await connection.fetchrow(sql, *params)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        if result is None:
             return None
-        if schema_type is None and self.results_as_dict:
-            return dict(result)
-        if schema_type is not None:
-            return cast("ModelDTOT", schema_type(**dict(result)))
-        return tuple(result)
+        if schema_type is None:
+            # Always return as dictionary
+            return dict(result.items())  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        return cast("ModelDTOT", schema_type(**dict(result.items())))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType, reportUnknownVariableType]

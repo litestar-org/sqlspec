@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from sqlite3 import Connection
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
@@ -48,9 +48,9 @@ class Sqlite(NoPoolSyncConfig["Connection", "SqliteDriver"]):
 
     uri: "Union[bool, EmptyType]" = Empty
     """If set to True, database is interpreted as a URI with supported options."""
-    driver_type: "type[SqliteDriver]" = SqliteDriver  # type: ignore[type-abstract]
+    driver_type: "type[SqliteDriver]" = field(init=False, default_factory=lambda: SqliteDriver)
     """Type of the driver object"""
-    connection_type: "type[Connection]" = Connection
+    connection_type: "type[Connection]" = field(init=False, default_factory=lambda: Connection)
     """Type of the connection object"""
 
     @property
@@ -105,4 +105,4 @@ class Sqlite(NoPoolSyncConfig["Connection", "SqliteDriver"]):
 
         """
         with self.provide_connection(*args, **kwargs) as connection:
-            yield self.driver_type(connection, results_as_dict=True)
+            yield self.driver_type(connection)

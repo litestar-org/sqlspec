@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from sqlspec.typing import EmptyType
 
 
-__all__ = ("PsycoPgGenericPoolConfig",)
+__all__ = ("PsycopgGenericPoolConfig",)
 
 
 ConnectionT = TypeVar("ConnectionT", bound="Union[Connection, AsyncConnection]")
@@ -22,7 +22,7 @@ PoolT = TypeVar("PoolT", bound="Union[ConnectionPool, AsyncConnectionPool]")
 
 
 @dataclass
-class PsycoPgGenericPoolConfig(GenericPoolConfig, Generic[ConnectionT, PoolT]):
+class PsycopgGenericPoolConfig(GenericPoolConfig, Generic[ConnectionT, PoolT]):
     """Configuration for Psycopg connection pools.
 
     This class provides configuration options for both synchronous and asynchronous Psycopg

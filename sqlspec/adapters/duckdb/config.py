@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
 from duckdb import DuckDBPyConnection
@@ -78,7 +78,7 @@ class DuckDB(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
     For details see: https://duckdb.org/docs/api/python/overview#connection-options
     """
 
-    database: "Union[str, EmptyType]" = Empty
+    database: "Union[str, EmptyType]" = field(default=":memory:")
     """The path to the database file to be opened. Pass ":memory:" to open a connection to a database that resides in RAM instead of on disk. If not specified, an in-memory database will be created."""
 
     read_only: "Union[bool, EmptyType]" = Empty
@@ -98,10 +98,12 @@ class DuckDB(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
     """Whether to automatically update on connection creation"""
     on_connection_create: "Optional[Callable[[DuckDBPyConnection], Optional[DuckDBPyConnection]]]" = None
     """A callable to be called after the connection is created."""
-    connection_type: "type[DuckDBPyConnection]" = DuckDBPyConnection
+    connection_type: "type[DuckDBPyConnection]" = field(init=False, default_factory=lambda: DuckDBPyConnection)
     """The type of connection to create. Defaults to DuckDBPyConnection."""
-    driver_type: "type[DuckDBDriver]" = DuckDBDriver  # type: ignore[type-abstract]
+    driver_type: "type[DuckDBDriver]" = field(init=False, default_factory=lambda: DuckDBDriver)  # type: ignore[type-abstract,unused-ignore]
     """The type of driver to use. Defaults to DuckDBDriver."""
+    pool_instance: "None" = field(init=False, default=None)
+    """The pool instance to use. Defaults to None."""
 
     def __post_init__(self) -> None:
         """Post-initialization validation and processing.
@@ -375,4 +377,4 @@ class DuckDB(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
 
         """
         with self.provide_connection(*args, **kwargs) as connection:
-            yield self.driver_type(connection, use_cursor=True, results_as_dict=True)
+            yield self.driver_type(connection, use_cursor=True)

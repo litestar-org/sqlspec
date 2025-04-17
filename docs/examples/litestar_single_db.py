@@ -13,7 +13,7 @@ async def simple_sqlite(db_connection: Connection) -> dict[str, str]:
         dict[str, str]: The greeting.
     """
     result = await db_connection.execute_fetchall("SELECT 'Hello, world!' AS greeting")
-    return {"greeting": result[0][0]}  # type: ignore  # noqa: PGH003
+    return {"greeting": result[0][0]}  # type: ignore
 
 
 sqlspec = SQLSpec(config=Aiosqlite())

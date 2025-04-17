@@ -1,13 +1,11 @@
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 from oracledb import create_pool_async as oracledb_create_pool  # pyright: ignore[reportUnknownVariableType]
 from oracledb.connection import AsyncConnection
 
-from sqlspec.adapters.oracledb.config._common import (
-    OracleGenericPoolConfig,
-)
+from sqlspec.adapters.oracledb.config._common import OracleGenericPoolConfig
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver
 from sqlspec.base import AsyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
@@ -51,16 +49,46 @@ class OracleAsync(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionPool", 
 
     If set, the plugin will use the provided pool rather than instantiate one.
     """
-    connection_class: "type[AsyncConnection]" = AsyncConnection
+    connection_class: "type[AsyncConnection]" = field(init=False, default_factory=lambda: AsyncConnection)
     """Connection class to use.
 
     Defaults to :class:`AsyncConnection`.
     """
-    driver_class: "type[OracleAsyncDriver]" = OracleAsyncDriver  # type: ignore[type-abstract]
+    driver_class: "type[OracleAsyncDriver]" = field(init=False, default_factory=lambda: OracleAsyncDriver)  # type: ignore[type-abstract,unused-ignore]
     """Driver class to use.
 
     Defaults to :class:`OracleAsyncDriver`.
     """
+
+    @property
+    def connection_config_dict(self) -> "dict[str, Any]":
+        """Return the connection configuration as a dict.
+
+        Returns:
+            A string keyed dict of config kwargs for the oracledb.connect function.
+
+        Raises:
+            ImproperConfigurationError: If the connection configuration is not provided.
+        """
+        if self.pool_config:
+            # Filter out pool-specific parameters
+            pool_only_params = {
+                "min",
+                "max",
+                "increment",
+                "timeout",
+                "wait_timeout",
+                "max_lifetime_session",
+                "session_callback",
+            }
+            return dataclass_to_dict(
+                self.pool_config,
+                exclude_empty=True,
+                convert_nested=False,
+                exclude=pool_only_params.union({"pool_instance", "connection_class", "driver_class"}),
+            )
+        msg = "You must provide a 'pool_config' for this adapter."
+        raise ImproperConfigurationError(msg)
 
     @property
     def pool_config_dict(self) -> "dict[str, Any]":
@@ -82,6 +110,23 @@ class OracleAsync(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionPool", 
             )
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
+
+    async def create_connection(self) -> "AsyncConnection":
+        """Create and return a new oracledb async connection.
+
+        Returns:
+            An AsyncConnection instance.
+
+        Raises:
+            ImproperConfigurationError: If the connection could not be created.
+        """
+        try:
+            import oracledb
+
+            return await oracledb.connect_async(**self.connection_config_dict)  # type: ignore[no-any-return]
+        except Exception as e:
+            msg = f"Could not configure the Oracle async connection. Error: {e!s}"
+            raise ImproperConfigurationError(msg) from e
 
     async def create_pool(self) -> "AsyncConnectionPool":
         """Return a pool. If none exists yet, create one.
@@ -125,3 +170,19 @@ class OracleAsync(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionPool", 
         db_pool = await self.provide_pool(*args, **kwargs)
         async with db_pool.acquire() as connection:  # pyright: ignore[reportUnknownMemberType]
             yield connection
+
+    @asynccontextmanager
+    async def provide_session(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[OracleAsyncDriver, None]":
+        """Create and provide a database session.
+
+        Yields:
+            OracleAsyncDriver: A driver instance with an active connection.
+        """
+        async with self.provide_connection(*args, **kwargs) as connection:
+            yield self.driver_class(connection)
+
+    async def close_pool(self) -> None:
+        """Close the connection pool."""
+        if self.pool_instance is not None:
+            await self.pool_instance.close()
+            self.pool_instance = None

@@ -1,9 +1,9 @@
-from sqlspec.adapters.asyncpg.config import AsyncPg, AsyncPgPool, PgConnection
-from sqlspec.adapters.asyncpg.driver import AsyncPgDriver
+from sqlspec.adapters.asyncpg.config import Asyncpg, AsyncpgPool, PgConnection
+from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 
 __all__ = (
-    "AsyncPg",
-    "AsyncPgDriver",
-    "AsyncPgPool",
+    "Asyncpg",
+    "AsyncpgDriver",
+    "AsyncpgPool",
     "PgConnection",
 )

@@ -1,104 +1,146 @@
+# type: ignore
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from sqlspec.base import AsyncDriverAdapterProtocol, T
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterable
-
-    from asyncmy import Connection  # pyright: ignore[reportUnknownVariableType,reportMissingTypeStubs]
+    from asyncmy import Connection
+    from asyncmy.cursors import Cursor
 
     from sqlspec.typing import ModelDTOT, StatementParameterType
 
-__all__ = ("AsyncMyDriver",)
+__all__ = ("AsyncmyDriver",)
 
 
-class AsyncMyDriver(AsyncDriverAdapterProtocol["Connection"]):
-    """AsyncMy MySQL/MariaDB Driver Adapter."""
+class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
+    """Asyncmy MySQL/MariaDB Driver Adapter."""
 
     connection: "Connection"
-    results_as_dict: bool = True
 
-    def __init__(self, connection: "Connection", results_as_dict: bool = True) -> None:  # pyright: ignore[reportUnknownParameterType]
+    def __init__(self, connection: "Connection") -> None:
         self.connection = connection
-        self.results_as_dict = results_as_dict
 
     @staticmethod
-    def _handle_statement_parameters(
-        parameters: "StatementParameterType",
-    ) -> "Union[list[Any], tuple[Any, ...]]":
-        if isinstance(parameters, dict):
-            return cast("list[Any]", parameters.values())
-        if isinstance(parameters, tuple):
-            return parameters
-        msg = f"Parameters expected to be dict or tuple, received {parameters}"
-        raise TypeError(msg)
+    async def _cursor(connection: "Connection") -> "Cursor":
+        return await connection.cursor()
+
+    @staticmethod
+    @asynccontextmanager
+    async def _with_cursor(connection: "Connection") -> AsyncGenerator["Cursor", None]:
+        cursor = await connection.cursor()
+        try:
+            yield cursor
+        finally:
+            await cursor.close()
 
     async def select(
         self,
         sql: str,
-        parameters: "StatementParameterType",
+        parameters: Optional["StatementParameterType"] = None,
         /,
-        connection: "Optional[Connection]" = None,  # pyright: ignore[reportUnknownParameterType]
+        connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
-    ) -> "AsyncIterable[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
+    ) -> "list[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch data from the database.
 
         Returns:
-            Row data as either model instances or dictionaries.
+            List of row data as either model instances or dictionaries.
         """
-        connection = connection if connection is not None else self.connection  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-        parameters = parameters if parameters is not None else {}
-
-        async def _fetch_results() -> "AsyncIterable[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
-            async with connection.cursor() as cursor:  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType,reportOptionalMemberAccess]
-                await cursor.execute(sql, *self._handle_statement_parameters(parameters))  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-                results = await cursor.fetchall()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-
-                for row in results:  # pyright: ignore[reportUnknownVariableType]
-                    if schema_type is not None:
-                        yield cast("ModelDTOT", schema_type(**dict(row)))  # pyright: ignore[reportUnknownArgumentType]
-                    elif self.results_as_dict:
-                        yield dict(row)  # pyright: ignore[reportUnknownArgumentType]
-                    else:
-                        yield tuple(row)  # pyright: ignore[reportUnknownArgumentType]
-
-        return _fetch_results()
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters)
+            results = await cursor.fetchall()
+            if not results:
+                return []
+            column_names = [c[0] for c in cursor.description or []]
+            if schema_type is None:
+                return [dict(zip(column_names, row)) for row in results]
+            return [schema_type(**dict(zip(column_names, row))) for row in results]
 
     async def select_one(
         self,
         sql: str,
-        parameters: "StatementParameterType",
+        parameters: Optional["StatementParameterType"] = None,
         /,
-        connection: "Optional[Connection]" = None,  # pyright: ignore[reportUnknownParameterType]
+        connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
-    ) -> "Optional[Union[ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
+    ) -> "Union[ModelDTOT, dict[str, Any]]":
         """Fetch one row from the database.
 
         Returns:
             The first row of the query results.
         """
-        connection = connection if connection is not None else self.connection  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-        parameters = parameters if parameters is not None else {}
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters)
+            result = await cursor.fetchone()
+            result = self.check_not_found(result)
+            column_names = [c[0] for c in cursor.description or []]
+            if schema_type is None:
+                return dict(zip(column_names, result))
+            return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
 
-        async with connection.cursor() as cursor:  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType,reportOptionalMemberAccess]
-            await cursor.execute(sql, *self._handle_statement_parameters(parameters))  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-            result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+    async def select_one_or_none(
+        self,
+        sql: str,
+        parameters: Optional["StatementParameterType"] = None,
+        /,
+        connection: Optional["Connection"] = None,
+        schema_type: "Optional[type[ModelDTOT]]" = None,
+    ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
+        """Fetch one row from the database.
 
+        Returns:
+            The first row of the query results.
+        """
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters)
+            result = await cursor.fetchone()
             if result is None:
                 return None
-
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**dict(result)))  # pyright: ignore[reportUnknownArgumentType]
-            if self.results_as_dict:
-                return dict(result)  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
-            return tuple(result)  # pyright: ignore[reportUnknownArgumentType]
+            column_names = [c[0] for c in cursor.description or []]
+            if schema_type is None:
+                return dict(zip(column_names, result))
+            return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
 
     async def select_value(
         self,
         sql: str,
-        parameters: "StatementParameterType",
+        parameters: "Optional[StatementParameterType]" = None,
         /,
-        connection: "Optional[Connection]" = None,  # pyright: ignore[reportUnknownParameterType]
+        connection: "Optional[Connection]" = None,
+        schema_type: "Optional[type[T]]" = None,
+    ) -> "Union[T, Any]":
+        """Fetch a single value from the database.
+
+        Returns:
+            The first value from the first row of results, or None if no results.
+        """
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
+
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters)
+            result = await cursor.fetchone()
+            result = self.check_not_found(result)
+
+            value = result[0]
+            if schema_type is not None:
+                return schema_type(value)  # type: ignore[call-arg]
+            return value
+
+    async def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        connection: "Optional[Connection]" = None,
         schema_type: "Optional[type[T]]" = None,
     ) -> "Optional[Union[T, Any]]":
         """Fetch a single value from the database.
@@ -106,81 +148,108 @@ class AsyncMyDriver(AsyncDriverAdapterProtocol["Connection"]):
         Returns:
             The first value from the first row of results, or None if no results.
         """
-        connection = connection if connection is not None else self.connection  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-        parameters = parameters if parameters is not None else {}
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
 
-        async with connection.cursor() as cursor:  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType,reportOptionalMemberAccess]
-            await cursor.execute(sql, *self._handle_statement_parameters(parameters))  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-            result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters)
+            result = await cursor.fetchone()
 
             if result is None:
                 return None
 
-            value = result[0]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+            value = result[0]
             if schema_type is not None:
                 return schema_type(value)  # type: ignore[call-arg]
-            return value  # pyright: ignore[reportUnknownVariableType]
+            return value
 
     async def insert_update_delete(
         self,
         sql: str,
-        parameters: "StatementParameterType",
+        parameters: Optional["StatementParameterType"] = None,
         /,
-        connection: "Optional[Connection]" = None,  # pyright: ignore[reportUnknownParameterType]
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        returning: bool = False,
-    ) -> "Optional[Union[int, Any, ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
+        connection: Optional["Connection"] = None,
+    ) -> int:
         """Insert, update, or delete data from the database.
 
         Returns:
-            Row count if not returning data, otherwise the first row of results.
+            Row count affected by the operation.
         """
-        connection = connection if connection is not None else self.connection  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-        parameters = parameters if parameters is not None else {}
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
 
-        async with connection.cursor() as cursor:  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType,reportOptionalMemberAccess]
-            if returning:
-                await cursor.execute(sql, *self._handle_statement_parameters(parameters))  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-                result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters)
+            return cursor.rowcount
 
-                if result is None:
-                    return None
+    async def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: Optional["StatementParameterType"] = None,
+        /,
+        connection: Optional["Connection"] = None,
+        schema_type: "Optional[type[ModelDTOT]]" = None,
+    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
+        """Insert, update, or delete data from the database and return result.
 
-                if schema_type is not None:
-                    return cast("ModelDTOT", schema_type(**dict(result)))  # pyright: ignore[reportUnknownArgumentType]
-                if self.results_as_dict:
-                    return dict(result)  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
-                return tuple(result)  # pyright: ignore[reportUnknownArgumentType]
-            return await cursor.execute(sql, *self._handle_statement_parameters(parameters))  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        Returns:
+            The first row of results.
+        """
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
+        column_names: list[str] = []
+
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(self._process_sql_statement(sql), self._handle_statement_parameters(parameters))
+            result = await cursor.fetchone()
+            if result is None:
+                return None
+            column_names = [c[0] for c in cursor.description or []]
+            if schema_type is not None:
+                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
+            return dict(zip(column_names, result))
 
     async def execute_script(
         self,
         sql: str,
-        parameters: "StatementParameterType",
+        parameters: Optional["StatementParameterType"] = None,
         /,
-        connection: "Optional[Connection]" = None,  # pyright: ignore[reportUnknownParameterType]
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        returning: bool = False,
-    ) -> "Optional[Union[Any, ModelDTOT, dict[str, Any], tuple[Any, ...]]]":
+        connection: Optional["Connection"] = None,
+    ) -> str:
         """Execute a script.
 
         Returns:
-            The number of rows affected by the script.
+            Status message for the operation.
         """
-        connection = connection if connection is not None else self.connection  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-        parameters = parameters if parameters is not None else {}
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
 
-        async with connection.cursor() as cursor:  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType,reportOptionalMemberAccess]
-            if returning:
-                await cursor.execute(sql, *self._handle_statement_parameters(parameters))  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-                result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters)
+            return "DONE"
 
-                if result is None:
-                    return None
+    async def execute_script_returning(
+        self,
+        sql: str,
+        parameters: Optional["StatementParameterType"] = None,
+        /,
+        connection: Optional["Connection"] = None,
+        schema_type: "Optional[type[ModelDTOT]]" = None,
+    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
+        """Execute a script and return result.
 
-                if schema_type is not None:
-                    return cast("ModelDTOT", schema_type(**dict(result)))  # pyright: ignore[reportUnknownArgumentType]
-                if self.results_as_dict:
-                    return dict(result)  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
-                return tuple(result)  # pyright: ignore[reportUnknownArgumentType]
-            return await cursor.execute(sql, *self._handle_statement_parameters(parameters))  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        Returns:
+            The first row of results.
+        """
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
+
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters)
+            result = await cursor.fetchone()
+            if result is None:
+                return None
+            column_names = [c[0] for c in cursor.description or []]
+            if schema_type is not None:
+                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
+            return dict(zip(column_names, result))
