@@ -29,7 +29,7 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
     @staticmethod
     @asynccontextmanager
     async def _with_cursor(connection: "Connection") -> AsyncGenerator["Cursor", None]:
-        cursor = await connection.cursor()
+        cursor = connection.cursor()
         try:
             yield cursor
         finally:
@@ -200,7 +200,7 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
         column_names: list[str] = []
 
         async with self._with_cursor(connection) as cursor:
-            await cursor.execute(self._process_sql_statement(sql), self._handle_statement_parameters(parameters))
+            await cursor.execute(sql, parameters)
             result = await cursor.fetchone()
             if result is None:
                 return None

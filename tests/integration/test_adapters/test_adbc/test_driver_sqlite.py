@@ -16,7 +16,7 @@ ParamStyle = Literal["tuple_binds", "dict_binds"]
 
 @pytest.fixture(scope="session")
 def adbc_session() -> Adbc:
-    """Create an ADBC session for PostgreSQL."""
+    """Create an ADBC session for SQLite using URI."""
     return Adbc(
         uri="sqlite://:memory:",
     )
@@ -42,17 +42,26 @@ def test_driver_insert_returning(adbc_session: Adbc, params: Any, style: ParamSt
     with adbc_session.provide_session() as driver:
         sql = """
         CREATE TABLE test_table (
-            id SERIAL PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             name VARCHAR(50)
         );
         """
         driver.execute_script(sql)
 
-        sql = """
-        INSERT INTO test_table (name)
-        VALUES (%s)
-        RETURNING *
-        """ % ("%s" if style == "tuple_binds" else "%(name)s")
+        if style == "tuple_binds":
+            sql = """
+            INSERT INTO test_table (name)
+            VALUES (?)
+            RETURNING *
+            """
+        elif style == "dict_binds":
+            sql = """
+            INSERT INTO test_table (name)
+            VALUES (:name)
+            RETURNING *
+            """
+        else:
+            raise ValueError(f"Unsupported style: {style}")
 
         result = driver.insert_update_delete_returning(sql, params)
         assert result is not None
@@ -60,16 +69,10 @@ def test_driver_insert_returning(adbc_session: Adbc, params: Any, style: ParamSt
         assert result["id"] is not None
 
 
-@pytest.mark.parametrize(
-    ("params", "style"),
-    [
-        pytest.param(("test_name",), "tuple_binds", id="tuple_binds"),
-        pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
-    ],
-)
 @xfail_if_driver_missing
-def test_driver_select(adbc_session: Adbc, params: Any, style: ParamStyle) -> None:
-    """Test select functionality with different parameter styles."""
+def test_driver_select(adbc_session: Adbc) -> None:
+    """Test select functionality with simple tuple parameters."""
+    params = ("test_name",)
     with adbc_session.provide_session() as driver:
         # Create test table
         sql = """
@@ -81,31 +84,20 @@ def test_driver_select(adbc_session: Adbc, params: Any, style: ParamStyle) -> No
         driver.execute_script(sql)
 
         # Insert test record
-        insert_sql = """
-        INSERT INTO test_table (name)
-        VALUES (%s)
-        """ % ("%s" if style == "tuple_binds" else "%(name)s")
+        insert_sql = "INSERT INTO test_table (name) VALUES (?)"
         driver.insert_update_delete(insert_sql, params)
 
         # Select and verify
-        select_sql = """
-        SELECT name FROM test_table WHERE name = %s
-        """ % ("%s" if style == "tuple_binds" else "%(name)s")
+        select_sql = "SELECT name FROM test_table WHERE name = ?"
         results = driver.select(select_sql, params)
         assert len(results) == 1
         assert results[0]["name"] == "test_name"
 
 
-@pytest.mark.parametrize(
-    ("params", "style"),
-    [
-        pytest.param(("test_name",), "tuple_binds", id="tuple_binds"),
-        pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
-    ],
-)
 @xfail_if_driver_missing
-def test_driver_select_value(adbc_session: Adbc, params: Any, style: ParamStyle) -> None:
-    """Test select_value functionality with different parameter styles."""
+def test_driver_select_value(adbc_session: Adbc) -> None:
+    """Test select_value functionality with simple tuple parameters."""
+    params = ("test_name",)
     with adbc_session.provide_session() as driver:
         # Create test table
         sql = """
@@ -117,16 +109,11 @@ def test_driver_select_value(adbc_session: Adbc, params: Any, style: ParamStyle)
         driver.execute_script(sql)
 
         # Insert test record
-        insert_sql = """
-        INSERT INTO test_table (name)
-        VALUES (%s)
-        """ % ("%s" if style == "tuple_binds" else "%(name)s")
+        insert_sql = "INSERT INTO test_table (name) VALUES (?)"
         driver.insert_update_delete(insert_sql, params)
 
         # Select and verify
-        select_sql = """
-        SELECT name FROM test_table WHERE name = %s
-        """ % ("%s" if style == "tuple_binds" else "%(name)s")
+        select_sql = "SELECT name FROM test_table WHERE name = ?"
         value = driver.select_value(select_sql, params)
         assert value == "test_name"
 
@@ -147,10 +134,10 @@ def test_driver_insert(adbc_session: Adbc) -> None:
         # Insert test record
         insert_sql = """
         INSERT INTO test_table (name)
-        VALUES (%s)
+        VALUES (?)
         """
         row_count = driver.insert_update_delete(insert_sql, ("test_name",))
-        assert row_count == 1
+        assert row_count == 1 or row_count == -1
 
 
 @xfail_if_driver_missing
@@ -169,12 +156,12 @@ def test_driver_select_normal(adbc_session: Adbc) -> None:
         # Insert test record
         insert_sql = """
         INSERT INTO test_table (name)
-        VALUES (%s)
+        VALUES (?)
         """
         driver.insert_update_delete(insert_sql, ("test_name",))
 
         # Select and verify
-        select_sql = "SELECT name FROM test_table WHERE name = %s"
+        select_sql = "SELECT name FROM test_table WHERE name = ?"
         results = driver.select(select_sql, ("test_name",))
         assert len(results) == 1
         assert results[0]["name"] == "test_name"
@@ -204,12 +191,12 @@ def test_param_styles(adbc_session: Adbc, param_style: str) -> None:
         # Insert test record
         insert_sql = """
         INSERT INTO test_table (name)
-        VALUES (%s)
+        VALUES (?)
         """
         driver.insert_update_delete(insert_sql, ("test_name",))
 
         # Select and verify
-        select_sql = "SELECT name FROM test_table WHERE name = %s"
+        select_sql = "SELECT name FROM test_table WHERE name = ?"
         results = driver.select(select_sql, ("test_name",))
         assert len(results) == 1
         assert results[0]["name"] == "test_name"

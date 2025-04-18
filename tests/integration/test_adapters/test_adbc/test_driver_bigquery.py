@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-import adbc_driver_bigquery
 import pytest
 from pytest_databases.docker.bigquery import BigQueryService
 
@@ -17,33 +16,11 @@ ParamStyle = Literal["tuple_binds", "dict_binds"]
 @pytest.fixture(scope="session")
 def adbc_session(bigquery_service: BigQueryService) -> Adbc:
     """Create an ADBC session for BigQuery."""
-    # Configure the database kwargs with the project_id from bigquery_service
-    db_kwargs = {
-        adbc_driver_bigquery.DatabaseOptions.PROJECT_ID.value: bigquery_service.project,
-    }
+    db_kwargs = {}
 
-    # Connection kwargs that might be needed
-    conn_kwargs = {}
+    conn_kwargs = {"project_id": bigquery_service.project}
 
-    # If client options are available, add them
-    if hasattr(bigquery_service, "client_options") and bigquery_service.client_options:
-        conn_kwargs["client_options"] = bigquery_service.client_options
-
-    # Handle credentials if available
-    # The ADBC driver will use default auth if credentials are not provided
-    # or it will use application default credentials if available
-    if hasattr(bigquery_service, "credentials") and bigquery_service.credentials:
-        # The ADBC driver should be able to use the same credentials
-        # used by the bigquery_service fixture
-        # Note: Explicit credential passing might be needed depending on driver specifics
-        # conn_kwargs[adbc_driver_bigquery.ConnectionOptions.CREDENTIALS.value] = bigquery_service.credentials  # noqa: ERA001
-        pass  # Assuming default auth works as intended with pytest-databases setup
-
-    return Adbc(
-        driver_name="adbc_driver_bigquery",
-        db_kwargs=db_kwargs,
-        conn_kwargs=conn_kwargs,
-    )
+    return Adbc(driver_name="adbc_driver_bigquery", db_kwargs=db_kwargs, conn_kwargs=conn_kwargs)
 
 
 @pytest.fixture(autouse=True)

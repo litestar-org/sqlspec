@@ -17,7 +17,7 @@ def test_connection(postgres_service: PostgresService) -> None:
     # Test direct connection
     config = Adbc(
         uri=f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-        driver_name="adbc_driver_postgresql",
+        driver_name="adbc_driver_postgresql.dbapi.connect",
     )
 
     with config.create_connection() as conn:

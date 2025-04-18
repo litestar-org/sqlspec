@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
 from adbc_driver_manager.dbapi import Connection
 
@@ -8,6 +8,7 @@ from sqlspec.adapters.adbc.driver import AdbcDriver
 from sqlspec.base import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType
+from sqlspec.utils.module_loader import import_string
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -27,7 +28,7 @@ class Adbc(NoPoolSyncConfig["Connection", "AdbcDriver"]):
     uri: "Union[str, EmptyType]" = Empty
     """Database URI"""
     driver_name: "Union[str, EmptyType]" = Empty
-    """Name of the ADBC driver to use"""
+    """Full dotted path to the ADBC driver's connect function (e.g., 'adbc_driver_sqlite.dbapi.connect')"""
     db_kwargs: "Optional[dict[str, Any]]" = None
     """Additional database-specific connection parameters"""
     conn_kwargs: "Optional[dict[str, Any]]" = None
@@ -38,9 +39,13 @@ class Adbc(NoPoolSyncConfig["Connection", "AdbcDriver"]):
     """Type of the driver object"""
     pool_instance: None = field(init=False, default=None)
     """No connection pool is used for ADBC connections"""
+    _is_in_memory: bool = field(init=False, default=False)
+    """Flag indicating if the connection is for an in-memory database"""
 
     def _set_adbc(self) -> str:
         """Identify the driver type based on the URI (if provided) or preset driver name.
+
+        Also sets the `_is_in_memory` flag for specific in-memory URIs.
 
         Raises:
             ImproperConfigurationError: If the driver name is not recognized or supported.
@@ -51,21 +56,28 @@ class Adbc(NoPoolSyncConfig["Connection", "AdbcDriver"]):
 
         if isinstance(self.driver_name, str):
             return self.driver_name
-        if isinstance(self.uri, str) and self.uri.startswith("postgresql://"):
-            self.driver_name = "adbc_driver_postgresql"
-        elif isinstance(self.uri, str) and self.uri.startswith("sqlite://"):
-            self.driver_name = "adbc_driver_sqlite"
-        elif isinstance(self.uri, str) and self.uri.startswith("grpc://"):
-            self.driver_name = "adbc_driver_flightsql"
-        elif isinstance(self.uri, str) and self.uri.startswith("snowflake://"):
-            self.driver_name = "adbc_driver_snowflake"
-        elif isinstance(self.uri, str) and self.uri.startswith("bigquery://"):
-            self.driver_name = "adbc_driver_bigquery"
-        elif isinstance(self.uri, str) and self.uri.startswith("duckdb://"):
-            self.driver_name = "adbc_driver_duckdb"
 
-        else:
-            msg = f"Unsupported driver name: {self.driver_name}"
+        # If driver_name wasn't explicit, try to determine from URI
+        if isinstance(self.uri, str) and self.uri.startswith("postgresql://"):
+            self.driver_name = "adbc_driver_postgresql.dbapi.connect"
+        elif isinstance(self.uri, str) and self.uri.startswith("sqlite://"):
+            self.driver_name = "adbc_driver_sqlite.dbapi.connect"
+        elif isinstance(self.uri, str) and self.uri.startswith("grpc://"):
+            self.driver_name = "adbc_driver_flightsql.dbapi.connect"
+        elif isinstance(self.uri, str) and self.uri.startswith("snowflake://"):
+            self.driver_name = "adbc_driver_snowflake.dbapi.connect"
+        elif isinstance(self.uri, str) and self.uri.startswith("bigquery://"):
+            self.driver_name = "adbc_driver_bigquery.dbapi.connect"
+        elif isinstance(self.uri, str) and self.uri.startswith("duckdb://"):
+            self.driver_name = "adbc_driver_duckdb.dbapi.connect"
+
+        # Check if we successfully determined a driver name
+        if self.driver_name is Empty or not isinstance(self.driver_name, str):
+            msg = (
+                "Could not determine ADBC driver connect path. Please specify 'driver_name' "
+                "(e.g., 'adbc_driver_sqlite.dbapi.connect') or provide a supported 'uri'. "
+                f"URI: {self.uri}, Driver Name: {self.driver_name}"
+            )
             raise ImproperConfigurationError(msg)
         return self.driver_name
 
@@ -73,21 +85,97 @@ class Adbc(NoPoolSyncConfig["Connection", "AdbcDriver"]):
     def connection_config_dict(self) -> "dict[str, Any]":
         """Return the connection configuration as a dict.
 
+        Omits the 'uri' key for known in-memory database types.
+
         Returns:
             A string keyed dict of config kwargs for the adbc_driver_manager.dbapi.connect function.
         """
-        config: dict[str, Any] = {}
-        config["driver"] = self._set_adbc()
+        config = {}
         db_kwargs = self.db_kwargs or {}
         conn_kwargs = self.conn_kwargs or {}
         if self.uri is not Empty:
-            db_kwargs["uri"] = self.uri
-        config["db_kwargs"] = db_kwargs
-        config["conn_kwargs"] = conn_kwargs
+            if isinstance(self.uri, str) and self.uri.startswith("sqlite://"):
+                db_kwargs["uri"] = self.uri.replace("sqlite://", "")
+            elif isinstance(self.uri, str) and self.uri.startswith("duckdb://"):
+                db_kwargs["path"] = self.uri.replace("duckdb://", "")
+            elif isinstance(self.uri, str):
+                db_kwargs["uri"] = self.uri
+        if isinstance(self.driver_name, str) and self.driver_name.startswith("adbc_driver_bigquery"):
+            # Handle project ID - first check db_kwargs, then conn_kwargs
+            project_id_keys = ["project_id", "project", "Catalog", "ProjectID"]
+            project_id_found = False
+
+            # Check in db_kwargs first
+            for key in project_id_keys:
+                if key in db_kwargs:
+                    config["ProjectID"] = db_kwargs[key]  # BigQuery expects ProjectID
+                    project_id_found = True
+                    break
+
+            # If not found in db_kwargs, check in conn_kwargs
+            if not project_id_found:
+                for key in project_id_keys:
+                    if key in conn_kwargs:
+                        config["ProjectID"] = conn_kwargs[key]  # BigQuery expects ProjectID
+                        project_id_found = True
+                        break
+
+            # Handle credentials
+            if "credentials" in db_kwargs:
+                config["credentials"] = db_kwargs["credentials"]
+            elif "credentials_file" in db_kwargs:
+                config["credentials_file"] = db_kwargs["credentials_file"]
+            elif "keyFilePath" in db_kwargs:  # ODBC style
+                config["credentials_file"] = db_kwargs["keyFilePath"]
+
+            # Add any remaining db_kwargs that aren't project_id or credentials related
+            for key, value in db_kwargs.items():
+                if key not in (
+                    "project_id",
+                    "project",
+                    "Catalog",
+                    "ProjectID",
+                    "credentials",
+                    "credentials_file",
+                    "keyFilePath",
+                ):
+                    config[key] = value
+
+            # For BigQuery, we merge conn_kwargs directly into config instead of nesting them
+            for key, value in conn_kwargs.items():
+                if key not in config:  # Don't override existing config values
+                    config[key] = value
+        else:
+            config = db_kwargs
+            if conn_kwargs:
+                config["conn_kwargs"] = conn_kwargs
         return config
 
+    def _get_connect_func(self) -> "Callable[..., Connection]":
+        self._set_adbc()
+        driver_path = cast("str", self.driver_name)
+        try:
+            connect_func = import_string(driver_path)
+        except ImportError as e:
+            # Check if the error is likely due to missing suffix and try again
+            if ".dbapi.connect" not in driver_path:
+                try:
+                    driver_path += ".dbapi.connect"
+                    connect_func = import_string(driver_path)
+                except ImportError as e2:
+                    msg = f"Failed to import ADBC connect function from '{self.driver_name}' or '{driver_path}'. Is the driver installed and the path correct? Original error: {e} / {e2}"
+                    raise ImproperConfigurationError(msg) from e2
+            else:
+                # Original import failed, and suffix was already present or added
+                msg = f"Failed to import ADBC connect function from '{driver_path}'. Is the driver installed and the path correct? Original error: {e}"
+                raise ImproperConfigurationError(msg) from e
+        if not callable(connect_func):
+            msg = f"The path '{driver_path}' did not resolve to a callable function."
+            raise ImproperConfigurationError(msg)
+        return connect_func  # type: ignore[no-any-return]
+
     def create_connection(self) -> "Connection":
-        """Create and return a new database connection.
+        """Create and return a new database connection using the specific driver.
 
         Returns:
             A new ADBC connection instance.
@@ -96,24 +184,32 @@ class Adbc(NoPoolSyncConfig["Connection", "AdbcDriver"]):
             ImproperConfigurationError: If the connection could not be established.
         """
         try:
-            from adbc_driver_manager.dbapi import connect
-
-            return connect(**self.connection_config_dict)
+            connect_func = self._get_connect_func()
+            _config = self.connection_config_dict
+            return connect_func(**_config)
         except Exception as e:
-            msg = f"Could not configure the ADBC connection. Error: {e!s}"
+            # Include driver name in error message for better context
+            driver_name = self.driver_name if isinstance(self.driver_name, str) else "Unknown/Derived"
+            # Use the potentially modified driver_path from _get_connect_func if available,
+            # otherwise fallback to self.driver_name for the error message.
+            # This requires _get_connect_func to potentially return the used path or store it.
+            # For simplicity now, we stick to self.driver_name in the message.
+            msg = f"Could not configure the ADBC connection using driver path '{driver_name}'. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e
 
     @contextmanager
     def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[Connection, None, None]":
-        """Create and provide a database connection.
+        """Create and provide a database connection using the specific driver.
 
         Yields:
             Connection: A database connection instance.
         """
-        from adbc_driver_manager.dbapi import connect
 
-        with connect(**self.connection_config_dict) as connection:
+        connection = self.create_connection()
+        try:
             yield connection
+        finally:
+            connection.close()
 
     @contextmanager
     def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[AdbcDriver, None, None]":
