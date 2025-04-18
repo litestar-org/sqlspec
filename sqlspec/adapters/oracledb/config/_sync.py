@@ -1,35 +1,35 @@
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 from oracledb import create_pool as oracledb_create_pool  # pyright: ignore[reportUnknownVariableType]
 from oracledb.connection import Connection
-from oracledb.pool import ConnectionPool
 
-from sqlspec.adapters.oracledb.config._common import (
-    OracleGenericPoolConfig,
-)
+from sqlspec.adapters.oracledb.config._common import OracleGenericPoolConfig
+from sqlspec.adapters.oracledb.driver import OracleSyncDriver
 from sqlspec.base import SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import dataclass_to_dict
 
 if TYPE_CHECKING:
     from collections.abc import Generator
-    from typing import Any
+
+    from oracledb.pool import ConnectionPool
+
 
 __all__ = (
-    "OracleSyncDatabaseConfig",
-    "OracleSyncPoolConfig",
+    "OracleSync",
+    "OracleSyncPool",
 )
 
 
 @dataclass
-class OracleSyncPoolConfig(OracleGenericPoolConfig[Connection, ConnectionPool]):
+class OracleSyncPool(OracleGenericPoolConfig["Connection", "ConnectionPool"]):
     """Sync Oracle Pool Config"""
 
 
 @dataclass
-class OracleSyncDatabaseConfig(SyncDatabaseConfig[Connection, ConnectionPool]):
+class OracleSync(SyncDatabaseConfig["Connection", "ConnectionPool", "OracleSyncDriver"]):
     """Oracle Sync database Configuration.
 
     This class provides the base configuration for Oracle database connections, extending
@@ -42,13 +42,53 @@ class OracleSyncDatabaseConfig(SyncDatabaseConfig[Connection, ConnectionPool]):
     options.([2](https://python-oracledb.readthedocs.io/en/latest/user_guide/tuning.html))
     """
 
-    pool_config: "Optional[OracleSyncPoolConfig]" = None
+    pool_config: "Optional[OracleSyncPool]" = None
     """Oracle Pool configuration"""
     pool_instance: "Optional[ConnectionPool]" = None
     """Optional pool to use.
 
     If set, the plugin will use the provided pool rather than instantiate one.
     """
+    connection_type: "type[Connection]" = field(init=False, default_factory=lambda: Connection)  # pyright: ignore
+    """Connection class to use.
+
+    Defaults to :class:`Connection`.
+    """
+    driver_type: "type[OracleSyncDriver]" = field(init=False, default_factory=lambda: OracleSyncDriver)  # type: ignore[type-abstract,unused-ignore]
+    """Driver class to use.
+
+    Defaults to :class:`OracleSyncDriver`.
+    """
+
+    @property
+    def connection_config_dict(self) -> "dict[str, Any]":
+        """Return the connection configuration as a dict.
+
+        Returns:
+            A string keyed dict of config kwargs for the oracledb.connect function.
+
+        Raises:
+            ImproperConfigurationError: If the connection configuration is not provided.
+        """
+        if self.pool_config:
+            # Filter out pool-specific parameters
+            pool_only_params = {
+                "min",
+                "max",
+                "increment",
+                "timeout",
+                "wait_timeout",
+                "max_lifetime_session",
+                "session_callback",
+            }
+            return dataclass_to_dict(
+                self.pool_config,
+                exclude_empty=True,
+                convert_nested=False,
+                exclude=pool_only_params.union({"pool_instance", "connection_type", "driver_type"}),
+            )
+        msg = "You must provide a 'pool_config' for this adapter."
+        raise ImproperConfigurationError(msg)
 
     @property
     def pool_config_dict(self) -> "dict[str, Any]":
@@ -63,10 +103,30 @@ class OracleSyncDatabaseConfig(SyncDatabaseConfig[Connection, ConnectionPool]):
         """
         if self.pool_config:
             return dataclass_to_dict(
-                self.pool_config, exclude_empty=True, convert_nested=False, exclude={"pool_instance"}
+                self.pool_config,
+                exclude_empty=True,
+                convert_nested=False,
+                exclude={"pool_instance", "connection_type", "driver_type"},
             )
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
+
+    def create_connection(self) -> "Connection":
+        """Create and return a new oracledb connection.
+
+        Returns:
+            A Connection instance.
+
+        Raises:
+            ImproperConfigurationError: If the connection could not be created.
+        """
+        try:
+            import oracledb
+
+            return oracledb.connect(**self.connection_config_dict)
+        except Exception as e:
+            msg = f"Could not configure the Oracle connection. Error: {e!s}"
+            raise ImproperConfigurationError(msg) from e
 
     def create_pool(self) -> "ConnectionPool":
         """Return a pool. If none exists yet, create one.
@@ -110,3 +170,19 @@ class OracleSyncDatabaseConfig(SyncDatabaseConfig[Connection, ConnectionPool]):
         db_pool = self.provide_pool(*args, **kwargs)
         with db_pool.acquire() as connection:  # pyright: ignore[reportUnknownMemberType]
             yield connection
+
+    @contextmanager
+    def provide_session(self, *args: "Any", **kwargs: "Any") -> "Generator[OracleSyncDriver, None, None]":
+        """Create and provide a database session.
+
+        Yields:
+            OracleSyncDriver: A driver instance with an active connection.
+        """
+        with self.provide_connection(*args, **kwargs) as connection:
+            yield self.driver_type(connection)
+
+    def close_pool(self) -> None:
+        """Close the connection pool."""
+        if self.pool_instance is not None:
+            self.pool_instance.close()
+            self.pool_instance = None

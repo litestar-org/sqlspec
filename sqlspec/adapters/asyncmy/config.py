@@ -1,23 +1,23 @@
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, TypeVar, Union
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Optional, TypeVar, Union
 
 from asyncmy.connection import Connection  # pyright: ignore[reportUnknownVariableType]
-from asyncmy.pool import Pool  # pyright: ignore[reportUnknownVariableType]
 
+from sqlspec.adapters.asyncmy.driver import AsyncmyDriver  # type: ignore[attr-defined]
 from sqlspec.base import AsyncDatabaseConfig, GenericPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
-    from typing import Any
 
     from asyncmy.cursors import Cursor, DictCursor  # pyright: ignore[reportUnknownVariableType]
+    from asyncmy.pool import Pool  # pyright: ignore[reportUnknownVariableType]
 
 __all__ = (
-    "AsyncMyConfig",
-    "AsyncmyPoolConfig",
+    "Asyncmy",
+    "AsyncmyPool",
 )
 
 
@@ -25,7 +25,7 @@ T = TypeVar("T")
 
 
 @dataclass
-class AsyncmyPoolConfig(GenericPoolConfig):
+class AsyncmyPool(GenericPoolConfig):
     """Configuration for Asyncmy's connection pool.
 
     This class provides configuration options for Asyncmy database connection pools.
@@ -104,20 +104,42 @@ class AsyncmyPoolConfig(GenericPoolConfig):
 
 
 @dataclass
-class AsyncMyConfig(AsyncDatabaseConfig[Connection, Pool]):
+class Asyncmy(AsyncDatabaseConfig["Connection", "Pool", "AsyncmyDriver"]):
     """Asyncmy Configuration."""
 
     __is_async__ = True
     __supports_connection_pooling__ = True
 
-    pool_config: "Optional[AsyncmyPoolConfig]" = None
+    pool_config: "Optional[AsyncmyPool]" = None
     """Asyncmy Pool configuration"""
-
+    connection_type: "type[Connection]" = field(init=False, default_factory=lambda: Connection)  # pyright: ignore
+    """Type of the connection object"""
+    driver_type: "type[AsyncmyDriver]" = field(init=False, default_factory=lambda: AsyncmyDriver)
+    """Type of the driver object"""
     pool_instance: "Optional[Pool]" = None  # pyright: ignore[reportUnknownVariableType]
-    """Optional pool to use.
+    """Instance of the pool"""
 
-    If set, the plugin will use the provided pool rather than instantiate one.
-    """
+    @property
+    def connection_config_dict(self) -> "dict[str, Any]":
+        """Return the connection configuration as a dict.
+
+        Returns:
+            A string keyed dict of config kwargs for the Asyncmy connect function.
+
+        Raises:
+            ImproperConfigurationError: If the connection configuration is not provided.
+        """
+        if self.pool_config:
+            # Filter out pool-specific parameters
+            pool_only_params = {"minsize", "maxsize", "echo", "pool_recycle"}
+            return dataclass_to_dict(
+                self.pool_config,
+                exclude_empty=True,
+                convert_nested=False,
+                exclude=pool_only_params.union({"pool_instance", "driver_type", "connection_type"}),
+            )
+        msg = "You must provide a 'pool_config' for this adapter."
+        raise ImproperConfigurationError(msg)
 
     @property
     def pool_config_dict(self) -> "dict[str, Any]":
@@ -134,10 +156,27 @@ class AsyncMyConfig(AsyncDatabaseConfig[Connection, Pool]):
                 self.pool_config,
                 exclude_empty=True,
                 convert_nested=False,
-                exclude={"pool_instance"},
+                exclude={"pool_instance", "driver_type", "connection_type"},
             )
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
+
+    async def create_connection(self) -> "Connection":  # pyright: ignore[reportUnknownParameterType]
+        """Create and return a new asyncmy connection.
+
+        Returns:
+            A Connection instance.
+
+        Raises:
+            ImproperConfigurationError: If the connection could not be created.
+        """
+        try:
+            import asyncmy  # pyright: ignore[reportMissingTypeStubs]
+
+            return await asyncmy.connect(**self.connection_config_dict)  # pyright: ignore
+        except Exception as e:
+            msg = f"Could not configure the Asyncmy connection. Error: {e!s}"
+            raise ImproperConfigurationError(msg) from e
 
     async def create_pool(self) -> "Pool":  # pyright: ignore[reportUnknownParameterType]
         """Return a pool. If none exists yet, create one.
@@ -185,8 +224,19 @@ class AsyncMyConfig(AsyncDatabaseConfig[Connection, Pool]):
         async with pool.acquire() as connection:  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             yield connection  # pyright: ignore[reportUnknownMemberType]
 
+    @asynccontextmanager
+    async def provide_session(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[AsyncmyDriver, None]":
+        """Create and provide a database session.
+
+        Yields:
+            An Asyncmy driver instance.
+
+        """
+        async with self.provide_connection(*args, **kwargs) as connection:  # pyright: ignore[reportUnknownVariableType]
+            yield self.driver_type(connection)  # pyright: ignore[reportUnknownArgumentType]
+
     async def close_pool(self) -> None:
         """Close the connection pool."""
-        if self.pool_instance is not None:
-            await self.pool_instance.close()
+        if self.pool_instance is not None:  # pyright: ignore[reportUnknownMemberType]
+            await self.pool_instance.close()  # pyright: ignore[reportUnknownMemberType]
             self.pool_instance = None

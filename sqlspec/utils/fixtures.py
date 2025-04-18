@@ -19,7 +19,7 @@ def open_fixture(fixtures_path: "Union[Path, AsyncPath]", fixture_name: str) -> 
         fixture_name (str): The fixture name to load.
 
     Raises:
-        :class:`FileNotFoundError`: Fixtures not found.
+        FileNotFoundError: Fixtures not found.
 
     Returns:
         Any: The parsed JSON data
@@ -43,8 +43,8 @@ async def open_fixture_async(fixtures_path: "Union[Path, AsyncPath]", fixture_na
         fixture_name (str): The fixture name to load.
 
     Raises:
-        :class:`~advanced_alchemy.exceptions.MissingDependencyError`: The `anyio` library is required to use this function.
-        :class:`FileNotFoundError`: Fixtures not found.
+        FileNotFoundError: Fixtures not found.
+        MissingDependencyError: The `anyio` library is required to use this function.
 
     Returns:
         Any: The parsed JSON data
@@ -52,8 +52,7 @@ async def open_fixture_async(fixtures_path: "Union[Path, AsyncPath]", fixture_na
     try:
         from anyio import Path as AsyncPath
     except ImportError as exc:
-        msg = "The `anyio` library is required to use this function. Please install it with `pip install anyio`."
-        raise MissingDependencyError(msg) from exc
+        raise MissingDependencyError(package="anyio") from exc
 
     fixture = AsyncPath(fixtures_path / f"{fixture_name}.json")
     if await fixture.exists():

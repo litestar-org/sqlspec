@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-from _pytest.monkeypatch import MonkeyPatch
 
 from sqlspec.base import SyncDatabaseConfig
 from sqlspec.utils.module_loader import import_string, module_to_os_path
@@ -17,7 +16,7 @@ def test_import_string() -> None:
         _ = import_string("imaginary_module_that_doesnt_exist.Config")  # a random nonexistent class
 
 
-def test_module_path(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+def test_module_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     the_path = module_to_os_path("sqlspec.base")
     assert the_path.exists()
 
@@ -40,7 +39,7 @@ def test_import_non_existing_attribute_raises() -> None:
         import_string("sqlspec.base.GenericDatabaseConfig.extra.module")
 
 
-def test_import_string_cached(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+def test_import_string_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tmp_path.joinpath("testmodule.py").write_text("x = 'foo'")
     monkeypatch.chdir(tmp_path)
     monkeypatch.syspath_prepend(tmp_path)  # pyright: ignore[reportUnknownMemberType]

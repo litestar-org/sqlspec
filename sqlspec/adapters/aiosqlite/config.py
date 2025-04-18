@@ -2,7 +2,10 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from sqlspec.base import NoPoolSyncConfig
+from aiosqlite import Connection
+
+from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
+from sqlspec.base import NoPoolAsyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
@@ -11,13 +14,12 @@ if TYPE_CHECKING:
     from sqlite3 import Connection as SQLite3Connection
     from typing import Literal
 
-    from aiosqlite import Connection
 
-__all__ = ("AiosqliteConfig",)
+__all__ = ("Aiosqlite",)
 
 
 @dataclass
-class AiosqliteConfig(NoPoolSyncConfig["Connection"]):
+class Aiosqlite(NoPoolAsyncConfig["Connection", "AiosqliteDriver"]):
     """Configuration for Aiosqlite database connections.
 
     This class provides configuration options for Aiosqlite database connections, wrapping all parameters
@@ -42,6 +44,10 @@ class AiosqliteConfig(NoPoolSyncConfig["Connection"]):
     """The number of statements that SQLite will cache for this connection. The default is 128."""
     uri: "Union[bool, EmptyType]" = field(default=Empty)
     """If set to True, database is interpreted as a URI with supported options."""
+    connection_type: "type[Connection]" = field(init=False, default_factory=lambda: Connection)
+    """Type of the connection object"""
+    driver_type: "type[AiosqliteDriver]" = field(init=False, default_factory=lambda: AiosqliteDriver)  # type: ignore[type-abstract,unused-ignore]
+    """Type of the driver object"""
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -50,7 +56,9 @@ class AiosqliteConfig(NoPoolSyncConfig["Connection"]):
         Returns:
             A string keyed dict of config kwargs for the aiosqlite.connect() function.
         """
-        return dataclass_to_dict(self, exclude_empty=True, convert_nested=False, exclude={"pool_instance"})
+        return dataclass_to_dict(
+            self, exclude_empty=True, convert_nested=False, exclude={"pool_instance", "connection_type", "driver_type"}
+        )
 
     async def create_connection(self) -> "Connection":
         """Create and return a new database connection.
@@ -82,3 +90,15 @@ class AiosqliteConfig(NoPoolSyncConfig["Connection"]):
             yield connection
         finally:
             await connection.close()
+
+    @asynccontextmanager
+    async def provide_session(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[AiosqliteDriver, None]":
+        """Create and provide a database connection.
+
+        Yields:
+            A Aiosqlite driver instance.
+
+
+        """
+        async with self.provide_connection(*args, **kwargs) as connection:
+            yield self.driver_type(connection)

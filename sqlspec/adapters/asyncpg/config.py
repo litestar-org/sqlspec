@@ -1,13 +1,14 @@
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional, TypeVar, Union
 
 from asyncpg import Record
 from asyncpg import create_pool as asyncpg_create_pool
-from asyncpg.pool import Pool, PoolConnectionProxy
+from asyncpg.pool import PoolConnectionProxy
 from typing_extensions import TypeAlias
 
 from sqlspec._serialization import decode_json, encode_json
+from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 from sqlspec.base import AsyncDatabaseConfig, GenericPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
@@ -17,21 +18,22 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 
     from asyncpg.connection import Connection
+    from asyncpg.pool import Pool
 
 
 __all__ = (
-    "AsyncPgConfig",
-    "AsyncPgPoolConfig",
+    "Asyncpg",
+    "AsyncpgPool",
 )
 
 
 T = TypeVar("T")
 
-PgConnection: TypeAlias = "Union[Connection, PoolConnectionProxy]"  # pyright: ignore[reportMissingTypeArgument]
+PgConnection: TypeAlias = "Union[Connection[Any], PoolConnectionProxy[Any]]"
 
 
 @dataclass
-class AsyncPgPoolConfig(GenericPoolConfig):
+class AsyncpgPool(GenericPoolConfig):
     """Configuration for Asyncpg's :class:`Pool <asyncpg.pool.Pool>`.
 
     For details see: https://magicstack.github.io/asyncpg/current/api/index.html#connection-pools
@@ -52,7 +54,7 @@ class AsyncPgPoolConfig(GenericPoolConfig):
     min_size: "Union[int, EmptyType]" = Empty
     """The number of connections to keep open inside the connection pool."""
     max_size: "Union[int, EmptyType]" = Empty
-    """The number of connections to allow in connection pool “overflow”, that is connections that can be opened above
+    """The number of connections to allow in connection pool "overflow", that is connections that can be opened above
     and beyond the pool_size setting, which defaults to 10."""
 
     max_queries: "Union[int, EmptyType]" = Empty
@@ -71,10 +73,10 @@ class AsyncPgPoolConfig(GenericPoolConfig):
 
 
 @dataclass
-class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):  # pyright: ignore[reportMissingTypeArgument]
+class Asyncpg(AsyncDatabaseConfig["PgConnection", "Pool", "AsyncpgDriver"]):  # pyright: ignore[reportMissingTypeArgument]
     """Asyncpg Configuration."""
 
-    pool_config: "Optional[AsyncPgPoolConfig]" = None
+    pool_config: "Optional[AsyncpgPool]" = None
     """Asyncpg Pool configuration"""
     json_deserializer: "Callable[[str], Any]" = decode_json
     """For dialects that support the :class:`JSON <sqlalchemy.types.JSON>` datatype, this is a Python callable that will
@@ -83,11 +85,41 @@ class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):  # pyright: ignore
     json_serializer: "Callable[[Any], str]" = encode_json
     """For dialects that support the JSON datatype, this is a Python callable that will render a given object as JSON.
     By default, SQLSpec's :attr:`encode_json() <sqlspec._serialization.encode_json>` is used."""
+    connection_type: "type[PgConnection]" = field(init=False, default_factory=lambda: PoolConnectionProxy)
+    """Type of the connection object"""
+    driver_type: "type[AsyncpgDriver]" = field(init=False, default_factory=lambda: AsyncpgDriver)  # type: ignore[type-abstract,unused-ignore]
+    """Type of the driver object"""
     pool_instance: "Optional[Pool[Any]]" = None
-    """Optional pool to use.
+    """The connection pool instance. If set, this will be used instead of creating a new pool."""
 
-    If set, the plugin will use the provided pool rather than instantiate one.
-    """
+    @property
+    def connection_config_dict(self) -> "dict[str, Any]":
+        """Return the connection configuration as a dict.
+
+        Returns:
+            A string keyed dict of config kwargs for the asyncpg.connect function.
+
+        Raises:
+            ImproperConfigurationError: If the connection configuration is not provided.
+        """
+        if self.pool_config:
+            connect_dict: dict[str, Any] = {}
+
+            # Add dsn if available
+            if hasattr(self.pool_config, "dsn"):
+                connect_dict["dsn"] = self.pool_config.dsn
+
+            # Add any connect_kwargs if available
+            if (
+                hasattr(self.pool_config, "connect_kwargs")
+                and self.pool_config.connect_kwargs is not Empty
+                and isinstance(self.pool_config.connect_kwargs, dict)
+            ):
+                connect_dict.update(dict(self.pool_config.connect_kwargs.items()))
+
+            return connect_dict
+        msg = "You must provide a 'pool_config' for this adapter."
+        raise ImproperConfigurationError(msg)
 
     @property
     def pool_config_dict(self) -> "dict[str, Any]":
@@ -102,7 +134,10 @@ class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):  # pyright: ignore
         """
         if self.pool_config:
             return dataclass_to_dict(
-                self.pool_config, exclude_empty=True, exclude={"pool_instance"}, convert_nested=False
+                self.pool_config,
+                exclude_empty=True,
+                exclude={"pool_instance", "driver_type", "connection_type"},
+                convert_nested=False,
             )
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
@@ -126,11 +161,9 @@ class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):  # pyright: ignore
 
         pool_config = self.pool_config_dict
         self.pool_instance = await asyncpg_create_pool(**pool_config)
-        if self.pool_instance is None:
-            msg = "Could not configure the 'pool_instance'. Please check your configuration."
-            raise ImproperConfigurationError(
-                msg,
-            )
+        if self.pool_instance is None:  # pyright: ignore[reportUnnecessaryComparison]
+            msg = "Could not configure the 'pool_instance'. Please check your configuration."  # type: ignore[unreachable]
+            raise ImproperConfigurationError(msg)
         return self.pool_instance
 
     def provide_pool(self, *args: "Any", **kwargs: "Any") -> "Awaitable[Pool]":  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]
@@ -141,8 +174,27 @@ class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):  # pyright: ignore
         """
         return self.create_pool()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
 
+    async def create_connection(self) -> "PgConnection":
+        """Create and return a new asyncpg connection.
+
+        Returns:
+            A Connection instance.
+
+        Raises:
+            ImproperConfigurationError: If the connection could not be created.
+        """
+        try:
+            import asyncpg
+
+            return await asyncpg.connect(**self.connection_config_dict)  # type: ignore[no-any-return]
+        except Exception as e:
+            msg = f"Could not configure the asyncpg connection. Error: {e!s}"
+            raise ImproperConfigurationError(msg) from e
+
     @asynccontextmanager
-    async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[PoolConnectionProxy, None]":  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]
+    async def provide_connection(
+        self, *args: "Any", **kwargs: "Any"
+    ) -> "AsyncGenerator[PoolConnectionProxy[Any], None]":  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]
         """Create a connection instance.
 
         Yields:
@@ -157,3 +209,15 @@ class AsyncPgConfig(AsyncDatabaseConfig[PgConnection, Pool]):  # pyright: ignore
         if self.pool_instance is not None:
             await self.pool_instance.close()
             self.pool_instance = None
+
+    @asynccontextmanager
+    async def provide_session(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[AsyncpgDriver, None]":
+        """Create and provide a database session.
+
+        Yields:
+            A Aiosqlite driver instance.
+
+
+        """
+        async with self.provide_connection(*args, **kwargs) as connection:
+            yield self.driver_type(connection)

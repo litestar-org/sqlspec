@@ -4,6 +4,14 @@ from pathlib import Path
 
 import pytest
 
+pytest_plugins = [
+    "pytest_databases.docker.postgres",
+    "pytest_databases.docker.oracle",
+    "pytest_databases.docker.mysql",
+    "pytest_databases.docker.bigquery",
+    "pytest_databases.docker.spanner",
+]
+
 pytestmark = pytest.mark.anyio
 here = Path(__file__).parent
 

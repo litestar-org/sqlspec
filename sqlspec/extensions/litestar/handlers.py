@@ -13,12 +13,13 @@ from sqlspec.utils.sync_tools import maybe_async_
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Coroutine
+    from contextlib import AbstractAsyncContextManager
 
     from litestar import Litestar
     from litestar.datastructures.state import State
     from litestar.types import Message, Scope
 
-    from sqlspec.base import ConnectionT, DatabaseConfigProtocol, PoolT
+    from sqlspec.base import ConnectionT, DatabaseConfigProtocol, DriverT, PoolT
 
 
 SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, HTTP_DISCONNECT, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
@@ -109,9 +110,9 @@ def autocommit_handler_maker(
 
 
 def lifespan_handler_maker(
-    config: "DatabaseConfigProtocol[Any, Any]",
+    config: "DatabaseConfigProtocol[Any, Any, Any]",
     pool_key: str,
-) -> "Callable[[Litestar], contextlib._AsyncGeneratorContextManager[None, None]]":
+) -> "Callable[[Litestar], AbstractAsyncContextManager[None]]":
     """Build the lifespan handler for the database configuration.
 
     Args:
@@ -141,7 +142,7 @@ def lifespan_handler_maker(
 
 def connection_provider_maker(
     connection_key: str,
-    config: "DatabaseConfigProtocol[ConnectionT, PoolT]",
+    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]",
 ) -> "Callable[[State,Scope], Awaitable[ConnectionT]]":
     """Build the connection provider for the database configuration.
 
@@ -165,7 +166,7 @@ def connection_provider_maker(
 
 def pool_provider_maker(
     pool_key: str,
-    config: "DatabaseConfigProtocol[ConnectionT, PoolT]",
+    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]",
 ) -> "Callable[[State,Scope], Awaitable[PoolT]]":
     """Build the pool provider for the database configuration.
 

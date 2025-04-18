@@ -11,6 +11,7 @@ from sqlspec._typing import (
     UNSET,
     BaseModel,
     DataclassProtocol,
+    DTOData,
     Empty,
     EmptyType,
     Struct,
@@ -38,25 +39,52 @@ FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
 
 :class:`~advanced_alchemy.filters.StatementFilter`
 """
+SupportedSchemaModel: TypeAlias = "Union[Struct, BaseModel, DataclassProtocol]"
+"""Type alias for pydantic or msgspec models.
 
+:class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol`
+"""
+ModelDTOT = TypeVar("ModelDTOT", bound="SupportedSchemaModel")
+"""Type variable for model DTOs.
 
-SupportedSchemaModel: TypeAlias = Union[Struct, BaseModel]
+:class:`msgspec.Struct`|:class:`pydantic.BaseModel`
+"""
+PydanticOrMsgspecT = SupportedSchemaModel
 """Type alias for pydantic or msgspec models.
 
 :class:`msgspec.Struct` or :class:`pydantic.BaseModel`
 """
-ModelDictT: TypeAlias = "Union[dict[str, Any], ModelT ]"
+ModelDict: TypeAlias = "Union[dict[str, Any], SupportedSchemaModel, DTOData[SupportedSchemaModel]]"
 """Type alias for model dictionaries.
 
 Represents:
 - :type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` |  :class:`pydantic.BaseModel`
 """
-ModelDictListT: TypeAlias = "Sequence[Union[dict[str, Any], ModelT ]]"
+ModelDictList: TypeAlias = "Sequence[Union[dict[str, Any], SupportedSchemaModel]]"
 """Type alias for model dictionary lists.
 
 A list or sequence of any of the following:
 - :type:`Sequence`[:type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel`]
 
+"""
+BulkModelDict: TypeAlias = (
+    "Union[Sequence[Union[dict[str, Any], SupportedSchemaModel]], DTOData[list[SupportedSchemaModel]]]"
+)
+"""Type alias for bulk model dictionaries.
+
+Represents:
+- :type:`Sequence`[:type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel`]
+- :class:`DTOData`[:type:`list[ModelT]`]
+"""
+
+StatementParameterType: TypeAlias = "Union[dict[str, Any], list[Any], tuple[Any, ...], None]"
+"""Type alias for parameter types.
+
+Represents:
+- :type:`dict[str, Any]`
+- :type:`list[Any]`
+- :type:`tuple[Any, ...]`
+- :type:`None`
 """
 
 
@@ -286,7 +314,14 @@ def is_schema_or_dict_without_field(
 
 
 def is_dataclass(obj: "Any") -> "TypeGuard[DataclassProtocol]":
-    """Check if an object is a dataclass."""
+    """Check if an object is a dataclass.
+
+    Args:
+        obj: Value to check.
+
+    Returns:
+        bool
+    """
     return is_dataclass_instance(obj)
 
 
@@ -294,17 +329,33 @@ def is_dataclass_with_field(
     obj: "Any",
     field_name: str,
 ) -> "TypeGuard[object]":  # Can't specify dataclass type directly
-    """Check if an object is a dataclass and has a specific field."""
+    """Check if an object is a dataclass and has a specific field.
+
+    Args:
+        obj: Value to check.
+        field_name: Field name to check for.
+
+    Returns:
+        bool
+    """
     return is_dataclass(obj) and hasattr(obj, field_name)
 
 
 def is_dataclass_without_field(obj: "Any", field_name: str) -> "TypeGuard[object]":
-    """Check if an object is a dataclass and does not have a specific field."""
+    """Check if an object is a dataclass and does not have a specific field.
+
+    Args:
+        obj: Value to check.
+        field_name: Field name to check for.
+
+    Returns:
+        bool
+    """
     return is_dataclass(obj) and not hasattr(obj, field_name)
 
 
 def extract_dataclass_fields(
-    dt: "DataclassProtocol",
+    obj: "DataclassProtocol",
     exclude_none: bool = False,
     exclude_empty: bool = False,
     include: "Optional[AbstractSet[str]]" = None,
@@ -313,12 +364,14 @@ def extract_dataclass_fields(
     """Extract dataclass fields.
 
     Args:
-        dt: A dataclass instance.
+        obj: A dataclass instance.
         exclude_none: Whether to exclude None values.
         exclude_empty: Whether to exclude Empty values.
         include: An iterable of fields to include.
         exclude: An iterable of fields to exclude.
 
+    Raises:
+        ValueError: If there are fields that are both included and excluded.
 
     Returns:
         A tuple of dataclass fields.
@@ -330,11 +383,11 @@ def extract_dataclass_fields(
         msg = f"Fields {common} are both included and excluded."
         raise ValueError(msg)
 
-    dataclass_fields: Iterable[Field[Any]] = fields(dt)
+    dataclass_fields: Iterable[Field[Any]] = fields(obj)
     if exclude_none:
-        dataclass_fields = (field for field in dataclass_fields if getattr(dt, field.name) is not None)
+        dataclass_fields = (field for field in dataclass_fields if getattr(obj, field.name) is not None)
     if exclude_empty:
-        dataclass_fields = (field for field in dataclass_fields if getattr(dt, field.name) is not Empty)
+        dataclass_fields = (field for field in dataclass_fields if getattr(obj, field.name) is not Empty)
     if include:
         dataclass_fields = (field for field in dataclass_fields if field.name in include)
     if exclude:
@@ -344,7 +397,7 @@ def extract_dataclass_fields(
 
 
 def extract_dataclass_items(
-    dt: "DataclassProtocol",
+    obj: "DataclassProtocol",
     exclude_none: bool = False,
     exclude_empty: bool = False,
     include: "Optional[AbstractSet[str]]" = None,
@@ -355,7 +408,7 @@ def extract_dataclass_items(
     Unlike the 'asdict' method exports by the stdlib, this function does not pickle values.
 
     Args:
-        dt: A dataclass instance.
+        obj: A dataclass instance.
         exclude_none: Whether to exclude None values.
         exclude_empty: Whether to exclude Empty values.
         include: An iterable of fields to include.
@@ -364,8 +417,8 @@ def extract_dataclass_items(
     Returns:
         A tuple of key/value pairs.
     """
-    dataclass_fields = extract_dataclass_fields(dt, exclude_none, exclude_empty, include, exclude)
-    return tuple((field.name, getattr(dt, field.name)) for field in dataclass_fields)
+    dataclass_fields = extract_dataclass_fields(obj, exclude_none, exclude_empty, include, exclude)
+    return tuple((field.name, getattr(obj, field.name)) for field in dataclass_fields)
 
 
 def dataclass_to_dict(
@@ -442,9 +495,11 @@ __all__ = (
     "EmptyType",
     "FailFast",
     "FilterTypeT",
-    "ModelDictListT",
-    "ModelDictT",
+    "ModelDict",
+    "ModelDictList",
+    "StatementParameterType",
     "Struct",
+    "SupportedSchemaModel",
     "TypeAdapter",
     "UnsetType",
     "convert",
