@@ -10,8 +10,6 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import Adbc, AdbcDriver
 
-# from tests.fixtures.sql_utils import create_tuple_or_dict_params, format_sql
-
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 
 
@@ -61,7 +59,6 @@ def test_insert_update_delete_returning(adbc_postgres_session: AdbcDriver, param
     VALUES ($1)
     RETURNING id, name
     """
-    # sql = format_sql(sql_template, ["name"], style, "postgres") # Temporarily bypass format_sql
     sql = sql_template
 
     # Ensure params are tuples
@@ -74,11 +71,6 @@ def test_insert_update_delete_returning(adbc_postgres_session: AdbcDriver, param
     assert result["name"] == execute_params[0]
     assert "id" in result
     assert isinstance(result["id"], int)
-    # assert isinstance(result, list)
-    # assert len(result) == 1
-    # Add assertion for content if needed, e.g.:
-    # assert result[0]["name"] == execute_params
-    # assert isinstance(result[0]["id"], int)
 
 
 @pytest.mark.parametrize(
@@ -107,8 +99,6 @@ def test_select(adbc_postgres_session: AdbcDriver, params: Any, style: ParamStyl
     # Using empty params here, assuming qmark style if needed, though likely irrelevant.
     select_sql = "SELECT id, name FROM test_table"
     empty_params = ()  # Use empty tuple for qmark style
-    # empty_params = create_tuple_or_dict_params([], [], style) # Keep original if needed
-
     results = adbc_postgres_session.select(select_sql, empty_params)
     assert len(results) == 1
     assert results[0]["name"] == "test_name"
@@ -139,12 +129,7 @@ def test_select_one(adbc_postgres_session: AdbcDriver, params: Any, style: Param
     sql_template = """
     SELECT id, name FROM test_table WHERE name = $1
     """
-    # sql = format_sql(sql_template, ["name"], style, "postgres") # Bypass format_sql
     sql = sql_template
-    # select_params = create_tuple_or_dict_params(
-    #     [params[0] if style == "tuple_binds" else params["name"]], ["name"], style
-    # ) # Keep original if needed
-
     result = adbc_postgres_session.select_one(sql, (params[0] if style == "tuple_binds" else params["name"],))
     assert result is not None
     assert result["name"] == "test_name"
@@ -175,12 +160,8 @@ def test_select_value(adbc_postgres_session: AdbcDriver, params: Any, style: Par
     sql_template = """
     SELECT name FROM test_table WHERE name = $1
     """
-    # sql = format_sql(sql_template, ["name"], style, "postgres") # Bypass format_sql
     sql = sql_template
     select_params = (params[0] if style == "tuple_binds" else params["name"],)
-    # select_params = create_tuple_or_dict_params(
-    #     [params[0] if style == "tuple_binds" else params["name"]], ["name"], style
-    # ) # Keep original if needed
 
     value = adbc_postgres_session.select_value(sql, select_params)
     assert value == "test_name"

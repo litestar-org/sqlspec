@@ -93,62 +93,18 @@ class Adbc(NoPoolSyncConfig["Connection", "AdbcDriver"]):
         config = {}
         db_kwargs = self.db_kwargs or {}
         conn_kwargs = self.conn_kwargs or {}
-        if self.uri is not Empty:
-            if isinstance(self.uri, str) and self.uri.startswith("sqlite://"):
-                db_kwargs["uri"] = self.uri.replace("sqlite://", "")
-            elif isinstance(self.uri, str) and self.uri.startswith("duckdb://"):
-                db_kwargs["path"] = self.uri.replace("duckdb://", "")
-            elif isinstance(self.uri, str):
-                db_kwargs["uri"] = self.uri
+        if isinstance(self.uri, str) and self.uri.startswith("sqlite://"):
+            db_kwargs["uri"] = self.uri.replace("sqlite://", "")
+        elif isinstance(self.uri, str) and self.uri.startswith("duckdb://"):
+            db_kwargs["path"] = self.uri.replace("duckdb://", "")
+        elif isinstance(self.uri, str):
+            db_kwargs["uri"] = self.uri
         if isinstance(self.driver_name, str) and self.driver_name.startswith("adbc_driver_bigquery"):
-            # Handle project ID - first check db_kwargs, then conn_kwargs
-            project_id_keys = ["project_id", "project", "Catalog", "ProjectID"]
-            project_id_found = False
-
-            # Check in db_kwargs first
-            for key in project_id_keys:
-                if key in db_kwargs:
-                    config["ProjectID"] = db_kwargs[key]  # BigQuery expects ProjectID
-                    project_id_found = True
-                    break
-
-            # If not found in db_kwargs, check in conn_kwargs
-            if not project_id_found:
-                for key in project_id_keys:
-                    if key in conn_kwargs:
-                        config["ProjectID"] = conn_kwargs[key]  # BigQuery expects ProjectID
-                        project_id_found = True
-                        break
-
-            # Handle credentials
-            if "credentials" in db_kwargs:
-                config["credentials"] = db_kwargs["credentials"]
-            elif "credentials_file" in db_kwargs:
-                config["credentials_file"] = db_kwargs["credentials_file"]
-            elif "keyFilePath" in db_kwargs:  # ODBC style
-                config["credentials_file"] = db_kwargs["keyFilePath"]
-
-            # Add any remaining db_kwargs that aren't project_id or credentials related
-            for key, value in db_kwargs.items():
-                if key not in (
-                    "project_id",
-                    "project",
-                    "Catalog",
-                    "ProjectID",
-                    "credentials",
-                    "credentials_file",
-                    "keyFilePath",
-                ):
-                    config[key] = value
-
-            # For BigQuery, we merge conn_kwargs directly into config instead of nesting them
-            for key, value in conn_kwargs.items():
-                if key not in config:  # Don't override existing config values
-                    config[key] = value
+            config["db_kwargs"] = db_kwargs
         else:
             config = db_kwargs
-            if conn_kwargs:
-                config["conn_kwargs"] = conn_kwargs
+        if conn_kwargs:
+            config["conn_kwargs"] = conn_kwargs
         return config
 
     def _get_connect_func(self) -> "Callable[..., Connection]":

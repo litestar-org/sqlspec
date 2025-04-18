@@ -1,3 +1,4 @@
+import contextlib
 import re
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -46,10 +47,8 @@ class AdbcDriver(SyncDriverAdapterProtocol["Connection"]):
         try:
             yield cursor
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 cursor.close()  # type: ignore[no-untyped-call]
-            except Exception:
-                pass
 
     def _process_sql_params(
         self, sql: str, parameters: "Optional[StatementParameterType]" = None
