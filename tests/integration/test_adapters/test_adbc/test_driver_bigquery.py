@@ -18,9 +18,9 @@ ParamStyle = Literal["tuple_binds", "dict_binds"]
 def adbc_session(bigquery_service: BigQueryService) -> Adbc:
     """Create an ADBC session for BigQuery."""
     db_kwargs = {
-        DatabaseOptions.AUTH_TYPE.value: DatabaseOptions.AUTH_VALUE_JSON_CREDENTIAL_FILE.value,
         DatabaseOptions.PROJECT_ID.value: bigquery_service.project,
         DatabaseOptions.DATASET_ID.value: bigquery_service.dataset,
+        DatabaseOptions.AUTH_TYPE.value: DatabaseOptions.AUTH_VALUE_BIGQUERY.value,
     }
 
     return Adbc(driver_name="adbc_driver_bigquery", db_kwargs=db_kwargs)
