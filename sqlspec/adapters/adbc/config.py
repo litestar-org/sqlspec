@@ -42,7 +42,7 @@ class Adbc(NoPoolSyncConfig["Connection", "AdbcDriver"]):
     _is_in_memory: bool = field(init=False, default=False)
     """Flag indicating if the connection is for an in-memory database"""
 
-    def _set_adbc(self) -> str:
+    def _set_adbc(self) -> str:  # noqa: PLR0912
         """Identify the driver type based on the URI (if provided) or preset driver name.
 
         Also sets the `_is_in_memory` flag for specific in-memory URIs.
@@ -55,6 +55,18 @@ class Adbc(NoPoolSyncConfig["Connection", "AdbcDriver"]):
         """
 
         if isinstance(self.driver_name, str):
+            if self.driver_name != "adbc_driver_sqlite.dbapi.connect" and "sqlite" in self.driver_name:
+                self.driver_name = "adbc_driver_sqlite.dbapi.connect"
+            elif self.driver_name != "adbc_driver_duckdb.dbapi.connect" and "duckdb" in self.driver_name:
+                self.driver_name = "adbc_driver_duckdb.dbapi.connect"
+            elif self.driver_name != "adbc_driver_postgresql.dbapi.connect" and "postgres" in self.driver_name:
+                self.driver_name = "adbc_driver_postgresql.dbapi.connect"
+            elif self.driver_name != "adbc_driver_snowflake.dbapi.connect" and "snowflake" in self.driver_name:
+                self.driver_name = "adbc_driver_snowflake.dbapi.connect"
+            elif self.driver_name != "adbc_driver_bigquery.dbapi.connect" and "bigquery" in self.driver_name:
+                self.driver_name = "adbc_driver_bigquery.dbapi.connect"
+            elif self.driver_name != "adbc_driver_flightsql.dbapi.connect" and "flightsql" in self.driver_name:
+                self.driver_name = "adbc_driver_flightsql.dbapi.connect"
             return self.driver_name
 
         # If driver_name wasn't explicit, try to determine from URI
