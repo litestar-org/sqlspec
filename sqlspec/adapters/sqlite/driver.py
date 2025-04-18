@@ -48,7 +48,10 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters)
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # type: ignore[arg-type]
+            if not parameters:
+                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
+            else:
+                cursor.execute(sql, parameters)
             results = cursor.fetchall()
             if not results:
                 return []
@@ -73,7 +76,10 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters)
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # type: ignore[arg-type]
+            if not parameters:
+                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
+            else:
+                cursor.execute(sql, parameters)
             result = cursor.fetchone()
             result = self.check_not_found(result)
             column_names = [c[0] for c in cursor.description or []]
@@ -97,7 +103,10 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters)
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # type: ignore[arg-type]
+            if not parameters:
+                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
+            else:
+                cursor.execute(sql, parameters)
             result = cursor.fetchone()
             if result is None:
                 return None
@@ -122,7 +131,10 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters)
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # type: ignore[arg-type]
+            if not parameters:
+                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
+            else:
+                cursor.execute(sql, parameters)
             result = cursor.fetchone()
             result = self.check_not_found(result)
             if schema_type is None:
@@ -145,7 +157,10 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters)
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # type: ignore[arg-type]
+            if not parameters:
+                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
+            else:
+                cursor.execute(sql, parameters)
             result = cursor.fetchone()
             if result is None:
                 return None
@@ -169,7 +184,10 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         sql, parameters = self._process_sql_params(sql, parameters)
 
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # type: ignore[arg-type]
+            if not parameters:
+                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
+            else:
+                cursor.execute(sql, parameters)
             return cursor.rowcount if hasattr(cursor, "rowcount") else -1
 
     def insert_update_delete_returning(
@@ -189,7 +207,10 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         sql, parameters = self._process_sql_params(sql, parameters)
 
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # type: ignore[arg-type]
+            if not parameters:
+                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
+            else:
+                cursor.execute(sql, parameters)
             result = cursor.fetchall()
             if len(result) == 0:
                 return None
@@ -244,7 +265,7 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         # For DDL statements, don't pass parameters to execute
         # SQLite doesn't support parameters for DDL statements
         with self._with_cursor(connection) as cursor:
-            if parameters is None:
+            if not parameters:
                 cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
             else:
                 sql, parameters = self._process_sql_params(sql, parameters)
@@ -269,7 +290,10 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         sql, parameters = self._process_sql_params(sql, parameters)
 
         with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # type: ignore[arg-type]
+            if not parameters:
+                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
+            else:
+                cursor.execute(sql, parameters)
             result = cursor.fetchall()
             if len(result) == 0:
                 return None

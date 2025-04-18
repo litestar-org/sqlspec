@@ -9,6 +9,7 @@ from typing import Any, Literal
 import pytest
 
 from sqlspec.adapters.sqlite import Sqlite, SqliteDriver
+from tests.fixtures.sql_utils import create_tuple_or_dict_params, format_placeholder
 
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 
@@ -54,11 +55,12 @@ def test_insert_update_delete_returning(sqlite_session: SqliteDriver, params: An
     returning_supported = sqlite_version >= (3, 35, 0)
 
     if returning_supported:
-        sql = """
+        placeholder = format_placeholder("name", style, "sqlite")
+        sql = f"""
         INSERT INTO test_table (name)
-        VALUES (%s)
+        VALUES ({placeholder})
         RETURNING id, name
-        """ % ("?" if style == "tuple_binds" else ":name")
+        """
 
         result = sqlite_session.insert_update_delete_returning(sql, params)
         assert result is not None
@@ -66,10 +68,11 @@ def test_insert_update_delete_returning(sqlite_session: SqliteDriver, params: An
         assert result["id"] is not None
     else:
         # Alternative for older SQLite: Insert and then get last row id
-        insert_sql = """
+        placeholder = format_placeholder("name", style, "sqlite")
+        insert_sql = f"""
         INSERT INTO test_table (name)
-        VALUES (%s)
-        """ % ("?" if style == "tuple_binds" else ":name")
+        VALUES ({placeholder})
+        """
 
         sqlite_session.insert_update_delete(insert_sql, params)
 
@@ -89,15 +92,16 @@ def test_insert_update_delete_returning(sqlite_session: SqliteDriver, params: An
 def test_select(sqlite_session: SqliteDriver, params: Any, style: ParamStyle) -> None:
     """Test select functionality with different parameter styles."""
     # Insert test record
-    insert_sql = """
+    placeholder = format_placeholder("name", style, "sqlite")
+    insert_sql = f"""
     INSERT INTO test_table (name)
-    VALUES (%s)
-    """ % ("?" if style == "tuple_binds" else ":name")
+    VALUES ({placeholder})
+    """
     sqlite_session.insert_update_delete(insert_sql, params)
 
     # Test select
     select_sql = "SELECT id, name FROM test_table"
-    empty_params: tuple[()] | dict[str, Any] = () if style == "tuple_binds" else {}
+    empty_params = create_tuple_or_dict_params([], [], style)
     results = sqlite_session.select(select_sql, empty_params)
     assert len(results) == 1
     assert results[0]["name"] == "test_name"
@@ -113,17 +117,21 @@ def test_select(sqlite_session: SqliteDriver, params: Any, style: ParamStyle) ->
 def test_select_one(sqlite_session: SqliteDriver, params: Any, style: ParamStyle) -> None:
     """Test select_one functionality with different parameter styles."""
     # Insert test record
-    insert_sql = """
+    placeholder = format_placeholder("name", style, "sqlite")
+    insert_sql = f"""
     INSERT INTO test_table (name)
-    VALUES (%s)
-    """ % ("?" if style == "tuple_binds" else ":name")
+    VALUES ({placeholder})
+    """
     sqlite_session.insert_update_delete(insert_sql, params)
 
     # Test select_one
-    select_one_sql = """
-    SELECT id, name FROM test_table WHERE name = %s
-    """ % ("?" if style == "tuple_binds" else ":name")
-    select_params = (params[0],) if style == "tuple_binds" else {"name": params["name"]}
+    placeholder = format_placeholder("name", style, "sqlite")
+    select_one_sql = f"""
+    SELECT id, name FROM test_table WHERE name = {placeholder}
+    """
+    select_params = create_tuple_or_dict_params(
+        [params[0] if style == "tuple_binds" else params["name"]], ["name"], style
+    )
     result = sqlite_session.select_one(select_one_sql, select_params)
     assert result is not None
     assert result["name"] == "test_name"
@@ -144,10 +152,11 @@ def test_select_value(
 ) -> None:
     """Test select_value functionality with different parameter styles."""
     # Insert test record and get the ID
-    insert_sql = """
+    placeholder = format_placeholder("name", style, "sqlite")
+    insert_sql = f"""
     INSERT INTO test_table (name)
-    VALUES (%s)
-    """ % ("?" if style == "tuple_binds" else ":name")
+    VALUES ({placeholder})
+    """
     sqlite_session.insert_update_delete(insert_sql, name_params)
 
     # Get the last inserted ID
@@ -156,9 +165,10 @@ def test_select_value(
     assert inserted_id is not None
 
     # Test select_value with the actual inserted ID
-    value_sql = """
-    SELECT name FROM test_table WHERE id = %s
-    """ % ("?" if style == "tuple_binds" else ":id")
-    test_id_params = (inserted_id,) if style == "tuple_binds" else {"id": inserted_id}
+    placeholder = format_placeholder("id", style, "sqlite")
+    value_sql = f"""
+    SELECT name FROM test_table WHERE id = {placeholder}
+    """
+    test_id_params = create_tuple_or_dict_params([inserted_id], ["id"], style)
     value = sqlite_session.select_value(value_sql, test_id_params)
     assert value == "test_name"

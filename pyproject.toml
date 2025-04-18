@@ -10,7 +10,7 @@ requires-python = ">=3.9, <4.0"
 version = "0.7.1"
 
 [project.optional-dependencies]
-adbc = ["adbc-driver-manager", "pyarrow"]
+adbc = ["adbc_driver_manager", "pyarrow"]
 aioodbc = ["aioodbc"]
 aiosqlite = ["aiosqlite"]
 asyncmy = ["asyncmy"]
@@ -35,9 +35,7 @@ uuid = ["uuid-utils>=0.6.1"]
 [dependency-groups]
 build = ["bump-my-version"]
 dev = [
-  "adbc-driver-sqlite",
-  "adbc-driver-postgresql",
-  "adbc-driver-flightsql",
+  { include-group = "extras" },
   { include-group = "lint" },
   { include-group = "doc" },
   { include-group = "test" },
@@ -58,6 +56,15 @@ doc = [
   "sphinx-toolbox>=3.8.1",
   "myst-parser",
   "sphinx-autodoc-typehints",
+]
+extras = [
+  "adbc_driver_manager",
+  "pyarrow",
+  "polars",
+  "adbc_driver_sqlite",
+  "adbc_driver_postgresql",
+  "adbc_driver_flightsql",
+  "adbc_driver_bigquery",
 ]
 lint = [
   "mypy>=1.13.0",
@@ -217,11 +224,17 @@ module = [
 
 [tool.pyright]
 disableBytesTypePromotions = true
-exclude = ["tools", "docs"]
+exclude = ["**/node_modules", "**/__pycache__", ".venv", "tools", "docs"]
 include = ["sqlspec", "tests"]
 pythonVersion = "3.9"
+reportMissingTypeStubs = false
+reportPrivateImportUsage = false
 reportPrivateUsage = false
+reportUnknownArgumentType = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
 reportUnnecessaryTypeIgnoreComments = true
+root = "."
 
 
 [tool.slotscheck]
