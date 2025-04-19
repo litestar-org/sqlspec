@@ -1,8 +1,8 @@
-from sqlspec.adapters.asyncmy.config import Asyncmy, AsyncmyPool
+from sqlspec.adapters.asyncmy.config import AsyncmyConfig, AsyncmyPoolConfig
 from sqlspec.adapters.asyncmy.driver import AsyncmyDriver  # type: ignore[attr-defined]
 
 __all__ = (
-    "Asyncmy",
+    "AsyncmyConfig",
     "AsyncmyDriver",
-    "AsyncmyPool",
+    "AsyncmyPoolConfig",
 )

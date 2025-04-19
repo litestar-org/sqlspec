@@ -1,19 +1,27 @@
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
-from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol, T
+from sqlspec.base import (
+    AsyncArrowBulkOperationsMixin,
+    AsyncDriverAdapterProtocol,
+    SyncArrowBulkOperationsMixin,
+    SyncDriverAdapterProtocol,
+    T,
+)
+from sqlspec.typing import ArrowTable, StatementParameterType
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
     from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 
-    from sqlspec.typing import ModelDTOT, StatementParameterType
+    # Conditionally import ArrowTable for type checking
+    from sqlspec.typing import ModelDTOT
 
 __all__ = ("OracleAsyncDriver", "OracleSyncDriver")
 
 
-class OracleSyncDriver(SyncDriverAdapterProtocol["Connection"]):
+class OracleSyncDriver(SyncArrowBulkOperationsMixin["Connection"], SyncDriverAdapterProtocol["Connection"]):
     """Oracle Sync Driver Adapter."""
 
     connection: "Connection"
@@ -239,8 +247,28 @@ class OracleSyncDriver(SyncDriverAdapterProtocol["Connection"]):
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             return str(cursor.rowcount)  # pyright: ignore[reportUnknownMemberType]
 
+    def select_arrow(  # pyright: ignore[reportUnknownParameterType]
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        connection: "Optional[Connection]" = None,
+    ) -> "ArrowTable":  # pyright: ignore[reportUnknownVariableType]
+        """Execute a SQL query and return results as an Apache Arrow Table.
 
-class OracleAsyncDriver(AsyncDriverAdapterProtocol["AsyncConnection"]):
+        Returns:
+            An Apache Arrow Table containing the query results.
+        """
+
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
+        results = connection.fetch_df_all(sql, parameters)
+        return cast("ArrowTable", ArrowTable.from_arrays(arrays=results.column_arrays(), names=results.column_names()))  # pyright: ignore
+
+
+class OracleAsyncDriver(
+    AsyncArrowBulkOperationsMixin["AsyncConnection"], AsyncDriverAdapterProtocol["AsyncConnection"]
+):
     """Oracle Async Driver Adapter."""
 
     connection: "AsyncConnection"
@@ -496,3 +524,26 @@ class OracleAsyncDriver(AsyncDriverAdapterProtocol["AsyncConnection"]):
                 return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))  # pyright: ignore[reportUnknownArgumentType]
             # Always return dictionaries
             return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
+
+    async def select_arrow(  # pyright: ignore[reportUnknownParameterType]
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        connection: "Optional[AsyncConnection]" = None,
+    ) -> "ArrowTable":  # pyright: ignore[reportUnknownVariableType]
+        """Execute a SQL query asynchronously and return results as an Apache Arrow Table.
+
+        Args:
+            sql: The SQL query string.
+            parameters: Parameters for the query.
+            connection: Optional connection override.
+
+        Returns:
+            An Apache Arrow Table containing the query results.
+        """
+
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
+        results = await connection.fetch_df_all(sql, parameters)
+        return ArrowTable.from_arrays(arrays=results.column_arrays(), names=results.column_names())  # pyright: ignore

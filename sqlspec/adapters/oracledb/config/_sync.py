@@ -18,18 +18,18 @@ if TYPE_CHECKING:
 
 
 __all__ = (
-    "OracleSync",
-    "OracleSyncPool",
+    "OracleSyncConfig",
+    "OracleSyncPoolConfig",
 )
 
 
 @dataclass
-class OracleSyncPool(OracleGenericPoolConfig["Connection", "ConnectionPool"]):
+class OracleSyncPoolConfig(OracleGenericPoolConfig["Connection", "ConnectionPool"]):
     """Sync Oracle Pool Config"""
 
 
 @dataclass
-class OracleSync(SyncDatabaseConfig["Connection", "ConnectionPool", "OracleSyncDriver"]):
+class OracleSyncConfig(SyncDatabaseConfig["Connection", "ConnectionPool", "OracleSyncDriver"]):
     """Oracle Sync database Configuration.
 
     This class provides the base configuration for Oracle database connections, extending
@@ -42,7 +42,7 @@ class OracleSync(SyncDatabaseConfig["Connection", "ConnectionPool", "OracleSyncD
     options.([2](https://python-oracledb.readthedocs.io/en/latest/user_guide/tuning.html))
     """
 
-    pool_config: "Optional[OracleSyncPool]" = None
+    pool_config: "Optional[OracleSyncPoolConfig]" = None
     """Oracle Pool configuration"""
     pool_instance: "Optional[ConnectionPool]" = None
     """Optional pool to use.

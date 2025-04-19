@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+import pyarrow as pa
 import pytest
 
-from sqlspec.adapters.adbc import Adbc
+from sqlspec.adapters.adbc import AdbcConfig
 
 # Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
@@ -15,15 +16,15 @@ ParamStyle = Literal["tuple_binds", "dict_binds"]
 
 
 @pytest.fixture(scope="session")
-def adbc_session() -> Adbc:
+def adbc_session() -> AdbcConfig:
     """Create an ADBC session for DuckDB using URI."""
-    return Adbc(
+    return AdbcConfig(
         uri="duckdb://:memory:",
     )
 
 
 @pytest.fixture(autouse=True)
-def cleanup_test_table(adbc_session: Adbc) -> None:
+def cleanup_test_table(adbc_session: AdbcConfig) -> None:
     """Clean up the test table before each test."""
     with adbc_session.provide_session() as driver:
         driver.execute_script("DROP TABLE IF EXISTS test_table")
@@ -38,7 +39,8 @@ def cleanup_test_table(adbc_session: Adbc) -> None:
     ],
 )
 @xfail_if_driver_missing
-def test_driver_insert_returning(adbc_session: Adbc, params: Any, style: ParamStyle) -> None:
+@pytest.mark.xdist_group("duckdb")
+def test_driver_insert_returning(adbc_session: AdbcConfig, params: Any, style: ParamStyle) -> None:
     """Test insert returning functionality with different parameter styles."""
     with adbc_session.provide_session() as driver:
         create_sequence_sql = "CREATE SEQUENCE test_table_id_seq START 1;"
@@ -71,7 +73,8 @@ def test_driver_insert_returning(adbc_session: Adbc, params: Any, style: ParamSt
     ],
 )
 @xfail_if_driver_missing
-def test_driver_select(adbc_session: Adbc, params: Any, style: ParamStyle) -> None:
+@pytest.mark.xdist_group("duckdb")
+def test_driver_select(adbc_session: AdbcConfig, params: Any, style: ParamStyle) -> None:
     """Test select functionality with different parameter styles."""
     with adbc_session.provide_session() as driver:
         # Create test table
@@ -109,7 +112,8 @@ def test_driver_select(adbc_session: Adbc, params: Any, style: ParamStyle) -> No
     ],
 )
 @xfail_if_driver_missing
-def test_driver_select_value(adbc_session: Adbc, params: Any, style: ParamStyle) -> None:
+@pytest.mark.xdist_group("duckdb")
+def test_driver_select_value(adbc_session: AdbcConfig, params: Any, style: ParamStyle) -> None:
     """Test select_value functionality with different parameter styles."""
     with adbc_session.provide_session() as driver:
         # Create test table
@@ -139,7 +143,8 @@ def test_driver_select_value(adbc_session: Adbc, params: Any, style: ParamStyle)
 
 
 @xfail_if_driver_missing
-def test_driver_insert(adbc_session: Adbc) -> None:
+@pytest.mark.xdist_group("duckdb")
+def test_driver_insert(adbc_session: AdbcConfig) -> None:
     """Test insert functionality."""
     with adbc_session.provide_session() as driver:
         # Create test table
@@ -163,7 +168,8 @@ def test_driver_insert(adbc_session: Adbc) -> None:
 
 
 @xfail_if_driver_missing
-def test_driver_select_normal(adbc_session: Adbc) -> None:
+@pytest.mark.xdist_group("duckdb")
+def test_driver_select_normal(adbc_session: AdbcConfig) -> None:
     """Test select functionality."""
     with adbc_session.provide_session() as driver:
         # Create test table
@@ -200,7 +206,8 @@ def test_driver_select_normal(adbc_session: Adbc) -> None:
     ],
 )
 @xfail_if_driver_missing
-def test_param_styles(adbc_session: Adbc, param_style: str) -> None:
+@pytest.mark.xdist_group("duckdb")
+def test_param_styles(adbc_session: AdbcConfig, param_style: str) -> None:
     """Test different parameter styles."""
     with adbc_session.provide_session() as driver:
         # Create test table
@@ -226,3 +233,40 @@ def test_param_styles(adbc_session: Adbc, param_style: str) -> None:
         results = driver.select(select_sql, ("test_name",))
         assert len(results) == 1
         assert results[0]["name"] == "test_name"
+
+
+@xfail_if_driver_missing
+@pytest.mark.xdist_group("duckdb")
+def test_driver_select_arrow(adbc_session: AdbcConfig) -> None:
+    """Test select_arrow functionality for ADBC DuckDB."""
+    with adbc_session.provide_session() as driver:
+        # Create test table
+        create_sequence_sql = "CREATE SEQUENCE test_table_id_seq START 1;"
+        driver.execute_script(create_sequence_sql)
+        sql = """
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY DEFAULT nextval('test_table_id_seq'),
+            name VARCHAR(50)
+        );
+        """
+        driver.execute_script(sql)
+
+        # Insert test record using a known param style ($1 for duckdb)
+        insert_sql = """
+        INSERT INTO test_table (name)
+        VALUES ($1)
+        """
+        driver.insert_update_delete(insert_sql, ("arrow_name",))
+
+        # Select and verify with select_arrow using a known param style
+        select_sql = "SELECT name, id FROM test_table WHERE name = $1"
+        arrow_table = driver.select_arrow(select_sql, ("arrow_name",))
+
+        assert isinstance(arrow_table, pa.Table)
+        assert arrow_table.num_rows == 1
+        assert arrow_table.num_columns == 2
+        # DuckDB should return columns in selected order
+        assert arrow_table.column_names == ["name", "id"]
+        assert arrow_table.column("name").to_pylist() == ["arrow_name"]
+        # Assuming id is 1 for the inserted record
+        assert arrow_table.column("id").to_pylist() == [1]

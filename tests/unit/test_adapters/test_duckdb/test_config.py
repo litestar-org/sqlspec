@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import duckdb
 import pytest
 
-from sqlspec.adapters.duckdb.config import DuckDB, ExtensionConfig, SecretConfig
+from sqlspec.adapters.duckdb.config import DuckDBConfig, ExtensionConfig, SecretConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty
 
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 
-class MockDuckDB(DuckDB):
+class MockDuckDB(DuckDBConfig):
     """Mock implementation of DuckDB for testing."""
 
     def __init__(self, *args: Any, connection: MagicMock | None = None, **kwargs: Any) -> None:
@@ -45,7 +45,7 @@ def mock_duckdb_connection() -> Generator[MagicMock, None, None]:
 
 def test_default_values() -> None:
     """Test default values for DuckDB."""
-    config = DuckDB()
+    config = DuckDBConfig()
     assert config.database == ":memory:"
     assert config.read_only is Empty
     assert config.config == {}
@@ -66,7 +66,7 @@ def test_with_all_values() -> None:
     extensions: list[ExtensionConfig] = [{"name": "test_ext"}]
     secrets: list[SecretConfig] = [{"name": "test_secret", "secret_type": "s3", "value": {"key": "value"}}]
 
-    config = DuckDB(
+    config = DuckDBConfig(
         database="test.db",
         read_only=True,
         config={"setting": "value"},
@@ -91,7 +91,7 @@ def test_with_all_values() -> None:
 
 def test_connection_config_dict() -> None:
     """Test connection_config_dict property."""
-    config = DuckDB(
+    config = DuckDBConfig(
         database="test.db",
         read_only=True,
         config={"setting": "value"},
@@ -116,7 +116,7 @@ def test_create_connection() -> None:
 
 def test_create_connection_error() -> None:
     """Test create_connection method with error."""
-    config = DuckDB(
+    config = DuckDBConfig(
         database="test.db",
         read_only=True,
         config={"setting": "value"},

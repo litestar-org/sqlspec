@@ -18,18 +18,18 @@ if TYPE_CHECKING:
 
 
 __all__ = (
-    "OracleAsync",
-    "OracleAsyncPool",
+    "OracleAsyncConfig",
+    "OracleAsyncPoolConfig",
 )
 
 
 @dataclass
-class OracleAsyncPool(OracleGenericPoolConfig["AsyncConnection", "AsyncConnectionPool"]):
+class OracleAsyncPoolConfig(OracleGenericPoolConfig["AsyncConnection", "AsyncConnectionPool"]):
     """Async Oracle Pool Config"""
 
 
 @dataclass
-class OracleAsync(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionPool", "OracleAsyncDriver"]):
+class OracleAsyncConfig(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionPool", "OracleAsyncDriver"]):
     """Oracle Async database Configuration.
 
     This class provides the base configuration for Oracle database connections, extending
@@ -42,7 +42,7 @@ class OracleAsync(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionPool", 
     options.([2](https://python-oracledb.readthedocs.io/en/latest/user_guide/tuning.html))
     """
 
-    pool_config: "Optional[OracleAsyncPool]" = None
+    pool_config: "Optional[OracleAsyncPoolConfig]" = None
     """Oracle Pool configuration"""
     pool_instance: "Optional[AsyncConnectionPool]" = None
     """Optional pool to use.

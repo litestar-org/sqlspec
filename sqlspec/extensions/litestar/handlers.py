@@ -186,3 +186,28 @@ def pool_provider_maker(
         return cast("PoolT", pool)
 
     return provide_pool
+
+
+def session_provider_maker(
+    session_key: str,
+    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]",
+) -> "Callable[[State,Scope], Awaitable[DriverT]]":
+    """Build the session provider for the database configuration.
+
+    Args:
+        session_key: The dependency key to use for the session within Litestar.
+        config: The database configuration.
+
+    Returns:
+        The generated session provider for the database.
+    """
+
+    async def provide_session(state: "State", scope: "Scope") -> "DriverT":
+        session = get_sqlspec_scope_state(scope, session_key)
+        if session is None:
+            connection = await maybe_async_(config.create_connection)()
+            session = config.driver_type(connection=connection)  # pyright: ignore[reportCallIssue]
+            set_sqlspec_scope_state(scope, session_key, session)
+        return cast("DriverT", session)
+
+    return provide_session

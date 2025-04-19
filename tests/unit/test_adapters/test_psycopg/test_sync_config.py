@@ -9,7 +9,7 @@ import pytest
 from psycopg import Connection
 from psycopg_pool import ConnectionPool
 
-from sqlspec.adapters.psycopg.config import PsycopgSync, PsycopgSyncPool
+from sqlspec.adapters.psycopg.config import PsycopgSyncConfig, PsycopgSyncPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty
 
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 
-class MockPsycopgSync(PsycopgSync):
+class MockPsycopgSync(PsycopgSyncConfig):
     """Mock implementation of PsycopgSync for testing."""
 
     def create_connection(*args: Any, **kwargs: Any) -> Connection:
@@ -56,7 +56,7 @@ def mock_psycopg_connection() -> Generator[MagicMock, None, None]:
 
 def test_default_values() -> None:
     """Test default values for PsycopgSyncPool."""
-    config = PsycopgSyncPool()
+    config = PsycopgSyncPoolConfig()
     assert config.conninfo is Empty
     assert config.kwargs is Empty
     assert config.min_size is Empty
@@ -78,7 +78,7 @@ def test_with_all_values() -> None:
         """Configure connection."""
         pass
 
-    config = PsycopgSyncPool(
+    config = PsycopgSyncPoolConfig(
         conninfo="postgresql://user:pass@localhost:5432/db",
         kwargs={"application_name": "test"},
         min_size=1,
@@ -109,7 +109,7 @@ def test_with_all_values() -> None:
 
 def test_pool_config_dict_with_pool_config() -> None:
     """Test pool_config_dict with pool configuration."""
-    pool_config = PsycopgSyncPool(
+    pool_config = PsycopgSyncPoolConfig(
         conninfo="postgresql://user:pass@localhost:5432/db",
         min_size=1,
         max_size=10,

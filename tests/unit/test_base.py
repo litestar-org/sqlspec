@@ -72,6 +72,14 @@ class MockDatabaseConfig(SyncDatabaseConfig[MockConnection, MockPool, Any]):
 
         return _provide_pool()
 
+    @contextmanager
+    def provide_session(self, *args: Any, **kwargs: Any) -> Generator[MockConnection, None, None]:
+        connection = self.create_connection()
+        try:
+            yield connection
+        finally:
+            connection.close()
+
 
 class MockNonPoolConfig(NoPoolSyncConfig[MockConnection, Any]):
     """Mock database configuration that doesn't support pooling."""
@@ -89,6 +97,14 @@ class MockNonPoolConfig(NoPoolSyncConfig[MockConnection, Any]):
 
     def close_pool(self) -> None:
         pass
+
+    @contextmanager
+    def provide_session(self, *args: Any, **kwargs: Any) -> Generator[MockConnection, None, None]:
+        connection = self.create_connection()
+        try:
+            yield connection
+        finally:
+            connection.close()
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
@@ -111,6 +127,14 @@ class MockAsyncNonPoolConfig(NoPoolAsyncConfig[MockAsyncConnection, Any]):
 
     async def close_pool(self) -> None:
         pass
+
+    @asynccontextmanager
+    async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[MockAsyncConnection, None]:
+        connection = self.create_connection()
+        try:
+            yield connection
+        finally:
+            await connection.close()
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:

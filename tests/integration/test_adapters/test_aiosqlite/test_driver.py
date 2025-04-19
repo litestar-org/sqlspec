@@ -7,22 +7,21 @@ from collections.abc import AsyncGenerator
 from typing import Any, Literal
 
 import pytest
-import pytest_asyncio
 
-from sqlspec.adapters.aiosqlite import Aiosqlite, AiosqliteDriver
+from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from tests.fixtures.sql_utils import create_tuple_or_dict_params, format_sql
 
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest.fixture
 async def aiosqlite_session() -> AsyncGenerator[AiosqliteDriver, None]:
     """Create a SQLite session with a test table.
 
     Returns:
         A configured SQLite session with a test table.
     """
-    adapter = Aiosqlite()
+    adapter = AiosqliteConfig()
     create_table_sql = """
     CREATE TABLE IF NOT EXISTS test_table (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,12 +35,6 @@ async def aiosqlite_session() -> AsyncGenerator[AiosqliteDriver, None]:
         await session.execute_script("DROP TABLE IF EXISTS test_table", None)
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def cleanup_table(aiosqlite_session: AiosqliteDriver) -> None:
-    """Clean up the test table before each test."""
-    await aiosqlite_session.execute_script("DELETE FROM test_table", None)
-
-
 @pytest.mark.parametrize(
     ("params", "style"),
     [
@@ -49,6 +42,7 @@ async def cleanup_table(aiosqlite_session: AiosqliteDriver) -> None:
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
+@pytest.mark.xdist_group("sqlite")
 @pytest.mark.asyncio
 async def test_insert_update_delete_returning(
     aiosqlite_session: AiosqliteDriver, params: Any, style: ParamStyle
@@ -70,20 +64,7 @@ async def test_insert_update_delete_returning(
         assert result is not None
         assert result["name"] == "test_name"
         assert result["id"] is not None
-    else:
-        # Alternative for older SQLite: Insert and then get last row id
-        sql_template = """
-        INSERT INTO test_table (name)
-        VALUES ({})
-        """
-        sql = format_sql(sql_template, ["name"], style, "aiosqlite")
-
-        await aiosqlite_session.insert_update_delete(sql, params)
-
-        # Get the last inserted ID using select_value
-        select_last_id_sql = "SELECT last_insert_rowid()"
-        inserted_id = await aiosqlite_session.select_value(select_last_id_sql)
-        assert inserted_id is not None
+        await aiosqlite_session.execute_script("DELETE FROM test_table")
 
 
 @pytest.mark.parametrize(
@@ -93,6 +74,7 @@ async def test_insert_update_delete_returning(
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
+@pytest.mark.xdist_group("sqlite")
 @pytest.mark.asyncio
 async def test_select(aiosqlite_session: AiosqliteDriver, params: Any, style: ParamStyle) -> None:
     """Test select functionality with different parameter styles."""
@@ -110,6 +92,7 @@ async def test_select(aiosqlite_session: AiosqliteDriver, params: Any, style: Pa
     results = await aiosqlite_session.select(select_sql, empty_params)
     assert len(results) == 1
     assert results[0]["name"] == "test_name"
+    await aiosqlite_session.execute_script("DELETE FROM test_table")
 
 
 @pytest.mark.parametrize(
@@ -119,6 +102,7 @@ async def test_select(aiosqlite_session: AiosqliteDriver, params: Any, style: Pa
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
+@pytest.mark.xdist_group("sqlite")
 @pytest.mark.asyncio
 async def test_select_one(aiosqlite_session: AiosqliteDriver, params: Any, style: ParamStyle) -> None:
     """Test select_one functionality with different parameter styles."""
@@ -141,6 +125,7 @@ async def test_select_one(aiosqlite_session: AiosqliteDriver, params: Any, style
     result = await aiosqlite_session.select_one(sql, select_params)
     assert result is not None
     assert result["name"] == "test_name"
+    await aiosqlite_session.execute_script("DELETE FROM test_table")
 
 
 @pytest.mark.parametrize(
@@ -150,6 +135,7 @@ async def test_select_one(aiosqlite_session: AiosqliteDriver, params: Any, style
         pytest.param({"name": "test_name"}, {"id": 1}, "dict_binds", id="dict_binds"),
     ],
 )
+@pytest.mark.xdist_group("sqlite")
 @pytest.mark.asyncio
 async def test_select_value(
     aiosqlite_session: AiosqliteDriver,
@@ -179,3 +165,4 @@ async def test_select_value(
     test_id_params = create_tuple_or_dict_params([inserted_id], ["id"], style)
     value = await aiosqlite_session.select_value(sql, test_id_params)
     assert value == "test_name"
+    await aiosqlite_session.execute_script("DELETE FROM test_table")

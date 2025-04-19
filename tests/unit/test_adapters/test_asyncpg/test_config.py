@@ -8,14 +8,14 @@ from unittest.mock import MagicMock
 import asyncpg
 import pytest
 
-from sqlspec.adapters.asyncpg import Asyncpg, AsyncpgPool
+from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
 
-class MockAsyncpg(Asyncpg):
+class MockAsyncpg(AsyncpgConfig):
     """Mock implementation of Asyncpg for testing."""
 
     async def create_connection(*args: Any, **kwargs: Any) -> asyncpg.Connection[Any]:
@@ -29,7 +29,7 @@ class MockAsyncpg(Asyncpg):
         return {}
 
 
-class MockAsyncpgPool(AsyncpgPool):
+class MockAsyncpgPool(AsyncpgPoolConfig):
     """Mock implementation of AsyncpgPool for testing."""
 
     def __init__(self, dsn: str, pool_instance: Any | None = None, **kwargs: Any) -> None:
@@ -74,21 +74,21 @@ def mock_asyncpg_connection() -> Generator[MagicMock, None, None]:
 
 def test_default_values() -> None:
     """Test default values for Asyncpg."""
-    config = Asyncpg()
+    config = AsyncpgConfig()
     assert config.pool_config is None
     assert config.pool_instance is None
 
 
 def test_with_all_values() -> None:
     """Test Asyncpg with all values set."""
-    pool_config = AsyncpgPool(
+    pool_config = AsyncpgPoolConfig(
         dsn="postgres://test_user:test_pass@localhost:5432/test_db",
         min_size=1,
         max_size=10,
         max_inactive_connection_lifetime=300.0,
         max_queries=50000,
     )
-    config = Asyncpg(pool_config=pool_config)
+    config = AsyncpgConfig(pool_config=pool_config)
 
     assert config.pool_config == pool_config
     assert config.pool_instance is None
@@ -96,17 +96,17 @@ def test_with_all_values() -> None:
 
 def test_connection_config_dict() -> None:
     """Test connection_config_dict property."""
-    pool_config = AsyncpgPool(
+    pool_config = AsyncpgPoolConfig(
         dsn="postgres://test_user:test_pass@localhost:5432/test_db",
     )
-    config = Asyncpg(pool_config=pool_config)
+    config = AsyncpgConfig(pool_config=pool_config)
     config_dict = config.connection_config_dict
     assert config_dict["dsn"] == "postgres://test_user:test_pass@localhost:5432/test_db"
 
 
 def test_pool_config_dict_with_pool_config() -> None:
     """Test pool_config_dict with pool configuration."""
-    pool_config = AsyncpgPool(
+    pool_config = AsyncpgPoolConfig(
         dsn="postgres://test_user:test_pass@localhost:5432/test_db",
         min_size=1,
         max_size=10,

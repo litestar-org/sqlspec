@@ -5,10 +5,9 @@ from typing import TYPE_CHECKING, Any, Optional, TypeVar, Union
 from asyncpg import Record
 from asyncpg import create_pool as asyncpg_create_pool
 from asyncpg.pool import PoolConnectionProxy
-from typing_extensions import TypeAlias
 
 from sqlspec._serialization import decode_json, encode_json
-from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
+from sqlspec.adapters.asyncpg.driver import AsyncpgConnection, AsyncpgDriver
 from sqlspec.base import AsyncDatabaseConfig, GenericPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
@@ -22,18 +21,16 @@ if TYPE_CHECKING:
 
 
 __all__ = (
-    "Asyncpg",
-    "AsyncpgPool",
+    "AsyncpgConfig",
+    "AsyncpgPoolConfig",
 )
 
 
 T = TypeVar("T")
 
-PgConnection: TypeAlias = "Union[Connection[Any], PoolConnectionProxy[Any]]"
-
 
 @dataclass
-class AsyncpgPool(GenericPoolConfig):
+class AsyncpgPoolConfig(GenericPoolConfig):
     """Configuration for Asyncpg's :class:`Pool <asyncpg.pool.Pool>`.
 
     For details see: https://magicstack.github.io/asyncpg/current/api/index.html#connection-pools
@@ -73,23 +70,25 @@ class AsyncpgPool(GenericPoolConfig):
 
 
 @dataclass
-class Asyncpg(AsyncDatabaseConfig["PgConnection", "Pool", "AsyncpgDriver"]):  # pyright: ignore[reportMissingTypeArgument]
+class AsyncpgConfig(AsyncDatabaseConfig["AsyncpgConnection", "Pool", "AsyncpgDriver"]):  # pyright: ignore[reportMissingTypeArgument]
     """Asyncpg Configuration."""
 
-    pool_config: "Optional[AsyncpgPool]" = None
+    pool_config: "Optional[AsyncpgPoolConfig]" = field(default=None)
     """Asyncpg Pool configuration"""
-    json_deserializer: "Callable[[str], Any]" = decode_json
+    json_deserializer: "Callable[[str], Any]" = field(hash=False, default=decode_json)
     """For dialects that support the :class:`JSON <sqlalchemy.types.JSON>` datatype, this is a Python callable that will
     convert a JSON string to a Python object. By default, this is set to SQLSpec's
     :attr:`decode_json() <sqlspec._serialization.decode_json>` function."""
-    json_serializer: "Callable[[Any], str]" = encode_json
+    json_serializer: "Callable[[Any], str]" = field(hash=False, default=encode_json)
     """For dialects that support the JSON datatype, this is a Python callable that will render a given object as JSON.
     By default, SQLSpec's :attr:`encode_json() <sqlspec._serialization.encode_json>` is used."""
-    connection_type: "type[PgConnection]" = field(init=False, default_factory=lambda: PoolConnectionProxy)
+    connection_type: "type[AsyncpgConnection]" = field(
+        hash=False, init=False, default_factory=lambda: PoolConnectionProxy
+    )
     """Type of the connection object"""
-    driver_type: "type[AsyncpgDriver]" = field(init=False, default_factory=lambda: AsyncpgDriver)  # type: ignore[type-abstract,unused-ignore]
+    driver_type: "type[AsyncpgDriver]" = field(hash=False, init=False, default_factory=lambda: AsyncpgDriver)  # type: ignore[type-abstract,unused-ignore]
     """Type of the driver object"""
-    pool_instance: "Optional[Pool[Any]]" = None
+    pool_instance: "Optional[Pool[Any]]" = field(hash=False, default=None)
     """The connection pool instance. If set, this will be used instead of creating a new pool."""
 
     @property
@@ -174,7 +173,7 @@ class Asyncpg(AsyncDatabaseConfig["PgConnection", "Pool", "AsyncpgDriver"]):  # 
         """
         return self.create_pool()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
 
-    async def create_connection(self) -> "PgConnection":
+    async def create_connection(self) -> "AsyncpgConnection":
         """Create and return a new asyncpg connection.
 
         Returns:

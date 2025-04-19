@@ -1,8 +1,10 @@
+# ruff: noqa: RUF100, PLR0913, A002, DOC201, PLR6301
 """This is a simple wrapper around a few important classes in each library.
 
 This is used to ensure compatibility when one or more of the libraries are installed.
 """
 
+from collections.abc import Iterable, Mapping
 from enum import Enum
 from typing import (
     Any,
@@ -96,7 +98,7 @@ except ImportError:
 
         def validate_python(
             self,
-            object: Any,  # noqa: A002
+            object: Any,
             /,
             *,
             strict: "Optional[bool]" = None,
@@ -127,10 +129,7 @@ try:
 except ImportError:
     import enum
     from collections.abc import Iterable
-    from typing import TYPE_CHECKING, Callable, Optional, Union
-
-    if TYPE_CHECKING:
-        from collections.abc import Iterable
+    from typing import Callable, Optional, Union
 
     @dataclass_transform()
     @runtime_checkable
@@ -174,7 +173,6 @@ except ImportError:
             """Placeholder init"""
 
         def create_instance(self, **kwargs: Any) -> "T":
-            """Placeholder implementation"""
             return cast("T", kwargs)
 
         def update_instance(self, instance: "T", **kwargs: Any) -> "T":
@@ -211,6 +209,22 @@ except ImportError:
         def to_batches(self, batch_size: int) -> Any: ...
         def num_rows(self) -> int: ...
         def num_columns(self) -> int: ...
+        def to_pydict(self) -> dict[str, Any]: ...
+        def to_string(self) -> str: ...
+        def from_arrays(
+            self,
+            arrays: list[Any],
+            names: "Optional[list[str]]" = None,
+            schema: "Optional[Any]" = None,
+            metadata: "Optional[Mapping[str, Any]]" = None,
+        ) -> Any: ...
+        def from_pydict(
+            self,
+            mapping: dict[str, Any],
+            schema: "Optional[Any]" = None,
+            metadata: "Optional[Mapping[str, Any]]" = None,
+        ) -> Any: ...
+        def from_batches(self, batches: Iterable[Any], schema: Optional[Any] = None) -> Any: ...
 
     PYARROW_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 

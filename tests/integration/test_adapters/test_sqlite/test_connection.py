@@ -1,12 +1,15 @@
 """Test SQLite connection configuration."""
 
-from sqlspec.adapters.sqlite.config import Sqlite
+import pytest
+
+from sqlspec.adapters.sqlite.config import SqliteConfig
 
 
+@pytest.mark.xdist_group("sqlite")
 def test_connection() -> None:
     """Test connection components."""
     # Test direct connection
-    config = Sqlite(database=":memory:")
+    config = SqliteConfig(database=":memory:")
 
     with config.provide_connection() as conn:
         assert conn is not None

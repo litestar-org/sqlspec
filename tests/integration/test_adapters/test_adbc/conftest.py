@@ -7,7 +7,7 @@ from typing import Any, Callable, TypeVar, cast
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.adbc import Adbc
+from sqlspec.adapters.adbc import AdbcConfig
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -28,8 +28,8 @@ def xfail_if_driver_missing(func: F) -> F:
 
 
 @pytest.fixture(scope="session")
-def adbc_session(postgres_service: PostgresService) -> Adbc:
+def adbc_session(postgres_service: PostgresService) -> AdbcConfig:
     """Create an ADBC session for PostgreSQL."""
-    return Adbc(
+    return AdbcConfig(
         uri=f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
     )

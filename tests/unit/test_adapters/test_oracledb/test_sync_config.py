@@ -8,14 +8,14 @@ from unittest.mock import MagicMock
 import pytest
 from oracledb import Connection, ConnectionPool
 
-from sqlspec.adapters.oracledb.config import OracleSync, OracleSyncPool
+from sqlspec.adapters.oracledb.config import OracleSyncConfig, OracleSyncPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
 
-class MockOracleSync(OracleSync):
+class MockOracleSync(OracleSyncConfig):
     """Mock implementation of OracleSync for testing."""
 
     def create_connection(*args: Any, **kwargs: Any) -> Connection:
@@ -50,7 +50,7 @@ def mock_oracle_connection() -> Generator[MagicMock, None, None]:
 
 def test_default_values() -> None:
     """Test default values for OracleSync."""
-    config = OracleSync()
+    config = OracleSyncConfig()
     assert config.pool_config is None
     assert config.pool_instance is None
 
@@ -58,10 +58,10 @@ def test_default_values() -> None:
 def test_with_all_values() -> None:
     """Test OracleSync with all values set."""
     mock_pool = MagicMock(spec=ConnectionPool)
-    pool_config = OracleSyncPool(
+    pool_config = OracleSyncPoolConfig(
         pool=mock_pool,
     )
-    config = OracleSync(
+    config = OracleSyncConfig(
         pool_config=pool_config,
     )
 
@@ -72,10 +72,10 @@ def test_with_all_values() -> None:
 def test_connection_config_dict() -> None:
     """Test connection_config_dict property."""
     mock_pool = MagicMock(spec=ConnectionPool)
-    pool_config = OracleSyncPool(
+    pool_config = OracleSyncPoolConfig(
         pool=mock_pool,
     )
-    config = OracleSync(
+    config = OracleSyncConfig(
         pool_config=pool_config,
     )
     config_dict = config.connection_config_dict
@@ -86,7 +86,7 @@ def test_connection_config_dict() -> None:
 def test_pool_config_dict_with_pool_config() -> None:
     """Test pool_config_dict with pool configuration."""
     mock_pool = MagicMock(spec=ConnectionPool)
-    pool_config = OracleSyncPool(
+    pool_config = OracleSyncPoolConfig(
         pool=mock_pool,
     )
     config = MockOracleSync(pool_config=pool_config)

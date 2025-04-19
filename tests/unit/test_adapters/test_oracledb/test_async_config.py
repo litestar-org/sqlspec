@@ -8,14 +8,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from oracledb import AsyncConnection, AsyncConnectionPool
 
-from sqlspec.adapters.oracledb import OracleAsync, OracleAsyncPool
+from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleAsyncPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
 
-class MockOracleAsync(OracleAsync):
+class MockOracleAsync(OracleAsyncConfig):
     """Mock implementation of OracleAsync for testing."""
 
     async def create_connection(*args: Any, **kwargs: Any) -> AsyncConnection:
@@ -53,7 +53,7 @@ def mock_oracle_async_connection() -> Generator[MagicMock, None, None]:
 
 def test_default_values() -> None:
     """Test default values for OracleAsync."""
-    config = OracleAsync()
+    config = OracleAsyncConfig()
     assert config.pool_config is None
     assert config.pool_instance is None
 
@@ -61,10 +61,10 @@ def test_default_values() -> None:
 def test_with_all_values() -> None:
     """Test OracleAsync with all values set."""
     mock_pool = MagicMock(spec=AsyncConnectionPool)
-    pool_config = OracleAsyncPool(
+    pool_config = OracleAsyncPoolConfig(
         pool=mock_pool,
     )
-    config = OracleAsync(
+    config = OracleAsyncConfig(
         pool_config=pool_config,
     )
 
@@ -75,10 +75,10 @@ def test_with_all_values() -> None:
 def test_connection_config_dict() -> None:
     """Test connection_config_dict property."""
     mock_pool = MagicMock(spec=AsyncConnectionPool)
-    pool_config = OracleAsyncPool(
+    pool_config = OracleAsyncPoolConfig(
         pool=mock_pool,
     )
-    config = OracleAsync(
+    config = OracleAsyncConfig(
         pool_config=pool_config,
     )
     config_dict = config.connection_config_dict
@@ -89,7 +89,7 @@ def test_connection_config_dict() -> None:
 def test_pool_config_dict_with_pool_config() -> None:
     """Test pool_config_dict with pool configuration."""
     mock_pool = MagicMock(spec=AsyncConnectionPool)
-    pool_config = OracleAsyncPool(
+    pool_config = OracleAsyncPoolConfig(
         pool=mock_pool,
     )
     config = MockOracleAsync(pool_config=pool_config)

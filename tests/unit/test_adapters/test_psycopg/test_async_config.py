@@ -9,7 +9,7 @@ import pytest
 from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool
 
-from sqlspec.adapters.psycopg.config import PsycopgAsync, PsycopgAsyncPool
+from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgAsyncPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty
 
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 
-class MockPsycopgAsync(PsycopgAsync):
+class MockPsycopgAsync(PsycopgAsyncConfig):
     """Mock implementation of PsycopgAsync for testing."""
 
     async def create_connection(*args: Any, **kwargs: Any) -> AsyncConnection:
@@ -58,7 +58,7 @@ def mock_psycopg_async_connection() -> Generator[MagicMock, None, None]:
 
 def test_default_values() -> None:
     """Test default values for PsycopgAsyncPool."""
-    config = PsycopgAsyncPool()
+    config = PsycopgAsyncPoolConfig()
     assert config.conninfo is Empty
     assert config.kwargs is Empty
     assert config.min_size is Empty
@@ -80,7 +80,7 @@ def test_with_all_values() -> None:
         """Configure connection."""
         pass
 
-    config = PsycopgAsyncPool(
+    config = PsycopgAsyncPoolConfig(
         conninfo="postgresql://user:pass@localhost:5432/db",
         kwargs={"application_name": "test"},
         min_size=1,
@@ -111,7 +111,7 @@ def test_with_all_values() -> None:
 
 def test_pool_config_dict_with_pool_config() -> None:
     """Test pool_config_dict with pool configuration."""
-    pool_config = PsycopgAsyncPool(
+    pool_config = PsycopgAsyncPoolConfig(
         conninfo="postgresql://user:pass@localhost:5432/db",
         min_size=1,
         max_size=10,

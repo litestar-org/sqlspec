@@ -23,6 +23,7 @@ CommitMode = Literal["manual", "autocommit", "autocommit_include_redirect"]
 DEFAULT_COMMIT_MODE: CommitMode = "manual"
 DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
+DEFAULT_SESSION_KEY = "db_session"
 
 
 class SQLSpec(InitPluginProtocol, SQLSpecBase):
@@ -85,7 +86,11 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
             app_config.before_send.append(c.before_send_handler)
             app_config.lifespan.append(c.lifespan_handler)  # pyright: ignore[reportUnknownMemberType]
             app_config.dependencies.update(
-                {c.connection_key: Provide(c.connection_provider), c.pool_key: Provide(c.pool_provider)},
+                {
+                    c.connection_key: Provide(c.connection_provider),
+                    c.pool_key: Provide(c.pool_provider),
+                    c.session_key: Provide(c.session_provider),
+                },
             )
 
         return app_config

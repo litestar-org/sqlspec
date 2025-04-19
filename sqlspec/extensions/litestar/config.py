@@ -12,6 +12,7 @@ from sqlspec.extensions.litestar.handlers import (
     lifespan_handler_maker,
     manual_handler_maker,
     pool_provider_maker,
+    session_provider_maker,
 )
 
 if TYPE_CHECKING:
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
     from sqlspec.base import (
         AsyncConfigT,
         ConnectionT,
+        DriverT,
         PoolT,
         SyncConfigT,
     )
@@ -33,6 +35,7 @@ CommitMode = Literal["manual", "autocommit", "autocommit_include_redirect"]
 DEFAULT_COMMIT_MODE: CommitMode = "manual"
 DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
+DEFAULT_SESSION_KEY = "db_session"
 
 
 @dataclass
@@ -40,11 +43,13 @@ class DatabaseConfig:
     config: "Union[SyncConfigT, AsyncConfigT]" = field()  # type: ignore[valid-type]   # pyright: ignore[reportGeneralTypeIssues]
     connection_key: str = field(default=DEFAULT_CONNECTION_KEY)
     pool_key: str = field(default=DEFAULT_POOL_KEY)
+    session_key: str = field(default=DEFAULT_SESSION_KEY)
     commit_mode: "CommitMode" = field(default=DEFAULT_COMMIT_MODE)
     extra_commit_statuses: "Optional[set[int]]" = field(default=None)
     extra_rollback_statuses: "Optional[set[int]]" = field(default=None)
     connection_provider: "Callable[[State,Scope], Awaitable[ConnectionT]]" = field(init=False, repr=False, hash=False)  # pyright: ignore[reportGeneralTypeIssues]
     pool_provider: "Callable[[State,Scope], Awaitable[PoolT]]" = field(init=False, repr=False, hash=False)  # pyright: ignore[reportGeneralTypeIssues]
+    session_provider: "Callable[[State,Scope], Awaitable[DriverT]]" = field(init=False, repr=False, hash=False)  # pyright: ignore[reportGeneralTypeIssues]
     before_send_handler: "BeforeMessageSendHookHandler" = field(init=False, repr=False, hash=False)
     lifespan_handler: "Callable[[Litestar], AbstractAsyncContextManager[None]]" = field(
         init=False,
@@ -79,3 +84,4 @@ class DatabaseConfig:
         self.lifespan_handler = lifespan_handler_maker(config=self.config, pool_key=self.pool_key)
         self.connection_provider = connection_provider_maker(connection_key=self.connection_key, config=self.config)
         self.pool_provider = pool_provider_maker(pool_key=self.pool_key, config=self.config)
+        self.session_provider = session_provider_maker(session_key=self.session_key, config=self.config)

@@ -8,14 +8,14 @@ from unittest.mock import MagicMock
 import asyncmy  # pyright: ignore
 import pytest
 
-from sqlspec.adapters.asyncmy import Asyncmy, AsyncmyPool
+from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
 
-class MockAsyncmy(Asyncmy):
+class MockAsyncmy(AsyncmyConfig):
     """Mock implementation of Asyncmy for testing."""
 
     async def create_connection(*args: Any, **kwargs: Any) -> asyncmy.Connection:  # pyright: ignore
@@ -29,7 +29,7 @@ class MockAsyncmy(Asyncmy):
         return {}
 
 
-class MockAsyncmyPool(AsyncmyPool):
+class MockAsyncmyPool(AsyncmyPoolConfig):
     """Mock implementation of AsyncmyPool for testing."""
 
     def __init__(self, host: str = "localhost", pool_instance: Any | None = None, **kwargs: Any) -> None:
@@ -74,14 +74,14 @@ def mock_asyncmy_connection() -> Generator[MagicMock, None, None]:
 
 def test_default_values() -> None:
     """Test default values for asyncmy."""
-    config = Asyncmy()
+    config = AsyncmyConfig()
     assert config.pool_config is None
     assert config.pool_instance is None  # pyright: ignore
 
 
 def test_with_all_values() -> None:
     """Test asyncmy with all values set."""
-    pool_config = AsyncmyPool(
+    pool_config = AsyncmyPoolConfig(
         host="localhost",
         port=3306,
         user="test_user",
@@ -90,7 +90,7 @@ def test_with_all_values() -> None:
         minsize=1,
         maxsize=10,
     )
-    config = Asyncmy(pool_config=pool_config)
+    config = AsyncmyConfig(pool_config=pool_config)
 
     assert config.pool_config == pool_config
     assert config.pool_instance is None  # pyright: ignore
@@ -105,14 +105,14 @@ def test_with_all_values() -> None:
 
 def test_connection_config_dict() -> None:
     """Test connection_config_dict property."""
-    pool_config = AsyncmyPool(
+    pool_config = AsyncmyPoolConfig(
         host="localhost",
         port=3306,
         user="test_user",
         password="test_pass",
         database="test_db",
     )
-    config = Asyncmy(pool_config=pool_config)
+    config = AsyncmyConfig(pool_config=pool_config)
     config_dict = config.connection_config_dict
     assert config_dict["host"] == "localhost"
     assert config_dict["port"] == 3306
