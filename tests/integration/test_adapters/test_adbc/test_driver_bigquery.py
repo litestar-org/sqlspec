@@ -15,7 +15,7 @@ from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_m
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def adbc_session(bigquery_service: BigQueryService) -> AdbcConfig:
     """Create an ADBC session for BigQuery."""
     db_kwargs = {
@@ -25,14 +25,6 @@ def adbc_session(bigquery_service: BigQueryService) -> AdbcConfig:
     }
 
     return AdbcConfig(driver_name="adbc_driver_bigquery", db_kwargs=db_kwargs)
-
-
-@pytest.fixture(autouse=True)
-def cleanup_test_table(adbc_session: AdbcConfig) -> None:
-    """Clean up the test table before each test."""
-    with adbc_session.provide_session() as driver:
-        # Using IF EXISTS is generally safer for cleanup
-        driver.execute_script("DROP TABLE IF EXISTS test_table")
 
 
 @pytest.mark.parametrize(
@@ -75,6 +67,7 @@ def test_driver_select(adbc_session: AdbcConfig, params: Any, style: ParamStyle,
         results = driver.select(select_sql, select_params)
         assert len(results) == 1
         assert results[0]["name"] == expected_name
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
 
 
 @pytest.mark.parametrize(
@@ -116,6 +109,7 @@ def test_driver_select_value(adbc_session: AdbcConfig, params: Any, style: Param
         # Select and verify
         value = driver.select_value(select_sql, select_params)
         assert value == expected_name
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
 
 
 @xfail_if_driver_missing
@@ -144,6 +138,7 @@ def test_driver_insert(adbc_session: AdbcConfig) -> None:
         results = driver.select("SELECT name FROM test_table WHERE id = ?", (1,))
         assert len(results) == 1
         assert results[0]["name"] == "test_insert"
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
 
 
 @xfail_if_driver_missing
@@ -170,6 +165,7 @@ def test_driver_select_normal(adbc_session: AdbcConfig) -> None:
         results = driver.select(select_sql, (10,))
         assert len(results) == 1
         assert results[0]["name"] == "test_select_normal"
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
 
 
 @xfail_if_driver_missing
@@ -194,6 +190,7 @@ def test_execute_script_multiple_statements(adbc_session: AdbcConfig) -> None:
 
         value = driver.select_value("SELECT name FROM test_table WHERE id = ?", (1,))
         assert value == "script_test"
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
 
 
 @xfail_if_driver_missing
@@ -227,3 +224,4 @@ def test_driver_select_arrow(adbc_session: AdbcConfig) -> None:
         # Check data irrespective of column order
         assert arrow_table.column("name").to_pylist() == ["arrow_name"]
         assert arrow_table.column("id").to_pylist() == [100]
+        driver.execute_script("DROP TABLE IF EXISTS test_table")

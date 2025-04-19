@@ -17,7 +17,7 @@ from sqlspec.adapters.psycopg import (
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def psycopg_sync_session(postgres_service: PostgresService) -> PsycopgSyncConfig:
     """Create a Psycopg synchronous session.
 
@@ -34,7 +34,7 @@ def psycopg_sync_session(postgres_service: PostgresService) -> PsycopgSyncConfig
     )
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def psycopg_async_session(postgres_service: PostgresService) -> PsycopgAsyncConfig:
     """Create a Psycopg asynchronous session.
 

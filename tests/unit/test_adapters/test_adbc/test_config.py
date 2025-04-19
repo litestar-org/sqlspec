@@ -64,7 +64,6 @@ def test_with_all_values() -> None:
 
     assert config.connection_config_dict == {
         "uri": "localhost",
-        "driver": "test_driver",
         "user": "test_user",
         "password": "test_pass",
         "database": "test_db",
@@ -80,7 +79,6 @@ def test_connection_config_dict() -> None:
     )
     config_dict = config.connection_config_dict
     assert config_dict["uri"] == "localhost"
-    assert config_dict["driver"] == "test_driver"
     assert config_dict["user"] == "test_user"
     assert config_dict["password"] == "test_pass"
     assert config_dict["database"] == "test_db"

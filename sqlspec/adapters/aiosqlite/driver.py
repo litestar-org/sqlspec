@@ -33,7 +33,7 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
         finally:
             await cursor.close()
 
-    def _process_sql_params(  # noqa: PLR6301
+    def _process_sql_params(
         self, sql: str, parameters: "Optional[StatementParameterType]" = None
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
         """Process SQL query and parameters for DB-API execution.

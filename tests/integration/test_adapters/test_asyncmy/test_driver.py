@@ -14,7 +14,7 @@ ParamStyle = Literal["tuple_binds", "dict_binds"]
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def asyncmy_session(mysql_service: MySQLService) -> AsyncmyConfig:
     """Create an Asyncmy asynchronous session.
 

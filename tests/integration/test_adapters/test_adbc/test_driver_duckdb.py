@@ -15,20 +15,12 @@ from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_m
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def adbc_session() -> AdbcConfig:
     """Create an ADBC session for DuckDB using URI."""
     return AdbcConfig(
         uri="duckdb://:memory:",
     )
-
-
-@pytest.fixture(autouse=True)
-def cleanup_test_table(adbc_session: AdbcConfig) -> None:
-    """Clean up the test table before each test."""
-    with adbc_session.provide_session() as driver:
-        driver.execute_script("DROP TABLE IF EXISTS test_table")
-        driver.execute_script("DROP SEQUENCE IF EXISTS test_table_id_seq")
 
 
 @pytest.mark.parametrize(
@@ -63,6 +55,8 @@ def test_driver_insert_returning(adbc_session: AdbcConfig, params: Any, style: P
         assert result is not None
         assert result["name"] == "test_name"
         assert result["id"] is not None
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
+        driver.execute_script("DROP SEQUENCE IF EXISTS test_table_id_seq")
 
 
 @pytest.mark.parametrize(
@@ -102,6 +96,8 @@ def test_driver_select(adbc_session: AdbcConfig, params: Any, style: ParamStyle)
         results = driver.select(select_sql, params)
         assert len(results) == 1
         assert results[0]["name"] == "test_name"
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
+        driver.execute_script("DROP SEQUENCE IF EXISTS test_table_id_seq")
 
 
 @pytest.mark.parametrize(
@@ -140,6 +136,8 @@ def test_driver_select_value(adbc_session: AdbcConfig, params: Any, style: Param
         """ % ("$1" if style == "tuple_binds" else ":name")
         value = driver.select_value(select_sql, params)
         assert value == "test_name"
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
+        driver.execute_script("DROP SEQUENCE IF EXISTS test_table_id_seq")
 
 
 @xfail_if_driver_missing
@@ -165,6 +163,8 @@ def test_driver_insert(adbc_session: AdbcConfig) -> None:
         """
         row_count = driver.insert_update_delete(insert_sql, ("test_name",))
         assert row_count in (0, 1, -1)
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
+        driver.execute_script("DROP SEQUENCE IF EXISTS test_table_id_seq")
 
 
 @xfail_if_driver_missing
@@ -195,6 +195,8 @@ def test_driver_select_normal(adbc_session: AdbcConfig) -> None:
         results = driver.select(select_sql, {"name": "test_name"})
         assert len(results) == 1
         assert results[0]["name"] == "test_name"
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
+        driver.execute_script("DROP SEQUENCE IF EXISTS test_table_id_seq")
 
 
 @pytest.mark.parametrize(
@@ -233,6 +235,8 @@ def test_param_styles(adbc_session: AdbcConfig, param_style: str) -> None:
         results = driver.select(select_sql, ("test_name",))
         assert len(results) == 1
         assert results[0]["name"] == "test_name"
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
+        driver.execute_script("DROP SEQUENCE IF EXISTS test_table_id_seq")
 
 
 @xfail_if_driver_missing
@@ -270,3 +274,5 @@ def test_driver_select_arrow(adbc_session: AdbcConfig) -> None:
         assert arrow_table.column("name").to_pylist() == ["arrow_name"]
         # Assuming id is 1 for the inserted record
         assert arrow_table.column("id").to_pylist() == [1]
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
+        driver.execute_script("DROP SEQUENCE IF EXISTS test_table_id_seq")

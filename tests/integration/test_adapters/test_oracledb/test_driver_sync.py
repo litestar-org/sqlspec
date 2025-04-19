@@ -15,7 +15,7 @@ ParamStyle = Literal["positional_binds", "dict_binds"]
 # --- Sync Fixtures ---
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def oracle_sync_session(oracle_23ai_service: OracleService) -> OracleSyncConfig:
     """Create an Oracle synchronous session."""
     return OracleSyncConfig(
@@ -27,19 +27,6 @@ def oracle_sync_session(oracle_23ai_service: OracleService) -> OracleSyncConfig:
             password=oracle_23ai_service.password,
         )
     )
-
-
-@pytest.fixture(autouse=True)
-def cleanup_sync_table(oracle_sync_session: OracleSyncConfig) -> None:
-    """Clean up the test table after each sync test."""
-    try:
-        with oracle_sync_session.provide_session() as driver:
-            # Use a block to handle potential ORA-00942: table or view does not exist
-            driver.execute_script(
-                "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-            )
-    except Exception:
-        pass
 
 
 # --- Sync Tests ---
@@ -81,6 +68,9 @@ def test_sync_insert_returning(oracle_sync_session: OracleSyncConfig, params: An
         assert result["NAME"] == "test_name"
         assert result["ID"] is not None
         assert isinstance(result["ID"], int)
+        driver.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        )
 
 
 @pytest.mark.parametrize(
@@ -119,6 +109,9 @@ def test_sync_select(oracle_sync_session: OracleSyncConfig, params: Any, style: 
         results = driver.select(select_sql, select_params)
         assert len(results) == 1
         assert results[0]["NAME"] == "test_name"
+        driver.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        )
 
 
 @pytest.mark.parametrize(
@@ -153,6 +146,9 @@ def test_sync_select_value(oracle_sync_session: OracleSyncConfig, params: Any, s
         select_sql = "SELECT 'test_value' FROM dual"
         value = driver.select_value(select_sql)
         assert value == "test_value"
+        driver.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        )
 
 
 @pytest.mark.xdist_group("oracle")
@@ -184,3 +180,6 @@ def test_sync_select_arrow(oracle_sync_session: OracleSyncConfig) -> None:
         # Check ID exists and is a number (exact value depends on IDENTITY)
         assert arrow_table.column("ID").to_pylist()[0] is not None
         assert isinstance(arrow_table.column("ID").to_pylist()[0], (int, float))  # Oracle NUMBER maps to float/Decimal
+        driver.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        )

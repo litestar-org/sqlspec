@@ -14,7 +14,7 @@ from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def adbc_postgres_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
     """Create an ADBC postgres session with a test table.
 

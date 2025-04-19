@@ -14,7 +14,7 @@ from tests.fixtures.sql_utils import create_tuple_or_dict_params, format_placeho
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def duckdb_session() -> Generator[DuckDBDriver, None, None]:
     """Create a DuckDB session with a test table.
 
@@ -35,12 +35,6 @@ def duckdb_session() -> Generator[DuckDBDriver, None, None]:
         # Clean up
         session.execute_script("DROP TABLE IF EXISTS test_table", None)
         session.execute_script("DROP SEQUENCE IF EXISTS test_id_seq", None)
-
-
-@pytest.fixture(autouse=True)
-def cleanup_table(duckdb_session: DuckDBDriver) -> None:
-    """Clean up the test table before each test."""
-    duckdb_session.execute_script("DELETE FROM test_table", None)
 
 
 @pytest.mark.parametrize(
@@ -70,6 +64,7 @@ def test_insert(duckdb_session: DuckDBDriver, params: list[Any], style: ParamSty
     assert len(results) == 1
     assert results[0]["name"] == "test_name"
     assert results[0]["id"] == 1
+    duckdb_session.execute_script("DELETE FROM test_table", None)
 
 
 @pytest.mark.parametrize(
@@ -108,6 +103,7 @@ def test_select(duckdb_session: DuckDBDriver, params: list[Any], style: ParamSty
     result = duckdb_session.select_one(select_where_sql, select_params)
     assert result is not None
     assert result["id"] == 1
+    duckdb_session.execute_script("DELETE FROM test_table", None)
 
 
 @pytest.mark.parametrize(
@@ -137,6 +133,7 @@ def test_select_value(duckdb_session: DuckDBDriver, params: list[Any], style: Pa
     value_params = create_tuple_or_dict_params([1], ["id"], style)
     value = duckdb_session.select_value(value_sql, value_params)
     assert value == "test_name"
+    duckdb_session.execute_script("DELETE FROM test_table", None)
 
 
 @pytest.mark.parametrize(
@@ -169,3 +166,4 @@ def test_select_arrow(duckdb_session: DuckDBDriver, params: list[Any], style: Pa
     assert arrow_table.column_names == ["name", "id"]
     assert arrow_table.column("name").to_pylist() == ["arrow_name"]
     assert arrow_table.column("id").to_pylist() == [1]
+    duckdb_session.execute_script("DELETE FROM test_table", None)

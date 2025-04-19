@@ -180,7 +180,7 @@ class AdbcConfig(NoPoolSyncConfig["Connection", "AdbcDriver"]):
             return connect_func(**self.connection_config_dict)
         except Exception as e:
             # Include driver name in error message for better context
-            driver_name = self.driver_name if isinstance(self.driver_name, str) else "Unknown/Derived"
+            driver_name = self.driver_name if isinstance(self.driver_name, str) else "Unknown/Missing"
             # Use the potentially modified driver_path from _get_connect_func if available,
             # otherwise fallback to self.driver_name for the error message.
             # This requires _get_connect_func to potentially return the used path or store it.

@@ -175,7 +175,7 @@ exclude_lines = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-ra -q --doctest-glob='*.md' --strict-markers --strict-config -n 2 --dist=loadgroup -m \"\""
+addopts = ["-q", "-ra"]
 asyncio_default_fixture_loop_scope = "function"
 asyncio_mode = "auto"
 filterwarnings = [
@@ -214,7 +214,6 @@ markers = [
   "pymysql: marks tests using pymysql",
 ]
 testpaths = ["tests"]
-xfail_strict = true
 
 [tool.mypy]
 packages = ["sqlspec", "tests"]

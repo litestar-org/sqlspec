@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from typing import Any, Literal
 
 import pyarrow as pa
@@ -18,7 +17,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 # --- Async Fixtures ---
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def oracle_async_session(oracle_23ai_service: OracleService) -> OracleAsyncConfig:
     """Create an Oracle asynchronous session."""
     return OracleAsyncConfig(
@@ -30,21 +29,6 @@ def oracle_async_session(oracle_23ai_service: OracleService) -> OracleAsyncConfi
             password=oracle_23ai_service.password,
         )
     )
-
-
-@pytest.fixture(scope="session")
-async def cleanup_async_table(oracle_async_session: OracleAsyncConfig) -> AsyncGenerator[None, None]:
-    """Clean up the test table before/after each async test. (Now mainly for end-of-session)"""
-    # Code before yield runs once before all session tests.
-    yield
-    # Code after yield runs once after all session tests.
-    try:
-        async with oracle_async_session.provide_session() as driver:
-            await driver.execute_script(
-                "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-            )
-    except Exception:
-        pass
 
 
 # --- Async Tests ---
@@ -89,6 +73,9 @@ async def test_async_insert_returning(oracle_async_session: OracleAsyncConfig, p
         assert result["NAME"] == "test_name"
         assert result["ID"] is not None
         assert isinstance(result["ID"], int)
+        await driver.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        )
 
 
 @pytest.mark.parametrize(
@@ -131,6 +118,9 @@ async def test_async_select(oracle_async_session: OracleAsyncConfig, params: Any
         results = await driver.select(select_sql, select_params)
         assert len(results) == 1
         assert results[0]["NAME"] == "test_name"
+        await driver.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        )
 
 
 @pytest.mark.parametrize(
@@ -168,6 +158,9 @@ async def test_async_select_value(oracle_async_session: OracleAsyncConfig, param
         select_sql = "SELECT 'test_value' FROM dual"
         value = await driver.select_value(select_sql)
         assert value == "test_value"
+        await driver.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        )
 
 
 @pytest.mark.xdist_group("oracle")
@@ -203,3 +196,6 @@ async def test_async_select_arrow(oracle_async_session: OracleAsyncConfig) -> No
         # Check ID exists and is a number (exact value depends on IDENTITY)
         assert arrow_table.column("ID").to_pylist()[0] is not None
         assert isinstance(arrow_table.column("ID").to_pylist()[0], (int, float))  # Oracle NUMBER maps to float/Decimal
+        await driver.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        )
