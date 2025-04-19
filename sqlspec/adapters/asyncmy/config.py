@@ -16,8 +16,8 @@ if TYPE_CHECKING:
     from asyncmy.pool import Pool  # pyright: ignore[reportUnknownVariableType]
 
 __all__ = (
-    "Asyncmy",
-    "AsyncmyPool",
+    "AsyncmyConfig",
+    "AsyncmyPoolConfig",
 )
 
 
@@ -25,7 +25,7 @@ T = TypeVar("T")
 
 
 @dataclass
-class AsyncmyPool(GenericPoolConfig):
+class AsyncmyPoolConfig(GenericPoolConfig):
     """Configuration for Asyncmy's connection pool.
 
     This class provides configuration options for Asyncmy database connection pools.
@@ -104,19 +104,19 @@ class AsyncmyPool(GenericPoolConfig):
 
 
 @dataclass
-class Asyncmy(AsyncDatabaseConfig["Connection", "Pool", "AsyncmyDriver"]):
+class AsyncmyConfig(AsyncDatabaseConfig["Connection", "Pool", "AsyncmyDriver"]):
     """Asyncmy Configuration."""
 
     __is_async__ = True
     __supports_connection_pooling__ = True
 
-    pool_config: "Optional[AsyncmyPool]" = None
+    pool_config: "Optional[AsyncmyPoolConfig]" = None
     """Asyncmy Pool configuration"""
-    connection_type: "type[Connection]" = field(init=False, default_factory=lambda: Connection)  # pyright: ignore
+    connection_type: "type[Connection]" = field(hash=False, init=False, default_factory=lambda: Connection)  # pyright: ignore
     """Type of the connection object"""
-    driver_type: "type[AsyncmyDriver]" = field(init=False, default_factory=lambda: AsyncmyDriver)
+    driver_type: "type[AsyncmyDriver]" = field(hash=False, init=False, default_factory=lambda: AsyncmyDriver)
     """Type of the driver object"""
-    pool_instance: "Optional[Pool]" = None  # pyright: ignore[reportUnknownVariableType]
+    pool_instance: "Optional[Pool]" = field(hash=False, default=None)  # pyright: ignore[reportUnknownVariableType]
     """Instance of the pool"""
 
     @property

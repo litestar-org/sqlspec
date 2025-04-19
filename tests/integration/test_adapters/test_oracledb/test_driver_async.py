@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from typing import Any, Literal
 
+import pyarrow as pa
 import pytest
 from pytest_databases.docker.oracle import OracleService
 
-from sqlspec.adapters.oracledb import OracleAsync, OracleAsyncPool
+from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleAsyncPoolConfig
 
 ParamStyle = Literal["positional_binds", "dict_binds"]
 
@@ -17,11 +17,11 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 # --- Async Fixtures ---
 
 
-@pytest.fixture(scope="session")
-def oracle_async_session(oracle_23ai_service: OracleService) -> OracleAsync:
+@pytest.fixture
+def oracle_async_session(oracle_23ai_service: OracleService) -> OracleAsyncConfig:
     """Create an Oracle asynchronous session."""
-    return OracleAsync(
-        pool_config=OracleAsyncPool(
+    return OracleAsyncConfig(
+        pool_config=OracleAsyncPoolConfig(
             host=oracle_23ai_service.host,
             port=oracle_23ai_service.port,
             service_name=oracle_23ai_service.service_name,
@@ -29,21 +29,6 @@ def oracle_async_session(oracle_23ai_service: OracleService) -> OracleAsync:
             password=oracle_23ai_service.password,
         )
     )
-
-
-@pytest.fixture(scope="session")
-async def cleanup_async_table(oracle_async_session: OracleAsync) -> AsyncGenerator[None, None]:
-    """Clean up the test table before/after each async test. (Now mainly for end-of-session)"""
-    # Code before yield runs once before all session tests.
-    yield
-    # Code after yield runs once after all session tests.
-    try:
-        async with oracle_async_session.provide_session() as driver:
-            await driver.execute_script(
-                "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-            )
-    except Exception:
-        pass
 
 
 # --- Async Tests ---
@@ -59,7 +44,8 @@ async def cleanup_async_table(oracle_async_session: OracleAsync) -> AsyncGenerat
 @pytest.mark.skip(
     reason="Oracle does not support RETURNING multiple columns directly in the required syntax for this method."
 )
-async def test_async_insert_returning(oracle_async_session: OracleAsync, params: Any, style: ParamStyle) -> None:
+@pytest.mark.xdist_group("oracle")
+async def test_async_insert_returning(oracle_async_session: OracleAsyncConfig, params: Any, style: ParamStyle) -> None:
     """Test async insert returning functionality with Oracle parameter styles."""
     async with oracle_async_session.provide_session() as driver:
         # Manual cleanup at start of test
@@ -87,6 +73,9 @@ async def test_async_insert_returning(oracle_async_session: OracleAsync, params:
         assert result["NAME"] == "test_name"
         assert result["ID"] is not None
         assert isinstance(result["ID"], int)
+        await driver.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        )
 
 
 @pytest.mark.parametrize(
@@ -96,7 +85,8 @@ async def test_async_insert_returning(oracle_async_session: OracleAsync, params:
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
-async def test_async_select(oracle_async_session: OracleAsync, params: Any, style: ParamStyle) -> None:
+@pytest.mark.xdist_group("oracle")
+async def test_async_select(oracle_async_session: OracleAsyncConfig, params: Any, style: ParamStyle) -> None:
     """Test async select functionality with Oracle parameter styles."""
     async with oracle_async_session.provide_session() as driver:
         # Manual cleanup at start of test
@@ -128,6 +118,9 @@ async def test_async_select(oracle_async_session: OracleAsync, params: Any, styl
         results = await driver.select(select_sql, select_params)
         assert len(results) == 1
         assert results[0]["NAME"] == "test_name"
+        await driver.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        )
 
 
 @pytest.mark.parametrize(
@@ -137,7 +130,8 @@ async def test_async_select(oracle_async_session: OracleAsync, params: Any, styl
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
-async def test_async_select_value(oracle_async_session: OracleAsync, params: Any, style: ParamStyle) -> None:
+@pytest.mark.xdist_group("oracle")
+async def test_async_select_value(oracle_async_session: OracleAsyncConfig, params: Any, style: ParamStyle) -> None:
     """Test async select_value functionality with Oracle parameter styles."""
     async with oracle_async_session.provide_session() as driver:
         # Manual cleanup at start of test
@@ -164,3 +158,44 @@ async def test_async_select_value(oracle_async_session: OracleAsync, params: Any
         select_sql = "SELECT 'test_value' FROM dual"
         value = await driver.select_value(select_sql)
         assert value == "test_value"
+        await driver.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        )
+
+
+@pytest.mark.xdist_group("oracle")
+async def test_async_select_arrow(oracle_async_session: OracleAsyncConfig) -> None:
+    """Test asynchronous select_arrow functionality."""
+    async with oracle_async_session.provide_session() as driver:
+        # Manual cleanup at start of test
+        await driver.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        )
+        sql = """
+        CREATE TABLE test_table (
+            id NUMBER GENERATED BY DEFAULT ON NULL AS IDENTITY PRIMARY KEY,
+            name VARCHAR2(50)
+        )
+        """
+        await driver.execute_script(sql)
+
+        # Insert test record using positional binds
+        insert_sql = "INSERT INTO test_table (name) VALUES (:1)"
+        await driver.insert_update_delete(insert_sql, ("arrow_name",))
+
+        # Select and verify with select_arrow using positional binds
+        select_sql = "SELECT name, id FROM test_table WHERE name = :1"
+        arrow_table = await driver.select_arrow(select_sql, ("arrow_name",))
+
+        assert isinstance(arrow_table, pa.Table)
+        assert arrow_table.num_rows == 1
+        assert arrow_table.num_columns == 2
+        # Oracle returns uppercase column names by default
+        assert arrow_table.column_names == ["NAME", "ID"]
+        assert arrow_table.column("NAME").to_pylist() == ["arrow_name"]
+        # Check ID exists and is a number (exact value depends on IDENTITY)
+        assert arrow_table.column("ID").to_pylist()[0] is not None
+        assert isinstance(arrow_table.column("ID").to_pylist()[0], (int, float))  # Oracle NUMBER maps to float/Decimal
+        await driver.execute_script(
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        )

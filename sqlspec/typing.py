@@ -7,8 +7,10 @@ from typing_extensions import TypeAlias, TypeGuard
 from sqlspec._typing import (
     LITESTAR_INSTALLED,
     MSGSPEC_INSTALLED,
+    PYARROW_INSTALLED,
     PYDANTIC_INSTALLED,
     UNSET,
+    ArrowTable,
     BaseModel,
     DataclassProtocol,
     DTOData,
@@ -486,9 +488,11 @@ def schema_dump(  # noqa: PLR0911
 __all__ = (
     "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
+    "PYARROW_INSTALLED",
     "PYDANTIC_INSTALLED",
     "PYDANTIC_USE_FAILFAST",
     "UNSET",
+    "ArrowTable",
     "BaseModel",
     "DataclassProtocol",
     "Empty",
@@ -539,3 +543,8 @@ if TYPE_CHECKING:
         from sqlspec._typing import UNSET, Struct, UnsetType, convert
     else:
         from msgspec import UNSET, Struct, UnsetType, convert  # noqa: TC004
+
+    if not PYARROW_INSTALLED:
+        from sqlspec._typing import ArrowTable
+    else:
+        from pyarrow import Table as ArrowTable  # noqa: TC004

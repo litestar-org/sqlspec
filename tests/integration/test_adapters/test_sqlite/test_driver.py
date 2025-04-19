@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 import pytest
 
-from sqlspec.adapters.sqlite import Sqlite, SqliteDriver
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from tests.fixtures.sql_utils import create_tuple_or_dict_params, format_placeholder
 
 ParamStyle = Literal["tuple_binds", "dict_binds"]
@@ -21,7 +21,7 @@ def sqlite_session() -> Generator[SqliteDriver, None, None]:
     Returns:
         A configured SQLite session with a test table.
     """
-    adapter = Sqlite()
+    adapter = SqliteConfig()
     create_table_sql = """
     CREATE TABLE IF NOT EXISTS test_table (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,6 +48,7 @@ def cleanup_table(sqlite_session: SqliteDriver) -> None:
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
+@pytest.mark.xdist_group("sqlite")
 def test_insert_update_delete_returning(sqlite_session: SqliteDriver, params: Any, style: ParamStyle) -> None:
     """Test insert_update_delete_returning with different parameter styles."""
     # Check SQLite version for RETURNING support (3.35.0+)
@@ -89,6 +90,7 @@ def test_insert_update_delete_returning(sqlite_session: SqliteDriver, params: An
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
+@pytest.mark.xdist_group("sqlite")
 def test_select(sqlite_session: SqliteDriver, params: Any, style: ParamStyle) -> None:
     """Test select functionality with different parameter styles."""
     # Insert test record
@@ -114,6 +116,7 @@ def test_select(sqlite_session: SqliteDriver, params: Any, style: ParamStyle) ->
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
+@pytest.mark.xdist_group("sqlite")
 def test_select_one(sqlite_session: SqliteDriver, params: Any, style: ParamStyle) -> None:
     """Test select_one functionality with different parameter styles."""
     # Insert test record
@@ -144,6 +147,7 @@ def test_select_one(sqlite_session: SqliteDriver, params: Any, style: ParamStyle
         pytest.param({"name": "test_name"}, {"id": 1}, "dict_binds", id="dict_binds"),
     ],
 )
+@pytest.mark.xdist_group("sqlite")
 def test_select_value(
     sqlite_session: SqliteDriver,
     name_params: Any,

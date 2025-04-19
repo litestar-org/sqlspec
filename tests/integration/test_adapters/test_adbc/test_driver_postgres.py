@@ -5,22 +5,23 @@ from __future__ import annotations
 from collections.abc import Generator
 from typing import Any, Literal
 
+import pyarrow as pa
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.adbc import Adbc, AdbcDriver
+from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def adbc_postgres_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
     """Create an ADBC postgres session with a test table.
 
     Returns:
         A configured ADBC postgres session with a test table.
     """
-    adapter = Adbc(
+    adapter = AdbcConfig(
         uri=f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
     )
     try:
@@ -48,6 +49,7 @@ def adbc_postgres_session(postgres_service: PostgresService) -> Generator[AdbcDr
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
+@pytest.mark.xdist_group("postgres")
 def test_insert_update_delete_returning(adbc_postgres_session: AdbcDriver, params: Any, style: ParamStyle) -> None:
     """Test insert_update_delete_returning with different parameter styles."""
     # Clear table before test
@@ -80,6 +82,7 @@ def test_insert_update_delete_returning(adbc_postgres_session: AdbcDriver, param
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
+@pytest.mark.xdist_group("postgres")
 def test_select(adbc_postgres_session: AdbcDriver, params: Any, style: ParamStyle) -> None:  # pyright: ignore
     """Test select functionality with different parameter styles."""
     # Clear table before test
@@ -111,6 +114,7 @@ def test_select(adbc_postgres_session: AdbcDriver, params: Any, style: ParamStyl
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
+@pytest.mark.xdist_group("postgres")
 def test_select_one(adbc_postgres_session: AdbcDriver, params: Any, style: ParamStyle) -> None:
     """Test select_one functionality with different parameter styles."""
     # Clear table before test
@@ -142,6 +146,7 @@ def test_select_one(adbc_postgres_session: AdbcDriver, params: Any, style: Param
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
+@pytest.mark.xdist_group("postgres")
 def test_select_value(adbc_postgres_session: AdbcDriver, params: Any, style: ParamStyle) -> None:
     """Test select_value functionality with different parameter styles."""
     # Clear table before test
@@ -165,3 +170,32 @@ def test_select_value(adbc_postgres_session: AdbcDriver, params: Any, style: Par
 
     value = adbc_postgres_session.select_value(sql, select_params)
     assert value == "test_name"
+
+
+@pytest.mark.xdist_group("postgres")
+def test_select_arrow(adbc_postgres_session: AdbcDriver) -> None:
+    """Test select_arrow functionality for ADBC Postgres."""
+    # Clear table before test
+    adbc_postgres_session.execute_script("DELETE FROM test_table", None)
+
+    # Insert test record using $1 param style
+    insert_sql = """
+    INSERT INTO test_table (name)
+    VALUES ($1)
+    """
+    adbc_postgres_session.insert_update_delete(insert_sql, ("arrow_name",))
+
+    # Select and verify with select_arrow using $1 param style
+    select_sql = "SELECT name, id FROM test_table WHERE name = $1"
+    arrow_table = adbc_postgres_session.select_arrow(select_sql, ("arrow_name",))
+
+    assert isinstance(arrow_table, pa.Table)
+    assert arrow_table.num_rows == 1
+    assert arrow_table.num_columns == 2
+    # Postgres should return columns in selected order
+    assert arrow_table.column_names == ["name", "id"]
+    assert arrow_table.column("name").to_pylist() == ["arrow_name"]
+    # Assuming id is 1 for the inserted record (check might need adjustment if SERIAL doesn't guarantee 1)
+    # Let's check type and existence instead of exact value
+    assert arrow_table.column("id").to_pylist()[0] is not None
+    assert isinstance(arrow_table.column("id").to_pylist()[0], int)

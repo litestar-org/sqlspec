@@ -1,12 +1,15 @@
 """Test DuckDB connection configuration."""
 
-from sqlspec.adapters.duckdb.config import DuckDB
+import pytest
+
+from sqlspec.adapters.duckdb.config import DuckDBConfig
 
 
+@pytest.mark.xdist_group("duckdb")
 def test_connection() -> None:
     """Test connection components."""
     # Test direct connection
-    config = DuckDB(database=":memory:")
+    config = DuckDBConfig(database=":memory:")
 
     with config.provide_connection() as conn:
         assert conn is not None

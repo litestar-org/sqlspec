@@ -2,14 +2,16 @@ import contextlib
 import re
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
-from adbc_driver_manager.dbapi import Connection, Cursor
+from adbc_driver_manager.dbapi import Connection
+from adbc_driver_manager.dbapi import Cursor as DbapiCursor
 
-from sqlspec.base import SyncDriverAdapterProtocol, T
+from sqlspec._typing import ArrowTable
+from sqlspec.base import SyncArrowBulkOperationsMixin, SyncDriverAdapterProtocol, T
 
 if TYPE_CHECKING:
-    from sqlspec.typing import ModelDTOT, StatementParameterType
+    from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType
 
 __all__ = ("AdbcDriver",)
 
@@ -26,10 +28,11 @@ PARAM_REGEX = re.compile(
 )
 
 
-class AdbcDriver(SyncDriverAdapterProtocol["Connection"]):
+class AdbcDriver(SyncArrowBulkOperationsMixin["Connection"], SyncDriverAdapterProtocol["Connection"]):
     """ADBC Sync Driver Adapter."""
 
     connection: Connection
+    __supports_arrow__: ClassVar[bool] = True
 
     def __init__(self, connection: "Connection") -> None:
         """Initialize the ADBC driver adapter."""
@@ -38,12 +41,12 @@ class AdbcDriver(SyncDriverAdapterProtocol["Connection"]):
         # For now, assume 'qmark' based on typical ADBC DBAPI behavior
 
     @staticmethod
-    def _cursor(connection: "Connection", *args: Any, **kwargs: Any) -> "Cursor":
+    def _cursor(connection: "Connection", *args: Any, **kwargs: Any) -> "DbapiCursor":
         return connection.cursor(*args, **kwargs)
 
     @contextmanager
-    def _with_cursor(self, connection: "Connection") -> Generator["Cursor", None, None]:
-        cursor = self._cursor(connection)
+    def _with_cursor(self, connection: "Connection") -> Generator["DbapiCursor", None, None]:
+        cursor: DbapiCursor = self._cursor(connection)
         try:
             yield cursor
         finally:
@@ -331,3 +334,24 @@ class AdbcDriver(SyncDriverAdapterProtocol["Connection"]):
             if schema_type is not None:
                 return cast("ModelDTOT", schema_type(**dict(zip(column_names, result[0]))))  # pyright: ignore[reportUnknownArgumentType]
             return dict(zip(column_names, result[0]))  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
+
+    # --- Arrow Bulk Operations ---
+
+    def select_arrow(  # pyright: ignore[reportUnknownParameterType]
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        connection: "Optional[Connection]" = None,
+    ) -> "ArrowTable":
+        """Execute a SQL query and return results as an Apache Arrow Table.
+
+        Returns:
+            The results of the query as an Apache Arrow Table.
+        """
+        conn = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters)
+
+        with self._with_cursor(conn) as cursor:
+            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
+            return cast("ArrowTable", cursor.fetch_arrow_table())  # pyright: ignore[reportUnknownMemberType]

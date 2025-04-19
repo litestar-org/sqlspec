@@ -15,11 +15,11 @@ if TYPE_CHECKING:
     from typing import Literal
 
 
-__all__ = ("Aiosqlite",)
+__all__ = ("AiosqliteConfig",)
 
 
 @dataclass
-class Aiosqlite(NoPoolAsyncConfig["Connection", "AiosqliteDriver"]):
+class AiosqliteConfig(NoPoolAsyncConfig["Connection", "AiosqliteDriver"]):
     """Configuration for Aiosqlite database connections.
 
     This class provides configuration options for Aiosqlite database connections, wrapping all parameters

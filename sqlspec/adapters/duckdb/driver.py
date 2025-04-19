@@ -1,24 +1,24 @@
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
-from sqlspec.base import SyncDriverAdapterProtocol, T
+from sqlspec._typing import ArrowTable
+from sqlspec.base import SyncArrowBulkOperationsMixin, SyncDriverAdapterProtocol, T
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
     from duckdb import DuckDBPyConnection
 
-    from sqlspec.typing import ModelDTOT, StatementParameterType
+    from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType
 
 __all__ = ("DuckDBDriver",)
 
 
-class DuckDBDriver(SyncDriverAdapterProtocol["DuckDBPyConnection"]):
+class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDriverAdapterProtocol["DuckDBPyConnection"]):
     """DuckDB Sync Driver Adapter."""
 
     connection: "DuckDBPyConnection"
     use_cursor: bool = True
-    # param_style is inherited from CommonDriverAttributes
 
     def __init__(self, connection: "DuckDBPyConnection", use_cursor: bool = True) -> None:
         self.connection = connection
@@ -80,7 +80,7 @@ class DuckDBDriver(SyncDriverAdapterProtocol["DuckDBPyConnection"]):
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            result = self.check_not_found(result)  #  pyright: ignore
+            result = self.check_not_found(result)  # pyright: ignore
 
             column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             if schema_type is not None:
@@ -124,7 +124,7 @@ class DuckDBDriver(SyncDriverAdapterProtocol["DuckDBPyConnection"]):
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-            result = self.check_not_found(result)  #  pyright: ignore
+            result = self.check_not_found(result)  # pyright: ignore
             if schema_type is None:
                 return result[0]  # pyright: ignore
             return schema_type(result[0])  # type: ignore[call-arg]
@@ -223,3 +223,25 @@ class DuckDBDriver(SyncDriverAdapterProtocol["DuckDBPyConnection"]):
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             return cast("str", getattr(cursor, "statusmessage", "DONE"))  # pyright: ignore[reportUnknownMemberType]
+
+    # --- Arrow Bulk Operations ---
+
+    def select_arrow(  # pyright: ignore[reportUnknownParameterType]
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        connection: "Optional[DuckDBPyConnection]" = None,
+    ) -> "ArrowTable":  # pyright: ignore[reportUnknownVariableType]
+        """Execute a SQL query and return results as an Apache Arrow Table.
+
+        Returns:
+            An Apache Arrow Table containing the query results.
+        """
+
+        conn = self._connection(connection)
+        processed_sql, processed_params = self._process_sql_params(sql, parameters)
+
+        with self._with_cursor(conn) as cursor:
+            cursor.execute(processed_sql, processed_params)  # pyright: ignore[reportUnknownMemberType]
+            return cast("ArrowTable", cursor.fetch_arrow_table())  # pyright: ignore[reportUnknownMemberType]

@@ -1,16 +1,17 @@
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec.adapters.asyncmy import Asyncmy, AsyncmyPool
+from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyPoolConfig
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
+@pytest.mark.xdist_group("mysql")
 async def test_async_connection(mysql_service: MySQLService) -> None:
     """Test async connection components."""
     # Test direct connection
-    async_config = Asyncmy(
-        pool_config=AsyncmyPool(
+    async_config = AsyncmyConfig(
+        pool_config=AsyncmyPoolConfig(
             host=mysql_service.host,
             port=mysql_service.port,
             user=mysql_service.user,
@@ -28,7 +29,7 @@ async def test_async_connection(mysql_service: MySQLService) -> None:
             assert result == (1,)
 
     # Test connection pool
-    pool_config = AsyncmyPool(
+    pool_config = AsyncmyPoolConfig(
         host=mysql_service.host,
         port=mysql_service.port,
         user=mysql_service.user,
@@ -37,7 +38,7 @@ async def test_async_connection(mysql_service: MySQLService) -> None:
         minsize=1,
         maxsize=5,
     )
-    another_config = Asyncmy(pool_config=pool_config)
+    another_config = AsyncmyConfig(pool_config=pool_config)
     pool = await another_config.create_pool()
     assert pool is not None
     try:

@@ -9,13 +9,13 @@ from unittest.mock import MagicMock
 import pytest
 from adbc_driver_manager.dbapi import Connection
 
-from sqlspec.adapters.adbc import Adbc
+from sqlspec.adapters.adbc import AdbcConfig
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
 
-class MockAdbc(Adbc):
+class MockAdbc(AdbcConfig):
     """Mock implementation of ADBC for testing."""
 
     def __init__(self, mock_connection: MagicMock | None = None, **kwargs: Any) -> None:
@@ -50,13 +50,13 @@ def mock_adbc_connection() -> Generator[MagicMock, None, None]:
 
 def test_default_values() -> None:
     """Test default values for ADBC."""
-    config = Adbc()
+    config = AdbcConfig()
     assert config.connection_config_dict == {}  # pyright: ignore
 
 
 def test_with_all_values() -> None:
     """Test ADBC with all values set."""
-    config = Adbc(
+    config = AdbcConfig(
         uri="localhost",
         driver_name="test_driver",
         db_kwargs={"user": "test_user", "password": "test_pass", "database": "test_db"},
@@ -64,7 +64,6 @@ def test_with_all_values() -> None:
 
     assert config.connection_config_dict == {
         "uri": "localhost",
-        "driver": "test_driver",
         "user": "test_user",
         "password": "test_pass",
         "database": "test_db",
@@ -73,14 +72,13 @@ def test_with_all_values() -> None:
 
 def test_connection_config_dict() -> None:
     """Test connection_config_dict property."""
-    config = Adbc(
+    config = AdbcConfig(
         uri="localhost",
         driver_name="test_driver",
         db_kwargs={"user": "test_user", "password": "test_pass", "database": "test_db"},
     )
     config_dict = config.connection_config_dict
     assert config_dict["uri"] == "localhost"
-    assert config_dict["driver"] == "test_driver"
     assert config_dict["user"] == "test_user"
     assert config_dict["password"] == "test_pass"
     assert config_dict["database"] == "test_db"

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
 
 
-__all__ = ("DuckDB", "ExtensionConfig")
+__all__ = ("DuckDBConfig", "ExtensionConfig")
 
 
 class ExtensionConfig(TypedDict):
@@ -69,7 +69,7 @@ class SecretConfig(TypedDict):
 
 
 @dataclass
-class DuckDB(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
+class DuckDBConfig(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
     """Configuration for DuckDB database connections.
 
     This class provides configuration options for DuckDB database connections, wrapping all parameters

@@ -14,11 +14,11 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 
-__all__ = ("Adbc",)
+__all__ = ("AdbcConfig",)
 
 
 @dataclass
-class Adbc(NoPoolSyncConfig["Connection", "AdbcDriver"]):
+class AdbcConfig(NoPoolSyncConfig["Connection", "AdbcDriver"]):
     """Configuration for ADBC connections.
 
     This class provides configuration options for ADBC database connections using the
@@ -55,17 +55,41 @@ class Adbc(NoPoolSyncConfig["Connection", "AdbcDriver"]):
         """
 
         if isinstance(self.driver_name, str):
-            if self.driver_name != "adbc_driver_sqlite.dbapi.connect" and "sqlite" in self.driver_name:
+            if self.driver_name != "adbc_driver_sqlite.dbapi.connect" and self.driver_name in {
+                "sqlite",
+                "sqlite3",
+                "adbc_driver_sqlite",
+            }:
                 self.driver_name = "adbc_driver_sqlite.dbapi.connect"
-            elif self.driver_name != "adbc_driver_duckdb.dbapi.connect" and "duckdb" in self.driver_name:
+            elif self.driver_name != "adbc_driver_duckdb.dbapi.connect" and self.driver_name in {
+                "duckdb",
+                "adbc_driver_duckdb",
+            }:
                 self.driver_name = "adbc_driver_duckdb.dbapi.connect"
-            elif self.driver_name != "adbc_driver_postgresql.dbapi.connect" and "postgres" in self.driver_name:
+            elif self.driver_name != "adbc_driver_postgresql.dbapi.connect" and self.driver_name in {
+                "postgres",
+                "adbc_driver_postgresql",
+                "postgresql",
+                "pg",
+            }:
                 self.driver_name = "adbc_driver_postgresql.dbapi.connect"
-            elif self.driver_name != "adbc_driver_snowflake.dbapi.connect" and "snowflake" in self.driver_name:
+            elif self.driver_name != "adbc_driver_snowflake.dbapi.connect" and self.driver_name in {
+                "snowflake",
+                "adbc_driver_snowflake",
+                "sf",
+            }:
                 self.driver_name = "adbc_driver_snowflake.dbapi.connect"
-            elif self.driver_name != "adbc_driver_bigquery.dbapi.connect" and "bigquery" in self.driver_name:
+            elif self.driver_name != "adbc_driver_bigquery.dbapi.connect" and self.driver_name in {
+                "bigquery",
+                "adbc_driver_bigquery",
+                "bq",
+            }:
                 self.driver_name = "adbc_driver_bigquery.dbapi.connect"
-            elif self.driver_name != "adbc_driver_flightsql.dbapi.connect" and "flightsql" in self.driver_name:
+            elif self.driver_name != "adbc_driver_flightsql.dbapi.connect" and self.driver_name in {
+                "flightsql",
+                "adbc_driver_flightsql",
+                "grpc",
+            }:
                 self.driver_name = "adbc_driver_flightsql.dbapi.connect"
             return self.driver_name
 
@@ -153,11 +177,10 @@ class Adbc(NoPoolSyncConfig["Connection", "AdbcDriver"]):
         """
         try:
             connect_func = self._get_connect_func()
-            _config = self.connection_config_dict
-            return connect_func(**_config)
+            return connect_func(**self.connection_config_dict)
         except Exception as e:
             # Include driver name in error message for better context
-            driver_name = self.driver_name if isinstance(self.driver_name, str) else "Unknown/Derived"
+            driver_name = self.driver_name if isinstance(self.driver_name, str) else "Unknown/Missing"
             # Use the potentially modified driver_path from _get_connect_func if available,
             # otherwise fallback to self.driver_name for the error message.
             # This requires _get_connect_func to potentially return the used path or store it.

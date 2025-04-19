@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sqlspec.adapters.sqlite.config import Sqlite
+from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty
 
@@ -27,7 +27,7 @@ def mock_sqlite_connection() -> Generator[MagicMock, None, None]:
 
 def test_default_values() -> None:
     """Test default values for Sqlite."""
-    config = Sqlite()
+    config = SqliteConfig()
     assert config.database == ":memory:"
     assert config.timeout is Empty
     assert config.detect_types is Empty
@@ -40,7 +40,7 @@ def test_default_values() -> None:
 
 def test_with_all_values() -> None:
     """Test Sqlite with all values set."""
-    config = Sqlite(
+    config = SqliteConfig(
         database="test.db",
         timeout=30.0,
         detect_types=1,
@@ -62,14 +62,14 @@ def test_with_all_values() -> None:
 
 def test_connection_config_dict() -> None:
     """Test connection_config_dict property."""
-    config = Sqlite(database="test.db", timeout=30.0)
+    config = SqliteConfig(database="test.db", timeout=30.0)
     config_dict = config.connection_config_dict
     assert config_dict == {"database": "test.db", "timeout": 30.0}
 
 
 def test_create_connection(mock_sqlite_connection: MagicMock) -> None:
     """Test create_connection method."""
-    config = Sqlite(database="test.db")
+    config = SqliteConfig(database="test.db")
     connection = config.create_connection()
     assert connection is mock_sqlite_connection
 
@@ -77,13 +77,13 @@ def test_create_connection(mock_sqlite_connection: MagicMock) -> None:
 def test_create_connection_error() -> None:
     """Test create_connection raises error on failure."""
     with patch("sqlite3.connect", side_effect=Exception("Test error")):
-        config = Sqlite(database="test.db")
+        config = SqliteConfig(database="test.db")
         with pytest.raises(ImproperConfigurationError, match="Could not configure the SQLite connection"):
             config.create_connection()
 
 
 def test_provide_connection(mock_sqlite_connection: MagicMock) -> None:
     """Test provide_connection context manager."""
-    config = Sqlite(database="test.db")
+    config = SqliteConfig(database="test.db")
     with config.provide_connection() as connection:
         assert connection is mock_sqlite_connection

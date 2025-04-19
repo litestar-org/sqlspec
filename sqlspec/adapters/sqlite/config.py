@@ -12,11 +12,11 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 
-__all__ = ("Sqlite",)
+__all__ = ("SqliteConfig",)
 
 
 @dataclass
-class Sqlite(NoPoolSyncConfig["Connection", "SqliteDriver"]):
+class SqliteConfig(NoPoolSyncConfig["Connection", "SqliteDriver"]):
     """Configuration for SQLite database connections.
 
     This class provides configuration options for SQLite database connections, wrapping all parameters

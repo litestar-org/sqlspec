@@ -16,18 +16,18 @@ if TYPE_CHECKING:
 
 
 __all__ = (
-    "PsycopgSync",
-    "PsycopgSyncPool",
+    "PsycopgSyncConfig",
+    "PsycopgSyncPoolConfig",
 )
 
 
 @dataclass
-class PsycopgSyncPool(PsycopgGenericPoolConfig[Connection, ConnectionPool]):
+class PsycopgSyncPoolConfig(PsycopgGenericPoolConfig[Connection, ConnectionPool]):
     """Sync Psycopg Pool Config"""
 
 
 @dataclass
-class PsycopgSync(SyncDatabaseConfig[Connection, ConnectionPool, PsycopgSyncDriver]):
+class PsycopgSyncConfig(SyncDatabaseConfig[Connection, ConnectionPool, PsycopgSyncDriver]):
     """Sync Psycopg database Configuration.
     This class provides the base configuration for Psycopg database connections, extending
     the generic database configuration with Psycopg-specific settings.([1](https://www.psycopg.org/psycopg3/docs/api/connections.html))
@@ -36,7 +36,7 @@ class PsycopgSync(SyncDatabaseConfig[Connection, ConnectionPool, PsycopgSyncDriv
     with both synchronous and asynchronous connections.([2](https://www.psycopg.org/psycopg3/docs/api/connections.html))
     """
 
-    pool_config: "Optional[PsycopgSyncPool]" = None
+    pool_config: "Optional[PsycopgSyncPoolConfig]" = None
     """Psycopg Pool configuration"""
     pool_instance: "Optional[ConnectionPool]" = None
     """Optional pool to use"""
@@ -70,7 +70,7 @@ class PsycopgSync(SyncDatabaseConfig[Connection, ConnectionPool, PsycopgSyncDriv
                 self.pool_config,
                 exclude_empty=True,
                 convert_nested=False,
-                exclude=pool_only_params.union({"pool_instance", "connection_type", "driver_type"}),
+                exclude=pool_only_params.union({"pool_instance", "connection_type", "driver_type", "open"}),
             )
         msg = "You must provide a 'pool_config' for this adapter."
         raise ImproperConfigurationError(msg)
@@ -87,7 +87,7 @@ class PsycopgSync(SyncDatabaseConfig[Connection, ConnectionPool, PsycopgSyncDriv
                 self.pool_config,
                 exclude_empty=True,
                 convert_nested=False,
-                exclude={"pool_instance", "connection_type", "driver_type"},
+                exclude={"pool_instance", "connection_type", "driver_type", "open"},
             )
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
@@ -127,7 +127,7 @@ class PsycopgSync(SyncDatabaseConfig[Connection, ConnectionPool, PsycopgSyncDriv
             raise ImproperConfigurationError(msg)
 
         pool_config = self.pool_config_dict
-        self.pool_instance = ConnectionPool(**pool_config)
+        self.pool_instance = ConnectionPool(open=False, **pool_config)
         if self.pool_instance is None:  # pyright: ignore[reportUnnecessaryComparison]
             msg = "Could not configure the 'pool_instance'. Please check your configuration."  # type: ignore[unreachable]
             raise ImproperConfigurationError(msg)
@@ -149,7 +149,7 @@ class PsycopgSync(SyncDatabaseConfig[Connection, ConnectionPool, PsycopgSyncDriv
             Connection: A database connection from the pool.
         """
         pool = self.provide_pool(*args, **kwargs)
-        with pool.connection() as connection:
+        with pool, pool.connection() as connection:
             yield connection
 
     @contextmanager

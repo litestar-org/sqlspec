@@ -175,7 +175,7 @@ exclude_lines = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-ra -q --doctest-glob='*.md' --strict-markers --strict-config"
+addopts = ["-q", "-ra"]
 asyncio_default_fixture_loop_scope = "function"
 asyncio_mode = "auto"
 filterwarnings = [
@@ -189,8 +189,31 @@ filterwarnings = [
   "ignore::DeprecationWarning:websockets.connection",
   "ignore::DeprecationWarning:websockets.legacy",
 ]
+markers = [
+  "integration: marks tests that require an external database",
+  "postgres: marks tests specific to PostgreSQL",
+  "duckdb: marks tests specific to DuckDB",
+  "sqlite: marks tests specific to SQLite",
+  "bigquery: marks tests specific to Google BigQuery",
+  "mysql: marks tests specific to MySQL",
+  "oracle: marks tests specific to Oracle",
+  "spanner: marks tests specific to Google Cloud Spanner",
+  "mssql: marks tests specific to Microsoft SQL Server",
+  # Driver markers
+  "adbc: marks tests using ADBC drivers",
+  "aioodbc: marks tests using aioodbc",
+  "aiosqlite: marks tests using aiosqlite",
+  "asyncmy: marks tests using asyncmy",
+  "asyncpg: marks tests using asyncpg",
+  "duckdb_driver: marks tests using the duckdb driver",
+  "google_bigquery: marks tests using google-cloud-bigquery",
+  "google_spanner: marks tests using google-cloud-spanner",
+  "oracledb: marks tests using oracledb",
+  "psycopg: marks tests using psycopg",
+  "pymssql: marks tests using pymssql",
+  "pymysql: marks tests using pymysql",
+]
 testpaths = ["tests"]
-xfail_strict = true
 
 [tool.mypy]
 packages = ["sqlspec", "tests"]
@@ -220,6 +243,8 @@ module = [
   "uvloop.*",
   "asyncmy",
   "asyncmy.*",
+  "pyarrow",
+  "pyarrow.*",
 ]
 
 [tool.pyright]

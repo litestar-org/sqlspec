@@ -16,18 +16,18 @@ if TYPE_CHECKING:
 
 
 __all__ = (
-    "PsycopgAsync",
-    "PsycopgAsyncPool",
+    "PsycopgAsyncConfig",
+    "PsycopgAsyncPoolConfig",
 )
 
 
 @dataclass
-class PsycopgAsyncPool(PsycopgGenericPoolConfig[AsyncConnection, AsyncConnectionPool]):
+class PsycopgAsyncPoolConfig(PsycopgGenericPoolConfig[AsyncConnection, AsyncConnectionPool]):
     """Async Psycopg Pool Config"""
 
 
 @dataclass
-class PsycopgAsync(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPool, PsycopgAsyncDriver]):
+class PsycopgAsyncConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPool, PsycopgAsyncDriver]):
     """Async Psycopg database Configuration.
 
     This class provides the base configuration for Psycopg database connections, extending
@@ -37,7 +37,7 @@ class PsycopgAsync(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPool, Psy
     with both synchronous and asynchronous connections.([2](https://www.psycopg.org/psycopg3/docs/api/connections.html))
     """
 
-    pool_config: "Optional[PsycopgAsyncPool]" = None
+    pool_config: "Optional[PsycopgAsyncPoolConfig]" = None
     """Psycopg Pool configuration"""
     pool_instance: "Optional[AsyncConnectionPool]" = None
     """Optional pool to use"""
@@ -71,7 +71,7 @@ class PsycopgAsync(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPool, Psy
                 self.pool_config,
                 exclude_empty=True,
                 convert_nested=False,
-                exclude=pool_only_params.union({"pool_instance", "connection_type", "driver_type"}),
+                exclude=pool_only_params.union({"pool_instance", "connection_type", "driver_type", "open"}),
             )
         msg = "You must provide a 'pool_config' for this adapter."
         raise ImproperConfigurationError(msg)
@@ -128,7 +128,7 @@ class PsycopgAsync(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPool, Psy
             raise ImproperConfigurationError(msg)
 
         pool_config = self.pool_config_dict
-        self.pool_instance = AsyncConnectionPool(**pool_config)
+        self.pool_instance = AsyncConnectionPool(open=False, **pool_config)
         if self.pool_instance is None:  # pyright: ignore[reportUnnecessaryComparison]
             msg = "Could not configure the 'pool_instance'. Please check your configuration."  # type: ignore[unreachable]
             raise ImproperConfigurationError(msg)
@@ -150,7 +150,7 @@ class PsycopgAsync(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPool, Psy
             AsyncConnection: A database connection from the pool.
         """
         pool = await self.provide_pool(*args, **kwargs)
-        async with pool.connection() as connection:
+        async with pool, pool.connection() as connection:
             yield connection
 
     @asynccontextmanager

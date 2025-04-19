@@ -7,15 +7,15 @@ from typing import Any, Literal
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec.adapters.asyncmy import Asyncmy, AsyncmyPool
+from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyPoolConfig
 
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
-@pytest.fixture(scope="session")
-def asyncmy_session(mysql_service: MySQLService) -> Asyncmy:
+@pytest.fixture
+def asyncmy_session(mysql_service: MySQLService) -> AsyncmyConfig:
     """Create an Asyncmy asynchronous session.
 
     Args:
@@ -24,8 +24,8 @@ def asyncmy_session(mysql_service: MySQLService) -> Asyncmy:
     Returns:
         Configured Asyncmy asynchronous session.
     """
-    return Asyncmy(
-        pool_config=AsyncmyPool(
+    return AsyncmyConfig(
+        pool_config=AsyncmyPoolConfig(
             host=mysql_service.host,
             port=mysql_service.port,
             user=mysql_service.user,
@@ -43,7 +43,8 @@ def asyncmy_session(mysql_service: MySQLService) -> Asyncmy:
     ],
 )
 @pytest.mark.xfail(reason="MySQL/Asyncmy does not support RETURNING clause directly")
-async def test_async_insert_returning(asyncmy_session: Asyncmy, params: Any, style: ParamStyle) -> None:
+@pytest.mark.xdist_group("mysql")
+async def test_async_insert_returning(asyncmy_session: AsyncmyConfig, params: Any, style: ParamStyle) -> None:
     """Test async insert returning functionality with different parameter styles."""
     async with asyncmy_session.provide_session() as driver:
         # Manual cleanup at start of test
@@ -82,7 +83,8 @@ async def test_async_insert_returning(asyncmy_session: Asyncmy, params: Any, sty
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
-async def test_async_select(asyncmy_session: Asyncmy, params: Any, style: ParamStyle) -> None:
+@pytest.mark.xdist_group("mysql")
+async def test_async_select(asyncmy_session: AsyncmyConfig, params: Any, style: ParamStyle) -> None:
     """Test async select functionality with different parameter styles."""
     async with asyncmy_session.provide_session() as driver:
         # Manual cleanup at start of test
@@ -127,7 +129,8 @@ async def test_async_select(asyncmy_session: Asyncmy, params: Any, style: ParamS
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
-async def test_async_select_value(asyncmy_session: Asyncmy, params: Any, style: ParamStyle) -> None:
+@pytest.mark.xdist_group("mysql")
+async def test_async_select_value(asyncmy_session: AsyncmyConfig, params: Any, style: ParamStyle) -> None:
     """Test async select_value functionality with different parameter styles."""
     async with asyncmy_session.provide_session() as driver:
         # Manual cleanup at start of test
@@ -163,7 +166,8 @@ async def test_async_select_value(asyncmy_session: Asyncmy, params: Any, style: 
         assert value == "test_name"
 
 
-async def test_insert(asyncmy_session: Asyncmy) -> None:
+@pytest.mark.xdist_group("mysql")
+async def test_insert(asyncmy_session: AsyncmyConfig) -> None:
     """Test inserting data."""
     async with asyncmy_session.provide_session() as driver:
         # Manual cleanup at start of test
@@ -185,7 +189,8 @@ async def test_insert(asyncmy_session: Asyncmy) -> None:
         assert row_count == 1
 
 
-async def test_select(asyncmy_session: Asyncmy) -> None:
+@pytest.mark.xdist_group("mysql")
+async def test_select(asyncmy_session: AsyncmyConfig) -> None:
     """Test selecting data."""
     async with asyncmy_session.provide_session() as driver:
         # Manual cleanup at start of test

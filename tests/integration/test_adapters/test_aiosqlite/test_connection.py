@@ -2,14 +2,15 @@
 
 import pytest
 
-from sqlspec.adapters.aiosqlite import Aiosqlite
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
 
 
+@pytest.mark.xdist_group("sqlite")
 @pytest.mark.asyncio
 async def test_connection() -> None:
     """Test connection components."""
     # Test direct connection
-    config = Aiosqlite()
+    config = AiosqliteConfig()
 
     async with config.provide_connection() as conn:
         assert conn is not None
