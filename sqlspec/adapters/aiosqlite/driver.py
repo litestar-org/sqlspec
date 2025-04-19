@@ -33,42 +33,15 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
         finally:
             await cursor.close()
 
-    def _process_sql_params(
-        self, sql: str, parameters: "Optional[StatementParameterType]" = None
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Process SQL query and parameters for DB-API execution.
-
-        Converts named parameters (:name) to positional parameters (?) for SQLite.
-
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-
-        Returns:
-            A tuple containing the processed SQL string and the processed parameters.
-        """
-        if not isinstance(parameters, dict) or not parameters:
-            # If parameters are not a dict, or empty dict, assume positional/no params
-            # Let the underlying driver handle tuples/lists directly
-            return sql, parameters
-
-        # Convert named parameters to positional parameters
-        processed_sql = sql
-        processed_params: list[Any] = []
-        for key, value in parameters.items():
-            # Replace :key with ? in the SQL
-            processed_sql = processed_sql.replace(f":{key}", "?")
-            processed_params.append(value)
-
-        return processed_sql, tuple(processed_params)
-
     async def select(
         self,
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "list[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch data from the database.
 
@@ -76,7 +49,7 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
             List of row data as either model instances or dictionaries.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             results = await cursor.fetchall()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
@@ -92,8 +65,10 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
         """Fetch one row from the database.
 
@@ -101,7 +76,7 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
@@ -116,8 +91,10 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch one row from the database.
 
@@ -125,7 +102,7 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
@@ -141,8 +118,10 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[Connection]" = None,
         schema_type: "Optional[type[T]]" = None,
+        **kwargs: Any,
     ) -> "Union[T, Any]":
         """Fetch a single value from the database.
 
@@ -150,7 +129,7 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType]
@@ -164,8 +143,10 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[Connection]" = None,
         schema_type: "Optional[type[T]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
         """Fetch a single value from the database.
 
@@ -173,8 +154,7 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
-
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType]
@@ -189,7 +169,9 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
+        **kwargs: Any,
     ) -> int:
         """Insert, update, or delete data from the database.
 
@@ -197,7 +179,7 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
             Row count affected by the operation.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
@@ -208,8 +190,10 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
         """Insert, update, or delete data from the database and return result.
 
@@ -217,7 +201,7 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
             The first row of results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
@@ -234,7 +218,9 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
+        **kwargs: Any,
     ) -> str:
         """Execute a script.
 
@@ -242,7 +228,7 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
             Status message for the operation.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
@@ -253,8 +239,10 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
         """Execute a script and return result.
 
@@ -262,7 +250,7 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
             The first row of results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]

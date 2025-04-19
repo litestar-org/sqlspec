@@ -1,4 +1,4 @@
-# ruff: noqa: PLR6301
+# ruff: noqa: PLR6301, PLR0912, PLR0915, C901, PLR0911
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable
@@ -16,7 +16,10 @@ from typing import (
     overload,
 )
 
-from sqlspec.exceptions import NotFoundError
+import sqlglot
+from sqlglot import exp
+
+from sqlspec.exceptions import NotFoundError, SQLParsingError
 from sqlspec.typing import ModelDTOT, StatementParameterType
 
 if TYPE_CHECKING:
@@ -456,70 +459,169 @@ class CommonDriverAttributes(Generic[ConnectionT]):
         return sql
 
     def _process_sql_params(
-        self, sql: str, parameters: "Optional[StatementParameterType]" = None
+        self, sql: str, parameters: "Optional[StatementParameterType]" = None, /, **kwargs: Any
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
         """Process SQL query and parameters for DB-API execution.
 
-        Converts named parameters (:name) to positional parameters specified by `self.param_style`
-        if the input parameters are a dictionary.
+        Uses sqlglot to parse named parameters (:name) if parameters is a dictionary,
+        and converts them to the driver's `param_style`.
+        Handles single value parameters by wrapping them in a tuple.
 
         Args:
             sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
+            parameters: The parameters for the query (dict, tuple, list, single value, or None).
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
         Returns:
             A tuple containing the processed SQL string and the processed parameters
-            (always a tuple or None if the input was a dictionary, otherwise the original type).
+            (tuple for named/single params, original list/tuple for positional, None if no params).
 
         Raises:
-            ValueError: If a named parameter in the SQL is not found in the dictionary
-                        or if a parameter in the dictionary is not used in the SQL.
+            ValueError: If parameter validation fails (missing/extra keys for dicts,
+                        mixing named/positional placeholders with dicts).
+            ImportError: If sqlglot is not installed.
         """
-        if not isinstance(parameters, dict) or not parameters:
-            # If parameters are not a dict, or empty dict, assume positional/no params
-            # Let the underlying driver handle tuples/lists directly
+        # 1. Handle None and kwargs
+        if parameters is None and not kwargs:
+            return self._process_sql_statement(sql), None
+
+        # 2. Merge parameters with kwargs if parameters is a dict
+        parameters = {**parameters, **kwargs} if isinstance(parameters, dict) else kwargs if kwargs else parameters
+
+        # 3. Handle dictionary parameters using sqlglot
+        if isinstance(parameters, dict):
+            if not parameters:
+                # Return early for empty dict
+                return self._process_sql_statement(sql), parameters
+
+            # First check if there are any :param style placeholders using regex
+            regex_placeholders = []
+            for match in PARAM_REGEX.finditer(sql):
+                if match.group("dquote") is not None or match.group("squote") is not None:
+                    continue
+                var_name = match.group("var_name")
+                if var_name is not None:
+                    regex_placeholders.append(var_name)
+
+            try:
+                expression = sqlglot.parse_one(sql)
+            except Exception as e:
+                # If sqlglot parsing fails but regex found placeholders, use regex approach
+                if regex_placeholders:
+                    # Use regex approach as fallback
+                    processed_sql = sql
+                    param_values = []
+                    for key, value in parameters.items():
+                        if key in regex_placeholders:
+                            processed_sql = processed_sql.replace(f":{key}", self.param_style)
+                            param_values.append(value)
+
+                    # Validate that all placeholders were found
+                    if len(param_values) != len(regex_placeholders):
+                        msg = f"Not all placeholders found in parameters: {set(regex_placeholders) - set(parameters.keys())}"
+                        raise SQLParsingError(msg) from e
+
+                    return self._process_sql_statement(processed_sql), tuple(param_values)
+
+                msg = f"sqlglot failed to parse SQL: {e}"
+                raise SQLParsingError(msg) from e
+
+            placeholders = list(expression.find_all(exp.Parameter))
+            placeholder_names: list[str] = []
+            has_unnamed = False
+            for p in placeholders:
+                if p.name:
+                    placeholder_names.append(p.name)
+                else:
+                    has_unnamed = True  # Found unnamed placeholder like '?'
+
+            # If sqlglot didn't find any placeholders but regex did, use regex approach
+            if not placeholder_names and regex_placeholders:
+                processed_sql = sql
+                param_values = []
+                for key, value in parameters.items():
+                    if key in regex_placeholders:
+                        processed_sql = processed_sql.replace(f":{key}", self.param_style)
+                        param_values.append(value)
+
+                # Validate that all placeholders were found
+                if len(param_values) != len(regex_placeholders):
+                    msg = (
+                        f"Not all placeholders found in parameters: {set(regex_placeholders) - set(parameters.keys())}"
+                    )
+                    raise SQLParsingError(msg)
+
+                return self._process_sql_statement(processed_sql), tuple(param_values)
+
+            if has_unnamed:
+                msg = "Cannot use dictionary parameters with unnamed placeholders (e.g., '?') in the SQL query."
+                raise SQLParsingError(msg)
+
+            if not placeholder_names:
+                # If no named placeholders found, but dict was provided, raise error.
+                # (We already handled the empty dict case above)
+                msg = "Dictionary parameters provided, but no named placeholders found in the SQL query."
+                raise SQLParsingError(msg)
+
+            # Validation
+            provided_keys = set(parameters.keys())
+            required_keys = set(placeholder_names)
+
+            missing_keys = required_keys - provided_keys
+            if missing_keys:
+                msg = f"Named parameters found in SQL but not provided in parameters dictionary: {missing_keys}"
+                raise SQLParsingError(msg)
+
+            extra_keys = provided_keys - required_keys
+            if extra_keys:
+                msg = f"Parameters provided but not found in SQL: {extra_keys}"
+                raise SQLParsingError(msg)  # Strict check
+
+            # Build ordered tuple of parameters
+            ordered_params = tuple(parameters[name] for name in placeholder_names)
+
+            # Replace :name with self.param_style using regex for safety
+            processed_sql = ""
+            last_end = 0
+            params_iter = iter(placeholder_names)  # Ensure order correctness during replacement
+
+            for match in PARAM_REGEX.finditer(sql):
+                if match.group("dquote") is not None or match.group("squote") is not None:
+                    processed_sql += sql[last_end : match.end()]
+                    last_end = match.end()
+                    continue
+
+                var_name = match.group("var_name")
+                if var_name is None:
+                    processed_sql += sql[last_end : match.end()]
+                    last_end = match.end()
+                    continue
+
+                expected_param = next(params_iter, None)
+                if var_name != expected_param:
+                    msg = f"Internal parameter processing mismatch: Regex found ':{var_name}' but expected ':{expected_param}' based on sqlglot parse order."
+                    raise SQLParsingError(msg)
+
+                # Replace :param with param_style
+                start_replace = match.start("var_name") - 1  # Include the ':'
+                processed_sql += sql[last_end:start_replace] + self.param_style
+                last_end = match.end("var_name")
+
+            processed_sql += sql[last_end:]  # Append remaining part
+
+            final_sql = self._process_sql_statement(processed_sql)
+            return final_sql, ordered_params
+
+        # 4. Handle list/tuple parameters (positional)
+        if isinstance(parameters, (list, tuple)):
+            # Let the underlying driver handle these directly
             return self._process_sql_statement(sql), parameters
 
-        processed_sql = ""
-        processed_params_list: list[Any] = []
-        last_end = 0
-        found_params: set[str] = set()
-
-        for match in PARAM_REGEX.finditer(sql):
-            if match.group("dquote") is not None or match.group("squote") is not None:
-                # Skip placeholders within quotes
-                continue
-
-            var_name = match.group("var_name")
-            if var_name is None:  # Should not happen with the regex, but safeguard
-                continue
-
-            if var_name not in parameters:
-                msg = f"Named parameter ':{var_name}' found in SQL but not provided in parameters dictionary."
-                raise ValueError(msg)
-
-            # Append segment before the placeholder + the leading character + the driver's positional placeholder
-            # The match.start("var_name") -1 includes the character before the ':'
-            processed_sql += sql[last_end : match.start("var_name")] + self.param_style
-            processed_params_list.append(parameters[var_name])
-            found_params.add(var_name)
-            last_end = match.end("var_name")
-
-        # Append the rest of the SQL string
-        processed_sql += sql[last_end:]
-
-        # Check if all provided parameters were used
-        unused_params = set(parameters.keys()) - found_params
-        if unused_params:
-            msg = f"Parameters provided but not found in SQL: {unused_params}"
-            # Depending on desired strictness, this could be a warning or an error
-            # For now, let's raise an error for clarity
-            raise ValueError(msg)
-
-        processed_params = tuple(processed_params_list)
-        # Pass the processed SQL through the driver-specific processor if needed
-        final_sql = self._process_sql_statement(processed_sql)
-        return final_sql, processed_params
+        # 5. Handle single value parameters
+        # If it wasn't None, dict, list, or tuple, it must be a single value
+        processed_params: tuple[Any, ...] = (parameters,)
+        # Assuming single value maps to a single positional placeholder.
+        return self._process_sql_statement(sql), processed_params
 
 
 class SyncArrowBulkOperationsMixin(Generic[ConnectionT]):
@@ -536,7 +638,9 @@ class SyncArrowBulkOperationsMixin(Generic[ConnectionT]):
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
+        **kwargs: Any,
     ) -> "ArrowTable":  # pyright: ignore[reportUnknownReturnType]
         """Execute a SQL query and return results as an Apache Arrow Table.
 
@@ -544,6 +648,7 @@ class SyncArrowBulkOperationsMixin(Generic[ConnectionT]):
             sql: The SQL query string.
             parameters: Parameters for the query.
             connection: Optional connection override.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
         Returns:
             An Apache Arrow Table containing the query results.
@@ -563,8 +668,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
         schema_type: Optional[type[ModelDTOT]] = None,
+        **kwargs: Any,
     ) -> "list[Union[ModelDTOT, dict[str, Any]]]": ...
 
     @abstractmethod
@@ -573,8 +680,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         sql: str,
         parameters: Optional[StatementParameterType] = None,
         /,
+        *,
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
+        **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]": ...
 
     @abstractmethod
@@ -583,8 +692,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         sql: str,
         parameters: Optional[StatementParameterType] = None,
         /,
+        *,
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
+        **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]": ...
 
     @abstractmethod
@@ -593,8 +704,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         sql: str,
         parameters: Optional[StatementParameterType] = None,
         /,
+        *,
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[T]] = None,
+        **kwargs: Any,
     ) -> "Union[Any, T]": ...
 
     @abstractmethod
@@ -603,8 +716,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         sql: str,
         parameters: Optional[StatementParameterType] = None,
         /,
+        *,
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[T]] = None,
+        **kwargs: Any,
     ) -> "Optional[Union[Any, T]]": ...
 
     @abstractmethod
@@ -613,7 +728,9 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         sql: str,
         parameters: Optional[StatementParameterType] = None,
         /,
+        *,
         connection: Optional[ConnectionT] = None,
+        **kwargs: Any,
     ) -> int: ...
 
     @abstractmethod
@@ -622,8 +739,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         sql: str,
         parameters: Optional[StatementParameterType] = None,
         /,
+        *,
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
+        **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]": ...
 
     @abstractmethod
@@ -632,7 +751,9 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         sql: str,
         parameters: Optional[StatementParameterType] = None,
         /,
+        *,
         connection: Optional[ConnectionT] = None,
+        **kwargs: Any,
     ) -> str: ...
 
 
@@ -647,7 +768,9 @@ class AsyncArrowBulkOperationsMixin(Generic[ConnectionT]):
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
+        **kwargs: Any,
     ) -> "ArrowTable":  # pyright: ignore[reportUnknownReturnType]
         """Execute a SQL query and return results as an Apache Arrow Table.
 
@@ -655,6 +778,7 @@ class AsyncArrowBulkOperationsMixin(Generic[ConnectionT]):
             sql: The SQL query string.
             parameters: Parameters for the query.
             connection: Optional connection override.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
         Returns:
             An Apache Arrow Table containing the query results.
@@ -674,8 +798,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "list[Union[ModelDTOT, dict[str, Any]]]": ...
 
     @abstractmethod
@@ -684,8 +810,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]": ...
 
     @abstractmethod
@@ -694,8 +822,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]": ...
 
     @abstractmethod
@@ -704,8 +834,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[T]]" = None,
+        **kwargs: Any,
     ) -> "Union[Any, T]": ...
 
     @abstractmethod
@@ -714,8 +846,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[T]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[Any, T]]": ...
 
     @abstractmethod
@@ -724,7 +858,9 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
+        **kwargs: Any,
     ) -> int: ...
 
     @abstractmethod
@@ -733,8 +869,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]": ...
 
     @abstractmethod
@@ -743,7 +881,9 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
+        **kwargs: Any,
     ) -> str: ...
 
 
