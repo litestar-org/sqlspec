@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator, Awaitable, Generator
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from dataclasses import dataclass, field
 from typing import (
+    TYPE_CHECKING,
     Annotated,
     Any,
     ClassVar,
@@ -19,13 +20,22 @@ from typing import (
 from sqlspec.exceptions import NotFoundError
 from sqlspec.typing import ModelDTOT, StatementParameterType
 
+if TYPE_CHECKING:
+    from pyarrow import Table as ArrowTable
+
 __all__ = (
+    "AsyncArrowBulkOperationsMixin",
     "AsyncDatabaseConfig",
+    "AsyncDriverAdapterProtocol",
+    "CommonDriverAttributes",
     "DatabaseConfigProtocol",
     "GenericPoolConfig",
     "NoPoolAsyncConfig",
     "NoPoolSyncConfig",
+    "SQLSpec",
+    "SyncArrowBulkOperationsMixin",
     "SyncDatabaseConfig",
+    "SyncDriverAdapterProtocol",
 )
 
 T = TypeVar("T")
@@ -333,6 +343,8 @@ class CommonDriverAttributes(Generic[ConnectionT]):
     """The parameter style placeholder supported by the underlying database driver (e.g., '?', '%s')."""
     connection: ConnectionT
     """The connection to the underlying database."""
+    __supports_arrow__: ClassVar[bool] = False
+    """Indicates if the driver supports Apache Arrow operations."""
 
     def _connection(self, connection: "Optional[ConnectionT]" = None) -> "ConnectionT":
         return connection if connection is not None else self.connection
@@ -434,6 +446,52 @@ class CommonDriverAttributes(Generic[ConnectionT]):
         return final_sql, processed_params
 
 
+class SyncArrowBulkOperationsMixin(Generic[ConnectionT]):
+    """Mixin for sync drivers supporting bulk Apache Arrow operations."""
+
+    __supports_arrow__: ClassVar[bool] = True
+
+    @abstractmethod
+    def bulk_select(  # pyright: ignore[reportUnknownParameterType]
+        self,
+        sql: str,
+        parameters: Optional[StatementParameterType] = None,
+        /,
+        connection: Optional[ConnectionT] = None,
+    ) -> "ArrowTable":  # pyright: ignore[reportUnknownReturnType]
+        """Execute a SQL query and return results as an Apache Arrow Table.
+
+        Args:
+            sql: The SQL query string.
+            parameters: Parameters for the query.
+            connection: Optional connection override.
+
+        Returns:
+            An Apache Arrow Table containing the query results.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def bulk_update(
+        self,
+        sql: str,
+        data: "ArrowTable",  # pyright: ignore[reportUnknownParameterType]
+        /,
+        connection: Optional[ConnectionT] = None,
+    ) -> int:
+        """Execute a bulk update/insert/delete operation using data from an Apache Arrow Table.
+
+        Args:
+            sql: The SQL statement template.
+            data: An Apache Arrow Table containing the data for the operation.
+            connection: Optional connection override.
+
+        Returns:
+            The number of rows affected.
+        """
+        raise NotImplementedError
+
+
 class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generic[ConnectionT]):
     connection: ConnectionT
 
@@ -517,6 +575,52 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         /,
         connection: Optional[ConnectionT] = None,
     ) -> str: ...
+
+
+class AsyncArrowBulkOperationsMixin(Generic[ConnectionT]):
+    """Mixin for async drivers supporting bulk Apache Arrow operations."""
+
+    __supports_arrow__: ClassVar[bool] = True
+
+    @abstractmethod
+    async def bulk_select(  # pyright: ignore[reportUnknownParameterType]
+        self,
+        sql: str,
+        parameters: Optional[StatementParameterType] = None,
+        /,
+        connection: Optional[ConnectionT] = None,
+    ) -> "ArrowTable":  # pyright: ignore[reportUnknownReturnType]
+        """Execute a SQL query and return results as an Apache Arrow Table.
+
+        Args:
+            sql: The SQL query string.
+            parameters: Parameters for the query.
+            connection: Optional connection override.
+
+        Returns:
+            An Apache Arrow Table containing the query results.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def bulk_update(
+        self,
+        sql: str,
+        data: "ArrowTable",  # pyright: ignore[reportUnknownParameterType]
+        /,
+        connection: Optional[ConnectionT] = None,
+    ) -> int:
+        """Execute a bulk update/insert/delete operation using data from an Apache Arrow Table.
+
+        Args:
+            sql: The SQL statement template.
+            data: An Apache Arrow Table containing the data for the operation.
+            connection: Optional connection override.
+
+        Returns:
+            The number of rows affected.
+        """
+        raise NotImplementedError
 
 
 class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generic[ConnectionT]):

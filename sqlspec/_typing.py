@@ -198,11 +198,30 @@ EmptyType = Union[Literal[EmptyEnum.EMPTY], UnsetType]
 Empty: Final = EmptyEnum.EMPTY
 
 
+try:
+    from pyarrow import Table as ArrowTable
+
+    PYARROW_INSTALLED = True
+except ImportError:
+
+    @runtime_checkable
+    class ArrowTable(Protocol):  # type: ignore[no-redef]
+        """Placeholder Implementation"""
+
+        def to_batches(self, batch_size: int) -> Any: ...
+        def num_rows(self) -> int: ...
+        def num_columns(self) -> int: ...
+
+    PYARROW_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
+
+
 __all__ = (
     "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
+    "PYARROW_INSTALLED",
     "PYDANTIC_INSTALLED",
     "UNSET",
+    "ArrowTable",
     "BaseModel",
     "DTOData",
     "DataclassProtocol",
