@@ -1,11 +1,11 @@
 from contextlib import contextmanager
 from sqlite3 import Connection, Cursor
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.base import SyncDriverAdapterProtocol, T
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Sequence
 
     from sqlspec.typing import ModelDTOT, StatementParameterType
 
@@ -33,6 +33,29 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         finally:
             cursor.close()
 
+    # --- Public API Methods --- #
+    @overload
+    def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Sequence[dict[str, Any]]": ...
+    @overload
+    def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Sequence[ModelDTOT]": ...
     def select(
         self,
         sql: str,
@@ -42,7 +65,7 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "list[Union[ModelDTOT, dict[str, Any]]]":
+    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch data from the database.
 
         Returns:
@@ -63,6 +86,28 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
                 return [cast("ModelDTOT", schema_type(**dict(zip(column_names, row)))) for row in results]  # pyright: ignore[reportUnknownArgumentType]
             return [dict(zip(column_names, row)) for row in results]  # pyright: ignore[reportUnknownArgumentType]
 
+    @overload
+    def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+    @overload
+    def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
     def select_one(
         self,
         sql: str,
@@ -92,6 +137,28 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
                 return dict(zip(column_names, result))
             return schema_type(**dict(zip(column_names, result)))  # type: ignore[return-value]
 
+    @overload
+    def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[dict[str, Any]]": ...
+    @overload
+    def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Optional[ModelDTOT]": ...
     def select_one_or_none(
         self,
         sql: str,
@@ -122,6 +189,28 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
                 return dict(zip(column_names, result))
             return schema_type(**dict(zip(column_names, result)))  # type: ignore[return-value]
 
+    @overload
+    def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Any": ...
+    @overload
+    def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "T": ...
     def select_value(
         self,
         sql: str,
@@ -150,6 +239,28 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
                 return result[0]
             return schema_type(result[0])  # type: ignore[call-arg]
 
+    @overload
+    def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[Any]": ...
+    @overload
+    def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "Optional[T]": ...
     def select_value_or_none(
         self,
         sql: str,
@@ -203,6 +314,28 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
                 cursor.execute(sql, parameters)
             return cursor.rowcount if hasattr(cursor, "rowcount") else -1
 
+    @overload
+    def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+    @overload
+    def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
     def insert_update_delete_returning(
         self,
         sql: str,
@@ -272,34 +405,3 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
                 cursor.execute(sql, parameters)
 
         return cast("str", cursor.statusmessage) if hasattr(cursor, "statusmessage") else "DONE"  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
-
-    def execute_script_returning(
-        self,
-        sql: str,
-        parameters: Optional["StatementParameterType"] = None,
-        /,
-        *,
-        connection: Optional["Connection"] = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
-        """Execute a script and return result.
-
-        Returns:
-            The first row of results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-
-        with self._with_cursor(connection) as cursor:
-            if not parameters:
-                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
-            else:
-                cursor.execute(sql, parameters)
-            result = cursor.fetchall()
-            if len(result) == 0:
-                return None
-            column_names = [c[0] for c in cursor.description or []]
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result[0]))))
-            return dict(zip(column_names, result[0]))

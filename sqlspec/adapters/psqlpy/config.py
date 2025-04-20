@@ -207,25 +207,17 @@ class PsqlpyConfig(AsyncDatabaseConfig[Connection, ConnectionPool, PsqlpyDriver]
     def create_connection(self) -> "Awaitable[Connection]":
         """Create and return a new, standalone psqlpy connection using the configured parameters.
 
-        Note: This method is not supported by the psqlpy adapter as connection
-        creation is primarily handled via the ConnectionPool.
-        Use `provide_connection` or `provide_session` for pooled connections.
-
         Returns:
             An awaitable that resolves to a new Connection instance.
-
-        Raises:
-            NotImplementedError: This method is not implemented for psqlpy.
         """
 
         async def _create() -> "Connection":
-            # psqlpy does not seem to offer a public API for creating
-            # standalone async connections easily outside the pool context.
-            msg = (
-                "Creating standalone connections is not directly supported by the psqlpy adapter. "
-                "Please use the pool via `provide_connection` or `provide_session`."
-            )
-            raise NotImplementedError(msg)
+            try:
+                async with self.provide_connection() as conn:
+                    return conn
+            except Exception as e:
+                msg = f"Could not configure the psqlpy connection. Error: {e!s}"
+                raise ImproperConfigurationError(msg) from e
 
         return _create()
 

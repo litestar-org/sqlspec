@@ -1,22 +1,18 @@
-"""Litestar DuckLLM
+"""Generating embeddings with Gemini
 
-This example demonstrates how to use the Litestar framework with the DuckLLM extension.
-
-The example uses the `SQLSpec` extension to create a connection to the DuckDB database.
-The `DuckDB` adapter is used to create a connection to the database.
+This example demonstrates how to generate embeddings with Gemini using only DuckDB and the HTTP client extension.
 """
 
 # /// script
 # dependencies = [
 #   "sqlspec[duckdb,performance]",
-#   "litestar[standard]",
 # ]
 # ///
 
 import os
 
 from sqlspec import SQLSpec
-from sqlspec.adapters.duckdb import DuckDB
+from sqlspec.adapters.duckdb import DuckDBConfig
 
 EMBEDDING_MODEL = "gemini-embedding-exp-03-07"
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -26,7 +22,7 @@ API_URL = (
 
 sql = SQLSpec()
 etl_config = sql.add_config(
-    DuckDB(
+    DuckDBConfig(
         extensions=[{"name": "vss"}, {"name": "http_client"}],
         on_connection_create=lambda connection: connection.execute(f"""
             CREATE IF NOT EXISTS MACRO generate_embedding(q) AS (
@@ -52,6 +48,6 @@ etl_config = sql.add_config(
 
 
 if __name__ == "__main__":
-    with sql.get_connection(etl_config) as connection:
-        result = connection.execute("SELECT generate_embedding('example text')")
-        print(result.fetchall())
+    with sql.provide_session(etl_config) as session:
+        result = session.select_one("SELECT generate_embedding('example text')")
+        print(result)
