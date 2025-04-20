@@ -3,18 +3,22 @@ from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
-from sqlspec.base import AsyncDriverAdapterProtocol, T
+from sqlspec.base import AsyncDriverAdapterProtocol
+from sqlspec.mixins import SQLTranslatorMixin
 
 if TYPE_CHECKING:
     from asyncmy import Connection
     from asyncmy.cursors import Cursor
 
-    from sqlspec.typing import ModelDTOT, StatementParameterType
+    from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 __all__ = ("AsyncmyDriver",)
 
 
-class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
+class AsyncmyDriver(
+    SQLTranslatorMixin["Connection"],
+    AsyncDriverAdapterProtocol["Connection"],
+):
     """Asyncmy MySQL/MariaDB Driver Adapter."""
 
     connection: "Connection"

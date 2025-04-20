@@ -7,13 +7,14 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast, overload
 
 from adbc_driver_manager.dbapi import Connection, Cursor
 
-from sqlspec.base import SyncArrowBulkOperationsMixin, SyncDriverAdapterProtocol, T
+from sqlspec.base import SyncDriverAdapterProtocol
 from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
+from sqlspec.mixins import SQLTranslatorMixin, SyncArrowBulkOperationsMixin
 from sqlspec.statement import SQLStatement
 from sqlspec.typing import ArrowTable, StatementParameterType
 
 if TYPE_CHECKING:
-    from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType
+    from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType, T
 
 __all__ = ("AdbcDriver",)
 
@@ -33,7 +34,11 @@ PARAM_REGEX = re.compile(
 )
 
 
-class AdbcDriver(SyncArrowBulkOperationsMixin["Connection"], SyncDriverAdapterProtocol["Connection"]):
+class AdbcDriver(
+    SyncArrowBulkOperationsMixin["Connection"],
+    SQLTranslatorMixin["Connection"],
+    SyncDriverAdapterProtocol["Connection"],
+):
     """ADBC Sync Driver Adapter."""
 
     connection: Connection

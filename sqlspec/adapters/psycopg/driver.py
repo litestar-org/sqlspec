@@ -4,8 +4,9 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from psycopg.rows import dict_row
 
-from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol, T
+from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
 from sqlspec.exceptions import SQLParsingError
+from sqlspec.mixins import SQLTranslatorMixin
 from sqlspec.statement import PARAM_REGEX, SQLStatement
 
 if TYPE_CHECKING:
@@ -13,14 +14,14 @@ if TYPE_CHECKING:
 
     from psycopg import AsyncConnection, Connection
 
-    from sqlspec.typing import ModelDTOT, StatementParameterType
+    from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 logger = logging.getLogger("sqlspec")
 
 __all__ = ("PsycopgAsyncDriver", "PsycopgSyncDriver")
 
 
-class PsycopgParameterParser:
+class PsycopgDriverBase:
     dialect: str
 
     def _process_sql_params(
@@ -76,7 +77,11 @@ class PsycopgParameterParser:
         return processed_sql, processed_params
 
 
-class PsycopgSyncDriver(PsycopgParameterParser, SyncDriverAdapterProtocol["Connection"]):
+class PsycopgSyncDriver(
+    PsycopgDriverBase,
+    SQLTranslatorMixin["Connection"],
+    SyncDriverAdapterProtocol["Connection"],
+):
     """Psycopg Sync Driver Adapter."""
 
     connection: "Connection"
@@ -482,7 +487,11 @@ class PsycopgSyncDriver(PsycopgParameterParser, SyncDriverAdapterProtocol["Conne
             return str(cursor.statusmessage) if cursor.statusmessage is not None else "DONE"
 
 
-class PsycopgAsyncDriver(PsycopgParameterParser, AsyncDriverAdapterProtocol["AsyncConnection"]):
+class PsycopgAsyncDriver(
+    PsycopgDriverBase,
+    SQLTranslatorMixin["AsyncConnection"],
+    AsyncDriverAdapterProtocol["AsyncConnection"],
+):
     """Psycopg Async Driver Adapter."""
 
     connection: "AsyncConnection"

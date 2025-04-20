@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from psqlpy.exceptions import RustPSQLDriverPyBaseError
 
-from sqlspec.base import AsyncDriverAdapterProtocol, T
+from sqlspec.base import AsyncDriverAdapterProtocol
 from sqlspec.exceptions import SQLParsingError
+from sqlspec.mixins import SQLTranslatorMixin
 from sqlspec.statement import PARAM_REGEX, SQLStatement
 
 if TYPE_CHECKING:
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
 
     from psqlpy import Connection, QueryResult
 
-    from sqlspec.typing import ModelDTOT, StatementParameterType
+    from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 __all__ = ("PsqlpyDriver",)
 
@@ -33,7 +34,10 @@ QMARK_REGEX = re.compile(
 logger = logging.getLogger("sqlspec")
 
 
-class PsqlpyDriver(AsyncDriverAdapterProtocol["Connection"]):
+class PsqlpyDriver(
+    SQLTranslatorMixin["Connection"],
+    AsyncDriverAdapterProtocol["Connection"],
+):
     """Psqlpy Postgres Driver Adapter."""
 
     connection: "Connection"

@@ -5,15 +5,14 @@ from litestar.plugins import InitPluginProtocol
 
 from sqlspec.base import (
     AsyncConfigT,
-    ConnectionT,
     DatabaseConfigProtocol,
     DriverT,
-    PoolT,
     SyncConfigT,
 )
 from sqlspec.base import SQLSpec as SQLSpecBase
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.config import DatabaseConfig
+from sqlspec.typing import ConnectionT, PoolT
 
 if TYPE_CHECKING:
     from click import Group

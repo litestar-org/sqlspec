@@ -1,10 +1,6 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Literal, Optional, Union
 
-from sqlspec.base import (
-    ConnectionT,
-    PoolT,
-)
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.handlers import (
     autocommit_handler_maker,
@@ -23,13 +19,9 @@ if TYPE_CHECKING:
     from litestar.datastructures.state import State
     from litestar.types import BeforeMessageSendHookHandler, Scope
 
-    from sqlspec.base import (
-        AsyncConfigT,
-        ConnectionT,
-        DriverT,
-        PoolT,
-        SyncConfigT,
-    )
+    from sqlspec.base import AsyncConfigT, DriverT, SyncConfigT
+    from sqlspec.typing import ConnectionT, PoolT
+
 
 CommitMode = Literal["manual", "autocommit", "autocommit_include_redirect"]
 DEFAULT_COMMIT_MODE: CommitMode = "manual"
