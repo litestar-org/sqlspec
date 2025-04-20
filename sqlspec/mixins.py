@@ -10,7 +10,7 @@ from typing import (
 from sqlglot import parse_one
 from sqlglot.dialects.dialect import DialectType
 
-from sqlspec.exceptions import SQLConversionError
+from sqlspec.exceptions import SQLConversionError, SQLParsingError
 from sqlspec.typing import ConnectionT, StatementParameterType
 
 if TYPE_CHECKING:
@@ -114,26 +114,35 @@ class SQLTranslatorMixin(Generic[ConnectionT]):
 
     dialect: str
 
-    def convert_to_dialect(self, sql: str, to_dialect: DialectType) -> str:
+    def convert_to_dialect(
+        self,
+        sql: str,
+        to_dialect: DialectType = None,
+        pretty: bool = True,
+    ) -> str:
         """Convert a SQL query to a different dialect.
 
         Args:
             sql: The SQL query string to convert.
             to_dialect: The target dialect to convert to.
+            pretty: Whether to pretty-print the SQL query.
 
         Returns:
             The converted SQL query string.
 
         Raises:
-            SQLConversionError: If the conversion fails.
+            SQLParsingError: If the SQL query cannot be parsed.
+            SQLConversionError: If the SQL query cannot be converted to the target dialect.
         """
-
         try:
-            # Parse the SQL query
             parsed = parse_one(sql, dialect=self.dialect)
-
-            # Convert to the target dialect
-            return parsed.sql(dialect=to_dialect, pretty=True)
         except Exception as e:
-            error_msg = f"Failed to convert SQL: {e!s}"
+            error_msg = f"Failed to parse SQL: {e!s}"
+            raise SQLParsingError(error_msg) from e
+        if to_dialect is None:
+            to_dialect = self.dialect
+        try:
+            return parsed.sql(dialect=to_dialect, pretty=pretty)
+        except Exception as e:
+            error_msg = f"Failed to convert SQL to {to_dialect}: {e!s}"
             raise SQLConversionError(error_msg) from e
