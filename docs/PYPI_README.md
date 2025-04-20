@@ -70,7 +70,11 @@ etl_config = sql.add_config(
     )
 )
 with sql.provide_session(etl_config) as session:
-    result = session.select_one("SELECT open_prompt(?)", "Can you write a haiku about DuckDB?", schema_type=ChatMessage)
+    result = session.select_one(
+        "SELECT open_prompt(?)",
+        "Can you write a haiku about DuckDB?",
+        schema_type=ChatMessage
+    )
     print(result) # result is a ChatMessage pydantic model
 ```
 

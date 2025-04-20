@@ -16,6 +16,14 @@ from sqlspec.typing import ConnectionT, StatementParameterType
 if TYPE_CHECKING:
     from sqlspec.typing import ArrowTable
 
+__all__ = (
+    "AsyncArrowBulkOperationsMixin",
+    "AsyncParquetExportMixin",
+    "SQLTranslatorMixin",
+    "SyncArrowBulkOperationsMixin",
+    "SyncParquetExportMixin",
+)
+
 
 class SyncArrowBulkOperationsMixin(Generic[ConnectionT]):
     """Mixin for sync drivers supporting bulk Apache Arrow operations."""
