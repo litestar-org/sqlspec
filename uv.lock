@@ -3693,6 +3693,7 @@ orjson = [
     { name = "orjson" },
 ]
 performance = [
+    { name = "msgspec" },
     { name = "sqlglot", extra = ["rs"] },
 ]
 psqlpy = [
@@ -3834,6 +3835,7 @@ requires-dist = [
     { name = "google-cloud-spanner", marker = "extra == 'spanner'" },
     { name = "litestar", marker = "extra == 'litestar'" },
     { name = "msgspec", marker = "extra == 'msgspec'" },
+    { name = "msgspec", marker = "extra == 'performance'" },
     { name = "oracledb", marker = "extra == 'oracledb'" },
     { name = "orjson", marker = "extra == 'orjson'" },
     { name = "psqlpy", marker = "extra == 'psqlpy'" },
