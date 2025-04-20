@@ -7,6 +7,7 @@ from sqlspec.base import (
     AsyncConfigT,
     ConnectionT,
     DatabaseConfigProtocol,
+    DriverT,
     PoolT,
     SyncConfigT,
 )
@@ -75,6 +76,7 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
                 SQLSpec,
                 ConnectionT,
                 PoolT,
+                DriverT,
                 DatabaseConfig,
                 DatabaseConfigProtocol,
                 SyncConfigT,

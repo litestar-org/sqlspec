@@ -13,11 +13,11 @@ The `DuckDB` adapter is used to create a connection to the database.
 # ]
 # ///
 
-from duckdb import DuckDBPyConnection
 from litestar import Litestar, post
 from msgspec import Struct
 
-from sqlspec.adapters.duckdb import DuckDB
+from sqlspec.adapters.duckdb import DuckDBConfig
+from sqlspec.adapters.duckdb.driver import DuckDBDriver
 from sqlspec.extensions.litestar import SQLSpec
 
 
@@ -26,13 +26,12 @@ class ChatMessage(Struct):
 
 
 @post("/chat", sync_to_thread=True)
-def duckllm_chat(db_connection: DuckDBPyConnection, data: ChatMessage) -> ChatMessage:
-    result = db_connection.execute("SELECT open_prompt(?)", (data.message,)).fetchall()
-    return ChatMessage(message=result[0][0])
+def duckllm_chat(db_session: DuckDBDriver, data: ChatMessage) -> ChatMessage:
+    return db_session.select_one("SELECT open_prompt(?)", data.message, schema_type=ChatMessage)
 
 
 sqlspec = SQLSpec(
-    config=DuckDB(
+    config=DuckDBConfig(
         extensions=[{"name": "open_prompt"}],
         secrets=[
             {

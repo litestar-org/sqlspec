@@ -3,7 +3,7 @@
 
 import logging
 import re
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from psqlpy.exceptions import RustPSQLDriverPyBaseError
 
@@ -12,6 +12,8 @@ from sqlspec.exceptions import SQLParsingError
 from sqlspec.statement import PARAM_REGEX, SQLStatement
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from psqlpy import Connection, QueryResult
 
     from sqlspec.typing import ModelDTOT, StatementParameterType
@@ -52,6 +54,17 @@ class PsqlpyDriver(AsyncDriverAdapterProtocol["Connection"]):
         psqlpy uses $1, $2 style parameters natively.
         This method converts '?' (tuple/list) and ':name' (dict) styles to $n.
         It relies on SQLStatement for initial parameter validation and merging.
+
+        Args:
+            sql: The SQL to process.
+            parameters: The parameters to process.
+            kwargs: Additional keyword arguments.
+
+        Raises:
+            SQLParsingError: If the SQL is invalid.
+
+        Returns:
+            A tuple of the processed SQL and parameters.
         """
         stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
         sql, parameters = stmt.process()
@@ -154,6 +167,29 @@ class PsqlpyDriver(AsyncDriverAdapterProtocol["Connection"]):
 
         return sql, ()
 
+    # --- Public API Methods --- #
+    @overload
+    async def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Sequence[dict[str, Any]]": ...
+    @overload
+    async def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Sequence[ModelDTOT]": ...
     async def select(
         self,
         sql: str,
@@ -163,7 +199,7 @@ class PsqlpyDriver(AsyncDriverAdapterProtocol["Connection"]):
         connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "list[Union[ModelDTOT, dict[str, Any]]]":
+    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         parameters = parameters or []  # psqlpy expects a list/tuple
@@ -171,9 +207,31 @@ class PsqlpyDriver(AsyncDriverAdapterProtocol["Connection"]):
         results: QueryResult = await connection.fetch(sql, parameters=parameters)
 
         if schema_type is None:
-            return cast("list[dict[str, Any]]", results.result())  # type: ignore[return-value]
+            return cast("list[dict[str, Any]]", results.result())
         return results.as_class(as_class=schema_type)
 
+    @overload
+    async def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+    @overload
+    async def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
     async def select_one(
         self,
         sql: str,
@@ -195,6 +253,28 @@ class PsqlpyDriver(AsyncDriverAdapterProtocol["Connection"]):
             return cast("dict[str, Any]", result[0])  # type: ignore[index]
         return result.as_class(as_class=schema_type)[0]
 
+    @overload
+    async def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[dict[str, Any]]": ...
+    @overload
+    async def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Optional[ModelDTOT]": ...
     async def select_one_or_none(
         self,
         sql: str,
@@ -220,6 +300,28 @@ class PsqlpyDriver(AsyncDriverAdapterProtocol["Connection"]):
             return None
         return cast("ModelDTOT", result[0])  # type: ignore[index]
 
+    @overload
+    async def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Any": ...
+    @overload
+    async def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "T": ...
     async def select_value(
         self,
         sql: str,
@@ -240,6 +342,28 @@ class PsqlpyDriver(AsyncDriverAdapterProtocol["Connection"]):
             return value
         return schema_type(value)  # type: ignore[call-arg]
 
+    @overload
+    async def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[Any]": ...
+    @overload
+    async def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "Optional[T]": ...
     async def select_value_or_none(
         self,
         sql: str,
@@ -282,6 +406,28 @@ class PsqlpyDriver(AsyncDriverAdapterProtocol["Connection"]):
         # if no error was raised
         return 1
 
+    @overload
+    async def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+    @overload
+    async def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
     async def insert_update_delete_returning(
         self,
         sql: str,

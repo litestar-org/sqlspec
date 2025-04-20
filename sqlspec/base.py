@@ -3,7 +3,7 @@ import atexit
 import contextlib
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
@@ -296,6 +296,24 @@ class SQLSpec:
         config = self.get_config(name)
         return config.create_connection()
 
+    @overload
+    def get_session(
+        self,
+        name: Union[
+            "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
+            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+        ],
+    ) -> "DriverT": ...
+
+    @overload
+    def get_session(
+        self,
+        name: Union[
+            "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
+            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+        ],
+    ) -> "Awaitable[DriverT]": ...
+
     def get_session(
         self,
         name: Union[
@@ -323,6 +341,28 @@ class SQLSpec:
             return _create_session()
         return cast("DriverT", config.driver_type(connection))  # pyright: ignore
 
+    @overload
+    def provide_connection(
+        self,
+        name: Union[
+            "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
+            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+        ],
+        *args: Any,
+        **kwargs: Any,
+    ) -> "AbstractContextManager[ConnectionT]": ...
+
+    @overload
+    def provide_connection(
+        self,
+        name: Union[
+            "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
+            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+        ],
+        *args: Any,
+        **kwargs: Any,
+    ) -> "AbstractAsyncContextManager[ConnectionT]": ...
+
     def provide_connection(
         self,
         name: Union[
@@ -346,6 +386,28 @@ class SQLSpec:
         """
         config = self.get_config(name)
         return config.provide_connection(*args, **kwargs)
+
+    @overload
+    def provide_session(
+        self,
+        name: Union[
+            "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
+            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+        ],
+        *args: Any,
+        **kwargs: Any,
+    ) -> "AbstractContextManager[DriverT]": ...
+
+    @overload
+    def provide_session(
+        self,
+        name: Union[
+            "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
+            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+        ],
+        *args: Any,
+        **kwargs: Any,
+    ) -> "AbstractAsyncContextManager[DriverT]": ...
 
     def provide_session(
         self,
@@ -404,6 +466,24 @@ class SQLSpec:
         if config.support_connection_pooling:
             return cast("Union[type[PoolT], Awaitable[type[PoolT]]]", config.create_pool())
         return None
+
+    @overload
+    def close_pool(
+        self,
+        name: Union[
+            "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
+            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+        ],
+    ) -> "None": ...
+
+    @overload
+    def close_pool(
+        self,
+        name: Union[
+            "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
+            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+        ],
+    ) -> "Awaitable[None]": ...
 
     def close_pool(
         self,
@@ -513,6 +593,32 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     def __init__(self, connection: "ConnectionT", **kwargs: Any) -> None:
         self.connection = connection
 
+    @overload
+    @abstractmethod
+    def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Sequence[dict[str, Any]]": ...
+
+    @overload
+    @abstractmethod
+    def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Sequence[ModelDTOT]": ...
+
     @abstractmethod
     def select(
         self,
@@ -523,7 +629,33 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         connection: "Optional[ConnectionT]" = None,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
-    ) -> "list[Union[ModelDTOT, dict[str, Any]]]": ...
+    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]": ...
+
+    @overload
+    @abstractmethod
+    def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+
+    @overload
+    @abstractmethod
+    def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
 
     @abstractmethod
     def select_one(
@@ -537,6 +669,32 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]": ...
 
+    @overload
+    @abstractmethod
+    def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[dict[str, Any]]": ...
+
+    @overload
+    @abstractmethod
+    def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Optional[ModelDTOT]": ...
+
     @abstractmethod
     def select_one_or_none(
         self,
@@ -549,6 +707,32 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]": ...
 
+    @overload
+    @abstractmethod
+    def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Any": ...
+
+    @overload
+    @abstractmethod
+    def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "T": ...
+
     @abstractmethod
     def select_value(
         self,
@@ -559,7 +743,33 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[T]] = None,
         **kwargs: Any,
-    ) -> "Union[Any, T]": ...
+    ) -> "Union[T, Any]": ...
+
+    @overload
+    @abstractmethod
+    def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[Any]": ...
+
+    @overload
+    @abstractmethod
+    def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "Optional[T]": ...
 
     @abstractmethod
     def select_value_or_none(
@@ -571,7 +781,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[T]] = None,
         **kwargs: Any,
-    ) -> "Optional[Union[Any, T]]": ...
+    ) -> "Optional[Union[T, Any]]": ...
 
     @abstractmethod
     def insert_update_delete(
@@ -584,6 +794,32 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         **kwargs: Any,
     ) -> int: ...
 
+    @overload
+    @abstractmethod
+    def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+
+    @overload
+    @abstractmethod
+    def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
+
     @abstractmethod
     def insert_update_delete_returning(
         self,
@@ -594,7 +830,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]": ...
+    ) -> "Union[ModelDTOT, dict[str, Any]]": ...
 
     @abstractmethod
     def execute_script(
@@ -643,6 +879,32 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     def __init__(self, connection: "ConnectionT") -> None:
         self.connection = connection
 
+    @overload
+    @abstractmethod
+    async def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Sequence[dict[str, Any]]": ...
+
+    @overload
+    @abstractmethod
+    async def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Sequence[ModelDTOT]": ...
+
     @abstractmethod
     async def select(
         self,
@@ -653,7 +915,33 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "list[Union[ModelDTOT, dict[str, Any]]]": ...
+    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]": ...
+
+    @overload
+    @abstractmethod
+    async def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+
+    @overload
+    @abstractmethod
+    async def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
 
     @abstractmethod
     async def select_one(
@@ -667,6 +955,32 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]": ...
 
+    @overload
+    @abstractmethod
+    async def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[dict[str, Any]]": ...
+
+    @overload
+    @abstractmethod
+    async def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Optional[ModelDTOT]": ...
+
     @abstractmethod
     async def select_one_or_none(
         self,
@@ -679,6 +993,32 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]": ...
 
+    @overload
+    @abstractmethod
+    async def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Any": ...
+
+    @overload
+    @abstractmethod
+    async def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "T": ...
+
     @abstractmethod
     async def select_value(
         self,
@@ -689,7 +1029,33 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
-    ) -> "Union[Any, T]": ...
+    ) -> "Union[T, Any]": ...
+
+    @overload
+    @abstractmethod
+    async def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[Any]": ...
+
+    @overload
+    @abstractmethod
+    async def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "Optional[T]": ...
 
     @abstractmethod
     async def select_value_or_none(
@@ -701,7 +1067,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
-    ) -> "Optional[Union[Any, T]]": ...
+    ) -> "Optional[Union[T, Any]]": ...
 
     @abstractmethod
     async def insert_update_delete(
@@ -714,6 +1080,32 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         **kwargs: Any,
     ) -> int: ...
 
+    @overload
+    @abstractmethod
+    async def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+
+    @overload
+    @abstractmethod
+    async def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[ConnectionT]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
+
     @abstractmethod
     async def insert_update_delete_returning(
         self,
@@ -724,7 +1116,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]": ...
+    ) -> "Union[ModelDTOT, dict[str, Any]]": ...
 
     @abstractmethod
     async def execute_script(

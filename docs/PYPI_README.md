@@ -22,6 +22,144 @@ SQLSpec is an experimental Python library designed to streamline and modernize y
 
 SQLSpec is a work in progress. While it offers a solid foundation for modern SQL interactions, it does not yet include every feature you might find in a mature ORM or database toolkit. The focus is on building a robust, flexible core that can be extended over time.
 
+## Examples
+
+We've talked about what SQLSpec is not, so let's look at what it can do.
+
+### Basic Example
+
+### Multiple Database Engines
+
+### Examples, Bells and Whistles
+
+Let's take a look at a few alternate examples that leverage DuckDB and Litestar.
+
+#### DuckDB LLM
+
+This is a quick implementation using some of the built in Secret and Extension management features of SQLSpec's DuckDB integration.
+
+It allows you to communicate with any compatible OpenAPI conversations endpoint (such as Ollama).  This examples:
+
+- auto installs the `open_prompt` DuckDB extensions
+- automatically creates the correct `open_prompt` comptaible secret required to use the extension
+
+```py
+# /// script
+# dependencies = [
+#   "sqlspec[duckdb,performance]",
+# ]
+# ///
+import os
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.duckdb import DuckDBConfig
+
+sql = SQLSpec()
+etl_config = sql.add_config(
+    DuckDBConfig(
+        extensions=[{"name": "open_prompt"}],
+        secrets=[
+            {
+                "secret_type": "open_prompt",
+                "name": "open_prompt",
+                "value": {
+                    "api_url": "http://127.0.0.1:11434/v1/chat/completions",
+                    "model_name": "gemma3:1b",
+                    "api_timeout": "120",
+                },
+            }
+        ],
+    )
+)
+with sql.provide_session(etl_config) as session:
+    result = session.select_one("SELECT generate_embedding('example text')")
+    print(result)
+```
+
+#### DuckDB Gemini Embeddings
+
+In this example, we are again using DuckDB.  However, we are going to use the built in to call the Google Gemini embeddings service directly from the database.
+
+This example will
+
+- auto installs the `http_client` and `vss` (vector similarity search) DuckDB extensions
+- when a connection is created, it ensures that the `generate_embeddings` macro exists in the DuckDB database.
+- Execute a simple query to call the Google API
+
+```py
+# /// script
+# dependencies = [
+#   "sqlspec[duckdb,performance]",
+# ]
+# ///
+import os
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.duckdb import DuckDBConfig
+
+EMBEDDING_MODEL = "gemini-embedding-exp-03-07"
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+API_URL = (
+    f"https://generativelanguage.googleapis.com/v1beta/models/{EMBEDDING_MODEL}:embedContent?key=${GOOGLE_API_KEY}"
+)
+
+sql = SQLSpec()
+etl_config = sql.add_config(
+    DuckDBConfig(
+        extensions=[{"name": "vss"}, {"name": "http_client"}],
+        on_connection_create=lambda connection: connection.execute(f"""
+            CREATE IF NOT EXISTS MACRO generate_embedding(q) AS (
+                WITH  __request AS (
+                    SELECT http_post(
+                        '{API_URL}',
+                        headers => MAP {{
+                            'accept': 'application/json',
+                        }},
+                        params => MAP {{
+                            'model': 'models/{EMBEDDING_MODEL}',
+                            'parts': [{{ 'text': q }}],
+                            'taskType': 'SEMANTIC_SIMILARITY'
+                        }}
+                    ) AS response
+                )
+                SELECT *
+                FROM __request,
+            );
+        """),
+    )
+)
+```
+
+#### Basic Litestar Integration
+
+In this example we are going to demonstrate how to create a basic configuration that integrates into Litestar.
+
+```py
+# /// script
+# dependencies = [
+#   "sqlspec[aiosqlite]",
+#   "litestar[standard]",
+# ]
+# ///
+
+from aiosqlite import Connection
+from litestar import Litestar, get
+
+from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.extensions.litestar import SQLSpec
+
+
+@get("/")
+async def simple_sqlite(db_session: AiosqliteDriver) -> dict[str, str]:
+    return await db_session.select_one("SELECT 'Hello, world!' AS greeting")
+
+
+sqlspec = SQLSpec(config=DatabaseConfig(
+    config=[AiosqliteConfig(), commit_mode="autocommit")],
+)
+app = Litestar(route_handlers=[simple_sqlite], plugins=[sqlspec])
+```
+
 ## Inspiration and Future Direction
 
 SQLSpec originally drew inspiration from features found in the `aiosql` library.  This is a great library for working with and executed SQL stored in files.  It's unclear how much of an overlap there will be between the two libraries, but it's possible that some features will be contributed back to `aiosql` where appropriate.

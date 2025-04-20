@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.base import (
     AsyncArrowBulkOperationsMixin,
@@ -11,7 +11,7 @@ from sqlspec.base import (
 from sqlspec.typing import ArrowTable, StatementParameterType
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator
+    from collections.abc import AsyncGenerator, Generator, Sequence
 
     from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 
@@ -39,6 +39,29 @@ class OracleSyncDriver(SyncArrowBulkOperationsMixin["Connection"], SyncDriverAda
         finally:
             cursor.close()
 
+    # --- Public API Methods --- #
+    @overload
+    def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Sequence[dict[str, Any]]": ...
+    @overload
+    def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Sequence[ModelDTOT]": ...
     def select(
         self,
         sql: str,
@@ -48,7 +71,7 @@ class OracleSyncDriver(SyncArrowBulkOperationsMixin["Connection"], SyncDriverAda
         connection: "Optional[Connection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "list[Union[ModelDTOT, dict[str, Any]]]":
+    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch data from the database.
 
         Args:
@@ -76,6 +99,28 @@ class OracleSyncDriver(SyncArrowBulkOperationsMixin["Connection"], SyncDriverAda
 
             return [dict(zip(column_names, row)) for row in results]  # pyright: ignore
 
+    @overload
+    def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+    @overload
+    def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
     def select_one(
         self,
         sql: str,
@@ -114,6 +159,28 @@ class OracleSyncDriver(SyncArrowBulkOperationsMixin["Connection"], SyncDriverAda
             # Always return dictionaries
             return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
 
+    @overload
+    def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[dict[str, Any]]": ...
+    @overload
+    def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Optional[ModelDTOT]": ...
     def select_one_or_none(
         self,
         sql: str,
@@ -147,6 +214,28 @@ class OracleSyncDriver(SyncArrowBulkOperationsMixin["Connection"], SyncDriverAda
             # Always return dictionaries
             return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
 
+    @overload
+    def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Any": ...
+    @overload
+    def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "T": ...
     def select_value(
         self,
         sql: str,
@@ -174,6 +263,28 @@ class OracleSyncDriver(SyncArrowBulkOperationsMixin["Connection"], SyncDriverAda
                 return result[0]  # pyright: ignore[reportUnknownArgumentType]
             return schema_type(result[0])  # type: ignore[call-arg]
 
+    @overload
+    def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[Any]": ...
+    @overload
+    def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "Optional[T]": ...
     def select_value_or_none(
         self,
         sql: str,
@@ -224,6 +335,28 @@ class OracleSyncDriver(SyncArrowBulkOperationsMixin["Connection"], SyncDriverAda
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             return cursor.rowcount  # pyright: ignore[reportUnknownMemberType]
 
+    @overload
+    def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+    @overload
+    def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
     def insert_update_delete_returning(
         self,
         sql: str,
@@ -319,6 +452,29 @@ class OracleAsyncDriver(
         finally:
             cursor.close()
 
+    # --- Public API Methods --- #
+    @overload
+    async def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Sequence[dict[str, Any]]": ...
+    @overload
+    async def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Sequence[ModelDTOT]": ...
     async def select(
         self,
         sql: str,
@@ -328,7 +484,7 @@ class OracleAsyncDriver(
         connection: "Optional[AsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "list[Union[ModelDTOT, dict[str, Any]]]":
+    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch data from the database.
 
         Returns:
@@ -350,6 +506,28 @@ class OracleAsyncDriver(
 
             return [dict(zip(column_names, row)) for row in results]  # pyright: ignore
 
+    @overload
+    async def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+    @overload
+    async def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
     async def select_one(
         self,
         sql: str,
@@ -380,6 +558,28 @@ class OracleAsyncDriver(
             # Always return dictionaries
             return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
 
+    @overload
+    async def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[dict[str, Any]]": ...
+    @overload
+    async def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Optional[ModelDTOT]": ...
     async def select_one_or_none(
         self,
         sql: str,
@@ -413,6 +613,28 @@ class OracleAsyncDriver(
             # Always return dictionaries
             return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
 
+    @overload
+    async def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Any": ...
+    @overload
+    async def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "T": ...
     async def select_value(
         self,
         sql: str,
@@ -440,6 +662,28 @@ class OracleAsyncDriver(
                 return result[0]  # pyright: ignore[reportUnknownArgumentType]
             return schema_type(result[0])  # type: ignore[call-arg]
 
+    @overload
+    async def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[Any]": ...
+    @overload
+    async def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "Optional[T]": ...
     async def select_value_or_none(
         self,
         sql: str,
@@ -490,6 +734,28 @@ class OracleAsyncDriver(
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             return cursor.rowcount  # pyright: ignore[reportUnknownMemberType]
 
+    @overload
+    async def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+    @overload
+    async def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
     async def insert_update_delete_returning(
         self,
         sql: str,

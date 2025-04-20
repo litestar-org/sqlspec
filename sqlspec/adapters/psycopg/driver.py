@@ -1,6 +1,6 @@
 import logging
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from psycopg.rows import dict_row
 
@@ -9,7 +9,7 @@ from sqlspec.exceptions import SQLParsingError
 from sqlspec.statement import PARAM_REGEX, SQLStatement
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator
+    from collections.abc import AsyncGenerator, Generator, Sequence
 
     from psycopg import AsyncConnection, Connection
 
@@ -20,7 +20,63 @@ logger = logging.getLogger("sqlspec")
 __all__ = ("PsycopgAsyncDriver", "PsycopgSyncDriver")
 
 
-class PsycopgSyncDriver(SyncDriverAdapterProtocol["Connection"]):
+class PsycopgParameterParser:
+    dialect: str
+
+    def _process_sql_params(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        **kwargs: Any,
+    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
+        """Process SQL and parameters, converting :name -> %(name)s if needed."""
+        stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
+        processed_sql, processed_params = stmt.process()
+
+        if isinstance(processed_params, dict):
+            parameter_dict = processed_params
+            processed_sql_parts: list[str] = []
+            last_end = 0
+            found_params_regex: list[str] = []
+
+            for match in PARAM_REGEX.finditer(processed_sql):
+                if match.group("dquote") or match.group("squote") or match.group("comment"):
+                    continue
+
+                if match.group("var_name"):
+                    var_name = match.group("var_name")
+                    found_params_regex.append(var_name)
+                    start = match.start("var_name") - 1
+                    end = match.end("var_name")
+
+                    if var_name not in parameter_dict:
+                        msg = (
+                            f"Named parameter ':{var_name}' found in SQL but missing from processed parameters. "
+                            f"Processed SQL: {processed_sql}"
+                        )
+                        raise SQLParsingError(msg)
+
+                    processed_sql_parts.extend((processed_sql[last_end:start], f"%({var_name})s"))
+                    last_end = end
+
+            processed_sql_parts.append(processed_sql[last_end:])
+            final_sql = "".join(processed_sql_parts)
+
+            if not found_params_regex and parameter_dict:
+                logger.warning(
+                    "Dict params provided (%s), but no :name placeholders found. SQL: %s",
+                    list(parameter_dict.keys()),
+                    processed_sql,
+                )
+                return processed_sql, parameter_dict
+
+            return final_sql, parameter_dict
+
+        return processed_sql, processed_params
+
+
+class PsycopgSyncDriver(PsycopgParameterParser, SyncDriverAdapterProtocol["Connection"]):
     """Psycopg Sync Driver Adapter."""
 
     connection: "Connection"
@@ -90,6 +146,29 @@ class PsycopgSyncDriver(SyncDriverAdapterProtocol["Connection"]):
         finally:
             cursor.close()
 
+    # --- Public API Methods --- #
+    @overload
+    def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Sequence[dict[str, Any]]": ...
+    @overload
+    def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Sequence[ModelDTOT]": ...
     def select(
         self,
         sql: str,
@@ -99,7 +178,7 @@ class PsycopgSyncDriver(SyncDriverAdapterProtocol["Connection"]):
         schema_type: "Optional[type[ModelDTOT]]" = None,
         connection: "Optional[Connection]" = None,
         **kwargs: Any,
-    ) -> "list[Union[ModelDTOT, dict[str, Any]]]":
+    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch data from the database.
 
         Returns:
@@ -117,6 +196,28 @@ class PsycopgSyncDriver(SyncDriverAdapterProtocol["Connection"]):
                 return [cast("ModelDTOT", schema_type(**row)) for row in results]  # pyright: ignore[reportUnknownArgumentType]
             return [cast("dict[str,Any]", row) for row in results]  # pyright: ignore[reportUnknownArgumentType]
 
+    @overload
+    def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+    @overload
+    def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
     def select_one(
         self,
         sql: str,
@@ -142,6 +243,28 @@ class PsycopgSyncDriver(SyncDriverAdapterProtocol["Connection"]):
                 return cast("ModelDTOT", schema_type(**cast("dict[str,Any]", row)))
             return cast("dict[str,Any]", row)
 
+    @overload
+    def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[dict[str, Any]]": ...
+    @overload
+    def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Optional[ModelDTOT]": ...
     def select_one_or_none(
         self,
         sql: str,
@@ -168,6 +291,28 @@ class PsycopgSyncDriver(SyncDriverAdapterProtocol["Connection"]):
                 return cast("ModelDTOT", schema_type(**cast("dict[str,Any]", row)))
             return cast("dict[str,Any]", row)
 
+    @overload
+    def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Any": ...
+    @overload
+    def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "T": ...
     def select_value(
         self,
         sql: str,
@@ -195,6 +340,28 @@ class PsycopgSyncDriver(SyncDriverAdapterProtocol["Connection"]):
                 return schema_type(val)  # type: ignore[call-arg]
             return val
 
+    @overload
+    def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[Any]": ...
+    @overload
+    def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "Optional[T]": ...
     def select_value_or_none(
         self,
         sql: str,
@@ -244,6 +411,28 @@ class PsycopgSyncDriver(SyncDriverAdapterProtocol["Connection"]):
             cursor.execute(sql, parameters)
             return getattr(cursor, "rowcount", -1)  # pyright: ignore[reportUnknownMemberType]
 
+    @overload
+    def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+    @overload
+    def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[Connection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
     def insert_update_delete_returning(
         self,
         sql: str,
@@ -293,7 +482,7 @@ class PsycopgSyncDriver(SyncDriverAdapterProtocol["Connection"]):
             return str(cursor.statusmessage) if cursor.statusmessage is not None else "DONE"
 
 
-class PsycopgAsyncDriver(AsyncDriverAdapterProtocol["AsyncConnection"]):
+class PsycopgAsyncDriver(PsycopgParameterParser, AsyncDriverAdapterProtocol["AsyncConnection"]):
     """Psycopg Async Driver Adapter."""
 
     connection: "AsyncConnection"
@@ -301,58 +490,6 @@ class PsycopgAsyncDriver(AsyncDriverAdapterProtocol["AsyncConnection"]):
 
     def __init__(self, connection: "AsyncConnection") -> None:
         self.connection = connection
-
-    def _process_sql_params(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        /,
-        **kwargs: Any,
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Process SQL and parameters, converting :name -> %(name)s if needed."""
-        stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
-        processed_sql, processed_params = stmt.process()
-
-        if isinstance(processed_params, dict):
-            parameter_dict = processed_params
-            processed_sql_parts: list[str] = []
-            last_end = 0
-            found_params_regex: list[str] = []
-
-            for match in PARAM_REGEX.finditer(processed_sql):
-                if match.group("dquote") or match.group("squote") or match.group("comment"):
-                    continue
-
-                if match.group("var_name"):
-                    var_name = match.group("var_name")
-                    found_params_regex.append(var_name)
-                    start = match.start("var_name") - 1
-                    end = match.end("var_name")
-
-                    if var_name not in parameter_dict:
-                        msg = (
-                            f"Named parameter ':{var_name}' found in SQL but missing from processed parameters. "
-                            f"Processed SQL: {processed_sql}"
-                        )
-                        raise SQLParsingError(msg)
-
-                    processed_sql_parts.extend((processed_sql[last_end:start], f"%({var_name})s"))
-                    last_end = end
-
-            processed_sql_parts.append(processed_sql[last_end:])
-            final_sql = "".join(processed_sql_parts)
-
-            if not found_params_regex and parameter_dict:
-                logger.warning(
-                    "Dict params provided (%s), but no :name placeholders found. SQL: %s",
-                    list(parameter_dict.keys()),
-                    processed_sql,
-                )
-                return processed_sql, parameter_dict
-
-            return final_sql, parameter_dict
-
-        return processed_sql, processed_params
 
     @staticmethod
     @asynccontextmanager
@@ -363,6 +500,29 @@ class PsycopgAsyncDriver(AsyncDriverAdapterProtocol["AsyncConnection"]):
         finally:
             await cursor.close()
 
+    # --- Public API Methods --- #
+    @overload
+    async def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Sequence[dict[str, Any]]": ...
+    @overload
+    async def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Sequence[ModelDTOT]": ...
     async def select(
         self,
         sql: str,
@@ -372,7 +532,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterProtocol["AsyncConnection"]):
         connection: "Optional[AsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "list[Union[ModelDTOT, dict[str, Any]]]":
+    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch data from the database.
 
         Returns:
@@ -391,6 +551,28 @@ class PsycopgAsyncDriver(AsyncDriverAdapterProtocol["AsyncConnection"]):
                 return [cast("ModelDTOT", schema_type(**cast("dict[str,Any]", row))) for row in results]  # pyright: ignore[reportUnknownArgumentType]
             return [cast("dict[str,Any]", row) for row in results]  # pyright: ignore[reportUnknownArgumentType]
 
+    @overload
+    async def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+    @overload
+    async def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
     async def select_one(
         self,
         sql: str,
@@ -417,6 +599,28 @@ class PsycopgAsyncDriver(AsyncDriverAdapterProtocol["AsyncConnection"]):
                 return cast("ModelDTOT", schema_type(**cast("dict[str,Any]", row)))
             return cast("dict[str,Any]", row)
 
+    @overload
+    async def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[dict[str, Any]]": ...
+    @overload
+    async def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Optional[ModelDTOT]": ...
     async def select_one_or_none(
         self,
         sql: str,
@@ -444,6 +648,28 @@ class PsycopgAsyncDriver(AsyncDriverAdapterProtocol["AsyncConnection"]):
                 return cast("ModelDTOT", schema_type(**cast("dict[str,Any]", row)))
             return cast("dict[str,Any]", row)
 
+    @overload
+    async def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Any": ...
+    @overload
+    async def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "T": ...
     async def select_value(
         self,
         sql: str,
@@ -527,6 +753,28 @@ class PsycopgAsyncDriver(AsyncDriverAdapterProtocol["AsyncConnection"]):
                 rowcount = -1
             return rowcount
 
+    @overload
+    async def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+    @overload
+    async def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncConnection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
     async def insert_update_delete_returning(
         self,
         sql: str,

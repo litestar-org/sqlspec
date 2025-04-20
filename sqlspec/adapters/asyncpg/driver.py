@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from asyncpg import Connection
 from typing_extensions import TypeAlias
@@ -10,6 +10,8 @@ from sqlspec.exceptions import SQLParsingError
 from sqlspec.statement import PARAM_REGEX, SQLStatement
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from asyncpg.connection import Connection
     from asyncpg.pool import PoolConnectionProxy
 
@@ -196,6 +198,28 @@ class AsyncpgDriver(AsyncDriverAdapterProtocol["AsyncpgConnection"]):
         # No parameters provided and none found in SQL, return original SQL from SQLStatement and empty tuple
         return sql, ()  # asyncpg expects a sequence, even if empty
 
+    @overload
+    async def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncpgConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Sequence[dict[str, Any]]": ...
+    @overload
+    async def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncpgConnection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Sequence[ModelDTOT]": ...
     async def select(
         self,
         sql: str,
@@ -205,7 +229,7 @@ class AsyncpgDriver(AsyncDriverAdapterProtocol["AsyncpgConnection"]):
         connection: Optional["AsyncpgConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "list[Union[ModelDTOT, dict[str, Any]]]":
+    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch data from the database.
 
         Args:
@@ -229,6 +253,28 @@ class AsyncpgDriver(AsyncDriverAdapterProtocol["AsyncpgConnection"]):
             return [dict(row.items()) for row in results]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         return [cast("ModelDTOT", schema_type(**dict(row.items()))) for row in results]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
 
+    @overload
+    async def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncpgConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+    @overload
+    async def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncpgConnection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
     async def select_one(
         self,
         sql: str,
@@ -262,6 +308,28 @@ class AsyncpgDriver(AsyncDriverAdapterProtocol["AsyncpgConnection"]):
             return dict(result.items())  # type: ignore[attr-defined]
         return cast("ModelDTOT", schema_type(**dict(result.items())))  # type: ignore[attr-defined]
 
+    @overload
+    async def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncpgConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[dict[str, Any]]": ...
+    @overload
+    async def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncpgConnection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Optional[ModelDTOT]": ...
     async def select_one_or_none(
         self,
         sql: str,
@@ -295,6 +363,28 @@ class AsyncpgDriver(AsyncDriverAdapterProtocol["AsyncpgConnection"]):
             return dict(result.items())
         return cast("ModelDTOT", schema_type(**dict(result.items())))
 
+    @overload
+    async def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncpgConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Any": ...
+    @overload
+    async def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncpgConnection]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "T": ...
     async def select_value(
         self,
         sql: str,
@@ -326,6 +416,28 @@ class AsyncpgDriver(AsyncDriverAdapterProtocol["AsyncpgConnection"]):
             return result
         return schema_type(result)  # type: ignore[call-arg]
 
+    @overload
+    async def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncpgConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[Any]": ...
+    @overload
+    async def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncpgConnection]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "Optional[T]": ...
     async def select_value_or_none(
         self,
         sql: str,
@@ -381,6 +493,28 @@ class AsyncpgDriver(AsyncDriverAdapterProtocol["AsyncpgConnection"]):
         except (ValueError, IndexError, AttributeError):
             return -1  # Fallback if we can't parse the status
 
+    @overload
+    async def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncpgConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+    @overload
+    async def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[AsyncpgConnection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
     async def insert_update_delete_returning(
         self,
         sql: str,

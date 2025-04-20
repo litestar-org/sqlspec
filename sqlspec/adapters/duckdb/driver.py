@@ -1,10 +1,10 @@
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.base import SyncArrowBulkOperationsMixin, SyncDriverAdapterProtocol, T
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Sequence
 
     from duckdb import DuckDBPyConnection
 
@@ -42,17 +42,38 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
             yield connection
 
     # --- Public API Methods --- #
-
+    @overload
     def select(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["DuckDBPyConnection"] = None,
+        connection: "Optional[DuckDBPyConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Sequence[dict[str, Any]]": ...
+    @overload
+    def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[DuckDBPyConnection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Sequence[ModelDTOT]": ...
+    def select(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[DuckDBPyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "list[Union[ModelDTOT, dict[str, Any]]]":
+    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
@@ -67,6 +88,28 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
                 return [cast("ModelDTOT", schema_type(**dict(zip(column_names, row)))) for row in results]  # pyright: ignore[reportUnknownArgumentType]
             return [dict(zip(column_names, row)) for row in results]  # pyright: ignore[reportUnknownArgumentType]
 
+    @overload
+    def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[DuckDBPyConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+    @overload
+    def select_one(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[DuckDBPyConnection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
     def select_one(
         self,
         sql: str,
@@ -90,6 +133,28 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
             # Always return dictionaries
             return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
 
+    @overload
+    def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[DuckDBPyConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[dict[str, Any]]": ...
+    @overload
+    def select_one_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[DuckDBPyConnection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "Optional[ModelDTOT]": ...
     def select_one_or_none(
         self,
         sql: str,
@@ -113,6 +178,28 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
                 return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))  # pyright: ignore[reportUnknownArgumentType]
             return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
 
+    @overload
+    def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[DuckDBPyConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Any": ...
+    @overload
+    def select_value(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[DuckDBPyConnection]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "T": ...
     def select_value(
         self,
         sql: str,
@@ -133,6 +220,28 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
                 return result[0]  # pyright: ignore
             return schema_type(result[0])  # type: ignore[call-arg]
 
+    @overload
+    def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[DuckDBPyConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[Any]": ...
+    @overload
+    def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[DuckDBPyConnection]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "Optional[T]": ...
     def select_value_or_none(
         self,
         sql: str,
@@ -169,23 +278,44 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             return getattr(cursor, "rowcount", -1)  # pyright: ignore[reportUnknownMemberType]
 
+    @overload
     def insert_update_delete_returning(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["DuckDBPyConnection"] = None,
+        connection: "Optional[DuckDBPyConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+    @overload
+    def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[DuckDBPyConnection]" = None,
+        schema_type: "type[ModelDTOT]",
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
+    def insert_update_delete_returning(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[DuckDBPyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
+    ) -> "Union[ModelDTOT, dict[str, Any]]":
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = cursor.fetchall()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if not result:
-                return None  # pyright: ignore[reportUnknownArgumentType]
+            result = self.check_not_found(result)  # pyright: ignore
             column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             if schema_type is not None:
                 return cast("ModelDTOT", schema_type(**dict(zip(column_names, result[0]))))  # pyright: ignore[reportUnknownArgumentType]
