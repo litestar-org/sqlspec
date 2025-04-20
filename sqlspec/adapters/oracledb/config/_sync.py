@@ -112,7 +112,7 @@ class OracleSyncConfig(SyncDatabaseConfig["Connection", "ConnectionPool", "Oracl
         raise ImproperConfigurationError(msg)
 
     def create_connection(self) -> "Connection":
-        """Create and return a new oracledb connection.
+        """Create and return a new oracledb connection from the pool.
 
         Returns:
             A Connection instance.
@@ -121,9 +121,8 @@ class OracleSyncConfig(SyncDatabaseConfig["Connection", "ConnectionPool", "Oracl
             ImproperConfigurationError: If the connection could not be created.
         """
         try:
-            import oracledb
-
-            return oracledb.connect(**self.connection_config_dict)
+            pool = self.provide_pool()
+            return pool.acquire()
         except Exception as e:
             msg = f"Could not configure the Oracle connection. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e

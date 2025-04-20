@@ -93,7 +93,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[Connection, ConnectionPool, PsycopgSy
         raise ImproperConfigurationError(msg)
 
     def create_connection(self) -> "Connection":
-        """Create and return a new psycopg connection.
+        """Create and return a new psycopg connection from the pool.
 
         Returns:
             A Connection instance.
@@ -102,9 +102,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[Connection, ConnectionPool, PsycopgSy
             ImproperConfigurationError: If the connection could not be created.
         """
         try:
-            from psycopg import connect
-
-            return connect(**self.connection_config_dict)
+            pool = self.provide_pool()
+            return pool.getconn()
         except Exception as e:
             msg = f"Could not configure the Psycopg connection. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e
@@ -131,6 +130,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[Connection, ConnectionPool, PsycopgSy
         if self.pool_instance is None:  # pyright: ignore[reportUnnecessaryComparison]
             msg = "Could not configure the 'pool_instance'. Please check your configuration."  # type: ignore[unreachable]
             raise ImproperConfigurationError(msg)
+        self.pool_instance.open()
         return self.pool_instance
 
     def provide_pool(self, *args: "Any", **kwargs: "Any") -> "ConnectionPool":

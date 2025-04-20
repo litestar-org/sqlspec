@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from oracledb import create_pool_async as oracledb_create_pool  # pyright: ignore[reportUnknownVariableType]
 from oracledb.connection import AsyncConnection
@@ -112,7 +112,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionP
         raise ImproperConfigurationError(msg)
 
     async def create_connection(self) -> "AsyncConnection":
-        """Create and return a new oracledb async connection.
+        """Create and return a new oracledb async connection from the pool.
 
         Returns:
             An AsyncConnection instance.
@@ -121,9 +121,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionP
             ImproperConfigurationError: If the connection could not be created.
         """
         try:
-            import oracledb
-
-            return await oracledb.connect_async(**self.connection_config_dict)  # type: ignore[no-any-return]
+            pool = await self.provide_pool()
+            return cast("AsyncConnection", await pool.acquire())  # type: ignore[no-any-return,unused-ignore]
         except Exception as e:
             msg = f"Could not configure the Oracle async connection. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e

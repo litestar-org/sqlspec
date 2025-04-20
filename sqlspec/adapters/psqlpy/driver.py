@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
     from sqlspec.typing import ModelDTOT, StatementParameterType
 
+__all__ = ("PsqlpyDriver",)
+
 
 # Regex to find '?' placeholders, skipping those inside quotes or SQL comments
 QMARK_REGEX = re.compile(

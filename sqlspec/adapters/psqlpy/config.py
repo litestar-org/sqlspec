@@ -112,7 +112,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[Connection, ConnectionPool, PsqlpyDriver]
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
-        """Return the minimal connection configuration as a dict for standalone use (if ever needed).
+        """Return the minimal connection configuration as a dict for standalone use.
 
         Returns:
             A string keyed dict of config kwargs for a psqlpy.Connection.
@@ -120,15 +120,22 @@ class PsqlpyConfig(AsyncDatabaseConfig[Connection, ConnectionPool, PsqlpyDriver]
         Raises:
             ImproperConfigurationError: If essential connection parameters are missing.
         """
-        # Although pooling is preferred, provide basic connection details if needed.
-        # Rely on pool_config validation during init.
         if self.pool_config:
+            # Exclude pool-specific keys and internal metadata
+            pool_specific_keys = {
+                "max_db_pool_size",
+                "load_balance_hosts",
+                "conn_recycling_method",
+                "pool_instance",
+                "connection_type",
+                "driver_type",
+            }
             return dataclass_to_dict(
                 self.pool_config,
                 exclude_empty=True,
                 convert_nested=False,
                 exclude_none=True,
-                exclude={"pool_instance", "connection_type", "driver_type"},
+                exclude=pool_specific_keys,
             )
         msg = "You must provide a 'pool_config' for this adapter."
         raise ImproperConfigurationError(msg)
@@ -198,19 +205,27 @@ class PsqlpyConfig(AsyncDatabaseConfig[Connection, ConnectionPool, PsqlpyDriver]
         return _create()
 
     def create_connection(self) -> "Awaitable[Connection]":
-        """Create and return a new psqlpy connection from the pool.
+        """Create and return a new, standalone psqlpy connection using the configured parameters.
+
+        Note: This method is not supported by the psqlpy adapter as connection
+        creation is primarily handled via the ConnectionPool.
+        Use `provide_connection` or `provide_session` for pooled connections.
 
         Returns:
-            An awaitable that resolves to a Connection instance.
+            An awaitable that resolves to a new Connection instance.
+
+        Raises:
+            NotImplementedError: This method is not implemented for psqlpy.
         """
 
         async def _create() -> "Connection":
-            try:
-                async with self.provide_connection() as conn:
-                    return conn
-            except Exception as e:
-                msg = f"Could not configure a psqlpy connection. Error: {e!s}"
-                raise ImproperConfigurationError(msg) from e
+            # psqlpy does not seem to offer a public API for creating
+            # standalone async connections easily outside the pool context.
+            msg = (
+                "Creating standalone connections is not directly supported by the psqlpy adapter. "
+                "Please use the pool via `provide_connection` or `provide_session`."
+            )
+            raise NotImplementedError(msg)
 
         return _create()
 

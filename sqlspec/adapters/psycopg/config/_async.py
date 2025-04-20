@@ -94,7 +94,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPoo
         raise ImproperConfigurationError(msg)
 
     async def create_connection(self) -> "AsyncConnection":
-        """Create and return a new psycopg async connection.
+        """Create and return a new psycopg async connection from the pool.
 
         Returns:
             An AsyncConnection instance.
@@ -103,9 +103,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPoo
             ImproperConfigurationError: If the connection could not be created.
         """
         try:
-            from psycopg import AsyncConnection
-
-            return await AsyncConnection.connect(**self.connection_config_dict)
+            pool = await self.provide_pool()
+            return await pool.getconn()
         except Exception as e:
             msg = f"Could not configure the Psycopg connection. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e
@@ -132,6 +131,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPoo
         if self.pool_instance is None:  # pyright: ignore[reportUnnecessaryComparison]
             msg = "Could not configure the 'pool_instance'. Please check your configuration."  # type: ignore[unreachable]
             raise ImproperConfigurationError(msg)
+        await self.pool_instance.open()
         return self.pool_instance
 
     def provide_pool(self, *args: "Any", **kwargs: "Any") -> "Awaitable[AsyncConnectionPool]":
