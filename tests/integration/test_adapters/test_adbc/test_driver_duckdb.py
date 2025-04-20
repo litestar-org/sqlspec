@@ -276,3 +276,169 @@ def test_driver_select_arrow(adbc_session: AdbcConfig) -> None:
         assert arrow_table.column("id").to_pylist() == [1]
         driver.execute_script("DROP TABLE IF EXISTS test_table")
         driver.execute_script("DROP SEQUENCE IF EXISTS test_table_id_seq")
+
+
+@xfail_if_driver_missing
+@pytest.mark.xdist_group("duckdb")
+def test_driver_named_params_with_scalar(adbc_session: AdbcConfig) -> None:
+    """Test that scalar parameters work with named parameters in SQL."""
+    with adbc_session.provide_session() as driver:
+        # Create test table
+        create_sequence_sql = "CREATE SEQUENCE test_table_id_seq START 1;"
+        driver.execute_script(create_sequence_sql)
+        sql = """
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY DEFAULT nextval('test_table_id_seq'),
+            name VARCHAR(50)
+        );
+        """
+        driver.execute_script(sql)
+
+        # Insert test record using positional parameter with scalar value
+        insert_sql = """
+        INSERT INTO test_table (name)
+        VALUES (?)
+        """
+        driver.insert_update_delete(insert_sql, "test_name")
+
+        # Select and verify
+        select_sql = "SELECT name FROM test_table WHERE name = ?"
+        results = driver.select(select_sql, "test_name")
+        assert len(results) == 1
+        assert results[0]["name"] == "test_name"
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
+        driver.execute_script("DROP SEQUENCE IF EXISTS test_table_id_seq")
+
+
+@xfail_if_driver_missing
+@pytest.mark.xdist_group("duckdb")
+def test_driver_named_params_with_tuple(adbc_session: AdbcConfig) -> None:
+    """Test that tuple parameters work with named parameters in SQL."""
+    with adbc_session.provide_session() as driver:
+        # Create test table
+        create_sequence_sql = "CREATE SEQUENCE test_table_id_seq START 1;"
+        driver.execute_script(create_sequence_sql)
+        sql = """
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY DEFAULT nextval('test_table_id_seq'),
+            name VARCHAR(50),
+            age INTEGER
+        );
+        """
+        driver.execute_script(sql)
+
+        # Insert test record using positional parameters with tuple values
+        insert_sql = """
+        INSERT INTO test_table (name, age)
+        VALUES (?, ?)
+        """
+        driver.insert_update_delete(insert_sql, ("test_name", 30))
+
+        # Select and verify
+        select_sql = "SELECT name, age FROM test_table WHERE name = ? AND age = ?"
+        results = driver.select(select_sql, ("test_name", 30))
+        assert len(results) == 1
+        assert results[0]["name"] == "test_name"
+        assert results[0]["age"] == 30
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
+        driver.execute_script("DROP SEQUENCE IF EXISTS test_table_id_seq")
+
+
+@xfail_if_driver_missing
+@pytest.mark.xdist_group("duckdb")
+def test_driver_native_named_params(adbc_session: AdbcConfig) -> None:
+    """Test DuckDB's native named parameter style ($name)."""
+    with adbc_session.provide_session() as driver:
+        # Create test table
+        create_sequence_sql = "CREATE SEQUENCE test_table_id_seq START 1;"
+        driver.execute_script(create_sequence_sql)
+        sql = """
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY DEFAULT nextval('test_table_id_seq'),
+            name VARCHAR(50)
+        );
+        """
+        driver.execute_script(sql)
+
+        # Insert test record using native $name style
+        insert_sql = """
+        INSERT INTO test_table (name)
+        VALUES ($name)
+        """
+        driver.insert_update_delete(insert_sql, {"name": "native_name"})
+
+        # Select and verify
+        select_sql = "SELECT name FROM test_table WHERE name = $name"
+        results = driver.select(select_sql, {"name": "native_name"})
+        assert len(results) == 1
+        assert results[0]["name"] == "native_name"
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
+        driver.execute_script("DROP SEQUENCE IF EXISTS test_table_id_seq")
+
+
+@xfail_if_driver_missing
+@pytest.mark.xdist_group("duckdb")
+def test_driver_native_positional_params(adbc_session: AdbcConfig) -> None:
+    """Test DuckDB's native positional parameter style ($1, $2, etc.)."""
+    with adbc_session.provide_session() as driver:
+        # Create test table
+        create_sequence_sql = "CREATE SEQUENCE test_table_id_seq START 1;"
+        driver.execute_script(create_sequence_sql)
+        sql = """
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY DEFAULT nextval('test_table_id_seq'),
+            name VARCHAR(50),
+            age INTEGER
+        );
+        """
+        driver.execute_script(sql)
+
+        # Insert test record using native $1 style
+        insert_sql = """
+        INSERT INTO test_table (name, age)
+        VALUES ($1, $2)
+        """
+        driver.insert_update_delete(insert_sql, ("native_pos", 30))
+
+        # Select and verify
+        select_sql = "SELECT name, age FROM test_table WHERE name = $1 AND age = $2"
+        results = driver.select(select_sql, ("native_pos", 30))
+        assert len(results) == 1
+        assert results[0]["name"] == "native_pos"
+        assert results[0]["age"] == 30
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
+        driver.execute_script("DROP SEQUENCE IF EXISTS test_table_id_seq")
+
+
+@xfail_if_driver_missing
+@pytest.mark.xdist_group("duckdb")
+def test_driver_native_auto_incremented_params(adbc_session: AdbcConfig) -> None:
+    """Test DuckDB's native auto-incremented parameter style (?)."""
+    with adbc_session.provide_session() as driver:
+        # Create test table
+        create_sequence_sql = "CREATE SEQUENCE test_table_id_seq START 1;"
+        driver.execute_script(create_sequence_sql)
+        sql = """
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY DEFAULT nextval('test_table_id_seq'),
+            name VARCHAR(50),
+            age INTEGER
+        );
+        """
+        driver.execute_script(sql)
+
+        # Insert test record using native ? style
+        insert_sql = """
+        INSERT INTO test_table (name, age)
+        VALUES (?, ?)
+        """
+        driver.insert_update_delete(insert_sql, ("native_auto", 35))
+
+        # Select and verify
+        select_sql = "SELECT name, age FROM test_table WHERE name = ? AND age = ?"
+        results = driver.select(select_sql, ("native_auto", 35))
+        assert len(results) == 1
+        assert results[0]["name"] == "native_auto"
+        assert results[0]["age"] == 35
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
+        driver.execute_script("DROP SEQUENCE IF EXISTS test_table_id_seq")

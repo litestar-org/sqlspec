@@ -16,6 +16,7 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
     """SQLite Sync Driver Adapter."""
 
     connection: "Connection"
+    dialect: str = "sqlite"
 
     def __init__(self, connection: "Connection") -> None:
         self.connection = connection
@@ -37,8 +38,10 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "list[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch data from the database.
 
@@ -46,7 +49,7 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
             List of row data as either model instances or dictionaries.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             if not parameters:
                 cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
@@ -65,8 +68,10 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
         """Fetch one row from the database.
 
@@ -74,7 +79,7 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             if not parameters:
                 cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
@@ -92,8 +97,10 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch one row from the database.
 
@@ -101,7 +108,7 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             if not parameters:
                 cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
@@ -120,8 +127,10 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[Connection]" = None,
         schema_type: "Optional[type[T]]" = None,
+        **kwargs: Any,
     ) -> "Union[T, Any]":
         """Fetch a single value from the database.
 
@@ -129,7 +138,7 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             if not parameters:
                 cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
@@ -146,8 +155,10 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[Connection]" = None,
         schema_type: "Optional[type[T]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
         """Fetch a single value from the database.
 
@@ -155,7 +166,7 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             if not parameters:
                 cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
@@ -173,7 +184,9 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
+        **kwargs: Any,
     ) -> int:
         """Insert, update, or delete data from the database.
 
@@ -181,7 +194,7 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
             Row count affected by the operation.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
         with self._with_cursor(connection) as cursor:
             if not parameters:
@@ -195,8 +208,10 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
         """Insert, update, or delete data from the database and return result.
 
@@ -204,7 +219,7 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
             The first row of results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
         with self._with_cursor(connection) as cursor:
             if not parameters:
@@ -214,46 +229,32 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
             result = cursor.fetchall()
             if len(result) == 0:
                 return None
+
+            # Get column names from cursor description
             column_names = [c[0] for c in cursor.description or []]
+
+            # Get the first row's values - ensure we're getting the actual values
+            row_values = result[0]
+
+            # Debug print to see what we're getting
+
+            # Create dictionary mapping column names to values
+            result_dict = {}
+            for i, col_name in enumerate(column_names):
+                result_dict[col_name] = row_values[i]
+
             if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result[0]))))
-            return dict(zip(column_names, result[0]))
-
-    def _process_sql_params(
-        self, sql: str, parameters: "Optional[StatementParameterType]" = None
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Process SQL query and parameters for DB-API execution.
-
-        Converts named parameters (:name) to positional parameters (?) for SQLite.
-
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-
-        Returns:
-            A tuple containing the processed SQL string and the processed parameters.
-        """
-        if not isinstance(parameters, dict) or not parameters:
-            # If parameters are not a dict, or empty dict, assume positional/no params
-            # Let the underlying driver handle tuples/lists directly
-            return sql, parameters
-
-        # Convert named parameters to positional parameters
-        processed_sql = sql
-        processed_params: list[Any] = []
-        for key, value in parameters.items():
-            # Replace :key with ? in the SQL
-            processed_sql = processed_sql.replace(f":{key}", "?")
-            processed_params.append(value)
-
-        return processed_sql, tuple(processed_params)
+                return cast("ModelDTOT", schema_type(**result_dict))
+            return result_dict
 
     def execute_script(
         self,
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
+        **kwargs: Any,
     ) -> str:
         """Execute a script.
 
@@ -261,25 +262,26 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
             Status message for the operation.
         """
         connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
-        # For DDL statements, don't pass parameters to execute
-        # SQLite doesn't support parameters for DDL statements
+        # The _process_sql_params handles parameter formatting for the dialect.
         with self._with_cursor(connection) as cursor:
             if not parameters:
                 cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
             else:
-                sql, parameters = self._process_sql_params(sql, parameters)
-                cursor.execute(sql, parameters)  # type: ignore[arg-type]
+                cursor.execute(sql, parameters)
 
-            return cast("str", cursor.statusmessage) if hasattr(cursor, "statusmessage") else "DONE"  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+        return cast("str", cursor.statusmessage) if hasattr(cursor, "statusmessage") else "DONE"  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
 
     def execute_script_returning(
         self,
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
         """Execute a script and return result.
 
@@ -287,7 +289,7 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
             The first row of results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
         with self._with_cursor(connection) as cursor:
             if not parameters:

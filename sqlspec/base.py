@@ -17,6 +17,7 @@ from typing import (
 )
 
 from sqlspec.exceptions import NotFoundError
+from sqlspec.statement import SQLStatement
 from sqlspec.typing import ModelDTOT, StatementParameterType
 
 if TYPE_CHECKING:
@@ -34,6 +35,7 @@ __all__ = (
     "NoPoolAsyncConfig",
     "NoPoolSyncConfig",
     "SQLSpec",
+    "SQLStatement",
     "SyncArrowBulkOperationsMixin",
     "SyncDatabaseConfig",
     "SyncDriverAdapterProtocol",
@@ -50,13 +52,15 @@ ConfigT = TypeVar(
     bound="Union[Union[AsyncDatabaseConfig[Any, Any, Any], NoPoolAsyncConfig[Any, Any]], SyncDatabaseConfig[Any, Any, Any], NoPoolSyncConfig[Any, Any]]",
 )
 DriverT = TypeVar("DriverT", bound="Union[SyncDriverAdapterProtocol[Any], AsyncDriverAdapterProtocol[Any]]")
-
-# Regex to find :param style placeholders, avoiding those inside quotes
-# Handles basic cases, might need refinement for complex SQL
+# Regex to find :param or %(param)s style placeholders, skipping those inside quotes
 PARAM_REGEX = re.compile(
-    r"(?P<dquote>\"(?:[^\"]|\"\")*\")|"  # Double-quoted strings
-    r"(?P<squote>'(?:[^']|'')*')|"  # Single-quoted strings
-    r"(?P<lead>[^:]):(?P<var_name>[a-zA-Z_][a-zA-Z0-9_]*)"  # :param placeholder
+    r"""
+    (?P<dquote>"([^"]|\\")*") | # Double-quoted strings
+    (?P<squote>'([^']|\\')*') | # Single-quoted strings
+    : (?P<var_name_colon>[a-zA-Z_][a-zA-Z0-9_]*) | # :var_name
+    % \( (?P<var_name_perc>[a-zA-Z_][a-zA-Z0-9_]*) \) s # %(var_name)s
+    """,
+    re.VERBOSE,
 )
 
 
@@ -415,8 +419,8 @@ class SQLSpec:
 class CommonDriverAttributes(Generic[ConnectionT]):
     """Common attributes and methods for driver adapters."""
 
-    param_style: str = "?"
-    """The parameter style placeholder supported by the underlying database driver (e.g., '?', '%s')."""
+    dialect: str
+    """The SQL dialect supported by the underlying database driver (e.g., 'postgres', 'mysql')."""
     connection: ConnectionT
     """The connection to the underlying database."""
     __supports_arrow__: ClassVar[bool] = False
@@ -443,83 +447,23 @@ class CommonDriverAttributes(Generic[ConnectionT]):
             raise NotFoundError(msg)
         return item_or_none
 
-    def _process_sql_statement(self, sql: str) -> str:
-        """Perform any preprocessing of the SQL query string if needed.
-        Default implementation returns the SQL unchanged.
-
-        Args:
-            sql: The SQL query string.
-
-        Returns:
-            The processed SQL query string.
-        """
-        return sql
-
     def _process_sql_params(
-        self, sql: str, parameters: "Optional[StatementParameterType]" = None
+        self, sql: str, parameters: "Optional[StatementParameterType]" = None, /, **kwargs: Any
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Process SQL query and parameters for DB-API execution.
-
-        Converts named parameters (:name) to positional parameters specified by `self.param_style`
-        if the input parameters are a dictionary.
+        """Process SQL query and parameters using SQLStatement for validation and formatting.
 
         Args:
             sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
+            parameters: Parameters for the query.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
         Returns:
-            A tuple containing the processed SQL string and the processed parameters
-            (always a tuple or None if the input was a dictionary, otherwise the original type).
-
-        Raises:
-            ValueError: If a named parameter in the SQL is not found in the dictionary
-                        or if a parameter in the dictionary is not used in the SQL.
+            A tuple containing the processed SQL query and parameters.
         """
-        if not isinstance(parameters, dict) or not parameters:
-            # If parameters are not a dict, or empty dict, assume positional/no params
-            # Let the underlying driver handle tuples/lists directly
-            return self._process_sql_statement(sql), parameters
-
-        processed_sql = ""
-        processed_params_list: list[Any] = []
-        last_end = 0
-        found_params: set[str] = set()
-
-        for match in PARAM_REGEX.finditer(sql):
-            if match.group("dquote") is not None or match.group("squote") is not None:
-                # Skip placeholders within quotes
-                continue
-
-            var_name = match.group("var_name")
-            if var_name is None:  # Should not happen with the regex, but safeguard
-                continue
-
-            if var_name not in parameters:
-                msg = f"Named parameter ':{var_name}' found in SQL but not provided in parameters dictionary."
-                raise ValueError(msg)
-
-            # Append segment before the placeholder + the leading character + the driver's positional placeholder
-            # The match.start("var_name") -1 includes the character before the ':'
-            processed_sql += sql[last_end : match.start("var_name")] + self.param_style
-            processed_params_list.append(parameters[var_name])
-            found_params.add(var_name)
-            last_end = match.end("var_name")
-
-        # Append the rest of the SQL string
-        processed_sql += sql[last_end:]
-
-        # Check if all provided parameters were used
-        unused_params = set(parameters.keys()) - found_params
-        if unused_params:
-            msg = f"Parameters provided but not found in SQL: {unused_params}"
-            # Depending on desired strictness, this could be a warning or an error
-            # For now, let's raise an error for clarity
-            raise ValueError(msg)
-
-        processed_params = tuple(processed_params_list)
-        # Pass the processed SQL through the driver-specific processor if needed
-        final_sql = self._process_sql_statement(processed_sql)
-        return final_sql, processed_params
+        # Instantiate SQLStatement with parameters and kwargs for internal merging
+        stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
+        # Process uses the merged parameters internally
+        return stmt.process()
 
 
 class SyncArrowBulkOperationsMixin(Generic[ConnectionT]):
@@ -527,16 +471,15 @@ class SyncArrowBulkOperationsMixin(Generic[ConnectionT]):
 
     __supports_arrow__: "ClassVar[bool]" = True
 
-    def __init__(self, connection: ConnectionT) -> None:
-        self.connection = connection
-
     @abstractmethod
     def select_arrow(  # pyright: ignore[reportUnknownParameterType]
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
+        **kwargs: Any,
     ) -> "ArrowTable":  # pyright: ignore[reportUnknownReturnType]
         """Execute a SQL query and return results as an Apache Arrow Table.
 
@@ -544,6 +487,7 @@ class SyncArrowBulkOperationsMixin(Generic[ConnectionT]):
             sql: The SQL query string.
             parameters: Parameters for the query.
             connection: Optional connection override.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
         Returns:
             An Apache Arrow Table containing the query results.
@@ -554,7 +498,7 @@ class SyncArrowBulkOperationsMixin(Generic[ConnectionT]):
 class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generic[ConnectionT]):
     connection: "ConnectionT"
 
-    def __init__(self, connection: "ConnectionT") -> None:
+    def __init__(self, connection: "ConnectionT", **kwargs: Any) -> None:
         self.connection = connection
 
     @abstractmethod
@@ -563,8 +507,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
         schema_type: Optional[type[ModelDTOT]] = None,
+        **kwargs: Any,
     ) -> "list[Union[ModelDTOT, dict[str, Any]]]": ...
 
     @abstractmethod
@@ -573,8 +519,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         sql: str,
         parameters: Optional[StatementParameterType] = None,
         /,
+        *,
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
+        **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]": ...
 
     @abstractmethod
@@ -583,8 +531,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         sql: str,
         parameters: Optional[StatementParameterType] = None,
         /,
+        *,
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
+        **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]": ...
 
     @abstractmethod
@@ -593,8 +543,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         sql: str,
         parameters: Optional[StatementParameterType] = None,
         /,
+        *,
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[T]] = None,
+        **kwargs: Any,
     ) -> "Union[Any, T]": ...
 
     @abstractmethod
@@ -603,8 +555,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         sql: str,
         parameters: Optional[StatementParameterType] = None,
         /,
+        *,
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[T]] = None,
+        **kwargs: Any,
     ) -> "Optional[Union[Any, T]]": ...
 
     @abstractmethod
@@ -613,7 +567,9 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         sql: str,
         parameters: Optional[StatementParameterType] = None,
         /,
+        *,
         connection: Optional[ConnectionT] = None,
+        **kwargs: Any,
     ) -> int: ...
 
     @abstractmethod
@@ -622,8 +578,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         sql: str,
         parameters: Optional[StatementParameterType] = None,
         /,
+        *,
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
+        **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]": ...
 
     @abstractmethod
@@ -632,7 +590,9 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         sql: str,
         parameters: Optional[StatementParameterType] = None,
         /,
+        *,
         connection: Optional[ConnectionT] = None,
+        **kwargs: Any,
     ) -> str: ...
 
 
@@ -647,7 +607,9 @@ class AsyncArrowBulkOperationsMixin(Generic[ConnectionT]):
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
+        **kwargs: Any,
     ) -> "ArrowTable":  # pyright: ignore[reportUnknownReturnType]
         """Execute a SQL query and return results as an Apache Arrow Table.
 
@@ -655,6 +617,7 @@ class AsyncArrowBulkOperationsMixin(Generic[ConnectionT]):
             sql: The SQL query string.
             parameters: Parameters for the query.
             connection: Optional connection override.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
         Returns:
             An Apache Arrow Table containing the query results.
@@ -674,8 +637,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "list[Union[ModelDTOT, dict[str, Any]]]": ...
 
     @abstractmethod
@@ -684,8 +649,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]": ...
 
     @abstractmethod
@@ -694,8 +661,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]": ...
 
     @abstractmethod
@@ -704,8 +673,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[T]]" = None,
+        **kwargs: Any,
     ) -> "Union[Any, T]": ...
 
     @abstractmethod
@@ -714,8 +685,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[T]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[Any, T]]": ...
 
     @abstractmethod
@@ -724,7 +697,9 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
+        **kwargs: Any,
     ) -> int: ...
 
     @abstractmethod
@@ -733,8 +708,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]": ...
 
     @abstractmethod
@@ -743,7 +720,9 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[ConnectionT]" = None,
+        **kwargs: Any,
     ) -> str: ...
 
 

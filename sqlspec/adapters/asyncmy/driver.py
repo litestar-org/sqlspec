@@ -18,6 +18,7 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
     """Asyncmy MySQL/MariaDB Driver Adapter."""
 
     connection: "Connection"
+    dialect: str = "mysql"
 
     def __init__(self, connection: "Connection") -> None:
         self.connection = connection
@@ -40,8 +41,10 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "list[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch data from the database.
 
@@ -49,7 +52,7 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
             List of row data as either model instances or dictionaries.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             results = await cursor.fetchall()
@@ -65,8 +68,10 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
         """Fetch one row from the database.
 
@@ -74,7 +79,7 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             result = await cursor.fetchone()
@@ -89,8 +94,10 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch one row from the database.
 
@@ -98,7 +105,7 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             result = await cursor.fetchone()
@@ -114,8 +121,10 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[Connection]" = None,
         schema_type: "Optional[type[T]]" = None,
+        **kwargs: Any,
     ) -> "Union[T, Any]":
         """Fetch a single value from the database.
 
@@ -123,7 +132,7 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
@@ -140,8 +149,10 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[Connection]" = None,
         schema_type: "Optional[type[T]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
         """Fetch a single value from the database.
 
@@ -149,7 +160,7 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
@@ -168,7 +179,9 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
+        **kwargs: Any,
     ) -> int:
         """Insert, update, or delete data from the database.
 
@@ -176,7 +189,7 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
             Row count affected by the operation.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
@@ -187,8 +200,10 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
         """Insert, update, or delete data from the database and return result.
 
@@ -196,7 +211,7 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
             The first row of results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         column_names: list[str] = []
 
         async with self._with_cursor(connection) as cursor:
@@ -214,7 +229,9 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["Connection"] = None,
+        **kwargs: Any,
     ) -> str:
         """Execute a script.
 
@@ -222,34 +239,8 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
             Status message for the operation.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             return "DONE"
-
-    async def execute_script_returning(
-        self,
-        sql: str,
-        parameters: Optional["StatementParameterType"] = None,
-        /,
-        connection: Optional["Connection"] = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
-        """Execute a script and return result.
-
-        Returns:
-            The first row of results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
-
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
-            result = await cursor.fetchone()
-            if result is None:
-                return None
-            column_names = [c[0] for c in cursor.description or []]
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
-            return dict(zip(column_names, result))

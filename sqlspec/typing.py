@@ -79,7 +79,7 @@ Represents:
 - :class:`DTOData`[:type:`list[ModelT]`]
 """
 
-StatementParameterType: TypeAlias = "Union[dict[str, Any], list[Any], tuple[Any, ...], None]"
+StatementParameterType: TypeAlias = "Union[Any, dict[str, Any], list[Any], tuple[Any, ...], None]"
 """Type alias for parameter types.
 
 Represents:

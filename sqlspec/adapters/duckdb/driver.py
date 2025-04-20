@@ -1,7 +1,6 @@
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
-from sqlspec._typing import ArrowTable
 from sqlspec.base import SyncArrowBulkOperationsMixin, SyncDriverAdapterProtocol, T
 
 if TYPE_CHECKING:
@@ -19,6 +18,7 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
 
     connection: "DuckDBPyConnection"
     use_cursor: bool = True
+    dialect: str = "duckdb"
 
     def __init__(self, connection: "DuckDBPyConnection", use_cursor: bool = True) -> None:
         self.connection = connection
@@ -27,7 +27,6 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
     # --- Helper Methods --- #
     def _cursor(self, connection: "DuckDBPyConnection") -> "DuckDBPyConnection":
         if self.use_cursor:
-            # Ignore lack of type hint on cursor()
             return connection.cursor()
         return connection
 
@@ -40,20 +39,22 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
             finally:
                 cursor.close()
         else:
-            yield connection  # Yield the connection directly
+            yield connection
 
-    # --- Public API Methods (Original Implementation + _process_sql_params) --- #
+    # --- Public API Methods --- #
 
     def select(
         self,
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["DuckDBPyConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "list[Union[ModelDTOT, dict[str, Any]]]":
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             results = cursor.fetchall()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
@@ -71,12 +72,13 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["DuckDBPyConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
-
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
@@ -93,12 +95,13 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["DuckDBPyConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
-
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
@@ -115,12 +118,13 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[DuckDBPyConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
+        **kwargs: Any,
     ) -> "Union[T, Any]":
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
-
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
@@ -134,11 +138,13 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[DuckDBPyConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
@@ -153,10 +159,12 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["DuckDBPyConnection"] = None,
+        **kwargs: Any,
     ) -> int:
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             return getattr(cursor, "rowcount", -1)  # pyright: ignore[reportUnknownMemberType]
@@ -166,11 +174,13 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["DuckDBPyConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = cursor.fetchall()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
@@ -182,44 +192,17 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
             # Always return dictionaries
             return dict(zip(column_names, result[0]))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
 
-    def _process_sql_params(
-        self, sql: str, parameters: "Optional[StatementParameterType]" = None
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Process SQL query and parameters for DB-API execution.
-
-        Converts named parameters (:name) to positional parameters (?) for DuckDB.
-
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-
-        Returns:
-            A tuple containing the processed SQL string and the processed parameters.
-        """
-        if not isinstance(parameters, dict) or not parameters:
-            # If parameters are not a dict, or empty dict, assume positional/no params
-            # Let the underlying driver handle tuples/lists directly
-            return sql, parameters
-
-        # Convert named parameters to positional parameters
-        processed_sql = sql
-        processed_params: list[Any] = []
-        for key, value in parameters.items():
-            # Replace :key with ? in the SQL
-            processed_sql = processed_sql.replace(f":{key}", "?")
-            processed_params.append(value)
-
-        return processed_sql, tuple(processed_params)
-
     def execute_script(
         self,
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
         /,
+        *,
         connection: Optional["DuckDBPyConnection"] = None,
+        **kwargs: Any,
     ) -> str:
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             return cast("str", getattr(cursor, "statusmessage", "DONE"))  # pyright: ignore[reportUnknownMemberType]
@@ -231,17 +214,12 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *,
         connection: "Optional[DuckDBPyConnection]" = None,
-    ) -> "ArrowTable":  # pyright: ignore[reportUnknownVariableType]
-        """Execute a SQL query and return results as an Apache Arrow Table.
-
-        Returns:
-            An Apache Arrow Table containing the query results.
-        """
-
-        conn = self._connection(connection)
-        processed_sql, processed_params = self._process_sql_params(sql, parameters)
-
-        with self._with_cursor(conn) as cursor:
-            cursor.execute(processed_sql, processed_params)  # pyright: ignore[reportUnknownMemberType]
+        **kwargs: Any,
+    ) -> "ArrowTable":
+        connection = self._connection(connection)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        with self._with_cursor(connection) as cursor:
+            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             return cast("ArrowTable", cursor.fetch_arrow_table())  # pyright: ignore[reportUnknownMemberType]
