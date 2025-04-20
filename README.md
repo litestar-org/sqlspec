@@ -60,7 +60,7 @@ This list is not final. If you have a driver you'd like to see added, please ope
 - `sqlspec/`:
     - `adapters/`: Contains all database drivers and associated configuration.
     - `extensions/`:
-        - `litestar/`: Future home of `litestar` integration.
+        - `litestar/`: Litestar framework integration ✅
         - `fastapi/`: Future home of `fastapi` integration.
         - `flask/`: Future home of `flask` integration.
         - `*/`: Future home of your favorite framework integration 🔌 ✨
