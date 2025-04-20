@@ -130,6 +130,36 @@ etl_config = sql.add_config(
 )
 ```
 
+#### Basic Litestar Integration
+
+In this example we are going to demonstrate how to create a basic configuration that integrates into Litestar.
+
+```py
+# /// script
+# dependencies = [
+#   "sqlspec[aiosqlite]",
+#   "litestar[standard]",
+# ]
+# ///
+
+from aiosqlite import Connection
+from litestar import Litestar, get
+
+from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.extensions.litestar import SQLSpec
+
+
+@get("/")
+async def simple_sqlite(db_session: AiosqliteDriver) -> dict[str, str]:
+    return await db_session.select_one("SELECT 'Hello, world!' AS greeting")
+
+
+sqlspec = SQLSpec(config=DatabaseConfig(
+    config=[AiosqliteConfig(), commit_mode="autocommit")],
+)
+app = Litestar(route_handlers=[simple_sqlite], plugins=[sqlspec])
+```
+
 ## Inspiration and Future Direction
 
 SQLSpec originally drew inspiration from features found in the `aiosql` library.  This is a great library for working with and executed SQL stored in files.  It's unclear how much of an overlap there will be between the two libraries, but it's possible that some features will be contributed back to `aiosql` where appropriate.
