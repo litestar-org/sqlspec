@@ -26,15 +26,9 @@ SQLSpec is a work in progress. While it offers a solid foundation for modern SQL
 
 We've talked about what SQLSpec is not, so let's look at what it can do.
 
-### Basic Example
+These are just a few of the examples that demonstrate SQLSpec's flexibility and each of the bundled adapters offer the same config and driver interfaces.
 
-### Multiple Database Engines
-
-### Examples, Bells and Whistles
-
-Let's take a look at a few alternate examples that leverage DuckDB and Litestar.
-
-#### DuckDB LLM
+### DuckDB LLM
 
 This is a quick implementation using some of the built in Secret and Extension management features of SQLSpec's DuckDB integration.
 
@@ -76,7 +70,7 @@ with sql.provide_session(etl_config) as session:
     print(result)
 ```
 
-#### DuckDB Gemini Embeddings
+### DuckDB Gemini Embeddings
 
 In this example, we are again using DuckDB.  However, we are going to use the built in to call the Google Gemini embeddings service directly from the database.
 
@@ -130,7 +124,7 @@ etl_config = sql.add_config(
 )
 ```
 
-#### Basic Litestar Integration
+### Basic Litestar Integration
 
 In this example we are going to demonstrate how to create a basic configuration that integrates into Litestar.
 
