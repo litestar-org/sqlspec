@@ -47,6 +47,10 @@ import os
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig
+from pydantic import BaseModel
+
+class ChatMessage(BaseModel):
+    message: str
 
 sql = SQLSpec()
 etl_config = sql.add_config(
@@ -66,8 +70,8 @@ etl_config = sql.add_config(
     )
 )
 with sql.provide_session(etl_config) as session:
-    result = session.select_one("SELECT generate_embedding('example text')")
-    print(result)
+    result = session.select_one("SELECT open_prompt(?)", data.message, schema_type=ChatMessage)
+    print(result) # result is a ChatMessage pydantic model
 ```
 
 ### DuckDB Gemini Embeddings
@@ -122,6 +126,9 @@ etl_config = sql.add_config(
         """),
     )
 )
+with sql.provide_session(etl_config) as session:
+    result = session.select_one("SELECT generate_embedding('example text')")
+    print(result) # result is a dictionary when `schema_type` is omitted.
 ```
 
 ### Basic Litestar Integration
