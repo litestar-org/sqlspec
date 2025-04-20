@@ -25,6 +25,7 @@ nanoid = ["fastnanoid>=0.4.1"]
 oracledb = ["oracledb"]
 orjson = ["orjson"]
 performance = ["sqlglot[rs]"]
+psqlpy = ["psqlpy"]
 psycopg = ["psycopg[binary,pool]"]
 pydantic = ["pydantic", "pydantic-extra-types"]
 pymssql = ["pymssql"]
@@ -212,6 +213,7 @@ markers = [
   "psycopg: marks tests using psycopg",
   "pymssql: marks tests using pymssql",
   "pymysql: marks tests using pymysql",
+  "psqlpy: marks tests using psqlpy",
 ]
 testpaths = ["tests"]
 

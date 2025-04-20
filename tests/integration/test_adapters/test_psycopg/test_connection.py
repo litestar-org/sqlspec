@@ -26,7 +26,7 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
             await cur.execute("SELECT 1")
             result = await cur.fetchone()
             assert result == (1,)
-
+    await async_config.close_pool()
     # Test connection pool
     pool_config = PsycopgAsyncPoolConfig(
         conninfo=f"host={postgres_service.host} port={postgres_service.port} user={postgres_service.user} password={postgres_service.password} dbname={postgres_service.database}",
@@ -42,6 +42,7 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
             await cur.execute("SELECT 1")
             result = await cur.fetchone()
             assert result == (1,)
+    await another_config.close_pool()
 
 
 @pytest.mark.xdist_group("postgres")
@@ -61,7 +62,7 @@ def test_sync_connection(postgres_service: PostgresService) -> None:
             cur.execute("SELECT 1")
             result = cur.fetchone()
             assert result == (1,)
-
+    sync_config.close_pool()
     # Test connection pool
     pool_config = PsycopgSyncPoolConfig(
         conninfo=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
@@ -77,3 +78,4 @@ def test_sync_connection(postgres_service: PostgresService) -> None:
             cur.execute("SELECT 1")
             result = cur.fetchone()
             assert result == (1,)
+    another_config.close_pool()

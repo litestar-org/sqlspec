@@ -162,7 +162,7 @@ class AsyncmyConfig(AsyncDatabaseConfig["Connection", "Pool", "AsyncmyDriver"]):
         raise ImproperConfigurationError(msg)
 
     async def create_connection(self) -> "Connection":  # pyright: ignore[reportUnknownParameterType]
-        """Create and return a new asyncmy connection.
+        """Create and return a new asyncmy connection from the pool.
 
         Returns:
             A Connection instance.
@@ -171,9 +171,8 @@ class AsyncmyConfig(AsyncDatabaseConfig["Connection", "Pool", "AsyncmyDriver"]):
             ImproperConfigurationError: If the connection could not be created.
         """
         try:
-            import asyncmy  # pyright: ignore[reportMissingTypeStubs]
-
-            return await asyncmy.connect(**self.connection_config_dict)  # pyright: ignore
+            async with self.provide_connection() as conn:
+                return conn
         except Exception as e:
             msg = f"Could not configure the Asyncmy connection. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e

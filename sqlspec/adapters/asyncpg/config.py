@@ -174,7 +174,7 @@ class AsyncpgConfig(AsyncDatabaseConfig["AsyncpgConnection", "Pool", "AsyncpgDri
         return self.create_pool()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
 
     async def create_connection(self) -> "AsyncpgConnection":
-        """Create and return a new asyncpg connection.
+        """Create and return a new asyncpg connection from the pool.
 
         Returns:
             A Connection instance.
@@ -183,9 +183,8 @@ class AsyncpgConfig(AsyncDatabaseConfig["AsyncpgConnection", "Pool", "AsyncpgDri
             ImproperConfigurationError: If the connection could not be created.
         """
         try:
-            import asyncpg
-
-            return await asyncpg.connect(**self.connection_config_dict)  # type: ignore[no-any-return]
+            pool = await self.provide_pool()
+            return await pool.acquire()
         except Exception as e:
             msg = f"Could not configure the asyncpg connection. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e

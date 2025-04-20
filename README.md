@@ -43,6 +43,7 @@ This list is not final. If you have a driver you'd like to see added, please ope
 | [`asyncpg`](https://magicstack.github.io/asyncpg/current/)                                                    | PostgreSQL | Async   | ✅         |
 | [`psycopg`](https://www.psycopg.org/)                                                                         | PostgreSQL | Sync    | ✅         |
 | [`psycopg`](https://www.psycopg.org/)                                                                         | PostgreSQL | Async   | ✅         |
+| [`psqlpy`](https://psqlpy-python.github.io/)                                                                  | PostgreSQL | Async   | ✅        |
 | [`aiosqlite`](https://github.com/omnilib/aiosqlite)                                                           | SQLite     | Async   | ✅         |
 | `sqlite3`                                                                                                    | SQLite     | Sync    | ✅         |
 | [`oracledb`](https://oracle.github.io/python-oracledb/)                                                      | Oracle     | Async   | ✅         |
