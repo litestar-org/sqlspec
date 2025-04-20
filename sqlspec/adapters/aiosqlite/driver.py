@@ -17,6 +17,7 @@ class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
     """SQLite Async Driver Adapter."""
 
     connection: "Connection"
+    dialect: str = "sqlite"
 
     def __init__(self, connection: "Connection") -> None:
         self.connection = connection

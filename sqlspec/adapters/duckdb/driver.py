@@ -1,7 +1,6 @@
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
-from sqlspec._typing import ArrowTable
 from sqlspec.base import SyncArrowBulkOperationsMixin, SyncDriverAdapterProtocol, T
 
 if TYPE_CHECKING:
@@ -19,6 +18,7 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
 
     connection: "DuckDBPyConnection"
     use_cursor: bool = True
+    dialect: str = "duckdb"
 
     def __init__(self, connection: "DuckDBPyConnection", use_cursor: bool = True) -> None:
         self.connection = connection
@@ -27,7 +27,6 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
     # --- Helper Methods --- #
     def _cursor(self, connection: "DuckDBPyConnection") -> "DuckDBPyConnection":
         if self.use_cursor:
-            # Ignore lack of type hint on cursor()
             return connection.cursor()
         return connection
 
@@ -40,9 +39,9 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
             finally:
                 cursor.close()
         else:
-            yield connection  # Yield the connection directly
+            yield connection
 
-    # --- Public API Methods (Original Implementation + _process_sql_params) --- #
+    # --- Public API Methods --- #
 
     def select(
         self,
@@ -54,18 +53,6 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "list[Union[ModelDTOT, dict[str, Any]]]":
-        """Fetch data from the database.
-
-        Args:
-            sql: SQL statement.
-            parameters: Query parameters.
-            connection: Optional connection to use.
-            schema_type: Optional schema class for the result.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            List of row data as either model instances or dictionaries.
-        """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
@@ -91,8 +78,7 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
-
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
@@ -116,7 +102,6 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
@@ -139,8 +124,7 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
         **kwargs: Any,
     ) -> "Union[T, Any]":
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
-
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
@@ -160,7 +144,7 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters)
+        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
@@ -233,13 +217,7 @@ class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDrive
         *,
         connection: "Optional[DuckDBPyConnection]" = None,
         **kwargs: Any,
-    ) -> "ArrowTable":  # pyright: ignore[reportUnknownVariableType]
-        """Execute a SQL query and return results as an Apache Arrow Table.
-
-        Returns:
-            An Apache Arrow Table containing the query results.
-        """
-
+    ) -> "ArrowTable":
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:

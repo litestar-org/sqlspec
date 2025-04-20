@@ -1,3 +1,5 @@
+from collections.abc import Generator
+from contextlib import contextmanager
 from typing import Any, Optional
 
 __all__ = (
@@ -6,7 +8,9 @@ __all__ = (
     "MissingDependencyError",
     "MultipleResultsFoundError",
     "NotFoundError",
+    "ParameterStyleMismatchError",
     "RepositoryError",
+    "SQLParsingError",
     "SQLSpecError",
     "SerializationError",
 )
@@ -74,6 +78,20 @@ class SQLParsingError(SQLSpecError):
         super().__init__(message)
 
 
+class ParameterStyleMismatchError(SQLSpecError):
+    """Error when parameter style doesn't match SQL placeholder style.
+
+    This exception is raised when there's a mismatch between the parameter type
+    (dictionary, tuple, etc.) and the placeholder style in the SQL query
+    (named, positional, etc.).
+    """
+
+    def __init__(self, message: Optional[str] = None) -> None:
+        if message is None:
+            message = "Parameter style mismatch: dictionary parameters provided but no named placeholders found in SQL."
+        super().__init__(message)
+
+
 class ImproperConfigurationError(SQLSpecError):
     """Improper Configuration error.
 
@@ -99,3 +117,15 @@ class NotFoundError(RepositoryError):
 
 class MultipleResultsFoundError(RepositoryError):
     """A single database result was required but more than one were found."""
+
+
+@contextmanager
+def wrap_exceptions(wrap_exceptions: bool = True) -> Generator[None, None, None]:
+    try:
+        yield
+
+    except Exception as exc:
+        if wrap_exceptions is False:
+            raise
+        msg = "An error occurred during the operation."
+        raise RepositoryError(detail=msg) from exc

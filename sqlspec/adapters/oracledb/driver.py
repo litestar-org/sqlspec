@@ -25,6 +25,7 @@ class OracleSyncDriver(SyncArrowBulkOperationsMixin["Connection"], SyncDriverAda
     """Oracle Sync Driver Adapter."""
 
     connection: "Connection"
+    dialect: str = "oracle"
 
     def __init__(self, connection: "Connection") -> None:
         self.connection = connection
@@ -304,6 +305,7 @@ class OracleAsyncDriver(
     """Oracle Async Driver Adapter."""
 
     connection: "AsyncConnection"
+    dialect: str = "oracle"
 
     def __init__(self, connection: "AsyncConnection") -> None:
         self.connection = connection

@@ -1,9 +1,12 @@
+import logging
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from psycopg.rows import dict_row
 
 from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol, T
+from sqlspec.exceptions import SQLParsingError
+from sqlspec.statement import PARAM_REGEX, SQLStatement
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
@@ -12,6 +15,8 @@ if TYPE_CHECKING:
 
     from sqlspec.typing import ModelDTOT, StatementParameterType
 
+logger = logging.getLogger("sqlspec")
+
 __all__ = ("PsycopgAsyncDriver", "PsycopgSyncDriver")
 
 
@@ -19,10 +24,62 @@ class PsycopgSyncDriver(SyncDriverAdapterProtocol["Connection"]):
     """Psycopg Sync Driver Adapter."""
 
     connection: "Connection"
-    param_style: str = "%s"
+    dialect: str = "postgres"
 
     def __init__(self, connection: "Connection") -> None:
         self.connection = connection
+
+    def _process_sql_params(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        **kwargs: Any,
+    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
+        """Process SQL and parameters, converting :name -> %(name)s if needed."""
+        stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
+        processed_sql, processed_params = stmt.process()
+
+        if isinstance(processed_params, dict):
+            parameter_dict = processed_params
+            processed_sql_parts: list[str] = []
+            last_end = 0
+            found_params_regex: list[str] = []
+
+            for match in PARAM_REGEX.finditer(processed_sql):
+                if match.group("dquote") or match.group("squote") or match.group("comment"):
+                    continue
+
+                if match.group("var_name"):
+                    var_name = match.group("var_name")
+                    found_params_regex.append(var_name)
+                    start = match.start("var_name") - 1
+                    end = match.end("var_name")
+
+                    if var_name not in parameter_dict:
+                        msg = (
+                            f"Named parameter ':{var_name}' found in SQL but missing from processed parameters. "
+                            f"Processed SQL: {processed_sql}"
+                        )
+                        raise SQLParsingError(msg)
+
+                    processed_sql_parts.extend((processed_sql[last_end:start], f"%({var_name})s"))
+                    last_end = end
+
+            processed_sql_parts.append(processed_sql[last_end:])
+            final_sql = "".join(processed_sql_parts)
+
+            if not found_params_regex and parameter_dict:
+                logger.warning(
+                    "Dict params provided (%s), but no :name placeholders found. SQL: %s",
+                    list(parameter_dict.keys()),
+                    processed_sql,
+                )
+                return processed_sql, parameter_dict
+
+            return final_sql, parameter_dict
+
+        return processed_sql, processed_params
 
     @staticmethod
     @contextmanager
@@ -132,7 +189,8 @@ class PsycopgSyncDriver(SyncDriverAdapterProtocol["Connection"]):
             cursor.execute(sql, parameters)
             row = cursor.fetchone()
             row = self.check_not_found(row)
-            val = next(iter(row))
+            val = next(iter(row.values())) if row else None
+            val = self.check_not_found(val)
             if schema_type is not None:
                 return schema_type(val)  # type: ignore[call-arg]
             return val
@@ -147,10 +205,10 @@ class PsycopgSyncDriver(SyncDriverAdapterProtocol["Connection"]):
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
-        """Fetch one row from the database.
+        """Fetch a single value from the database.
 
         Returns:
-            The first row of the query results.
+            The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
@@ -159,7 +217,9 @@ class PsycopgSyncDriver(SyncDriverAdapterProtocol["Connection"]):
             row = cursor.fetchone()
             if row is None:
                 return None
-            val = next(iter(row))
+            val = next(iter(row.values())) if row else None
+            if val is None:
+                return None
             if schema_type is not None:
                 return schema_type(val)  # type: ignore[call-arg]
             return val
@@ -230,17 +290,69 @@ class PsycopgSyncDriver(SyncDriverAdapterProtocol["Connection"]):
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
-            return str(cursor.rowcount)
+            return str(cursor.statusmessage) if cursor.statusmessage is not None else "DONE"
 
 
 class PsycopgAsyncDriver(AsyncDriverAdapterProtocol["AsyncConnection"]):
     """Psycopg Async Driver Adapter."""
 
     connection: "AsyncConnection"
-    param_style: str = "%s"
+    dialect: str = "postgres"
 
     def __init__(self, connection: "AsyncConnection") -> None:
         self.connection = connection
+
+    def _process_sql_params(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        **kwargs: Any,
+    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
+        """Process SQL and parameters, converting :name -> %(name)s if needed."""
+        stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
+        processed_sql, processed_params = stmt.process()
+
+        if isinstance(processed_params, dict):
+            parameter_dict = processed_params
+            processed_sql_parts: list[str] = []
+            last_end = 0
+            found_params_regex: list[str] = []
+
+            for match in PARAM_REGEX.finditer(processed_sql):
+                if match.group("dquote") or match.group("squote") or match.group("comment"):
+                    continue
+
+                if match.group("var_name"):
+                    var_name = match.group("var_name")
+                    found_params_regex.append(var_name)
+                    start = match.start("var_name") - 1
+                    end = match.end("var_name")
+
+                    if var_name not in parameter_dict:
+                        msg = (
+                            f"Named parameter ':{var_name}' found in SQL but missing from processed parameters. "
+                            f"Processed SQL: {processed_sql}"
+                        )
+                        raise SQLParsingError(msg)
+
+                    processed_sql_parts.extend((processed_sql[last_end:start], f"%({var_name})s"))
+                    last_end = end
+
+            processed_sql_parts.append(processed_sql[last_end:])
+            final_sql = "".join(processed_sql_parts)
+
+            if not found_params_regex and parameter_dict:
+                logger.warning(
+                    "Dict params provided (%s), but no :name placeholders found. SQL: %s",
+                    list(parameter_dict.keys()),
+                    processed_sql,
+                )
+                return processed_sql, parameter_dict
+
+            return final_sql, parameter_dict
+
+        return processed_sql, processed_params
 
     @staticmethod
     @asynccontextmanager
@@ -354,7 +466,8 @@ class PsycopgAsyncDriver(AsyncDriverAdapterProtocol["AsyncConnection"]):
             await cursor.execute(sql, parameters)
             row = await cursor.fetchone()
             row = self.check_not_found(row)
-            val = next(iter(row))
+            val = next(iter(row.values())) if row else None
+            val = self.check_not_found(val)
             if schema_type is not None:
                 return schema_type(val)  # type: ignore[call-arg]
             return val
@@ -382,7 +495,9 @@ class PsycopgAsyncDriver(AsyncDriverAdapterProtocol["AsyncConnection"]):
             row = await cursor.fetchone()
             if row is None:
                 return None
-            val = next(iter(row))
+            val = next(iter(row.values())) if row else None
+            if val is None:
+                return None
             if schema_type is not None:
                 return schema_type(val)  # type: ignore[call-arg]
             return val
@@ -460,4 +575,4 @@ class PsycopgAsyncDriver(AsyncDriverAdapterProtocol["AsyncConnection"]):
 
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
-            return str(cursor.rowcount)
+            return str(cursor.statusmessage) if cursor.statusmessage is not None else "DONE"

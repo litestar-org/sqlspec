@@ -13,11 +13,13 @@ def format_placeholder(field_name: str, style: str, dialect: Optional[str] = Non
         The formatted placeholder string.
     """
     if style == "tuple_binds":
-        if dialect in ["sqlite", "duckdb", "aiosqlite"]:
+        if dialect in {"sqlite", "duckdb", "aiosqlite"}:
             return "?"
         # Default to Postgres/BigQuery style
         return "%s"
-    if dialect in ["sqlite", "duckdb", "aiosqlite"]:
+    if dialect == "duckdb":
+        return f"${field_name}"
+    if dialect in {"sqlite", "aiosqlite"}:
         return f":{field_name}"
     # For postgres and similar
     return f"%({field_name})s"

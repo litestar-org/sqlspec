@@ -18,6 +18,7 @@ class AsyncmyDriver(AsyncDriverAdapterProtocol["Connection"]):
     """Asyncmy MySQL/MariaDB Driver Adapter."""
 
     connection: "Connection"
+    dialect: str = "mysql"
 
     def __init__(self, connection: "Connection") -> None:
         self.connection = connection

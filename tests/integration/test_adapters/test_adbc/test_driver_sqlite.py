@@ -250,3 +250,61 @@ def test_driver_select_arrow(adbc_session: AdbcConfig) -> None:
         # Assuming id is 1 for the inserted record
         assert arrow_table.column("id").to_pylist() == [1]
         driver.execute_script("DROP TABLE IF EXISTS test_table")
+
+
+@xfail_if_driver_missing
+@pytest.mark.xdist_group("sqlite")
+def test_driver_named_params_with_scalar(adbc_session: AdbcConfig) -> None:
+    """Test that scalar parameters work with named parameters in SQL."""
+    with adbc_session.provide_session() as driver:
+        sql = """
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name VARCHAR(50)
+        );
+        """
+        driver.execute_script(sql)
+
+        # Insert test record using named parameter with scalar value
+        insert_sql = """
+        INSERT INTO test_table (name)
+        VALUES (:name)
+        """
+        driver.insert_update_delete(insert_sql, "test_name")
+
+        # Select and verify
+        select_sql = "SELECT name FROM test_table WHERE name = :name"
+        results = driver.select(select_sql, "test_name")
+        assert len(results) == 1
+        assert results[0]["name"] == "test_name"
+        driver.execute_script("DROP TABLE IF EXISTS test_table")
+
+
+@xfail_if_driver_missing
+@pytest.mark.xdist_group("sqlite")
+def test_driver_named_params_with_tuple(adbc_session: AdbcConfig) -> None:
+    """Test that tuple parameters work with named parameters in SQL."""
+    with adbc_session.provide_session() as driver:
+        sql = """
+        CREATE TABLE test_table (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name VARCHAR(50),
+            age INTEGER
+        );
+        """
+        driver.execute_script(sql)
+
+        # Insert test record using named parameters with tuple values
+        insert_sql = """
+        INSERT INTO test_table (name, age)
+        VALUES (:name, :age)
+        """
+        driver.insert_update_delete(insert_sql, ("test_name", 30))
+
+        # Select and verify
+        select_sql = "SELECT name, age FROM test_table WHERE name = :name AND age = :age"
+        results = driver.select(select_sql, ("test_name", 30))
+        assert len(results) == 1
+        assert results[0]["name"] == "test_name"
+        assert results[0]["age"] == 30
+        driver.execute_script("DROP TABLE IF EXISTS test_table")

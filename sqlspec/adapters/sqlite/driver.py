@@ -16,6 +16,7 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
     """SQLite Sync Driver Adapter."""
 
     connection: "Connection"
+    dialect: str = "sqlite"
 
     def __init__(self, connection: "Connection") -> None:
         self.connection = connection
@@ -228,10 +229,23 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
             result = cursor.fetchall()
             if len(result) == 0:
                 return None
+
+            # Get column names from cursor description
             column_names = [c[0] for c in cursor.description or []]
+
+            # Get the first row's values - ensure we're getting the actual values
+            row_values = result[0]
+
+            # Debug print to see what we're getting
+
+            # Create dictionary mapping column names to values
+            result_dict = {}
+            for i, col_name in enumerate(column_names):
+                result_dict[col_name] = row_values[i]
+
             if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result[0]))))
-            return dict(zip(column_names, result[0]))
+                return cast("ModelDTOT", schema_type(**result_dict))
+            return result_dict
 
     def execute_script(
         self,
@@ -250,15 +264,14 @@ class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
-        # For DDL statements, don't pass parameters to execute
-        # SQLite doesn't support parameters for DDL statements
+        # The _process_sql_params handles parameter formatting for the dialect.
         with self._with_cursor(connection) as cursor:
             if not parameters:
                 cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
             else:
                 cursor.execute(sql, parameters)
 
-            return cast("str", cursor.statusmessage) if hasattr(cursor, "statusmessage") else "DONE"  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+        return cast("str", cursor.statusmessage) if hasattr(cursor, "statusmessage") else "DONE"  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
 
     def execute_script_returning(
         self,

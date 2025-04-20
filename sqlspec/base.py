@@ -1,4 +1,4 @@
-# ruff: noqa: PLR6301, PLR0912, PLR0915, C901, PLR0911
+# ruff: noqa: PLR6301
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable
@@ -16,10 +16,8 @@ from typing import (
     overload,
 )
 
-import sqlglot
-from sqlglot import exp
-
-from sqlspec.exceptions import NotFoundError, SQLParsingError
+from sqlspec.exceptions import NotFoundError
+from sqlspec.statement import SQLStatement
 from sqlspec.typing import ModelDTOT, StatementParameterType
 
 if TYPE_CHECKING:
@@ -37,6 +35,7 @@ __all__ = (
     "NoPoolAsyncConfig",
     "NoPoolSyncConfig",
     "SQLSpec",
+    "SQLStatement",
     "SyncArrowBulkOperationsMixin",
     "SyncDatabaseConfig",
     "SyncDriverAdapterProtocol",
@@ -53,13 +52,15 @@ ConfigT = TypeVar(
     bound="Union[Union[AsyncDatabaseConfig[Any, Any, Any], NoPoolAsyncConfig[Any, Any]], SyncDatabaseConfig[Any, Any, Any], NoPoolSyncConfig[Any, Any]]",
 )
 DriverT = TypeVar("DriverT", bound="Union[SyncDriverAdapterProtocol[Any], AsyncDriverAdapterProtocol[Any]]")
-
-# Regex to find :param style placeholders, avoiding those inside quotes
-# Handles basic cases, might need refinement for complex SQL
+# Regex to find :param or %(param)s style placeholders, skipping those inside quotes
 PARAM_REGEX = re.compile(
-    r"(?P<dquote>\"(?:[^\"]|\"\")*\")|"  # Double-quoted strings
-    r"(?P<squote>'(?:[^']|'')*')|"  # Single-quoted strings
-    r"(?P<lead>[^:]):(?P<var_name>[a-zA-Z_][a-zA-Z0-9_]*)"  # :param placeholder
+    r"""
+    (?P<dquote>"([^"]|\\")*") | # Double-quoted strings
+    (?P<squote>'([^']|\\')*') | # Single-quoted strings
+    : (?P<var_name_colon>[a-zA-Z_][a-zA-Z0-9_]*) | # :var_name
+    % \( (?P<var_name_perc>[a-zA-Z_][a-zA-Z0-9_]*) \) s # %(var_name)s
+    """,
+    re.VERBOSE,
 )
 
 
@@ -418,8 +419,8 @@ class SQLSpec:
 class CommonDriverAttributes(Generic[ConnectionT]):
     """Common attributes and methods for driver adapters."""
 
-    param_style: str = "?"
-    """The parameter style placeholder supported by the underlying database driver (e.g., '?', '%s')."""
+    dialect: str
+    """The SQL dialect supported by the underlying database driver (e.g., 'postgres', 'mysql')."""
     connection: ConnectionT
     """The connection to the underlying database."""
     __supports_arrow__: ClassVar[bool] = False
@@ -446,191 +447,29 @@ class CommonDriverAttributes(Generic[ConnectionT]):
             raise NotFoundError(msg)
         return item_or_none
 
-    def _process_sql_statement(self, sql: str) -> str:
-        """Perform any preprocessing of the SQL query string if needed.
-        Default implementation returns the SQL unchanged.
-
-        Args:
-            sql: The SQL query string.
-
-        Returns:
-            The processed SQL query string.
-        """
-        return sql
-
     def _process_sql_params(
         self, sql: str, parameters: "Optional[StatementParameterType]" = None, /, **kwargs: Any
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Process SQL query and parameters for DB-API execution.
-
-        Uses sqlglot to parse named parameters (:name) if parameters is a dictionary,
-        and converts them to the driver's `param_style`.
-        Handles single value parameters by wrapping them in a tuple.
+        """Process SQL query and parameters using SQLStatement for validation and formatting.
 
         Args:
             sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, single value, or None).
+            parameters: Parameters for the query.
             **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
         Returns:
-            A tuple containing the processed SQL string and the processed parameters
-            (tuple for named/single params, original list/tuple for positional, None if no params).
-
-        Raises:
-            ValueError: If parameter validation fails (missing/extra keys for dicts,
-                        mixing named/positional placeholders with dicts).
-            ImportError: If sqlglot is not installed.
+            A tuple containing the processed SQL query and parameters.
         """
-        # 1. Handle None and kwargs
-        if parameters is None and not kwargs:
-            return self._process_sql_statement(sql), None
-
-        # 2. Merge parameters with kwargs if parameters is a dict
-        parameters = {**parameters, **kwargs} if isinstance(parameters, dict) else kwargs if kwargs else parameters
-
-        # 3. Handle dictionary parameters using sqlglot
-        if isinstance(parameters, dict):
-            if not parameters:
-                # Return early for empty dict
-                return self._process_sql_statement(sql), parameters
-
-            # First check if there are any :param style placeholders using regex
-            regex_placeholders = []
-            for match in PARAM_REGEX.finditer(sql):
-                if match.group("dquote") is not None or match.group("squote") is not None:
-                    continue
-                var_name = match.group("var_name")
-                if var_name is not None:
-                    regex_placeholders.append(var_name)
-
-            try:
-                expression = sqlglot.parse_one(sql)
-            except Exception as e:
-                # If sqlglot parsing fails but regex found placeholders, use regex approach
-                if regex_placeholders:
-                    # Use regex approach as fallback
-                    processed_sql = sql
-                    param_values = []
-                    for key, value in parameters.items():
-                        if key in regex_placeholders:
-                            processed_sql = processed_sql.replace(f":{key}", self.param_style)
-                            param_values.append(value)
-
-                    # Validate that all placeholders were found
-                    if len(param_values) != len(regex_placeholders):
-                        msg = f"Not all placeholders found in parameters: {set(regex_placeholders) - set(parameters.keys())}"
-                        raise SQLParsingError(msg) from e
-
-                    return self._process_sql_statement(processed_sql), tuple(param_values)
-
-                msg = f"sqlglot failed to parse SQL: {e}"
-                raise SQLParsingError(msg) from e
-
-            placeholders = list(expression.find_all(exp.Parameter))
-            placeholder_names: list[str] = []
-            has_unnamed = False
-            for p in placeholders:
-                if p.name:
-                    placeholder_names.append(p.name)
-                else:
-                    has_unnamed = True  # Found unnamed placeholder like '?'
-
-            # If sqlglot didn't find any placeholders but regex did, use regex approach
-            if not placeholder_names and regex_placeholders:
-                processed_sql = sql
-                param_values = []
-                for key, value in parameters.items():
-                    if key in regex_placeholders:
-                        processed_sql = processed_sql.replace(f":{key}", self.param_style)
-                        param_values.append(value)
-
-                # Validate that all placeholders were found
-                if len(param_values) != len(regex_placeholders):
-                    msg = (
-                        f"Not all placeholders found in parameters: {set(regex_placeholders) - set(parameters.keys())}"
-                    )
-                    raise SQLParsingError(msg)
-
-                return self._process_sql_statement(processed_sql), tuple(param_values)
-
-            if has_unnamed:
-                msg = "Cannot use dictionary parameters with unnamed placeholders (e.g., '?') in the SQL query."
-                raise SQLParsingError(msg)
-
-            if not placeholder_names:
-                # If no named placeholders found, but dict was provided, raise error.
-                # (We already handled the empty dict case above)
-                msg = "Dictionary parameters provided, but no named placeholders found in the SQL query."
-                raise SQLParsingError(msg)
-
-            # Validation
-            provided_keys = set(parameters.keys())
-            required_keys = set(placeholder_names)
-
-            missing_keys = required_keys - provided_keys
-            if missing_keys:
-                msg = f"Named parameters found in SQL but not provided in parameters dictionary: {missing_keys}"
-                raise SQLParsingError(msg)
-
-            extra_keys = provided_keys - required_keys
-            if extra_keys:
-                msg = f"Parameters provided but not found in SQL: {extra_keys}"
-                raise SQLParsingError(msg)  # Strict check
-
-            # Build ordered tuple of parameters
-            ordered_params = tuple(parameters[name] for name in placeholder_names)
-
-            # Replace :name with self.param_style using regex for safety
-            processed_sql = ""
-            last_end = 0
-            params_iter = iter(placeholder_names)  # Ensure order correctness during replacement
-
-            for match in PARAM_REGEX.finditer(sql):
-                if match.group("dquote") is not None or match.group("squote") is not None:
-                    processed_sql += sql[last_end : match.end()]
-                    last_end = match.end()
-                    continue
-
-                var_name = match.group("var_name")
-                if var_name is None:
-                    processed_sql += sql[last_end : match.end()]
-                    last_end = match.end()
-                    continue
-
-                expected_param = next(params_iter, None)
-                if var_name != expected_param:
-                    msg = f"Internal parameter processing mismatch: Regex found ':{var_name}' but expected ':{expected_param}' based on sqlglot parse order."
-                    raise SQLParsingError(msg)
-
-                # Replace :param with param_style
-                start_replace = match.start("var_name") - 1  # Include the ':'
-                processed_sql += sql[last_end:start_replace] + self.param_style
-                last_end = match.end("var_name")
-
-            processed_sql += sql[last_end:]  # Append remaining part
-
-            final_sql = self._process_sql_statement(processed_sql)
-            return final_sql, ordered_params
-
-        # 4. Handle list/tuple parameters (positional)
-        if isinstance(parameters, (list, tuple)):
-            # Let the underlying driver handle these directly
-            return self._process_sql_statement(sql), parameters
-
-        # 5. Handle single value parameters
-        # If it wasn't None, dict, list, or tuple, it must be a single value
-        processed_params: tuple[Any, ...] = (parameters,)
-        # Assuming single value maps to a single positional placeholder.
-        return self._process_sql_statement(sql), processed_params
+        # Instantiate SQLStatement with parameters and kwargs for internal merging
+        stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
+        # Process uses the merged parameters internally
+        return stmt.process()
 
 
 class SyncArrowBulkOperationsMixin(Generic[ConnectionT]):
     """Mixin for sync drivers supporting bulk Apache Arrow operations."""
 
     __supports_arrow__: "ClassVar[bool]" = True
-
-    def __init__(self, connection: ConnectionT) -> None:
-        self.connection = connection
 
     @abstractmethod
     def select_arrow(  # pyright: ignore[reportUnknownParameterType]
@@ -659,7 +498,7 @@ class SyncArrowBulkOperationsMixin(Generic[ConnectionT]):
 class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generic[ConnectionT]):
     connection: "ConnectionT"
 
-    def __init__(self, connection: "ConnectionT") -> None:
+    def __init__(self, connection: "ConnectionT", **kwargs: Any) -> None:
         self.connection = connection
 
     @abstractmethod
