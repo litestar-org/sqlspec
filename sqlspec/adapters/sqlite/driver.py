@@ -2,17 +2,21 @@ from contextlib import contextmanager
 from sqlite3 import Connection, Cursor
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
-from sqlspec.base import SyncDriverAdapterProtocol, T
+from sqlspec.base import SyncDriverAdapterProtocol
+from sqlspec.mixins import SQLTranslatorMixin
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
 
-    from sqlspec.typing import ModelDTOT, StatementParameterType
+    from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 __all__ = ("SqliteDriver",)
 
 
-class SqliteDriver(SyncDriverAdapterProtocol["Connection"]):
+class SqliteDriver(
+    SQLTranslatorMixin["Connection"],
+    SyncDriverAdapterProtocol["Connection"],
+):
     """SQLite Sync Driver Adapter."""
 
     connection: "Connection"

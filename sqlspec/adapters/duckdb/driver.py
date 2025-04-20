@@ -1,19 +1,25 @@
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
-from sqlspec.base import SyncArrowBulkOperationsMixin, SyncDriverAdapterProtocol, T
+from sqlspec.base import SyncDriverAdapterProtocol
+from sqlspec.mixins import SQLTranslatorMixin, SyncArrowBulkOperationsMixin
+from sqlspec.typing import ArrowTable, StatementParameterType
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
 
     from duckdb import DuckDBPyConnection
 
-    from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType
+    from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType, T
 
 __all__ = ("DuckDBDriver",)
 
 
-class DuckDBDriver(SyncArrowBulkOperationsMixin["DuckDBPyConnection"], SyncDriverAdapterProtocol["DuckDBPyConnection"]):
+class DuckDBDriver(
+    SyncArrowBulkOperationsMixin["DuckDBPyConnection"],
+    SQLTranslatorMixin["DuckDBPyConnection"],
+    SyncDriverAdapterProtocol["DuckDBPyConnection"],
+):
     """DuckDB Sync Driver Adapter."""
 
     connection: "DuckDBPyConnection"

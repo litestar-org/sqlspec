@@ -33,8 +33,26 @@ PYDANTIC_USE_FAILFAST = False  # leave permanently disabled for now
 
 
 T = TypeVar("T")
+ConnectionT = TypeVar("ConnectionT")
+"""Type variable for connection types.
 
-ModelT = TypeVar("ModelT", bound="Union[Struct, BaseModel, DataclassProtocol]")
+:class:`~sqlspec.typing.ConnectionT`
+"""
+PoolT = TypeVar("PoolT")
+"""Type variable for pool types.
+
+:class:`~sqlspec.typing.PoolT`
+"""
+PoolT_co = TypeVar("PoolT_co", covariant=True)
+"""Type variable for covariant pool types.
+
+:class:`~sqlspec.typing.PoolT_co`
+"""
+ModelT = TypeVar("ModelT", bound="Union[dict[str, Any], Struct, BaseModel, DataclassProtocol]")
+"""Type variable for model types.
+
+:class:`dict[str, Any]` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol`
+"""
 
 FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
 """Type variable for filter types.

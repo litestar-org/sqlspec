@@ -78,6 +78,15 @@ class SQLParsingError(SQLSpecError):
         super().__init__(message)
 
 
+class SQLConversionError(SQLSpecError):
+    """Issues converting SQL statements."""
+
+    def __init__(self, message: Optional[str] = None) -> None:
+        if message is None:
+            message = "Issues converting SQL statement."
+        super().__init__(message)
+
+
 class ParameterStyleMismatchError(SQLSpecError):
     """Error when parameter style doesn't match SQL placeholder style.
 

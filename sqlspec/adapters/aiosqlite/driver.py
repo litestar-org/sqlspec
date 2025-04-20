@@ -1,19 +1,23 @@
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
-from sqlspec.base import AsyncDriverAdapterProtocol, T
+from sqlspec.base import AsyncDriverAdapterProtocol
+from sqlspec.mixins import SQLTranslatorMixin
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
     from aiosqlite import Connection, Cursor
 
-    from sqlspec.typing import ModelDTOT, StatementParameterType
+    from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 __all__ = ("AiosqliteDriver",)
 
 
-class AiosqliteDriver(AsyncDriverAdapterProtocol["Connection"]):
+class AiosqliteDriver(
+    SQLTranslatorMixin["Connection"],
+    AsyncDriverAdapterProtocol["Connection"],
+):
     """SQLite Async Driver Adapter."""
 
     connection: "Connection"

@@ -20,16 +20,14 @@ from typing import (
 
 from sqlspec.exceptions import NotFoundError
 from sqlspec.statement import SQLStatement
-from sqlspec.typing import ModelDTOT, StatementParameterType
+from sqlspec.typing import ConnectionT, ModelDTOT, PoolT, StatementParameterType, T
 from sqlspec.utils.sync_tools import maybe_async_
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
-    from pyarrow import Table as ArrowTable
 
 __all__ = (
-    "AsyncArrowBulkOperationsMixin",
     "AsyncDatabaseConfig",
     "AsyncDriverAdapterProtocol",
     "CommonDriverAttributes",
@@ -39,15 +37,10 @@ __all__ = (
     "NoPoolSyncConfig",
     "SQLSpec",
     "SQLStatement",
-    "SyncArrowBulkOperationsMixin",
     "SyncDatabaseConfig",
     "SyncDriverAdapterProtocol",
 )
 
-T = TypeVar("T")
-ConnectionT = TypeVar("ConnectionT")
-PoolT = TypeVar("PoolT")
-PoolT_co = TypeVar("PoolT_co", covariant=True)
 AsyncConfigT = TypeVar("AsyncConfigT", bound="Union[AsyncDatabaseConfig[Any, Any, Any], NoPoolAsyncConfig[Any, Any]]")
 SyncConfigT = TypeVar("SyncConfigT", bound="Union[SyncDatabaseConfig[Any, Any, Any], NoPoolSyncConfig[Any, Any]]")
 ConfigT = TypeVar(
@@ -558,35 +551,6 @@ class CommonDriverAttributes(Generic[ConnectionT]):
         return stmt.process()
 
 
-class SyncArrowBulkOperationsMixin(Generic[ConnectionT]):
-    """Mixin for sync drivers supporting bulk Apache Arrow operations."""
-
-    __supports_arrow__: "ClassVar[bool]" = True
-
-    @abstractmethod
-    def select_arrow(  # pyright: ignore[reportUnknownParameterType]
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
-        connection: "Optional[ConnectionT]" = None,
-        **kwargs: Any,
-    ) -> "ArrowTable":  # pyright: ignore[reportUnknownReturnType]
-        """Execute a SQL query and return results as an Apache Arrow Table.
-
-        Args:
-            sql: The SQL query string.
-            parameters: Parameters for the query.
-            connection: Optional connection override.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            An Apache Arrow Table containing the query results.
-        """
-        raise NotImplementedError
-
-
 class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generic[ConnectionT]):
     connection: "ConnectionT"
 
@@ -842,35 +806,6 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         connection: Optional[ConnectionT] = None,
         **kwargs: Any,
     ) -> str: ...
-
-
-class AsyncArrowBulkOperationsMixin(Generic[ConnectionT]):
-    """Mixin for async drivers supporting bulk Apache Arrow operations."""
-
-    __supports_arrow__: "ClassVar[bool]" = True
-
-    @abstractmethod
-    async def select_arrow(  # pyright: ignore[reportUnknownParameterType]
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
-        connection: "Optional[ConnectionT]" = None,
-        **kwargs: Any,
-    ) -> "ArrowTable":  # pyright: ignore[reportUnknownReturnType]
-        """Execute a SQL query and return results as an Apache Arrow Table.
-
-        Args:
-            sql: The SQL query string.
-            parameters: Parameters for the query.
-            connection: Optional connection override.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            An Apache Arrow Table containing the query results.
-        """
-        raise NotImplementedError
 
 
 class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generic[ConnectionT]):

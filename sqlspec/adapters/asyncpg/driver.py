@@ -5,8 +5,9 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 from asyncpg import Connection
 from typing_extensions import TypeAlias
 
-from sqlspec.base import AsyncDriverAdapterProtocol, T
+from sqlspec.base import AsyncDriverAdapterProtocol
 from sqlspec.exceptions import SQLParsingError
+from sqlspec.mixins import SQLTranslatorMixin
 from sqlspec.statement import PARAM_REGEX, SQLStatement
 
 if TYPE_CHECKING:
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
     from asyncpg.connection import Connection
     from asyncpg.pool import PoolConnectionProxy
 
-    from sqlspec.typing import ModelDTOT, StatementParameterType
+    from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 __all__ = ("AsyncpgConnection", "AsyncpgDriver")
 
@@ -35,7 +36,10 @@ QMARK_REGEX = re.compile(
 AsyncpgConnection: TypeAlias = "Union[Connection[Any], PoolConnectionProxy[Any]]"  # pyright: ignore[reportMissingTypeArgument]
 
 
-class AsyncpgDriver(AsyncDriverAdapterProtocol["AsyncpgConnection"]):
+class AsyncpgDriver(
+    SQLTranslatorMixin["AsyncpgConnection"],
+    AsyncDriverAdapterProtocol["AsyncpgConnection"],
+):
     """AsyncPG Postgres Driver Adapter."""
 
     connection: "AsyncpgConnection"

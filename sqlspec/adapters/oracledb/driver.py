@@ -1,14 +1,9 @@
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
-from sqlspec.base import (
-    AsyncArrowBulkOperationsMixin,
-    AsyncDriverAdapterProtocol,
-    SyncArrowBulkOperationsMixin,
-    SyncDriverAdapterProtocol,
-    T,
-)
-from sqlspec.typing import ArrowTable, StatementParameterType
+from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+from sqlspec.mixins import AsyncArrowBulkOperationsMixin, SQLTranslatorMixin, SyncArrowBulkOperationsMixin
+from sqlspec.typing import ArrowTable, StatementParameterType, T
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator, Sequence
@@ -21,7 +16,11 @@ if TYPE_CHECKING:
 __all__ = ("OracleAsyncDriver", "OracleSyncDriver")
 
 
-class OracleSyncDriver(SyncArrowBulkOperationsMixin["Connection"], SyncDriverAdapterProtocol["Connection"]):
+class OracleSyncDriver(
+    SyncArrowBulkOperationsMixin["Connection"],
+    SQLTranslatorMixin["Connection"],
+    SyncDriverAdapterProtocol["Connection"],
+):
     """Oracle Sync Driver Adapter."""
 
     connection: "Connection"
@@ -433,7 +432,9 @@ class OracleSyncDriver(SyncArrowBulkOperationsMixin["Connection"], SyncDriverAda
 
 
 class OracleAsyncDriver(
-    AsyncArrowBulkOperationsMixin["AsyncConnection"], AsyncDriverAdapterProtocol["AsyncConnection"]
+    AsyncArrowBulkOperationsMixin["AsyncConnection"],
+    SQLTranslatorMixin["AsyncConnection"],
+    AsyncDriverAdapterProtocol["AsyncConnection"],
 ):
     """Oracle Async Driver Adapter."""
 

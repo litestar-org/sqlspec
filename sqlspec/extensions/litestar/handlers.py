@@ -19,7 +19,8 @@ if TYPE_CHECKING:
     from litestar.datastructures.state import State
     from litestar.types import Message, Scope
 
-    from sqlspec.base import ConnectionT, DatabaseConfigProtocol, DriverT, PoolT
+    from sqlspec.base import DatabaseConfigProtocol, DriverT
+    from sqlspec.typing import ConnectionT, PoolT
 
 
 SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, HTTP_DISCONNECT, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
