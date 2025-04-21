@@ -192,7 +192,7 @@ This list is not final. If you have a driver you'd like to see added, please ope
 | [`oracledb`](https://oracle.github.io/python-oracledb/)                                                      | Oracle     | Async   | ✅         |
 | [`oracledb`](https://oracle.github.io/python-oracledb/)                                                      | Oracle     | Sync    | ✅         |
 | [`duckdb`](https://duckdb.org/)                                                                               | DuckDB     | Sync    | ✅         |
-| [`bigquery`](https://googleapis.dev/python/bigquery/latest/index.html)                                        | BigQuery   | Sync    | 🗓️ |
+| [`bigquery`](https://googleapis.dev/python/bigquery/latest/index.html)                                        | BigQuery   | Sync    | ✅ |
 | [`spanner`](https://googleapis.dev/python/spanner/latest/index.html)                                         | Spanner    | Sync    | 🗓️  |
 | [`sqlserver`](https://docs.microsoft.com/en-us/sql/connect/python/pyodbc/python-sql-driver-for-pyodbc?view=sql-server-ver16) | SQL Server | Sync    | 🗓️  |
 | [`mysql`](https://dev.mysql.com/doc/connector-python/en/connector-python-api-mysql-connector-python.html)     | MySQL      | Sync    | 🗓️  |
