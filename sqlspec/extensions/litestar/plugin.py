@@ -84,6 +84,9 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
         )
         for c in self._plugin_configs:
             c.annotation = self.add_config(c.config)
+            app_config.signature_types.append(c.annotation)
+            app_config.signature_types.append(c.config.connection_type)  # type: ignore[union-attr]
+            app_config.signature_types.append(c.config.driver_type)  # type: ignore[union-attr]
             app_config.before_send.append(c.before_send_handler)
             app_config.lifespan.append(c.lifespan_handler)  # pyright: ignore[reportUnknownMemberType]
             app_config.dependencies.update(

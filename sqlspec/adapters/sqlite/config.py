@@ -1,9 +1,9 @@
+import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from sqlite3 import Connection
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
-from sqlspec.adapters.sqlite.driver import SqliteDriver
+from sqlspec.adapters.sqlite.driver import SqliteConnection, SqliteDriver
 from sqlspec.base import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
@@ -16,7 +16,7 @@ __all__ = ("SqliteConfig",)
 
 
 @dataclass
-class SqliteConfig(NoPoolSyncConfig["Connection", "SqliteDriver"]):
+class SqliteConfig(NoPoolSyncConfig["SqliteConnection", "SqliteDriver"]):
     """Configuration for SQLite database connections.
 
     This class provides configuration options for SQLite database connections, wrapping all parameters
@@ -40,7 +40,7 @@ class SqliteConfig(NoPoolSyncConfig["Connection", "SqliteDriver"]):
     check_same_thread: "Union[bool, EmptyType]" = Empty
     """If True (default), ProgrammingError is raised if the database connection is used by a thread other than the one that created it. If False, the connection may be shared across multiple threads."""
 
-    factory: "Union[type[Connection], EmptyType]" = Empty
+    factory: "Union[type[SqliteConnection], EmptyType]" = Empty
     """A custom Connection class factory. If given, must be a callable that returns a Connection instance."""
 
     cached_statements: "Union[int, EmptyType]" = Empty
@@ -50,7 +50,7 @@ class SqliteConfig(NoPoolSyncConfig["Connection", "SqliteDriver"]):
     """If set to True, database is interpreted as a URI with supported options."""
     driver_type: "type[SqliteDriver]" = field(init=False, default_factory=lambda: SqliteDriver)
     """Type of the driver object"""
-    connection_type: "type[Connection]" = field(init=False, default_factory=lambda: Connection)
+    connection_type: "type[SqliteConnection]" = field(init=False, default_factory=lambda: SqliteConnection)
     """Type of the connection object"""
 
     @property
@@ -61,10 +61,13 @@ class SqliteConfig(NoPoolSyncConfig["Connection", "SqliteDriver"]):
             A string keyed dict of config kwargs for the sqlite3.connect() function.
         """
         return dataclass_to_dict(
-            self, exclude_empty=True, convert_nested=False, exclude={"pool_instance", "driver_type", "connection_type"}
+            self,
+            exclude_empty=True,
+            convert_nested=False,
+            exclude={"pool_instance", "driver_type", "connection_type"},
         )
 
-    def create_connection(self) -> "Connection":
+    def create_connection(self) -> "SqliteConnection":
         """Create and return a new database connection.
 
         Returns:
@@ -73,8 +76,6 @@ class SqliteConfig(NoPoolSyncConfig["Connection", "SqliteDriver"]):
         Raises:
             ImproperConfigurationError: If the connection could not be established.
         """
-        import sqlite3
-
         try:
             return sqlite3.connect(**self.connection_config_dict)  # type: ignore[no-any-return,unused-ignore]
         except Exception as e:
@@ -82,7 +83,7 @@ class SqliteConfig(NoPoolSyncConfig["Connection", "SqliteDriver"]):
             raise ImproperConfigurationError(msg) from e
 
     @contextmanager
-    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[Connection, None, None]":
+    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[SqliteConnection, None, None]":
         """Create and provide a database connection.
 
         Yields:
@@ -100,7 +101,7 @@ class SqliteConfig(NoPoolSyncConfig["Connection", "SqliteDriver"]):
         """Create and provide a database connection.
 
         Yields:
-            A DuckDB driver instance.
+            A SQLite driver instance.
 
 
         """

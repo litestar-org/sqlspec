@@ -2,16 +2,15 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from aiosqlite import Connection
+import aiosqlite
 
-from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
+from sqlspec.adapters.aiosqlite.driver import AiosqliteConnection, AiosqliteDriver
 from sqlspec.base import NoPoolAsyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
-    from sqlite3 import Connection as SQLite3Connection
     from typing import Literal
 
 
@@ -19,7 +18,7 @@ __all__ = ("AiosqliteConfig",)
 
 
 @dataclass
-class AiosqliteConfig(NoPoolAsyncConfig["Connection", "AiosqliteDriver"]):
+class AiosqliteConfig(NoPoolAsyncConfig["AiosqliteConnection", "AiosqliteDriver"]):
     """Configuration for Aiosqlite database connections.
 
     This class provides configuration options for Aiosqlite database connections, wrapping all parameters
@@ -38,13 +37,11 @@ class AiosqliteConfig(NoPoolAsyncConfig["Connection", "AiosqliteDriver"]):
     """The isolation_level of the connection. This can be None for autocommit mode or one of "DEFERRED", "IMMEDIATE" or "EXCLUSIVE"."""
     check_same_thread: "Union[bool, EmptyType]" = field(default=Empty)
     """If True (default), ProgrammingError is raised if the database connection is used by a thread other than the one that created it. If False, the connection may be shared across multiple threads."""
-    factory: "Union[type[SQLite3Connection], EmptyType]" = field(default=Empty)
-    """A custom Connection class factory. If given, must be a callable that returns a Connection instance."""
     cached_statements: "Union[int, EmptyType]" = field(default=Empty)
     """The number of statements that SQLite will cache for this connection. The default is 128."""
     uri: "Union[bool, EmptyType]" = field(default=Empty)
     """If set to True, database is interpreted as a URI with supported options."""
-    connection_type: "type[Connection]" = field(init=False, default_factory=lambda: Connection)
+    connection_type: "type[AiosqliteConnection]" = field(init=False, default_factory=lambda: AiosqliteConnection)
     """Type of the connection object"""
     driver_type: "type[AiosqliteDriver]" = field(init=False, default_factory=lambda: AiosqliteDriver)  # type: ignore[type-abstract,unused-ignore]
     """Type of the driver object"""
@@ -57,10 +54,13 @@ class AiosqliteConfig(NoPoolAsyncConfig["Connection", "AiosqliteDriver"]):
             A string keyed dict of config kwargs for the aiosqlite.connect() function.
         """
         return dataclass_to_dict(
-            self, exclude_empty=True, convert_nested=False, exclude={"pool_instance", "connection_type", "driver_type"}
+            self,
+            exclude_empty=True,
+            convert_nested=False,
+            exclude={"pool_instance", "connection_type", "driver_type"},
         )
 
-    async def create_connection(self) -> "Connection":
+    async def create_connection(self) -> "AiosqliteConnection":
         """Create and return a new database connection.
 
         Returns:
@@ -69,8 +69,6 @@ class AiosqliteConfig(NoPoolAsyncConfig["Connection", "AiosqliteDriver"]):
         Raises:
             ImproperConfigurationError: If the connection could not be established.
         """
-        import aiosqlite
-
         try:
             return await aiosqlite.connect(**self.connection_config_dict)
         except Exception as e:
@@ -78,7 +76,7 @@ class AiosqliteConfig(NoPoolAsyncConfig["Connection", "AiosqliteDriver"]):
             raise ImproperConfigurationError(msg) from e
 
     @asynccontextmanager
-    async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[Connection, None]":
+    async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[AiosqliteConnection, None]":
         """Create and provide a database connection.
 
         Yields:

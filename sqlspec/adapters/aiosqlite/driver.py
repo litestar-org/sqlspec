@@ -1,37 +1,38 @@
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
+import aiosqlite
+
 from sqlspec.base import AsyncDriverAdapterProtocol
 from sqlspec.mixins import SQLTranslatorMixin
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
-    from aiosqlite import Connection, Cursor
-
     from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
-__all__ = ("AiosqliteDriver",)
+__all__ = ("AiosqliteConnection", "AiosqliteDriver")
+AiosqliteConnection = aiosqlite.Connection
 
 
 class AiosqliteDriver(
-    SQLTranslatorMixin["Connection"],
-    AsyncDriverAdapterProtocol["Connection"],
+    SQLTranslatorMixin["AiosqliteConnection"],
+    AsyncDriverAdapterProtocol["AiosqliteConnection"],
 ):
     """SQLite Async Driver Adapter."""
 
-    connection: "Connection"
+    connection: "AiosqliteConnection"
     dialect: str = "sqlite"
 
-    def __init__(self, connection: "Connection") -> None:
+    def __init__(self, connection: "AiosqliteConnection") -> None:
         self.connection = connection
 
     @staticmethod
-    async def _cursor(connection: "Connection", *args: Any, **kwargs: Any) -> "Cursor":
+    async def _cursor(connection: "AiosqliteConnection", *args: Any, **kwargs: Any) -> "aiosqlite.Cursor":
         return await connection.cursor(*args, **kwargs)
 
     @asynccontextmanager
-    async def _with_cursor(self, connection: "Connection") -> "AsyncGenerator[Cursor, None]":
+    async def _with_cursor(self, connection: "AiosqliteConnection") -> "AsyncGenerator[aiosqlite.Cursor, None]":
         cursor = await self._cursor(connection)
         try:
             yield cursor
@@ -46,7 +47,7 @@ class AiosqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Sequence[dict[str, Any]]": ...
@@ -57,7 +58,7 @@ class AiosqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Sequence[ModelDTOT]": ...
@@ -67,7 +68,7 @@ class AiosqliteDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AiosqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
@@ -95,7 +96,7 @@ class AiosqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -106,7 +107,7 @@ class AiosqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -116,7 +117,7 @@ class AiosqliteDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AiosqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
@@ -143,7 +144,7 @@ class AiosqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[dict[str, Any]]": ...
@@ -154,7 +155,7 @@ class AiosqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Optional[ModelDTOT]": ...
@@ -164,7 +165,7 @@ class AiosqliteDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AiosqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
@@ -192,7 +193,7 @@ class AiosqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Any": ...
@@ -203,7 +204,7 @@ class AiosqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "T": ...
@@ -213,7 +214,7 @@ class AiosqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Union[T, Any]":
@@ -239,7 +240,7 @@ class AiosqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[Any]": ...
@@ -250,7 +251,7 @@ class AiosqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "Optional[T]": ...
@@ -260,7 +261,7 @@ class AiosqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
@@ -286,7 +287,7 @@ class AiosqliteDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AiosqliteConnection"] = None,
         **kwargs: Any,
     ) -> int:
         """Insert, update, or delete data from the database.
@@ -308,7 +309,7 @@ class AiosqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -319,7 +320,7 @@ class AiosqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -329,7 +330,7 @@ class AiosqliteDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AiosqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
@@ -357,7 +358,7 @@ class AiosqliteDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AiosqliteConnection"] = None,
         **kwargs: Any,
     ) -> str:
         """Execute a script.
@@ -378,7 +379,7 @@ class AiosqliteDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AiosqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":

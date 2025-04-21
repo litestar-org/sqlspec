@@ -1,6 +1,8 @@
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
+from duckdb import DuckDBPyConnection
+
 from sqlspec.base import SyncDriverAdapterProtocol
 from sqlspec.mixins import SQLTranslatorMixin, SyncArrowBulkOperationsMixin
 from sqlspec.typing import ArrowTable, StatementParameterType
@@ -8,36 +10,36 @@ from sqlspec.typing import ArrowTable, StatementParameterType
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
 
-    from duckdb import DuckDBPyConnection
-
     from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType, T
 
-__all__ = ("DuckDBDriver",)
+__all__ = ("DuckDBConnection", "DuckDBDriver")
+
+DuckDBConnection = DuckDBPyConnection
 
 
 class DuckDBDriver(
-    SyncArrowBulkOperationsMixin["DuckDBPyConnection"],
-    SQLTranslatorMixin["DuckDBPyConnection"],
-    SyncDriverAdapterProtocol["DuckDBPyConnection"],
+    SyncArrowBulkOperationsMixin["DuckDBConnection"],
+    SQLTranslatorMixin["DuckDBConnection"],
+    SyncDriverAdapterProtocol["DuckDBConnection"],
 ):
     """DuckDB Sync Driver Adapter."""
 
-    connection: "DuckDBPyConnection"
+    connection: "DuckDBConnection"
     use_cursor: bool = True
     dialect: str = "duckdb"
 
-    def __init__(self, connection: "DuckDBPyConnection", use_cursor: bool = True) -> None:
+    def __init__(self, connection: "DuckDBConnection", use_cursor: bool = True) -> None:
         self.connection = connection
         self.use_cursor = use_cursor
 
     # --- Helper Methods --- #
-    def _cursor(self, connection: "DuckDBPyConnection") -> "DuckDBPyConnection":
+    def _cursor(self, connection: "DuckDBConnection") -> "DuckDBConnection":
         if self.use_cursor:
             return connection.cursor()
         return connection
 
     @contextmanager
-    def _with_cursor(self, connection: "DuckDBPyConnection") -> "Generator[DuckDBPyConnection, None, None]":
+    def _with_cursor(self, connection: "DuckDBConnection") -> "Generator[DuckDBConnection, None, None]":
         if self.use_cursor:
             cursor = self._cursor(connection)
             try:
@@ -55,7 +57,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Sequence[dict[str, Any]]": ...
@@ -66,7 +68,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Sequence[ModelDTOT]": ...
@@ -76,7 +78,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
@@ -101,7 +103,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -112,7 +114,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -122,7 +124,7 @@ class DuckDBDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["DuckDBPyConnection"] = None,
+        connection: Optional["DuckDBConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
@@ -146,7 +148,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[dict[str, Any]]": ...
@@ -157,7 +159,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Optional[ModelDTOT]": ...
@@ -167,7 +169,7 @@ class DuckDBDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["DuckDBPyConnection"] = None,
+        connection: Optional["DuckDBConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
@@ -191,7 +193,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Any": ...
@@ -202,7 +204,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "T": ...
@@ -212,7 +214,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Union[T, Any]":
@@ -233,7 +235,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[Any]": ...
@@ -244,7 +246,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "Optional[T]": ...
@@ -254,7 +256,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
@@ -275,7 +277,7 @@ class DuckDBDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["DuckDBPyConnection"] = None,
+        connection: Optional["DuckDBConnection"] = None,
         **kwargs: Any,
     ) -> int:
         connection = self._connection(connection)
@@ -291,7 +293,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -302,7 +304,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -312,7 +314,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
@@ -334,7 +336,7 @@ class DuckDBDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["DuckDBPyConnection"] = None,
+        connection: Optional["DuckDBConnection"] = None,
         **kwargs: Any,
     ) -> str:
         connection = self._connection(connection)
@@ -351,7 +353,7 @@ class DuckDBDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[DuckDBPyConnection]" = None,
+        connection: "Optional[DuckDBConnection]" = None,
         **kwargs: Any,
     ) -> "ArrowTable":
         connection = self._connection(connection)

@@ -3,37 +3,36 @@ from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
+from asyncmy import Connection
+
 from sqlspec.base import AsyncDriverAdapterProtocol
 from sqlspec.mixins import SQLTranslatorMixin
 
 if TYPE_CHECKING:
-    from asyncmy import Connection
     from asyncmy.cursors import Cursor
 
     from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 __all__ = ("AsyncmyDriver",)
 
+AsyncmyConnection = Connection
+
 
 class AsyncmyDriver(
-    SQLTranslatorMixin["Connection"],
-    AsyncDriverAdapterProtocol["Connection"],
+    SQLTranslatorMixin["AsyncmyConnection"],
+    AsyncDriverAdapterProtocol["AsyncmyConnection"],
 ):
     """Asyncmy MySQL/MariaDB Driver Adapter."""
 
-    connection: "Connection"
+    connection: "AsyncmyConnection"
     dialect: str = "mysql"
 
-    def __init__(self, connection: "Connection") -> None:
+    def __init__(self, connection: "AsyncmyConnection") -> None:
         self.connection = connection
 
     @staticmethod
-    async def _cursor(connection: "Connection") -> "Cursor":
-        return await connection.cursor()
-
-    @staticmethod
     @asynccontextmanager
-    async def _with_cursor(connection: "Connection") -> AsyncGenerator["Cursor", None]:
+    async def _with_cursor(connection: "AsyncmyConnection") -> AsyncGenerator["Cursor", None]:
         cursor = connection.cursor()
         try:
             yield cursor
@@ -48,7 +47,7 @@ class AsyncmyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Sequence[dict[str, Any]]": ...
@@ -59,7 +58,7 @@ class AsyncmyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Sequence[ModelDTOT]": ...
@@ -69,7 +68,7 @@ class AsyncmyDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AsyncmyConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
@@ -97,7 +96,7 @@ class AsyncmyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -108,7 +107,7 @@ class AsyncmyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -118,7 +117,7 @@ class AsyncmyDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AsyncmyConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
@@ -145,7 +144,7 @@ class AsyncmyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[dict[str, Any]]": ...
@@ -156,7 +155,7 @@ class AsyncmyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Optional[ModelDTOT]": ...
@@ -166,7 +165,7 @@ class AsyncmyDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AsyncmyConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
@@ -194,7 +193,7 @@ class AsyncmyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Any": ...
@@ -205,7 +204,7 @@ class AsyncmyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "T": ...
@@ -215,7 +214,7 @@ class AsyncmyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Union[T, Any]":
@@ -244,7 +243,7 @@ class AsyncmyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[Any]": ...
@@ -255,7 +254,7 @@ class AsyncmyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "Optional[T]": ...
@@ -265,7 +264,7 @@ class AsyncmyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
@@ -295,7 +294,7 @@ class AsyncmyDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AsyncmyConnection"] = None,
         **kwargs: Any,
     ) -> int:
         """Insert, update, or delete data from the database.
@@ -317,7 +316,7 @@ class AsyncmyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -328,7 +327,7 @@ class AsyncmyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -338,7 +337,7 @@ class AsyncmyDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AsyncmyConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
@@ -367,7 +366,7 @@ class AsyncmyDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AsyncmyConnection"] = None,
         **kwargs: Any,
     ) -> str:
         """Execute a script.

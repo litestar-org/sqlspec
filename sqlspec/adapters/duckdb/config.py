@@ -2,10 +2,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
-from duckdb import DuckDBPyConnection
 from typing_extensions import Literal, NotRequired, TypedDict
 
-from sqlspec.adapters.duckdb.driver import DuckDBDriver
+from sqlspec.adapters.duckdb.driver import DuckDBConnection, DuckDBDriver
 from sqlspec.base import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
@@ -69,7 +68,7 @@ class SecretConfig(TypedDict):
 
 
 @dataclass
-class DuckDBConfig(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
+class DuckDBConfig(NoPoolSyncConfig["DuckDBConnection", "DuckDBDriver"]):
     """Configuration for DuckDB database connections.
 
     This class provides configuration options for DuckDB database connections, wrapping all parameters
@@ -96,10 +95,10 @@ class DuckDBConfig(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
     """A dictionary of secrets to store in the connection for later retrieval."""
     auto_update_extensions: "bool" = False
     """Whether to automatically update on connection creation"""
-    on_connection_create: "Optional[Callable[[DuckDBPyConnection], Optional[DuckDBPyConnection]]]" = None
+    on_connection_create: "Optional[Callable[[DuckDBConnection], Optional[DuckDBConnection]]]" = None
     """A callable to be called after the connection is created."""
-    connection_type: "type[DuckDBPyConnection]" = field(init=False, default_factory=lambda: DuckDBPyConnection)
-    """The type of connection to create. Defaults to DuckDBPyConnection."""
+    connection_type: "type[DuckDBConnection]" = field(init=False, default_factory=lambda: DuckDBConnection)
+    """The type of connection to create. Defaults to DuckDBConnection."""
     driver_type: "type[DuckDBDriver]" = field(init=False, default_factory=lambda: DuckDBDriver)  # type: ignore[type-abstract,unused-ignore]
     """The type of driver to use. Defaults to DuckDBDriver."""
     pool_instance: "None" = field(init=False, default=None)
@@ -139,7 +138,7 @@ class DuckDBConfig(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
             raise ImproperConfigurationError(msg) from e
         self.extensions.extend(config_exts)
 
-    def _configure_connection(self, connection: "DuckDBPyConnection") -> None:
+    def _configure_connection(self, connection: "DuckDBConnection") -> None:
         """Configure the connection.
 
         Args:
@@ -148,7 +147,7 @@ class DuckDBConfig(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
         for key, value in cast("dict[str,Any]", self.config).items():
             connection.execute(f"SET {key}='{value}'")
 
-    def _configure_extensions(self, connection: "DuckDBPyConnection") -> None:
+    def _configure_extensions(self, connection: "DuckDBConnection") -> None:
         """Configure extensions for the connection.
 
         Args:
@@ -165,7 +164,7 @@ class DuckDBConfig(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
             connection.execute("update extensions")
 
     @staticmethod
-    def _secret_exists(connection: "DuckDBPyConnection", name: "str") -> bool:
+    def _secret_exists(connection: "DuckDBConnection", name: "str") -> bool:
         """Check if a secret exists in the connection.
 
         Args:
@@ -179,7 +178,7 @@ class DuckDBConfig(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
         return results is not None
 
     @classmethod
-    def _is_community_extension(cls, connection: "DuckDBPyConnection", name: "str") -> bool:
+    def _is_community_extension(cls, connection: "DuckDBConnection", name: "str") -> bool:
         """Check if an extension is a community extension.
 
         Args:
@@ -195,7 +194,7 @@ class DuckDBConfig(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
         return results is None
 
     @classmethod
-    def _extension_installed(cls, connection: "DuckDBPyConnection", name: "str") -> bool:
+    def _extension_installed(cls, connection: "DuckDBConnection", name: "str") -> bool:
         """Check if a extension exists in the connection.
 
         Args:
@@ -211,7 +210,7 @@ class DuckDBConfig(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
         return results is not None
 
     @classmethod
-    def _extension_loaded(cls, connection: "DuckDBPyConnection", name: "str") -> bool:
+    def _extension_loaded(cls, connection: "DuckDBConnection", name: "str") -> bool:
         """Check if a extension is loaded in the connection.
 
         Args:
@@ -229,7 +228,7 @@ class DuckDBConfig(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
     @classmethod
     def _configure_secrets(
         cls,
-        connection: "DuckDBPyConnection",
+        connection: "DuckDBConnection",
         secrets: "Sequence[SecretConfig]",
     ) -> None:
         """Configure persistent secrets for the connection.
@@ -258,7 +257,7 @@ class DuckDBConfig(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
             raise ImproperConfigurationError(msg) from e
 
     @classmethod
-    def _configure_extension(cls, connection: "DuckDBPyConnection", extension: "ExtensionConfig") -> None:
+    def _configure_extension(cls, connection: "DuckDBConnection", extension: "ExtensionConfig") -> None:
         """Configure a single extension for the connection.
 
         Args:
@@ -320,6 +319,7 @@ class DuckDBConfig(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
                 "auto_update_extensions",
                 "driver_type",
                 "connection_type",
+                "connection_instance",
             },
             convert_nested=False,
         )
@@ -327,7 +327,7 @@ class DuckDBConfig(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
             config["database"] = ":memory:"
         return config
 
-    def create_connection(self) -> "DuckDBPyConnection":
+    def create_connection(self) -> "DuckDBConnection":
         """Create and return a new database connection with configured extensions.
 
         Returns:
@@ -349,11 +349,10 @@ class DuckDBConfig(NoPoolSyncConfig["DuckDBPyConnection", "DuckDBDriver"]):
         except Exception as e:
             msg = f"Could not configure the DuckDB connection. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e
-        else:
-            return connection
+        return connection
 
     @contextmanager
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[DuckDBPyConnection, None, None]":
+    def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[DuckDBConnection, None, None]":
         """Create and provide a database connection.
 
         Yields:

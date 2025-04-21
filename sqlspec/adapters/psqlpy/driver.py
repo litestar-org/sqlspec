@@ -5,6 +5,7 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
+from psqlpy import Connection, QueryResult
 from psqlpy.exceptions import RustPSQLDriverPyBaseError
 
 from sqlspec.base import AsyncDriverAdapterProtocol
@@ -15,13 +16,14 @@ from sqlspec.statement import PARAM_REGEX, SQLStatement
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from psqlpy import Connection, QueryResult
+    from psqlpy import QueryResult
 
     from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
-__all__ = ("PsqlpyDriver",)
+__all__ = ("PsqlpyConnection", "PsqlpyDriver")
 
 
+PsqlpyConnection = Connection
 # Regex to find '?' placeholders, skipping those inside quotes or SQL comments
 QMARK_REGEX = re.compile(
     r"""(?P<dquote>"[^"]*") | # Double-quoted strings
@@ -35,15 +37,15 @@ logger = logging.getLogger("sqlspec")
 
 
 class PsqlpyDriver(
-    SQLTranslatorMixin["Connection"],
-    AsyncDriverAdapterProtocol["Connection"],
+    SQLTranslatorMixin["PsqlpyConnection"],
+    AsyncDriverAdapterProtocol["PsqlpyConnection"],
 ):
     """Psqlpy Postgres Driver Adapter."""
 
-    connection: "Connection"
+    connection: "PsqlpyConnection"
     dialect: str = "postgres"
 
-    def __init__(self, connection: "Connection") -> None:
+    def __init__(self, connection: "PsqlpyConnection") -> None:
         self.connection = connection
 
     def _process_sql_params(
@@ -179,7 +181,7 @@ class PsqlpyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Sequence[dict[str, Any]]": ...
@@ -190,7 +192,7 @@ class PsqlpyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Sequence[ModelDTOT]": ...
@@ -200,7 +202,7 @@ class PsqlpyDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["PsqlpyConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
@@ -221,7 +223,7 @@ class PsqlpyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -232,7 +234,7 @@ class PsqlpyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -242,7 +244,7 @@ class PsqlpyDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["PsqlpyConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
@@ -264,7 +266,7 @@ class PsqlpyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[dict[str, Any]]": ...
@@ -275,7 +277,7 @@ class PsqlpyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Optional[ModelDTOT]": ...
@@ -285,7 +287,7 @@ class PsqlpyDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["PsqlpyConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
@@ -311,7 +313,7 @@ class PsqlpyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Any": ...
@@ -322,7 +324,7 @@ class PsqlpyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "T": ...
@@ -332,7 +334,7 @@ class PsqlpyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Union[T, Any]":
@@ -353,7 +355,7 @@ class PsqlpyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[Any]": ...
@@ -364,7 +366,7 @@ class PsqlpyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "Optional[T]": ...
@@ -374,7 +376,7 @@ class PsqlpyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
@@ -398,7 +400,7 @@ class PsqlpyDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["PsqlpyConnection"] = None,
         **kwargs: Any,
     ) -> int:
         connection = self._connection(connection)
@@ -417,7 +419,7 @@ class PsqlpyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -428,7 +430,7 @@ class PsqlpyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -438,7 +440,7 @@ class PsqlpyDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["PsqlpyConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
@@ -463,7 +465,7 @@ class PsqlpyDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["PsqlpyConnection"] = None,
         **kwargs: Any,
     ) -> str:
         connection = self._connection(connection)
@@ -473,7 +475,7 @@ class PsqlpyDriver(
         await connection.execute(sql, parameters=parameters)
         return sql
 
-    def _connection(self, connection: Optional["Connection"] = None) -> "Connection":
+    def _connection(self, connection: Optional["PsqlpyConnection"] = None) -> "PsqlpyConnection":
         """Get the connection to use.
 
         Args:

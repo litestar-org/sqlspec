@@ -2,9 +2,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
-from adbc_driver_manager.dbapi import Connection
-
-from sqlspec.adapters.adbc.driver import AdbcDriver
+from sqlspec.adapters.adbc.driver import AdbcConnection, AdbcDriver
 from sqlspec.base import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType
@@ -18,7 +16,7 @@ __all__ = ("AdbcConfig",)
 
 
 @dataclass
-class AdbcConfig(NoPoolSyncConfig["Connection", "AdbcDriver"]):
+class AdbcConfig(NoPoolSyncConfig["AdbcConnection", "AdbcDriver"]):
     """Configuration for ADBC connections.
 
     This class provides configuration options for ADBC database connections using the
@@ -33,19 +31,15 @@ class AdbcConfig(NoPoolSyncConfig["Connection", "AdbcDriver"]):
     """Additional database-specific connection parameters"""
     conn_kwargs: "Optional[dict[str, Any]]" = None
     """Additional database-specific connection parameters"""
-    connection_type: "type[Connection]" = field(init=False, default_factory=lambda: Connection)
+    connection_type: "type[AdbcConnection]" = field(init=False, default_factory=lambda: AdbcConnection)
     """Type of the connection object"""
     driver_type: "type[AdbcDriver]" = field(init=False, default_factory=lambda: AdbcDriver)  # type: ignore[type-abstract,unused-ignore]
     """Type of the driver object"""
-    pool_instance: None = field(init=False, default=None)
+    pool_instance: None = field(init=False, default=None, hash=False)
     """No connection pool is used for ADBC connections"""
-    _is_in_memory: bool = field(init=False, default=False)
-    """Flag indicating if the connection is for an in-memory database"""
 
     def _set_adbc(self) -> str:  # noqa: PLR0912
         """Identify the driver type based on the URI (if provided) or preset driver name.
-
-        Also sets the `_is_in_memory` flag for specific in-memory URIs.
 
         Raises:
             ImproperConfigurationError: If the driver name is not recognized or supported.
@@ -143,7 +137,7 @@ class AdbcConfig(NoPoolSyncConfig["Connection", "AdbcDriver"]):
             config["conn_kwargs"] = conn_kwargs
         return config
 
-    def _get_connect_func(self) -> "Callable[..., Connection]":
+    def _get_connect_func(self) -> "Callable[..., AdbcConnection]":
         self._set_adbc()
         driver_path = cast("str", self.driver_name)
         try:
@@ -166,7 +160,7 @@ class AdbcConfig(NoPoolSyncConfig["Connection", "AdbcDriver"]):
             raise ImproperConfigurationError(msg)
         return connect_func  # type: ignore[no-any-return]
 
-    def create_connection(self) -> "Connection":
+    def create_connection(self) -> "AdbcConnection":
         """Create and return a new database connection using the specific driver.
 
         Returns:
@@ -189,7 +183,7 @@ class AdbcConfig(NoPoolSyncConfig["Connection", "AdbcDriver"]):
             raise ImproperConfigurationError(msg) from e
 
     @contextmanager
-    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[Connection, None, None]":
+    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[AdbcConnection, None, None]":
         """Create and provide a database connection using the specific driver.
 
         Yields:

@@ -2,11 +2,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
-from psycopg import Connection
 from psycopg_pool import ConnectionPool
 
 from sqlspec.adapters.psycopg.config._common import PsycopgGenericPoolConfig
-from sqlspec.adapters.psycopg.driver import PsycopgSyncDriver
+from sqlspec.adapters.psycopg.driver import PsycopgSyncConnection, PsycopgSyncDriver
 from sqlspec.base import SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import dataclass_to_dict
@@ -22,12 +21,12 @@ __all__ = (
 
 
 @dataclass
-class PsycopgSyncPoolConfig(PsycopgGenericPoolConfig[Connection, ConnectionPool]):
+class PsycopgSyncPoolConfig(PsycopgGenericPoolConfig[PsycopgSyncConnection, ConnectionPool]):
     """Sync Psycopg Pool Config"""
 
 
 @dataclass
-class PsycopgSyncConfig(SyncDatabaseConfig[Connection, ConnectionPool, PsycopgSyncDriver]):
+class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool, PsycopgSyncDriver]):
     """Sync Psycopg database Configuration.
     This class provides the base configuration for Psycopg database connections, extending
     the generic database configuration with Psycopg-specific settings.([1](https://www.psycopg.org/psycopg3/docs/api/connections.html))
@@ -40,7 +39,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[Connection, ConnectionPool, PsycopgSy
     """Psycopg Pool configuration"""
     pool_instance: "Optional[ConnectionPool]" = None
     """Optional pool to use"""
-    connection_type: "type[Connection]" = field(init=False, default_factory=lambda: Connection)  # type: ignore[assignment]
+    connection_type: "type[PsycopgSyncConnection]" = field(init=False, default_factory=lambda: PsycopgSyncConnection)  # type: ignore[assignment]
     """Type of the connection object"""
     driver_type: "type[PsycopgSyncDriver]" = field(init=False, default_factory=lambda: PsycopgSyncDriver)  # type: ignore[type-abstract,unused-ignore]
     """Type of the driver object"""
@@ -92,7 +91,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[Connection, ConnectionPool, PsycopgSy
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 
-    def create_connection(self) -> "Connection":
+    def create_connection(self) -> "PsycopgSyncConnection":
         """Create and return a new psycopg connection from the pool.
 
         Returns:
@@ -142,11 +141,11 @@ class PsycopgSyncConfig(SyncDatabaseConfig[Connection, ConnectionPool, PsycopgSy
         return self.create_pool()
 
     @contextmanager
-    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[Connection, None, None]":
+    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[PsycopgSyncConnection, None, None]":
         """Create and provide a database connection.
 
         Yields:
-            Connection: A database connection from the pool.
+            PsycopgSyncConnection: A database connection from the pool.
         """
         pool = self.provide_pool(*args, **kwargs)
         with pool, pool.connection() as connection:
