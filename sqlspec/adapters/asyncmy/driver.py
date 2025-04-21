@@ -1,7 +1,7 @@
 # type: ignore
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, Optional, TypeAlias, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from asyncmy import Connection
 
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 __all__ = ("AsyncmyDriver",)
 
-AsyncmyConnection: TypeAlias = Connection
+AsyncmyConnection = Connection
 
 
 class AsyncmyDriver(
