@@ -99,8 +99,6 @@ class DuckDBConfig(NoPoolSyncConfig["DuckDBConnection", "DuckDBDriver"]):
     """A callable to be called after the connection is created."""
     connection_type: "type[DuckDBConnection]" = field(init=False, default_factory=lambda: DuckDBConnection)
     """The type of connection to create. Defaults to DuckDBConnection."""
-    connection_instance: "Optional[DuckDBConnection]" = field(init=False, default=None, hash=False)
-    """The instance of the connection to use. Defaults to None."""
     driver_type: "type[DuckDBDriver]" = field(init=False, default_factory=lambda: DuckDBDriver)  # type: ignore[type-abstract,unused-ignore]
     """The type of driver to use. Defaults to DuckDBDriver."""
     pool_instance: "None" = field(init=False, default=None)
@@ -338,23 +336,20 @@ class DuckDBConfig(NoPoolSyncConfig["DuckDBConnection", "DuckDBDriver"]):
         Raises:
             ImproperConfigurationError: If the connection could not be established or extensions could not be configured.
         """
-        if self.connection_instance is not None:
-            return self.connection_instance
         import duckdb
 
         try:
-            self.connection_instance = duckdb.connect(**self.connection_config_dict)  # pyright: ignore[reportUnknownMemberType]
-            self._configure_extensions(self.connection_instance)
-            self._configure_secrets(self.connection_instance, cast("list[SecretConfig]", self.secrets))
-            self._configure_connection(self.connection_instance)
+            connection = duckdb.connect(**self.connection_config_dict)  # pyright: ignore[reportUnknownMemberType]
+            self._configure_extensions(connection)
+            self._configure_secrets(connection, cast("list[SecretConfig]", self.secrets))
+            self._configure_connection(connection)
             if self.on_connection_create:
-                self.on_connection_create(self.connection_instance)
+                self.on_connection_create(connection)
 
         except Exception as e:
             msg = f"Could not configure the DuckDB connection. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e
-        else:
-            return self.connection_instance
+        return connection
 
     @contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[DuckDBConnection, None, None]":
