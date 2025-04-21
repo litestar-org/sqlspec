@@ -10,10 +10,7 @@ from sqlspec.typing import dataclass_to_dict
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-__all__ = (
-    "BigQueryConfig",
-    "BigQueryConnectionConfig",
-)
+__all__ = ("BigQueryConfig", "BigQueryConnectionConfig")
 
 
 class BigQueryConnectionConfig(BigQueryConnectionConfigCommon):
