@@ -31,6 +31,8 @@ if TYPE_CHECKING:
     from google.cloud.bigquery import Client, SchemaField
     from google.cloud.bigquery.table import Row
 
+__all__ = ("BigQueryDriver", )
+
 
 class BigQueryDriver(
     SyncDriverAdapterProtocol["Client"],

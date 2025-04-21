@@ -8,6 +8,8 @@ if TYPE_CHECKING:
     from google.api_core.client_options import ClientOptions
     from google.auth.credentials import Credentials
 
+__all__ = ("BigQueryConnectionConfigCommon", )
+
 
 @dataclass
 class BigQueryConnectionConfigCommon:
