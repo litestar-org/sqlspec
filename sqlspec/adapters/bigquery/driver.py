@@ -14,7 +14,7 @@ from typing import (
 
 import sqlglot
 from google.cloud import bigquery
-from google.cloud.bigquery.client import Client
+from google.cloud.bigquery import Client
 from google.cloud.bigquery.job import QueryJob, QueryJobConfig
 from google.cloud.exceptions import NotFound
 
@@ -28,25 +28,27 @@ from sqlspec.mixins import (
 from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType, T
 
 if TYPE_CHECKING:
-    from google.cloud.bigquery import Client, SchemaField
+    from google.cloud.bigquery import SchemaField
     from google.cloud.bigquery.table import Row
 
-__all__ = ("BigQueryDriver", )
+__all__ = ("BigQueryConnection", "BigQueryDriver")
+
+BigQueryConnection = Client
 
 
 class BigQueryDriver(
-    SyncDriverAdapterProtocol["Client"],
-    SyncArrowBulkOperationsMixin["Client"],
-    SyncParquetExportMixin["Client"],
-    SQLTranslatorMixin["Client"],
+    SyncDriverAdapterProtocol["BigQueryConnection"],
+    SyncArrowBulkOperationsMixin["BigQueryConnection"],
+    SyncParquetExportMixin["BigQueryConnection"],
+    SQLTranslatorMixin["BigQueryConnection"],
 ):
     """Synchronous BigQuery Driver Adapter."""
 
     dialect: str = "bigquery"
-    connection: "Client"
+    connection: "BigQueryConnection"
     __supports_arrow__: ClassVar[bool] = True
 
-    def __init__(self, connection: "Client", **kwargs: Any) -> None:
+    def __init__(self, connection: "BigQueryConnection", **kwargs: Any) -> None:
         super().__init__(connection=connection)
         self._default_query_job_config = kwargs.get("default_query_job_config") or getattr(
             connection, "default_query_job_config", None
@@ -107,7 +109,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
         is_script: bool = False,
         **kwargs: Any,
@@ -263,7 +265,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Sequence[dict[str, Any]]": ...
@@ -274,7 +276,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Sequence[ModelDTOT]": ...
@@ -284,7 +286,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
         **kwargs: Any,
@@ -299,7 +301,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -310,7 +312,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -320,7 +322,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
         **kwargs: Any,
@@ -349,7 +351,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[dict[str, Any]]": ...
@@ -360,7 +362,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Optional[ModelDTOT]": ...
@@ -370,7 +372,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
         **kwargs: Any,
@@ -394,7 +396,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
         **kwargs: Any,
@@ -406,7 +408,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "T": ...
@@ -416,7 +418,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
         **kwargs: Any,
@@ -446,7 +448,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[Any]": ...
@@ -457,7 +459,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "Optional[T]": ...
@@ -467,7 +469,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
         **kwargs: Any,
@@ -495,7 +497,7 @@ class BigQueryDriver(
         parameters: Optional[StatementParameterType] = None,
         /,
         *,
-        connection: Optional["Client"] = None,
+        connection: Optional["BigQueryConnection"] = None,
         job_config: Optional[QueryJobConfig] = None,
         **kwargs: Any,
     ) -> int:
@@ -519,7 +521,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -530,7 +532,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -540,7 +542,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
         **kwargs: Any,
@@ -555,7 +557,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,  # Parameters might be complex in scripts
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
         **kwargs: Any,
     ) -> str:
@@ -582,7 +584,7 @@ class BigQueryDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
         **kwargs: Any,
     ) -> "ArrowTable":  # pyright: ignore[reportUnknownReturnType]
@@ -655,7 +657,7 @@ class BigQueryDriver(
         /,
         *,
         destination_uri: "Optional[str]" = None,
-        connection: "Optional[Client]" = None,
+        connection: "Optional[BigQueryConnection]" = None,
         job_config: "Optional[bigquery.ExtractJobConfig]" = None,
         **kwargs: Any,
     ) -> None:

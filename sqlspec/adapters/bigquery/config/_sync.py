@@ -2,17 +2,18 @@ import contextlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
-from google.cloud import bigquery
-
 from sqlspec.adapters.bigquery.config._common import BigQueryConnectionConfigCommon
-from sqlspec.adapters.bigquery.driver import BigQueryDriver
+from sqlspec.adapters.bigquery.driver import BigQueryConnection, BigQueryDriver
 from sqlspec.base import NoPoolSyncConfig
 from sqlspec.typing import dataclass_to_dict
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-__all__ = ("BigQueryConfig", "BigQueryConnectionConfig", )
+__all__ = (
+    "BigQueryConfig",
+    "BigQueryConnectionConfig",
+)
 
 
 class BigQueryConnectionConfig(BigQueryConnectionConfigCommon):
@@ -20,18 +21,18 @@ class BigQueryConnectionConfig(BigQueryConnectionConfigCommon):
 
 
 @dataclass
-class BigQueryConfig(NoPoolSyncConfig["bigquery.Client", "BigQueryDriver"]):
+class BigQueryConfig(NoPoolSyncConfig["BigQueryConnection", "BigQueryDriver"]):
     """BigQuery Synchronous Driver Configuration."""
 
     connection_config: "BigQueryConnectionConfig" = field(default_factory=BigQueryConnectionConfig)
     """BigQuery Connection Configuration."""
     driver_type: "type[BigQueryDriver]" = field(init=False, repr=False, default=BigQueryDriver)
     """BigQuery Driver Type."""
-    connection_type: "type[bigquery.Client]" = field(init=False, repr=False, default=bigquery.Client)
+    connection_type: "type[BigQueryConnection]" = field(init=False, repr=False, default=BigQueryConnection)
     """BigQuery Connection Type."""
     pool_instance: "None" = field(init=False, repr=False, default=None, hash=False)
     """This is set to have a init=False since BigQuery does not support pooling."""
-    connection_instance: "Optional[bigquery.Client]" = field(init=False, repr=False, default=None, hash=False)
+    connection_instance: "Optional[BigQueryConnection]" = field(init=False, repr=False, default=None, hash=False)
     """BigQuery Connection Instance."""
 
     @property
@@ -39,7 +40,7 @@ class BigQueryConfig(NoPoolSyncConfig["bigquery.Client", "BigQueryDriver"]):
         """Return the connection configuration as a dict.
 
         Returns:
-            A string keyed dict of config kwargs for the bigquery.Client constructor.
+            A string keyed dict of config kwargs for the BigQueryConnection constructor.
         """
         return dataclass_to_dict(
             self.connection_config,
@@ -48,7 +49,7 @@ class BigQueryConfig(NoPoolSyncConfig["bigquery.Client", "BigQueryDriver"]):
             exclude={"dataset_id", "credentials_path"},
         )
 
-    def create_connection(self) -> "bigquery.Client":
+    def create_connection(self) -> "BigQueryConnection":
         """Create a BigQuery Client instance.
 
         Returns:
@@ -61,7 +62,7 @@ class BigQueryConfig(NoPoolSyncConfig["bigquery.Client", "BigQueryDriver"]):
         return self.connection_instance
 
     @contextlib.contextmanager
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "Iterator[bigquery.Client]":
+    def provide_connection(self, *args: Any, **kwargs: Any) -> "Iterator[BigQueryConnection]":
         """Provide a BigQuery client within a context manager.
 
         Args:
