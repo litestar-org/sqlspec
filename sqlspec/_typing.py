@@ -6,15 +6,7 @@ This is used to ensure compatibility when one or more of the libraries are insta
 
 from collections.abc import Iterable, Mapping
 from enum import Enum
-from typing import (
-    Any,
-    ClassVar,
-    Final,
-    Protocol,
-    Union,
-    cast,
-    runtime_checkable,
-)
+from typing import Any, ClassVar, Final, Optional, Protocol, Union, cast, runtime_checkable
 
 from typing_extensions import Literal, TypeVar, dataclass_transform
 
@@ -50,9 +42,9 @@ except ImportError:
             self,
             /,
             *,
-            include: "Optional[Any]" = None,
-            exclude: "Optional[Any]" = None,
-            context: "Optional[Any]" = None,
+            include: Optional[Any] = None,
+            exclude: Optional[Any] = None,
+            context: Optional[Any] = None,
             by_alias: bool = False,
             exclude_unset: bool = False,
             exclude_defaults: bool = False,
@@ -68,9 +60,9 @@ except ImportError:
             self,
             /,
             *,
-            include: "Optional[Any]" = None,
-            exclude: "Optional[Any]" = None,
-            context: "Optional[Any]" = None,
+            include: Optional[Any] = None,
+            exclude: Optional[Any] = None,
+            context: Optional[Any] = None,
             by_alias: bool = False,
             exclude_unset: bool = False,
             exclude_defaults: bool = False,
@@ -90,9 +82,9 @@ except ImportError:
             self,
             type: Any,  # noqa: A002
             *,
-            config: "Optional[Any]" = None,
+            config: Optional[Any] = None,
             _parent_depth: int = 2,
-            module: "Optional[str]" = None,
+            module: Optional[str] = None,
         ) -> None:
             """Init"""
 
@@ -101,10 +93,10 @@ except ImportError:
             object: Any,
             /,
             *,
-            strict: "Optional[bool]" = None,
-            from_attributes: "Optional[bool]" = None,
-            context: "Optional[dict[str, Any]]" = None,
-            experimental_allow_partial: "Union[bool, Literal['off', 'on', 'trailing-strings']]" = False,
+            strict: Optional[bool] = None,
+            from_attributes: Optional[bool] = None,
+            context: Optional[dict[str, Any]] = None,
+            experimental_allow_partial: Union[bool, Literal["off", "on", "trailing-strings"]] = False,
         ) -> "T_co":
             """Stub"""
             return cast("T_co", object)
@@ -136,16 +128,16 @@ except ImportError:
     class Struct(Protocol):  # type: ignore[no-redef]
         """Placeholder Implementation"""
 
-        __struct_fields__: "ClassVar[tuple[str, ...]]"
+        __struct_fields__: ClassVar[tuple[str, ...]]
 
     def convert(  # type: ignore[no-redef]
         obj: Any,
-        type: "Union[Any, type[T]]",  # noqa: A002
+        type: Union[Any, type[T]],  # noqa: A002
         *,
         strict: bool = True,
         from_attributes: bool = False,
-        dec_hook: "Optional[Callable[[type, Any], Any]]" = None,
-        builtin_types: "Union[Iterable[type], None]" = None,
+        dec_hook: Optional[Callable[[type, Any], Any]] = None,
+        builtin_types: Optional[Iterable[type]] = None,
         str_keys: bool = False,
     ) -> "Union[T, Any]":
         """Placeholder implementation"""
@@ -172,10 +164,10 @@ except ImportError:
         def __init__(self, backend: Any, data_as_builtins: Any) -> None:
             """Placeholder init"""
 
-        def create_instance(self, **kwargs: Any) -> "T":
+        def create_instance(self, **kwargs: Any) -> T:
             return cast("T", kwargs)
 
-        def update_instance(self, instance: "T", **kwargs: Any) -> "T":
+        def update_instance(self, instance: T, **kwargs: Any) -> T:
             """Placeholder implementation"""
             return cast("T", kwargs)
 
@@ -214,15 +206,15 @@ except ImportError:
         def from_arrays(
             self,
             arrays: list[Any],
-            names: "Optional[list[str]]" = None,
-            schema: "Optional[Any]" = None,
-            metadata: "Optional[Mapping[str, Any]]" = None,
+            names: Optional[list[str]] = None,
+            schema: Optional[Any] = None,
+            metadata: Optional[Mapping[str, Any]] = None,
         ) -> Any: ...
         def from_pydict(
             self,
             mapping: dict[str, Any],
-            schema: "Optional[Any]" = None,
-            metadata: "Optional[Mapping[str, Any]]" = None,
+            schema: Optional[Any] = None,
+            metadata: Optional[Mapping[str, Any]] = None,
         ) -> Any: ...
         def from_batches(self, batches: Iterable[Any], schema: Optional[Any] = None) -> Any: ...
 
