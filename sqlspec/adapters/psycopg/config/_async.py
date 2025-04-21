@@ -2,11 +2,10 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
-from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool
 
 from sqlspec.adapters.psycopg.config._common import PsycopgGenericPoolConfig
-from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver
+from sqlspec.adapters.psycopg.driver import PsycopgAsyncConnection, PsycopgAsyncDriver
 from sqlspec.base import AsyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import dataclass_to_dict
@@ -22,12 +21,12 @@ __all__ = (
 
 
 @dataclass
-class PsycopgAsyncPoolConfig(PsycopgGenericPoolConfig[AsyncConnection, AsyncConnectionPool]):
+class PsycopgAsyncPoolConfig(PsycopgGenericPoolConfig[PsycopgAsyncConnection, AsyncConnectionPool]):
     """Async Psycopg Pool Config"""
 
 
 @dataclass
-class PsycopgAsyncConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPool, PsycopgAsyncDriver]):
+class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnectionPool, PsycopgAsyncDriver]):
     """Async Psycopg database Configuration.
 
     This class provides the base configuration for Psycopg database connections, extending
@@ -41,7 +40,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPoo
     """Psycopg Pool configuration"""
     pool_instance: "Optional[AsyncConnectionPool]" = None
     """Optional pool to use"""
-    connection_type: "type[AsyncConnection]" = field(init=False, default_factory=lambda: AsyncConnection)  # type: ignore[assignment]
+    connection_type: "type[PsycopgAsyncConnection]" = field(init=False, default_factory=lambda: PsycopgAsyncConnection)  # type: ignore[assignment]
     """Type of the connection object"""
     driver_type: "type[PsycopgAsyncDriver]" = field(init=False, default_factory=lambda: PsycopgAsyncDriver)  # type: ignore[type-abstract,unused-ignore]
     """Type of the driver object"""
@@ -93,7 +92,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPoo
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 
-    async def create_connection(self) -> "AsyncConnection":
+    async def create_connection(self) -> "PsycopgAsyncConnection":
         """Create and return a new psycopg async connection from the pool.
 
         Returns:
@@ -143,7 +142,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[AsyncConnection, AsyncConnectionPoo
         return self.create_pool()
 
     @asynccontextmanager
-    async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[AsyncConnection, None]":
+    async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[PsycopgAsyncConnection, None]":
         """Create and provide a database connection.
 
         Yields:

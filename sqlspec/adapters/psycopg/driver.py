@@ -2,6 +2,7 @@ import logging
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
+from psycopg import AsyncConnection, Connection
 from psycopg.rows import dict_row
 
 from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
@@ -12,13 +13,14 @@ from sqlspec.statement import PARAM_REGEX, SQLStatement
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator, Sequence
 
-    from psycopg import AsyncConnection, Connection
-
     from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 logger = logging.getLogger("sqlspec")
 
-__all__ = ("PsycopgAsyncDriver", "PsycopgSyncDriver")
+__all__ = ("PsycopgAsyncConnection", "PsycopgAsyncDriver", "PsycopgSyncConnection", "PsycopgSyncDriver")
+
+PsycopgSyncConnection = Connection
+PsycopgAsyncConnection = AsyncConnection
 
 
 class PsycopgDriverBase:
@@ -79,15 +81,15 @@ class PsycopgDriverBase:
 
 class PsycopgSyncDriver(
     PsycopgDriverBase,
-    SQLTranslatorMixin["Connection"],
-    SyncDriverAdapterProtocol["Connection"],
+    SQLTranslatorMixin["PsycopgSyncConnection"],
+    SyncDriverAdapterProtocol["PsycopgSyncConnection"],
 ):
     """Psycopg Sync Driver Adapter."""
 
-    connection: "Connection"
+    connection: "PsycopgSyncConnection"
     dialect: str = "postgres"
 
-    def __init__(self, connection: "Connection") -> None:
+    def __init__(self, connection: "PsycopgSyncConnection") -> None:
         self.connection = connection
 
     def _process_sql_params(
@@ -97,7 +99,6 @@ class PsycopgSyncDriver(
         /,
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Process SQL and parameters, converting :name -> %(name)s if needed."""
         stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
         processed_sql, processed_params = stmt.process()
 
@@ -144,7 +145,7 @@ class PsycopgSyncDriver(
 
     @staticmethod
     @contextmanager
-    def _with_cursor(connection: "Connection") -> "Generator[Any, None, None]":
+    def _with_cursor(connection: "PsycopgSyncConnection") -> "Generator[Any, None, None]":
         cursor = connection.cursor(row_factory=dict_row)
         try:
             yield cursor
@@ -159,7 +160,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Sequence[dict[str, Any]]": ...
@@ -170,7 +171,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Sequence[ModelDTOT]": ...
@@ -181,7 +182,7 @@ class PsycopgSyncDriver(
         /,
         *,
         schema_type: "Optional[type[ModelDTOT]]" = None,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch data from the database.
@@ -208,7 +209,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -219,7 +220,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -229,7 +230,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
@@ -255,7 +256,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[dict[str, Any]]": ...
@@ -266,7 +267,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Optional[ModelDTOT]": ...
@@ -276,7 +277,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
@@ -303,7 +304,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Any": ...
@@ -314,7 +315,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "T": ...
@@ -324,7 +325,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Union[T, Any]":
@@ -352,7 +353,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[Any]": ...
@@ -363,7 +364,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "Optional[T]": ...
@@ -373,7 +374,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
@@ -402,7 +403,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         **kwargs: Any,
     ) -> int:
         """Execute an INSERT, UPDATE, or DELETE query and return the number of affected rows.
@@ -423,7 +424,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -434,7 +435,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -444,7 +445,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
@@ -472,7 +473,7 @@ class PsycopgSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[PsycopgSyncConnection]" = None,
         **kwargs: Any,
     ) -> str:
         """Execute a script.
@@ -489,20 +490,20 @@ class PsycopgSyncDriver(
 
 class PsycopgAsyncDriver(
     PsycopgDriverBase,
-    SQLTranslatorMixin["AsyncConnection"],
-    AsyncDriverAdapterProtocol["AsyncConnection"],
+    SQLTranslatorMixin["PsycopgAsyncConnection"],
+    AsyncDriverAdapterProtocol["PsycopgAsyncConnection"],
 ):
     """Psycopg Async Driver Adapter."""
 
-    connection: "AsyncConnection"
+    connection: "PsycopgAsyncConnection"
     dialect: str = "postgres"
 
-    def __init__(self, connection: "AsyncConnection") -> None:
+    def __init__(self, connection: "PsycopgAsyncConnection") -> None:
         self.connection = connection
 
     @staticmethod
     @asynccontextmanager
-    async def _with_cursor(connection: "AsyncConnection") -> "AsyncGenerator[Any, None]":
+    async def _with_cursor(connection: "PsycopgAsyncConnection") -> "AsyncGenerator[Any, None]":
         cursor = connection.cursor(row_factory=dict_row)
         try:
             yield cursor
@@ -517,7 +518,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Sequence[dict[str, Any]]": ...
@@ -528,7 +529,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Sequence[ModelDTOT]": ...
@@ -538,7 +539,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
@@ -567,7 +568,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -578,7 +579,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -588,7 +589,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
@@ -615,7 +616,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[dict[str, Any]]": ...
@@ -626,7 +627,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Optional[ModelDTOT]": ...
@@ -637,7 +638,7 @@ class PsycopgAsyncDriver(
         /,
         *,
         schema_type: "Optional[type[ModelDTOT]]" = None,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch one row from the database.
@@ -664,7 +665,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Any": ...
@@ -675,7 +676,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "T": ...
@@ -685,7 +686,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Union[T, Any]":
@@ -713,7 +714,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
@@ -743,7 +744,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         **kwargs: Any,
     ) -> int:
         """Execute an INSERT, UPDATE, or DELETE query and return the number of affected rows.
@@ -769,7 +770,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -780,7 +781,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -790,7 +791,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
@@ -819,7 +820,7 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         **kwargs: Any,
     ) -> str:
         """Execute a script.

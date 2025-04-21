@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 from psqlpy import Connection, ConnectionPool
 
-from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
+from sqlspec.adapters.psqlpy.driver import PsqlpyConnection, PsqlpyDriver
 from sqlspec.base import AsyncDatabaseConfig, GenericPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
@@ -94,7 +94,7 @@ class PsqlpyPoolConfig(GenericPoolConfig):
 
 
 @dataclass
-class PsqlpyConfig(AsyncDatabaseConfig[Connection, ConnectionPool, PsqlpyDriver]):
+class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
     """Configuration for psqlpy database connections, managing a connection pool.
 
     This configuration class wraps `PsqlpyPoolConfig` and manages the lifecycle
@@ -105,7 +105,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[Connection, ConnectionPool, PsqlpyDriver]
     """Psqlpy Pool configuration"""
     driver_type: type[PsqlpyDriver] = field(default=PsqlpyDriver, init=False, hash=False)
     """Type of the driver object"""
-    connection_type: type[Connection] = field(default=Connection, init=False, hash=False)
+    connection_type: type[PsqlpyConnection] = field(default=PsqlpyConnection, init=False, hash=False)
     """Type of the connection object"""
     pool_instance: Optional[ConnectionPool] = field(default=None, hash=False)
     """The connection pool instance. If set, this will be used instead of creating a new pool."""
@@ -204,7 +204,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[Connection, ConnectionPool, PsqlpyDriver]
 
         return _create()
 
-    def create_connection(self) -> "Awaitable[Connection]":
+    def create_connection(self) -> "Awaitable[PsqlpyConnection]":
         """Create and return a new, standalone psqlpy connection using the configured parameters.
 
         Returns:
@@ -222,7 +222,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[Connection, ConnectionPool, PsqlpyDriver]
         return _create()
 
     @asynccontextmanager
-    async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[Connection, None]":
+    async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[PsqlpyConnection, None]":
         """Acquire a connection from the pool.
 
         Yields:

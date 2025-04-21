@@ -16,7 +16,7 @@ from sqlspec.typing import ArrowTable, StatementParameterType
 if TYPE_CHECKING:
     from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType, T
 
-__all__ = ("AdbcDriver",)
+__all__ = ("AdbcConnection", "AdbcDriver")
 
 logger = logging.getLogger("sqlspec")
 
@@ -33,24 +33,26 @@ PARAM_REGEX = re.compile(
     re.VERBOSE | re.DOTALL,
 )
 
+AdbcConnection = Connection
+
 
 class AdbcDriver(
-    SyncArrowBulkOperationsMixin["Connection"],
-    SQLTranslatorMixin["Connection"],
-    SyncDriverAdapterProtocol["Connection"],
+    SyncArrowBulkOperationsMixin["AdbcConnection"],
+    SQLTranslatorMixin["AdbcConnection"],
+    SyncDriverAdapterProtocol["AdbcConnection"],
 ):
     """ADBC Sync Driver Adapter."""
 
-    connection: Connection
+    connection: AdbcConnection
     __supports_arrow__: ClassVar[bool] = True
 
-    def __init__(self, connection: "Connection") -> None:
+    def __init__(self, connection: "AdbcConnection") -> None:
         """Initialize the ADBC driver adapter."""
         self.connection = connection
         self.dialect = self._get_dialect(connection)
 
     @staticmethod
-    def _get_dialect(connection: "Connection") -> str:  # noqa: PLR0911
+    def _get_dialect(connection: "AdbcConnection") -> str:  # noqa: PLR0911
         """Get the database dialect based on the driver name.
 
         Args:
@@ -75,11 +77,11 @@ class AdbcDriver(
         return "postgres"  # default to postgresql dialect
 
     @staticmethod
-    def _cursor(connection: "Connection", *args: Any, **kwargs: Any) -> "Cursor":
+    def _cursor(connection: "AdbcConnection", *args: Any, **kwargs: Any) -> "Cursor":
         return connection.cursor(*args, **kwargs)
 
     @contextmanager
-    def _with_cursor(self, connection: "Connection") -> Generator["Cursor", None, None]:
+    def _with_cursor(self, connection: "AdbcConnection") -> Generator["Cursor", None, None]:
         cursor = self._cursor(connection)
         try:
             yield cursor
@@ -172,7 +174,7 @@ class AdbcDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AdbcConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Sequence[dict[str, Any]]": ...
@@ -183,7 +185,7 @@ class AdbcDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AdbcConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Sequence[ModelDTOT]": ...
@@ -193,7 +195,7 @@ class AdbcDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AdbcConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
@@ -223,7 +225,7 @@ class AdbcDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AdbcConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -234,7 +236,7 @@ class AdbcDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AdbcConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -244,7 +246,7 @@ class AdbcDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AdbcConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
@@ -271,7 +273,7 @@ class AdbcDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AdbcConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[dict[str, Any]]": ...
@@ -282,7 +284,7 @@ class AdbcDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AdbcConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Optional[ModelDTOT]": ...
@@ -292,7 +294,7 @@ class AdbcDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AdbcConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
@@ -320,7 +322,7 @@ class AdbcDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AdbcConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Any": ...
@@ -331,7 +333,7 @@ class AdbcDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AdbcConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "T": ...
@@ -341,7 +343,7 @@ class AdbcDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AdbcConnection"] = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Union[T, Any]":
@@ -367,7 +369,7 @@ class AdbcDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AdbcConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[Any]": ...
@@ -378,7 +380,7 @@ class AdbcDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AdbcConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "Optional[T]": ...
@@ -388,7 +390,7 @@ class AdbcDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AdbcConnection"] = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
@@ -414,7 +416,7 @@ class AdbcDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AdbcConnection"] = None,
         **kwargs: Any,
     ) -> int:
         """Insert, update, or delete data from the database.
@@ -436,7 +438,7 @@ class AdbcDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AdbcConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -447,7 +449,7 @@ class AdbcDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AdbcConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -457,7 +459,7 @@ class AdbcDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AdbcConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
@@ -490,7 +492,7 @@ class AdbcDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["AdbcConnection"] = None,
         **kwargs: Any,
     ) -> str:
         """Execute a script.
@@ -513,7 +515,7 @@ class AdbcDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[AdbcConnection]" = None,
         **kwargs: Any,
     ) -> "ArrowTable":
         """Execute a SQL query and return results as an Apache Arrow Table.

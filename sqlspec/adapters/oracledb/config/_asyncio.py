@@ -3,10 +3,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from oracledb import create_pool_async as oracledb_create_pool  # pyright: ignore[reportUnknownVariableType]
-from oracledb.connection import AsyncConnection
 
 from sqlspec.adapters.oracledb.config._common import OracleGenericPoolConfig
-from sqlspec.adapters.oracledb.driver import OracleAsyncDriver
+from sqlspec.adapters.oracledb.driver import OracleAsyncConnection, OracleAsyncDriver
 from sqlspec.base import AsyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import dataclass_to_dict
@@ -24,12 +23,12 @@ __all__ = (
 
 
 @dataclass
-class OracleAsyncPoolConfig(OracleGenericPoolConfig["AsyncConnection", "AsyncConnectionPool"]):
+class OracleAsyncPoolConfig(OracleGenericPoolConfig["OracleAsyncConnection", "AsyncConnectionPool"]):
     """Async Oracle Pool Config"""
 
 
 @dataclass
-class OracleAsyncConfig(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionPool", "OracleAsyncDriver"]):
+class OracleAsyncConfig(AsyncDatabaseConfig["OracleAsyncConnection", "AsyncConnectionPool", "OracleAsyncDriver"]):
     """Oracle Async database Configuration.
 
     This class provides the base configuration for Oracle database connections, extending
@@ -49,7 +48,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionP
 
     If set, the plugin will use the provided pool rather than instantiate one.
     """
-    connection_type: "type[AsyncConnection]" = field(init=False, default_factory=lambda: AsyncConnection)
+    connection_type: "type[OracleAsyncConnection]" = field(init=False, default_factory=lambda: OracleAsyncConnection)
     """Connection class to use.
 
     Defaults to :class:`AsyncConnection`.
@@ -111,7 +110,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionP
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 
-    async def create_connection(self) -> "AsyncConnection":
+    async def create_connection(self) -> "OracleAsyncConnection":
         """Create and return a new oracledb async connection from the pool.
 
         Returns:
@@ -122,7 +121,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionP
         """
         try:
             pool = await self.provide_pool()
-            return cast("AsyncConnection", await pool.acquire())  # type: ignore[no-any-return,unused-ignore]
+            return cast("OracleAsyncConnection", await pool.acquire())  # type: ignore[no-any-return,unused-ignore]
         except Exception as e:
             msg = f"Could not configure the Oracle async connection. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e
@@ -160,7 +159,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig["AsyncConnection", "AsyncConnectionP
         return self.create_pool()
 
     @asynccontextmanager
-    async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[AsyncConnection, None]":
+    async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[OracleAsyncConnection, None]":
         """Create a connection instance.
 
         Yields:

@@ -3,10 +3,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 from oracledb import create_pool as oracledb_create_pool  # pyright: ignore[reportUnknownVariableType]
-from oracledb.connection import Connection
 
 from sqlspec.adapters.oracledb.config._common import OracleGenericPoolConfig
-from sqlspec.adapters.oracledb.driver import OracleSyncDriver
+from sqlspec.adapters.oracledb.driver import OracleSyncConnection, OracleSyncDriver
 from sqlspec.base import SyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import dataclass_to_dict
@@ -24,12 +23,12 @@ __all__ = (
 
 
 @dataclass
-class OracleSyncPoolConfig(OracleGenericPoolConfig["Connection", "ConnectionPool"]):
+class OracleSyncPoolConfig(OracleGenericPoolConfig["OracleSyncConnection", "ConnectionPool"]):
     """Sync Oracle Pool Config"""
 
 
 @dataclass
-class OracleSyncConfig(SyncDatabaseConfig["Connection", "ConnectionPool", "OracleSyncDriver"]):
+class OracleSyncConfig(SyncDatabaseConfig["OracleSyncConnection", "ConnectionPool", "OracleSyncDriver"]):
     """Oracle Sync database Configuration.
 
     This class provides the base configuration for Oracle database connections, extending
@@ -49,7 +48,7 @@ class OracleSyncConfig(SyncDatabaseConfig["Connection", "ConnectionPool", "Oracl
 
     If set, the plugin will use the provided pool rather than instantiate one.
     """
-    connection_type: "type[Connection]" = field(init=False, default_factory=lambda: Connection)  # pyright: ignore
+    connection_type: "type[OracleSyncConnection]" = field(init=False, default_factory=lambda: OracleSyncConnection)  # pyright: ignore
     """Connection class to use.
 
     Defaults to :class:`Connection`.
@@ -111,7 +110,7 @@ class OracleSyncConfig(SyncDatabaseConfig["Connection", "ConnectionPool", "Oracl
         msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
         raise ImproperConfigurationError(msg)
 
-    def create_connection(self) -> "Connection":
+    def create_connection(self) -> "OracleSyncConnection":
         """Create and return a new oracledb connection from the pool.
 
         Returns:
@@ -160,7 +159,7 @@ class OracleSyncConfig(SyncDatabaseConfig["Connection", "ConnectionPool", "Oracl
         return self.create_pool()
 
     @contextmanager
-    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[Connection, None, None]":
+    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[OracleSyncConnection, None, None]":
         """Create a connection instance.
 
         Yields:

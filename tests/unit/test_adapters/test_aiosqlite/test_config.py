@@ -33,7 +33,6 @@ def test_minimal_config() -> None:
     assert config.detect_types is Empty
     assert config.isolation_level is Empty
     assert config.check_same_thread is Empty
-    assert config.factory is Empty
     assert config.cached_statements is Empty
     assert config.uri is Empty
 
@@ -46,7 +45,6 @@ def test_full_config() -> None:
         detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
         isolation_level="IMMEDIATE",
         check_same_thread=False,
-        factory=sqlite3.Connection,
         cached_statements=256,
         uri=True,
     )
@@ -56,7 +54,6 @@ def test_full_config() -> None:
     assert config.detect_types == sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES
     assert config.isolation_level == "IMMEDIATE"
     assert config.check_same_thread is False
-    assert config.factory == sqlite3.Connection
     assert config.cached_statements == 256
     assert config.uri is True
 

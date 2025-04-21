@@ -190,9 +190,7 @@ class AsyncpgConfig(AsyncDatabaseConfig["AsyncpgConnection", "Pool", "AsyncpgDri
             raise ImproperConfigurationError(msg) from e
 
     @asynccontextmanager
-    async def provide_connection(
-        self, *args: "Any", **kwargs: "Any"
-    ) -> "AsyncGenerator[PoolConnectionProxy[Any], None]":  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]
+    async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[AsyncpgConnection, None]":  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]
         """Create a connection instance.
 
         Yields:

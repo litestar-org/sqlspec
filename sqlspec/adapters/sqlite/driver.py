@@ -1,5 +1,6 @@
+import sqlite3
 from contextlib import contextmanager
-from sqlite3 import Connection, Cursor
+from sqlite3 import Cursor
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.base import SyncDriverAdapterProtocol
@@ -10,27 +11,29 @@ if TYPE_CHECKING:
 
     from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
-__all__ = ("SqliteDriver",)
+__all__ = ("SqliteConnection", "SqliteDriver")
+
+SqliteConnection = sqlite3.Connection
 
 
 class SqliteDriver(
-    SQLTranslatorMixin["Connection"],
-    SyncDriverAdapterProtocol["Connection"],
+    SQLTranslatorMixin["SqliteConnection"],
+    SyncDriverAdapterProtocol["SqliteConnection"],
 ):
     """SQLite Sync Driver Adapter."""
 
-    connection: "Connection"
+    connection: "SqliteConnection"
     dialect: str = "sqlite"
 
-    def __init__(self, connection: "Connection") -> None:
+    def __init__(self, connection: "SqliteConnection") -> None:
         self.connection = connection
 
     @staticmethod
-    def _cursor(connection: "Connection", *args: Any, **kwargs: Any) -> Cursor:
+    def _cursor(connection: "SqliteConnection", *args: Any, **kwargs: Any) -> Cursor:
         return connection.cursor(*args, **kwargs)  # type: ignore[no-any-return]
 
     @contextmanager
-    def _with_cursor(self, connection: "Connection") -> "Generator[Cursor, None, None]":
+    def _with_cursor(self, connection: "SqliteConnection") -> "Generator[Cursor, None, None]":
         cursor = self._cursor(connection)
         try:
             yield cursor
@@ -45,7 +48,7 @@ class SqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[SqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Sequence[dict[str, Any]]": ...
@@ -56,7 +59,7 @@ class SqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[SqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Sequence[ModelDTOT]": ...
@@ -66,7 +69,7 @@ class SqliteDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["SqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
@@ -97,7 +100,7 @@ class SqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[SqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -108,7 +111,7 @@ class SqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[SqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -118,7 +121,7 @@ class SqliteDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["SqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
@@ -148,7 +151,7 @@ class SqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[SqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[dict[str, Any]]": ...
@@ -159,7 +162,7 @@ class SqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[SqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Optional[ModelDTOT]": ...
@@ -169,7 +172,7 @@ class SqliteDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["SqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
@@ -200,7 +203,7 @@ class SqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[SqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Any": ...
@@ -211,7 +214,7 @@ class SqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[SqliteConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "T": ...
@@ -221,7 +224,7 @@ class SqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[SqliteConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Union[T, Any]":
@@ -250,7 +253,7 @@ class SqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[SqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[Any]": ...
@@ -261,7 +264,7 @@ class SqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[SqliteConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "Optional[T]": ...
@@ -271,7 +274,7 @@ class SqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[SqliteConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
@@ -300,7 +303,7 @@ class SqliteDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["SqliteConnection"] = None,
         **kwargs: Any,
     ) -> int:
         """Insert, update, or delete data from the database.
@@ -325,7 +328,7 @@ class SqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[SqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -336,7 +339,7 @@ class SqliteDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[SqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -346,7 +349,7 @@ class SqliteDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["SqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
@@ -390,7 +393,7 @@ class SqliteDriver(
         parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: Optional["Connection"] = None,
+        connection: Optional["SqliteConnection"] = None,
         **kwargs: Any,
     ) -> str:
         """Execute a script.

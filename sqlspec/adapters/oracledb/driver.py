@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
+from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
+
 from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
 from sqlspec.mixins import AsyncArrowBulkOperationsMixin, SQLTranslatorMixin, SyncArrowBulkOperationsMixin
 from sqlspec.typing import ArrowTable, StatementParameterType, T
@@ -8,30 +10,30 @@ from sqlspec.typing import ArrowTable, StatementParameterType, T
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator, Sequence
 
-    from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
-
-    # Conditionally import ArrowTable for type checking
     from sqlspec.typing import ModelDTOT
 
-__all__ = ("OracleAsyncDriver", "OracleSyncDriver")
+__all__ = ("OracleAsyncConnection", "OracleAsyncDriver", "OracleSyncConnection", "OracleSyncDriver")
+
+OracleSyncConnection = Connection
+OracleAsyncConnection = AsyncConnection
 
 
 class OracleSyncDriver(
-    SyncArrowBulkOperationsMixin["Connection"],
-    SQLTranslatorMixin["Connection"],
-    SyncDriverAdapterProtocol["Connection"],
+    SyncArrowBulkOperationsMixin["OracleSyncConnection"],
+    SQLTranslatorMixin["OracleSyncConnection"],
+    SyncDriverAdapterProtocol["OracleSyncConnection"],
 ):
     """Oracle Sync Driver Adapter."""
 
-    connection: "Connection"
+    connection: "OracleSyncConnection"
     dialect: str = "oracle"
 
-    def __init__(self, connection: "Connection") -> None:
+    def __init__(self, connection: "OracleSyncConnection") -> None:
         self.connection = connection
 
     @staticmethod
     @contextmanager
-    def _with_cursor(connection: "Connection") -> "Generator[Cursor, None, None]":
+    def _with_cursor(connection: "OracleSyncConnection") -> "Generator[Cursor, None, None]":
         cursor = connection.cursor()
         try:
             yield cursor
@@ -46,7 +48,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Sequence[dict[str, Any]]": ...
@@ -57,7 +59,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Sequence[ModelDTOT]": ...
@@ -67,7 +69,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
@@ -105,7 +107,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -116,7 +118,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -126,7 +128,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
@@ -165,7 +167,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[dict[str, Any]]": ...
@@ -176,7 +178,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Optional[ModelDTOT]": ...
@@ -186,7 +188,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
@@ -220,7 +222,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Any": ...
@@ -231,7 +233,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "T": ...
@@ -241,7 +243,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Union[T, Any]":
@@ -269,7 +271,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[Any]": ...
@@ -280,7 +282,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "Optional[T]": ...
@@ -290,7 +292,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
@@ -319,7 +321,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         **kwargs: Any,
     ) -> int:
         """Insert, update, or delete data from the database.
@@ -341,7 +343,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -352,7 +354,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -362,7 +364,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
@@ -395,7 +397,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         **kwargs: Any,
     ) -> str:
         """Execute a script.
@@ -416,7 +418,7 @@ class OracleSyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[Connection]" = None,
+        connection: "Optional[OracleSyncConnection]" = None,
         **kwargs: Any,
     ) -> "ArrowTable":  # pyright: ignore[reportUnknownVariableType]
         """Execute a SQL query and return results as an Apache Arrow Table.
@@ -432,21 +434,21 @@ class OracleSyncDriver(
 
 
 class OracleAsyncDriver(
-    AsyncArrowBulkOperationsMixin["AsyncConnection"],
-    SQLTranslatorMixin["AsyncConnection"],
-    AsyncDriverAdapterProtocol["AsyncConnection"],
+    AsyncArrowBulkOperationsMixin["OracleAsyncConnection"],
+    SQLTranslatorMixin["OracleAsyncConnection"],
+    AsyncDriverAdapterProtocol["OracleAsyncConnection"],
 ):
     """Oracle Async Driver Adapter."""
 
-    connection: "AsyncConnection"
+    connection: "OracleAsyncConnection"
     dialect: str = "oracle"
 
-    def __init__(self, connection: "AsyncConnection") -> None:
+    def __init__(self, connection: "OracleAsyncConnection") -> None:
         self.connection = connection
 
     @staticmethod
     @asynccontextmanager
-    async def _with_cursor(connection: "AsyncConnection") -> "AsyncGenerator[AsyncCursor, None]":
+    async def _with_cursor(connection: "OracleAsyncConnection") -> "AsyncGenerator[AsyncCursor, None]":
         cursor = connection.cursor()
         try:
             yield cursor
@@ -461,7 +463,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Sequence[dict[str, Any]]": ...
@@ -472,7 +474,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Sequence[ModelDTOT]": ...
@@ -482,7 +484,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
@@ -514,7 +516,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -525,7 +527,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -535,7 +537,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
@@ -566,7 +568,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[dict[str, Any]]": ...
@@ -577,7 +579,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Optional[ModelDTOT]": ...
@@ -587,7 +589,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
@@ -621,7 +623,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Any": ...
@@ -632,7 +634,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "T": ...
@@ -642,7 +644,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Union[T, Any]":
@@ -670,7 +672,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "Optional[Any]": ...
@@ -681,7 +683,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "Optional[T]": ...
@@ -691,7 +693,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
@@ -720,7 +722,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         **kwargs: Any,
     ) -> int:
         """Insert, update, or delete data from the database.
@@ -742,7 +744,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
@@ -753,7 +755,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
@@ -763,7 +765,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
@@ -796,7 +798,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         **kwargs: Any,
     ) -> str:
         """Execute a script.
@@ -817,7 +819,7 @@ class OracleAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[AsyncConnection]" = None,
+        connection: "Optional[OracleAsyncConnection]" = None,
         **kwargs: Any,
     ) -> "ArrowTable":  # pyright: ignore[reportUnknownVariableType]
         """Execute a SQL query asynchronously and return results as an Apache Arrow Table.
