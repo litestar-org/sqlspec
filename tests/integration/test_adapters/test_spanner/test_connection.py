@@ -7,7 +7,7 @@ from google.cloud.spanner_v1.pool import AbstractSessionPool
 from pytest_databases.docker.spanner import SpannerService
 
 # Import sqlspec types
-from sqlspec.adapters.spanner import SpannerConfig, SpannerPoolConfig
+from sqlspec.adapters.spanner import SpannerConfig, SpannerDriver, SpannerPoolConfig
 
 
 @pytest.fixture(scope="session")
@@ -47,7 +47,7 @@ def sync_config(
 def test_sync_config_properties(sync_config: Any) -> None:
     assert sync_config.is_async is False
     assert sync_config.support_connection_pooling is True  # Spanner uses pools
-    assert issubclass(sync_config.driver_type, SpannerSyncDriver)
+    assert issubclass(sync_config.driver_type, SpannerDriver)
     # Check connection_type can be resolved (might need adjustment based on actual Union)
     assert sync_config.connection_type is not None
 
