@@ -9,7 +9,7 @@ from sqlspec.extensions.litestar._utils import (
     get_sqlspec_scope_state,
     set_sqlspec_scope_state,
 )
-from sqlspec.utils.sync_tools import maybe_async_
+from sqlspec.utils.sync_tools import ensure_async_
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Coroutine
@@ -47,7 +47,7 @@ def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope
         connection = get_sqlspec_scope_state(scope, connection_scope_key)
         if connection and message["type"] in SESSION_TERMINUS_ASGI_EVENTS:
             with contextlib.suppress(Exception):
-                await maybe_async_(connection.close)()
+                await ensure_async_(connection.close)()
             delete_sqlspec_scope_state(scope, connection_scope_key)
 
     return handler
@@ -98,13 +98,13 @@ def autocommit_handler_maker(
                 if (message["status"] in commit_range or message["status"] in extra_commit_statuses) and message[
                     "status"
                 ] not in extra_rollback_statuses:
-                    await maybe_async_(connection.commit)()
+                    await ensure_async_(connection.commit)()
                 else:
-                    await maybe_async_(connection.rollback)()
+                    await ensure_async_(connection.rollback)()
         finally:
             if connection and message["type"] in SESSION_TERMINUS_ASGI_EVENTS:
                 with contextlib.suppress(Exception):
-                    await maybe_async_(connection.close)()
+                    await ensure_async_(connection.close)()
                 delete_sqlspec_scope_state(scope, connection_scope_key)
 
     return handler
@@ -126,14 +126,14 @@ def lifespan_handler_maker(
 
     @contextlib.asynccontextmanager
     async def lifespan_handler(app: "Litestar") -> "AsyncGenerator[None, None]":
-        db_pool = await maybe_async_(config.create_pool)()
+        db_pool = await ensure_async_(config.create_pool)()
         app.state.update({pool_key: db_pool})
         try:
             yield
         finally:
             app.state.pop(pool_key, None)
             try:
-                await maybe_async_(config.close_pool)()
+                await ensure_async_(config.close_pool)()
             except Exception as e:  # noqa: BLE001
                 if app.logger:
                     app.logger.warning("Error closing database pool for %s. Error: %s", pool_key, e)
@@ -158,7 +158,7 @@ def connection_provider_maker(
     async def provide_connection(state: "State", scope: "Scope") -> "ConnectionT":
         connection = get_sqlspec_scope_state(scope, connection_key)
         if connection is None:
-            connection = await maybe_async_(config.create_connection)()
+            connection = await ensure_async_(config.create_connection)()
             set_sqlspec_scope_state(scope, connection_key, connection)
         return cast("ConnectionT", connection)
 
@@ -182,7 +182,7 @@ def pool_provider_maker(
     async def provide_pool(state: "State", scope: "Scope") -> "PoolT":
         pool = get_sqlspec_scope_state(scope, pool_key)
         if pool is None:
-            pool = await maybe_async_(config.create_pool)()
+            pool = await ensure_async_(config.create_pool)()
             set_sqlspec_scope_state(scope, pool_key, pool)
         return cast("PoolT", pool)
 
@@ -206,7 +206,7 @@ def session_provider_maker(
     async def provide_session(state: "State", scope: "Scope") -> "DriverT":
         session = get_sqlspec_scope_state(scope, session_key)
         if session is None:
-            connection = await maybe_async_(config.create_connection)()
+            connection = await ensure_async_(config.create_connection)()
             session = config.driver_type(connection=connection)  # pyright: ignore[reportCallIssue]
             set_sqlspec_scope_state(scope, session_key, session)
         return cast("DriverT", session)
