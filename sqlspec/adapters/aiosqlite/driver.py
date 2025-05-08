@@ -1,10 +1,15 @@
+import logging
+import re
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 import aiosqlite
 
 from sqlspec.base import AsyncDriverAdapterProtocol
+from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin
+from sqlspec.statement import PARAM_REGEX
+from sqlspec.utils.text import bind_parameters
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
@@ -13,6 +18,18 @@ if TYPE_CHECKING:
 
 __all__ = ("AiosqliteConnection", "AiosqliteDriver")
 AiosqliteConnection = aiosqlite.Connection
+
+logger = logging.getLogger("sqlspec")
+
+# Regex to find '?' placeholders, skipping those inside quotes or SQL comments
+QMARK_REGEX = re.compile(
+    r"""(?P<dquote>"[^"]*") | # Double-quoted strings
+         (?P<squote>'[^']*') | # Single-quoted strings
+         (?P<comment>--[^\n]*|/\*.*?\*/) | # SQL comments (single/multi-line)
+         (?P<qmark>\?) # The question mark placeholder
+      """,
+    re.VERBOSE | re.DOTALL,
+)
 
 
 class AiosqliteDriver(
@@ -38,6 +55,62 @@ class AiosqliteDriver(
             yield cursor
         finally:
             await cursor.close()
+
+    def _process_sql_params(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        **kwargs: Any,
+    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
+        # 1. Merge parameters and kwargs
+        merged_params: Optional[Union[dict[str, Any], list[Any], tuple[Any, ...]]] = None
+
+        if kwargs:
+            if isinstance(parameters, dict):
+                merged_params = {**parameters, **kwargs}
+            elif parameters is not None:
+                msg = "Cannot mix positional parameters with keyword arguments for aiosqlite driver."
+                raise ParameterStyleMismatchError(msg)
+            else:
+                merged_params = kwargs
+        elif parameters is not None:
+            merged_params = parameters  # type: ignore
+
+        # Use bind_parameters for named parameters
+        if isinstance(merged_params, dict):
+            final_sql, final_params = bind_parameters(sql, merged_params, dialect="sqlite")
+            return final_sql, final_params
+
+        # Case 2: Sequence parameters - pass through
+        if isinstance(merged_params, (list, tuple)):
+            return sql, merged_params
+        # Case 3: Scalar parameter - wrap in tuple
+        if merged_params is not None:
+            return sql, (merged_params,)
+
+        # Case 0: No parameters provided
+        # Basic validation for placeholders
+        has_placeholders = False
+        for match in PARAM_REGEX.finditer(sql):
+            if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
+                "var_name"
+            ):
+                has_placeholders = True
+                break
+        if not has_placeholders:
+            # Check for ? style placeholders
+            for match in re.finditer(
+                r"(\"(?:[^\"]|\"\")*\")|(\'(?:[^\']|\'\')*\')|(--.*?\n)|(\/\*.*?\*\/)|(\?)", sql, re.DOTALL
+            ):
+                if match.group(5):
+                    has_placeholders = True
+                    break
+
+        if has_placeholders:
+            msg = f"aiosqlite: SQL contains parameter placeholders, but no parameters were provided. SQL: {sql}"
+            raise SQLParsingError(msg)
+        return sql, None
 
     # --- Public API Methods --- #
     @overload
@@ -71,7 +144,7 @@ class AiosqliteDriver(
         connection: Optional["AiosqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
+    ) -> "Sequence[Union[dict[str, Any], ModelDTOT]]":
         """Fetch data from the database.
 
         Returns:
@@ -79,15 +152,19 @@ class AiosqliteDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            results = await cursor.fetchall()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if not results:
-                return []
-            column_names = [c[0] for c in cursor.description or []]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if schema_type is None:
-                return [dict(zip(column_names, row)) for row in results]  # pyright: ignore[reportUnknownArgumentType]
-            return [cast("ModelDTOT", schema_type(**dict(zip(column_names, row)))) for row in results]  # pyright: ignore[reportUnknownArgumentType]
+
+        # Execute the query
+        cursor = await connection.execute(sql, parameters or ())
+        results = await cursor.fetchall()
+        if not results:
+            return []
+
+        # Get column names
+        column_names = [column[0] for column in cursor.description]
+
+        if schema_type is None:
+            return [dict(zip(column_names, row)) for row in results]
+        return [cast("ModelDTOT", schema_type(**dict(zip(column_names, row)))) for row in results]
 
     @overload
     async def select_one(
@@ -120,7 +197,7 @@ class AiosqliteDriver(
         connection: Optional["AiosqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "Union[ModelDTOT, dict[str, Any]]":
+    ) -> "Union[dict[str, Any], ModelDTOT]":
         """Fetch one row from the database.
 
         Returns:
@@ -128,14 +205,18 @@ class AiosqliteDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            result = self.check_not_found(result)
-            column_names = [c[0] for c in cursor.description or []]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if schema_type is None:
-                return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
-            return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))  # pyright: ignore[reportUnknownArgumentType]
+
+        # Execute the query
+        cursor = await connection.execute(sql, parameters or ())
+        result = await cursor.fetchone()
+        result = self.check_not_found(result)
+
+        # Get column names
+        column_names = [column[0] for column in cursor.description]
+
+        if schema_type is None:
+            return dict(zip(column_names, result))
+        return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
 
     @overload
     async def select_one_or_none(
@@ -168,7 +249,7 @@ class AiosqliteDriver(
         connection: Optional["AiosqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
+    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
         """Fetch one row from the database.
 
         Returns:
@@ -176,15 +257,19 @@ class AiosqliteDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if result is None:
-                return None
-            column_names = [c[0] for c in cursor.description or []]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if schema_type is None:
-                return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
-            return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))  # pyright: ignore[reportUnknownArgumentType]
+
+        # Execute the query
+        cursor = await connection.execute(sql, parameters or ())
+        result = await cursor.fetchone()
+        if result is None:
+            return None
+
+        # Get column names
+        column_names = [column[0] for column in cursor.description]
+
+        if schema_type is None:
+            return dict(zip(column_names, result))
+        return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
 
     @overload
     async def select_value(
@@ -211,27 +296,31 @@ class AiosqliteDriver(
     async def select_value(
         self,
         sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
+        parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: "Optional[AiosqliteConnection]" = None,
+        connection: Optional["AiosqliteConnection"] = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Union[T, Any]":
         """Fetch a single value from the database.
 
         Returns:
-            The first value from the first row of results, or None if no results.
+            The first value from the first row of results.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType]
-            result = self.check_not_found(result)
-            if schema_type is None:
-                return result[0]
-            return schema_type(result[0])  # type: ignore[call-arg]
+
+        # Execute the query
+        cursor = await connection.execute(sql, parameters or ())
+        result = await cursor.fetchone()
+        result = self.check_not_found(result)
+
+        # Return first value from the row
+        result_value = result[0]
+        if schema_type is None:
+            return result_value
+        return cast("T", schema_type(result_value))  # type: ignore[call-arg]
 
     @overload
     async def select_value_or_none(
@@ -258,10 +347,10 @@ class AiosqliteDriver(
     async def select_value_or_none(
         self,
         sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
+        parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: "Optional[AiosqliteConnection]" = None,
+        connection: Optional["AiosqliteConnection"] = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
@@ -272,14 +361,18 @@ class AiosqliteDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType]
-            if result is None:
-                return None
-            if schema_type is None:
-                return result[0]
-            return schema_type(result[0])  # type: ignore[call-arg]
+
+        # Execute the query
+        cursor = await connection.execute(sql, parameters or ())
+        result = await cursor.fetchone()
+        if result is None:
+            return None
+
+        # Return first value from the row
+        result_value = result[0]
+        if schema_type is None:
+            return result_value
+        return cast("T", schema_type(result_value))  # type: ignore[call-arg]
 
     async def insert_update_delete(
         self,
@@ -298,9 +391,10 @@ class AiosqliteDriver(
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            return cursor.rowcount if hasattr(cursor, "rowcount") else -1  # pyright: ignore[reportUnknownVariableType, reportGeneralTypeIssues]
+        # Execute the query
+        cursor = await connection.execute(sql, parameters or ())
+        await connection.commit()
+        return cursor.rowcount
 
     @overload
     async def insert_update_delete_returning(
@@ -333,7 +427,7 @@ class AiosqliteDriver(
         connection: Optional["AiosqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
+    ) -> "Union[dict[str, Any], ModelDTOT]":
         """Insert, update, or delete data from the database and return result.
 
         Returns:
@@ -342,15 +436,18 @@ class AiosqliteDriver(
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            results = list(await cursor.fetchall())  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if not results:  # Check if empty
-                return None
-            column_names = [c[0] for c in cursor.description or []]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**dict(zip(column_names, results[0]))))  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
-            return dict(zip(column_names, results[0]))  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
+        # Execute the query
+        cursor = await connection.execute(sql, parameters or ())
+        await connection.commit()
+        result = await cursor.fetchone()
+        result = self.check_not_found(result)
+
+        # Get column names
+        column_names = [column[0] for column in cursor.description]
+
+        if schema_type is None:
+            return dict(zip(column_names, result))
+        return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
 
     async def execute_script(
         self,
@@ -369,34 +466,18 @@ class AiosqliteDriver(
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            return "DONE"
+        # Execute the script
+        await connection.executescript(sql)
+        await connection.commit()
+        return "Script executed successfully."
 
-    async def execute_script_returning(
-        self,
-        sql: str,
-        parameters: Optional["StatementParameterType"] = None,
-        /,
-        *,
-        connection: Optional["AiosqliteConnection"] = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
-        """Execute a script and return result.
+    def _connection(self, connection: Optional["AiosqliteConnection"] = None) -> "AiosqliteConnection":
+        """Get the connection to use for the operation.
+
+        Args:
+            connection: Optional connection to use.
 
         Returns:
-            The first row of results.
+            The connection to use.
         """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            results = list(await cursor.fetchall())  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if not results:  # Check if empty
-                return None
-            column_names = [c[0] for c in cursor.description or []]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**dict(zip(column_names, results[0]))))  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
-            return dict(zip(column_names, results[0]))  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
+        return connection or self.connection

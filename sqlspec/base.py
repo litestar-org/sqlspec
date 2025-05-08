@@ -546,7 +546,7 @@ class CommonDriverAttributes(Generic[ConnectionT]):
             A tuple containing the processed SQL query and parameters.
         """
         # Instantiate SQLStatement with parameters and kwargs for internal merging
-        stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
+        stmt = SQLStatement(sql=sql, parameters=parameters, kwargs=kwargs or None)
         # Process uses the merged parameters internally
         return stmt.process()
 

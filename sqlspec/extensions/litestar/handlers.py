@@ -46,8 +46,7 @@ def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope
         """
         connection = get_sqlspec_scope_state(scope, connection_scope_key)
         if connection and message["type"] in SESSION_TERMINUS_ASGI_EVENTS:
-            with contextlib.suppress(Exception):
-                await ensure_async_(connection.close)()
+            await ensure_async_(connection.close)()
             delete_sqlspec_scope_state(scope, connection_scope_key)
 
     return handler
@@ -103,8 +102,7 @@ def autocommit_handler_maker(
                     await ensure_async_(connection.rollback)()
         finally:
             if connection and message["type"] in SESSION_TERMINUS_ASGI_EVENTS:
-                with contextlib.suppress(Exception):
-                    await ensure_async_(connection.close)()
+                await ensure_async_(connection.close)()
                 delete_sqlspec_scope_state(scope, connection_scope_key)
 
     return handler

@@ -10,8 +10,9 @@ from adbc_driver_manager.dbapi import Connection, Cursor
 from sqlspec.base import SyncDriverAdapterProtocol
 from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin, SyncArrowBulkOperationsMixin
-from sqlspec.statement import SQLStatement
+from sqlspec.statement import PARAM_REGEX
 from sqlspec.typing import ArrowTable, StatementParameterType
+from sqlspec.utils.text import bind_parameters
 
 if TYPE_CHECKING:
     from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType, T
@@ -20,18 +21,6 @@ __all__ = ("AdbcConnection", "AdbcDriver")
 
 logger = logging.getLogger("sqlspec")
 
-
-PARAM_REGEX = re.compile(
-    r"""(?<![:\w\$]) # Avoid matching ::, \:, etc. and other vendor prefixes
-    (?:
-        (?P<dquote>"(?:[^"]|"")*") |     # Double-quoted strings
-        (?P<squote>'(?:[^']|'')*') |     # Single-quoted strings
-        (?P<comment>--.*?\n|\/\*.*?\*\/) | # SQL comments
-        (?P<lead>[:\$])(?P<var_name>[a-zA-Z_][a-zA-Z0-9_]*) # :name or $name identifier
-    )
-    """,
-    re.VERBOSE | re.DOTALL,
-)
 
 AdbcConnection = Connection
 
@@ -45,11 +34,11 @@ class AdbcDriver(
 
     connection: AdbcConnection
     __supports_arrow__: ClassVar[bool] = True
+    dialect: str = "adbc"
 
     def __init__(self, connection: "AdbcConnection") -> None:
         """Initialize the ADBC driver adapter."""
         self.connection = connection
-        self.dialect = self._get_dialect(connection)
 
     @staticmethod
     def _get_dialect(connection: "AdbcConnection") -> str:  # noqa: PLR0911
@@ -96,76 +85,54 @@ class AdbcDriver(
         /,
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        # Determine effective parameter type *before* calling SQLStatement
-        merged_params_type = dict if kwargs else type(parameters)
+        # 1. Merge parameters and kwargs
+        merged_params: Optional[Union[dict[str, Any], list[Any], tuple[Any, ...]]] = None
 
-        # If ADBC + sqlite/duckdb + dictionary params, handle conversion manually
-        if self.dialect in {"sqlite", "duckdb"} and merged_params_type is dict:
-            logger.debug(
-                "ADBC/%s with dict params; bypassing SQLStatement conversion, manually converting to '?' positional.",
-                self.dialect,
-            )
-
-            # Combine parameters and kwargs into the actual dictionary to use
-            parameter_dict = {}  # type: ignore[var-annotated]
+        if kwargs:
             if isinstance(parameters, dict):
-                parameter_dict.update(parameters)
-            if kwargs:
-                parameter_dict.update(kwargs)
-
-            # Define regex locally to find :name or $name
-
-            processed_sql_parts: list[str] = []
-            ordered_params = []
-            last_end = 0
-            found_params_regex: list[str] = []
-
-            for match in PARAM_REGEX.finditer(sql):  # Use original sql
-                if match.group("dquote") or match.group("squote") or match.group("comment"):
-                    continue
-
-                if match.group("var_name"):
-                    var_name = match.group("var_name")
-                    leading_char = match.group("lead")  # : or $
-                    found_params_regex.append(var_name)
-                    # Use match span directly for replacement
-                    start = match.start()
-                    end = match.end()
-
-                    if var_name not in parameter_dict:
-                        msg = f"Named parameter '{leading_char}{var_name}' found in SQL but not provided. SQL: {sql}"
-                        raise SQLParsingError(msg)
-
-                    processed_sql_parts.extend((sql[last_end:start], "?"))  # Force ? style
-                    ordered_params.append(parameter_dict[var_name])
-                    last_end = end
-
-            processed_sql_parts.append(sql[last_end:])
-
-            if not found_params_regex and parameter_dict:
-                msg = f"ADBC/{self.dialect}: Dict params provided, but no :name or $name placeholders found. SQL: {sql}"
+                merged_params = {**parameters, **kwargs}
+            elif parameters is not None:
+                msg = "Cannot mix positional parameters with keyword arguments for adbc driver."
                 raise ParameterStyleMismatchError(msg)
+            else:
+                merged_params = kwargs
+        elif parameters is not None:
+            merged_params = parameters  # type: ignore
 
-            # Key validation
-            provided_keys = set(parameter_dict.keys())
-            missing_keys = set(found_params_regex) - provided_keys
-            if missing_keys:
-                msg = (
-                    f"Named parameters found in SQL ({found_params_regex}) but not provided: {missing_keys}. SQL: {sql}"
-                )
-                raise SQLParsingError(msg)
-            extra_keys = provided_keys - set(found_params_regex)
-            if extra_keys:
-                logger.debug("Extra parameters provided for ADBC/%s: %s", self.dialect, extra_keys)
-                # Allow extra keys
-
-            final_sql = "".join(processed_sql_parts)
-            final_params = tuple(ordered_params)
+        # Use bind_parameters for named parameters
+        if isinstance(merged_params, dict):
+            final_sql, final_params = bind_parameters(sql, merged_params, dialect="adbc")
             return final_sql, final_params
-        # For all other cases (other dialects, or non-dict params for sqlite/duckdb),
-        # use the standard SQLStatement processing.
-        stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
-        return stmt.process()
+
+        # Case 2: Sequence parameters - pass through
+        if isinstance(merged_params, (list, tuple)):
+            return sql, merged_params
+        # Case 3: Scalar parameter - wrap in tuple
+        if merged_params is not None:
+            return sql, (merged_params,)
+
+        # Case 0: No parameters provided
+        # Basic validation for placeholders
+        has_placeholders = False
+        for match in PARAM_REGEX.finditer(sql):
+            if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
+                "var_name"
+            ):
+                has_placeholders = True
+                break
+        if not has_placeholders:
+            # Check for ? style placeholders
+            for match in re.finditer(
+                r"(\"(?:[^\"]|\"\")*\")|(\'(?:[^\']|\'\')*\')|(--.*?\n)|(\/\*.*?\*\/)|(\?)", sql, re.DOTALL
+            ):
+                if match.group(5):
+                    has_placeholders = True
+                    break
+
+        if has_placeholders:
+            msg = f"adbc: SQL contains parameter placeholders, but no parameters were provided. SQL: {sql}"
+            raise SQLParsingError(msg)
+        return sql, None
 
     @overload
     def select(

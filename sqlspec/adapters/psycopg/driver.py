@@ -1,4 +1,5 @@
 import logging
+import re
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
@@ -6,9 +7,10 @@ from psycopg import AsyncConnection, Connection
 from psycopg.rows import dict_row
 
 from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
-from sqlspec.exceptions import SQLParsingError
+from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin
-from sqlspec.statement import PARAM_REGEX, SQLStatement
+from sqlspec.statement import PARAM_REGEX
+from sqlspec.utils.text import bind_parameters
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator, Sequence
@@ -22,6 +24,16 @@ __all__ = ("PsycopgAsyncConnection", "PsycopgAsyncDriver", "PsycopgSyncConnectio
 PsycopgSyncConnection = Connection
 PsycopgAsyncConnection = AsyncConnection
 
+# Regex to find '?' placeholders, skipping those inside quotes or SQL comments
+QMARK_REGEX = re.compile(
+    r"""(?P<dquote>"[^"]*") | # Double-quoted strings
+         (?P<squote>'[^']*') | # Single-quoted strings
+         (?P<comment>--[^\n]*|/\*.*?\*/) | # SQL comments (single/multi-line)
+         (?P<qmark>\?) # The question mark placeholder
+      """,
+    re.VERBOSE | re.DOTALL,
+)
+
 
 class PsycopgDriverBase:
     dialect: str
@@ -34,49 +46,54 @@ class PsycopgDriverBase:
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
         """Process SQL and parameters, converting :name -> %(name)s if needed."""
-        stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
-        processed_sql, processed_params = stmt.process()
+        # 1. Merge parameters and kwargs
+        merged_params: Optional[Union[dict[str, Any], Sequence[Any]]] = None
 
-        if isinstance(processed_params, dict):
-            parameter_dict = processed_params
-            processed_sql_parts: list[str] = []
-            last_end = 0
-            found_params_regex: list[str] = []
+        if kwargs:
+            if isinstance(parameters, dict):
+                merged_params = {**parameters, **kwargs}
+            elif parameters is not None:
+                msg = f"Cannot mix positional parameters with keyword arguments for {self.dialect} driver."
+                raise ParameterStyleMismatchError(msg)
+            else:
+                merged_params = kwargs
+        elif parameters is not None:
+            merged_params = parameters  # type: ignore
 
-            for match in PARAM_REGEX.finditer(processed_sql):
-                if match.group("dquote") or match.group("squote") or match.group("comment"):
-                    continue
+        # Use bind_parameters for named parameters
+        if isinstance(merged_params, dict):
+            final_sql, final_params = bind_parameters(sql, merged_params, dialect="postgres")
+            return final_sql, final_params
 
-                if match.group("var_name"):
-                    var_name = match.group("var_name")
-                    found_params_regex.append(var_name)
-                    start = match.start("var_name") - 1
-                    end = match.end("var_name")
+        # Case 2: Sequence parameters - leave as is (psycopg handles '%s' placeholders with tuple/list)
+        if isinstance(merged_params, (list, tuple)):
+            return sql, merged_params
+        # Case 3: Scalar - wrap in tuple
+        if merged_params is not None:
+            return sql, (merged_params,)
 
-                    if var_name not in parameter_dict:
-                        msg = (
-                            f"Named parameter ':{var_name}' found in SQL but missing from processed parameters. "
-                            f"Processed SQL: {processed_sql}"
-                        )
-                        raise SQLParsingError(msg)
+        # Case 0: No parameters provided
+        # Basic validation for placeholders
+        has_placeholders = False
+        for match in PARAM_REGEX.finditer(sql):
+            if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
+                "var_name"
+            ):
+                has_placeholders = True
+                break
+        if not has_placeholders:
+            # Check for ? style placeholders
+            for match in QMARK_REGEX.finditer(sql):
+                if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
+                    "qmark"
+                ):
+                    has_placeholders = True
+                    break
 
-                    processed_sql_parts.extend((processed_sql[last_end:start], f"%({var_name})s"))
-                    last_end = end
-
-            processed_sql_parts.append(processed_sql[last_end:])
-            final_sql = "".join(processed_sql_parts)
-
-            if not found_params_regex and parameter_dict:
-                logger.warning(
-                    "Dict params provided (%s), but no :name placeholders found. SQL: %s",
-                    list(parameter_dict.keys()),
-                    processed_sql,
-                )
-                return processed_sql, parameter_dict
-
-            return final_sql, parameter_dict
-
-        return processed_sql, processed_params
+        if has_placeholders:
+            msg = f"psycopg: SQL contains parameter placeholders, but no parameters were provided. SQL: {sql}"
+            raise SQLParsingError(msg)
+        return sql, None
 
 
 class PsycopgSyncDriver(
@@ -91,57 +108,6 @@ class PsycopgSyncDriver(
 
     def __init__(self, connection: "PsycopgSyncConnection") -> None:
         self.connection = connection
-
-    def _process_sql_params(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        /,
-        **kwargs: Any,
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
-        processed_sql, processed_params = stmt.process()
-
-        if isinstance(processed_params, dict):
-            parameter_dict = processed_params
-            processed_sql_parts: list[str] = []
-            last_end = 0
-            found_params_regex: list[str] = []
-
-            for match in PARAM_REGEX.finditer(processed_sql):
-                if match.group("dquote") or match.group("squote") or match.group("comment"):
-                    continue
-
-                if match.group("var_name"):
-                    var_name = match.group("var_name")
-                    found_params_regex.append(var_name)
-                    start = match.start("var_name") - 1
-                    end = match.end("var_name")
-
-                    if var_name not in parameter_dict:
-                        msg = (
-                            f"Named parameter ':{var_name}' found in SQL but missing from processed parameters. "
-                            f"Processed SQL: {processed_sql}"
-                        )
-                        raise SQLParsingError(msg)
-
-                    processed_sql_parts.extend((processed_sql[last_end:start], f"%({var_name})s"))
-                    last_end = end
-
-            processed_sql_parts.append(processed_sql[last_end:])
-            final_sql = "".join(processed_sql_parts)
-
-            if not found_params_regex and parameter_dict:
-                logger.warning(
-                    "Dict params provided (%s), but no :name placeholders found. SQL: %s",
-                    list(parameter_dict.keys()),
-                    processed_sql,
-                )
-                return processed_sql, parameter_dict
-
-            return final_sql, parameter_dict
-
-        return processed_sql, processed_params
 
     @staticmethod
     @contextmanager

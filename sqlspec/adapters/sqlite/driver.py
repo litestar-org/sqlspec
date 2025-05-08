@@ -1,10 +1,15 @@
+import logging
+import re
 import sqlite3
 from contextlib import contextmanager
 from sqlite3 import Cursor
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.base import SyncDriverAdapterProtocol
+from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin
+from sqlspec.statement import PARAM_REGEX
+from sqlspec.utils.text import bind_parameters
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
@@ -13,7 +18,19 @@ if TYPE_CHECKING:
 
 __all__ = ("SqliteConnection", "SqliteDriver")
 
+logger = logging.getLogger("sqlspec")
+
 SqliteConnection = sqlite3.Connection
+
+# Regex to find '?' placeholders, skipping those inside quotes or SQL comments
+QMARK_REGEX = re.compile(
+    r"""(?P<dquote>"[^"]*") | # Double-quoted strings
+         (?P<squote>'[^']*') | # Single-quoted strings
+         (?P<comment>--[^\n]*|/\*.*?\*/) | # SQL comments (single/multi-line)
+         (?P<qmark>\?) # The question mark placeholder
+      """,
+    re.VERBOSE | re.DOTALL,
+)
 
 
 class SqliteDriver(
@@ -39,6 +56,67 @@ class SqliteDriver(
             yield cursor
         finally:
             cursor.close()
+
+    def _process_sql_params(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        **kwargs: Any,
+    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
+        """Process SQL and parameters for SQLite.
+
+        SQLite supports both named (:name) and positional (?) parameters.
+        This method merges parameters and validates them.
+        """
+        # 1. Merge parameters and kwargs
+        merged_params: Optional[Union[dict[str, Any], list[Any], tuple[Any, ...]]] = None
+
+        if kwargs:
+            if isinstance(parameters, dict):
+                merged_params = {**parameters, **kwargs}
+            elif parameters is not None:
+                msg = "Cannot mix positional parameters with keyword arguments for SQLite driver."
+                raise ParameterStyleMismatchError(msg)
+            else:
+                merged_params = kwargs
+        elif parameters is not None:
+            merged_params = parameters  # type: ignore
+
+        # Use bind_parameters for named parameters
+        if isinstance(merged_params, dict):
+            final_sql, final_params = bind_parameters(sql, merged_params, dialect="sqlite")
+            return final_sql, final_params
+
+        # Case 2: Sequence parameters - pass through
+        if isinstance(merged_params, (list, tuple)):
+            return sql, merged_params
+        # Case 3: Scalar parameter - wrap in tuple
+        if merged_params is not None:
+            return sql, (merged_params,)
+
+        # Case 0: No parameters provided
+        # Basic validation for placeholders
+        has_placeholders = False
+        for match in PARAM_REGEX.finditer(sql):
+            if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
+                "var_name"
+            ):
+                has_placeholders = True
+                break
+        if not has_placeholders:
+            # Check for ? style placeholders
+            for match in re.finditer(
+                r"(\"(?:[^\"]|\"\")*\")|('(?:[^']|'')*')|(--.*?\n)|(\/\*.*?\*\/)|(\?)", sql, re.DOTALL
+            ):
+                if match.group(5):
+                    has_placeholders = True
+                    break
+
+        if has_placeholders:
+            msg = f"sqlite: SQL contains parameter placeholders, but no parameters were provided. SQL: {sql}"
+            raise SQLParsingError(msg)
+        return sql, None
 
     # --- Public API Methods --- #
     @overload
@@ -72,7 +150,7 @@ class SqliteDriver(
         connection: Optional["SqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
+    ) -> "Sequence[Union[dict[str, Any], ModelDTOT]]":
         """Fetch data from the database.
 
         Returns:
@@ -80,18 +158,20 @@ class SqliteDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            if not parameters:
-                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
-            else:
-                cursor.execute(sql, parameters)
-            results = cursor.fetchall()
-            if not results:
-                return []
-            column_names = [c[0] for c in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-            if schema_type is not None:
-                return [cast("ModelDTOT", schema_type(**dict(zip(column_names, row)))) for row in results]  # pyright: ignore[reportUnknownArgumentType]
-            return [dict(zip(column_names, row)) for row in results]  # pyright: ignore[reportUnknownArgumentType]
+
+        # Execute the query
+        cursor = connection.cursor()
+        cursor.execute(sql, parameters or [])
+        results = cursor.fetchall()
+        if not results:
+            return []
+
+        # Get column names
+        column_names = [column[0] for column in cursor.description]
+
+        if schema_type is None:
+            return [dict(zip(column_names, row)) for row in results]
+        return [cast("ModelDTOT", schema_type(**dict(zip(column_names, row)))) for row in results]
 
     @overload
     def select_one(
@@ -124,7 +204,7 @@ class SqliteDriver(
         connection: Optional["SqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "Union[ModelDTOT, dict[str, Any]]":
+    ) -> "Union[dict[str, Any], ModelDTOT]":
         """Fetch one row from the database.
 
         Returns:
@@ -132,17 +212,19 @@ class SqliteDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            if not parameters:
-                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
-            else:
-                cursor.execute(sql, parameters)
-            result = cursor.fetchone()
-            result = self.check_not_found(result)
-            column_names = [c[0] for c in cursor.description or []]
-            if schema_type is None:
-                return dict(zip(column_names, result))
-            return schema_type(**dict(zip(column_names, result)))  # type: ignore[return-value]
+
+        # Execute the query
+        cursor = connection.cursor()
+        cursor.execute(sql, parameters or [])
+        result = cursor.fetchone()
+        result = self.check_not_found(result)
+
+        # Get column names
+        column_names = [column[0] for column in cursor.description]
+
+        if schema_type is None:
+            return dict(zip(column_names, result))
+        return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
 
     @overload
     def select_one_or_none(
@@ -175,26 +257,28 @@ class SqliteDriver(
         connection: Optional["SqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
+    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
         """Fetch one row from the database.
 
         Returns:
-            The first row of the query results.
+            The first row of the query results, or None if no results.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            if not parameters:
-                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
-            else:
-                cursor.execute(sql, parameters)
-            result = cursor.fetchone()
-            if result is None:
-                return None
-            column_names = [c[0] for c in cursor.description or []]
-            if schema_type is None:
-                return dict(zip(column_names, result))
-            return schema_type(**dict(zip(column_names, result)))  # type: ignore[return-value]
+
+        # Execute the query
+        cursor = connection.cursor()
+        cursor.execute(sql, parameters or [])
+        result = cursor.fetchone()
+        if result is None:
+            return None
+
+        # Get column names
+        column_names = [column[0] for column in cursor.description]
+
+        if schema_type is None:
+            return dict(zip(column_names, result))
+        return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
 
     @overload
     def select_value(
@@ -221,30 +305,32 @@ class SqliteDriver(
     def select_value(
         self,
         sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
+        parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: "Optional[SqliteConnection]" = None,
+        connection: Optional["SqliteConnection"] = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Union[T, Any]":
         """Fetch a single value from the database.
 
         Returns:
-            The first value from the first row of results, or None if no results.
+            The first value from the first row of results.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            if not parameters:
-                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
-            else:
-                cursor.execute(sql, parameters)
-            result = cursor.fetchone()
-            result = self.check_not_found(result)
-            if schema_type is None:
-                return result[0]
-            return schema_type(result[0])  # type: ignore[call-arg]
+
+        # Execute the query
+        cursor = connection.cursor()
+        cursor.execute(sql, parameters or [])
+        result = cursor.fetchone()
+        result = self.check_not_found(result)
+
+        # Return first value from the row
+        result_value = result[0]
+        if schema_type is None:
+            return result_value
+        return cast("T", schema_type(result_value))  # type: ignore[call-arg]
 
     @overload
     def select_value_or_none(
@@ -271,10 +357,10 @@ class SqliteDriver(
     def select_value_or_none(
         self,
         sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
+        parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: "Optional[SqliteConnection]" = None,
+        connection: Optional["SqliteConnection"] = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
@@ -285,17 +371,19 @@ class SqliteDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            if not parameters:
-                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
-            else:
-                cursor.execute(sql, parameters)
-            result = cursor.fetchone()
-            if result is None:
-                return None
-            if schema_type is None:
-                return result[0]
-            return schema_type(result[0])  # type: ignore[call-arg]
+
+        # Execute the query
+        cursor = connection.cursor()
+        cursor.execute(sql, parameters or [])
+        result = cursor.fetchone()
+        if result is None:
+            return None
+
+        # Return first value from the row
+        result_value = result[0]
+        if schema_type is None:
+            return result_value
+        return cast("T", schema_type(result_value))  # type: ignore[call-arg]
 
     def insert_update_delete(
         self,
@@ -314,12 +402,11 @@ class SqliteDriver(
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
-        with self._with_cursor(connection) as cursor:
-            if not parameters:
-                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
-            else:
-                cursor.execute(sql, parameters)
-            return cursor.rowcount if hasattr(cursor, "rowcount") else -1
+        # Execute the query
+        cursor = connection.cursor()
+        cursor.execute(sql, parameters or [])
+        connection.commit()
+        return cursor.rowcount
 
     @overload
     def insert_update_delete_returning(
@@ -352,7 +439,7 @@ class SqliteDriver(
         connection: Optional["SqliteConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
+    ) -> "Union[dict[str, Any], ModelDTOT]":
         """Insert, update, or delete data from the database and return result.
 
         Returns:
@@ -361,31 +448,19 @@ class SqliteDriver(
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
-        with self._with_cursor(connection) as cursor:
-            if not parameters:
-                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
-            else:
-                cursor.execute(sql, parameters)
-            result = cursor.fetchall()
-            if len(result) == 0:
-                return None
+        # Execute the query
+        cursor = connection.cursor()
+        cursor.execute(sql, parameters or [])
+        connection.commit()
+        result = cursor.fetchone()
+        result = self.check_not_found(result)
 
-            # Get column names from cursor description
-            column_names = [c[0] for c in cursor.description or []]
+        # Get column names
+        column_names = [column[0] for column in cursor.description]
 
-            # Get the first row's values - ensure we're getting the actual values
-            row_values = result[0]
-
-            # Debug print to see what we're getting
-
-            # Create dictionary mapping column names to values
-            result_dict = {}
-            for i, col_name in enumerate(column_names):
-                result_dict[col_name] = row_values[i]
-
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**result_dict))
-            return result_dict
+        if schema_type is None:
+            return dict(zip(column_names, result))
+        return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
 
     def execute_script(
         self,
@@ -404,11 +479,19 @@ class SqliteDriver(
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
-        # The _process_sql_params handles parameter formatting for the dialect.
-        with self._with_cursor(connection) as cursor:
-            if not parameters:
-                cursor.execute(sql)  # pyright: ignore[reportUnknownMemberType]
-            else:
-                cursor.execute(sql, parameters)
+        # Execute the script
+        cursor = connection.cursor()
+        cursor.executescript(sql)
+        connection.commit()
+        return "Script executed successfully."
 
-        return cast("str", cursor.statusmessage) if hasattr(cursor, "statusmessage") else "DONE"  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+    def _connection(self, connection: Optional["SqliteConnection"] = None) -> "SqliteConnection":
+        """Get the connection to use for the operation.
+
+        Args:
+            connection: Optional connection to use.
+
+        Returns:
+            The connection to use.
+        """
+        return connection or self.connection

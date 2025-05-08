@@ -1,4 +1,4 @@
-# ruff: noqa: PLR0915, PLR0914, PLR0912, C901
+# ruff: noqa: PLR0915, PLR0912, C901
 """Psqlpy Driver Implementation."""
 
 import logging
@@ -9,9 +9,10 @@ from psqlpy import Connection, QueryResult
 from psqlpy.exceptions import RustPSQLDriverPyBaseError
 
 from sqlspec.base import AsyncDriverAdapterProtocol
-from sqlspec.exceptions import SQLParsingError
+from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin
-from sqlspec.statement import PARAM_REGEX, SQLStatement
+from sqlspec.statement import PARAM_REGEX
+from sqlspec.utils.text import bind_parameters
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -59,81 +60,51 @@ class PsqlpyDriver(
 
         psqlpy uses $1, $2 style parameters natively.
         This method converts '?' (tuple/list) and ':name' (dict) styles to $n.
-        It relies on SQLStatement for initial parameter validation and merging.
-
-        Args:
-            sql: The SQL to process.
-            parameters: The parameters to process.
-            kwargs: Additional keyword arguments.
-
-        Raises:
-            SQLParsingError: If the SQL is invalid.
-
-        Returns:
-            A tuple of the processed SQL and parameters.
         """
-        stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
-        sql, parameters = stmt.process()
+        # 1. Merge parameters and kwargs
+        merged_params: Optional[Union[dict[str, Any], Sequence[Any]]] = None
 
-        # Case 1: Parameters are a dictionary
-        if isinstance(parameters, dict):
-            processed_sql_parts: list[str] = []
-            ordered_params = []
-            last_end = 0
-            param_index = 1
-            found_params_regex: list[str] = []
+        if kwargs:
+            if isinstance(parameters, dict):
+                merged_params = {**parameters, **kwargs}
+            elif parameters is not None:
+                msg = "Cannot mix positional parameters with keyword arguments for psqlpy driver."
+                raise ParameterStyleMismatchError(msg)
+            else:
+                merged_params = kwargs
+        elif parameters is not None:
+            merged_params = parameters  # type: ignore
 
+        # Use bind_parameters for named parameters
+        if isinstance(merged_params, dict):
+            final_sql, _ = bind_parameters(sql, merged_params, dialect="postgres")
+            # psqlpy expects positional parameters, so convert dict to tuple in order of appearance
+            # We'll use regex to find order for now
+            param_names = []
             for match in PARAM_REGEX.finditer(sql):
                 if match.group("dquote") or match.group("squote") or match.group("comment"):
                     continue
+                if match.group("var_name"):
+                    param_names.append(match.group("var_name"))
+            ordered_params = tuple(merged_params[name] for name in param_names)
+            # Replace :name with $1, $2, ...
+            for idx, name in enumerate(param_names, 1):
+                final_sql = final_sql.replace(f":{name}", f"${idx}")
+            return final_sql, ordered_params
 
-                if match.group("var_name"):  # Finds :var_name
-                    var_name = match.group("var_name")
-                    found_params_regex.append(var_name)
-                    start = match.start("var_name") - 1
-                    end = match.end("var_name")
-
-                    if var_name not in parameters:
-                        msg = f"Named parameter ':{var_name}' missing from parameters. SQL: {sql}"
-                        raise SQLParsingError(msg)
-
-                    processed_sql_parts.extend((sql[last_end:start], f"${param_index}"))
-                    ordered_params.append(parameters[var_name])
-                    last_end = end
-                    param_index += 1
-
-            processed_sql_parts.append(sql[last_end:])
-            final_sql = "".join(processed_sql_parts)
-
-            if not found_params_regex and parameters:
-                logger.warning(
-                    "Dict params provided (%s), but no :name placeholders found. SQL: %s",
-                    list(parameters.keys()),
-                    sql,
-                )
-                return sql, ()
-
-            provided_keys = set(parameters.keys())
-            found_keys = set(found_params_regex)
-            unused_keys = provided_keys - found_keys
-            if unused_keys:
-                logger.warning("Unused parameters provided: %s. SQL: %s", unused_keys, sql)
-
-            return final_sql, tuple(ordered_params)
-
-        # Case 2: Parameters are a sequence/scalar
-        if isinstance(parameters, (list, tuple)):
+        # Case b: Sequence or scalar parameters (? style)
+        if isinstance(merged_params, (list, tuple)):
             sequence_processed_parts: list[str] = []
             param_index = 1
             last_end = 0
-            qmark_found = False
+            qmark_count = 0
 
             for match in QMARK_REGEX.finditer(sql):
                 if match.group("dquote") or match.group("squote") or match.group("comment"):
                     continue
 
                 if match.group("qmark"):
-                    qmark_found = True
+                    qmark_count += 1
                     start = match.start("qmark")
                     end = match.end("qmark")
                     sequence_processed_parts.extend((sql[last_end:start], f"${param_index}"))
@@ -143,34 +114,69 @@ class PsqlpyDriver(
             sequence_processed_parts.append(sql[last_end:])
             final_sql = "".join(sequence_processed_parts)
 
-            if parameters and not qmark_found:
-                logger.warning("Sequence parameters provided, but no '?' placeholders found. SQL: %s", sql)
-                return sql, parameters
+            # Validation
+            if not qmark_count and merged_params:
+                msg = f"psqlpy: Sequence parameters provided, but no '?' placeholders found in SQL: {sql}"
+                raise ParameterStyleMismatchError(msg)
 
-            expected_params = param_index - 1
-            actual_params = len(parameters)
-            if expected_params != actual_params:
-                msg = f"Parameter count mismatch: Expected {expected_params}, got {actual_params}. SQL: {final_sql}"
+            actual_count = len(merged_params)
+            if qmark_count != actual_count:
+                msg = f"psqlpy: Parameter count mismatch. SQL expects {qmark_count} positional parameters ('?'), but {actual_count} were provided. SQL: {sql}"
                 raise SQLParsingError(msg)
 
-            return final_sql, parameters
+            return final_sql, merged_params
+        # Case c: Scalar
+        # Convert to a one-element tuple
+        if merged_params is not None:
+            scalar_param_tuple = (merged_params,)
+            sequence_processed_parts: list[str] = []
+            param_index = 1
+            last_end = 0
+            qmark_count = 0
 
-        # Case 3: Parameters are None
-        if PARAM_REGEX.search(sql) or QMARK_REGEX.search(sql):
-            # Perform a simpler check if any placeholders might exist if no params are given
-            for match in PARAM_REGEX.finditer(sql):
-                if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
-                    "var_name"
-                ):
-                    msg = f"SQL contains named parameters (:name) but no parameters provided. SQL: {sql}"
-                    raise SQLParsingError(msg)
+            for match in QMARK_REGEX.finditer(sql):
+                if match.group("dquote") or match.group("squote") or match.group("comment"):
+                    continue
+
+                if match.group("qmark"):
+                    qmark_count += 1
+                    start = match.start("qmark")
+                    end = match.end("qmark")
+                    sequence_processed_parts.extend((sql[last_end:start], f"${param_index}"))
+                    last_end = end
+                    param_index += 1
+
+            sequence_processed_parts.append(sql[last_end:])
+            final_sql = "".join(sequence_processed_parts)
+
+            # Validation - for scalar, we expect exactly one placeholder
+            if qmark_count != 1:
+                msg = f"psqlpy: Parameter count mismatch. SQL expects 1 positional parameter ('?') for scalar input, but found {qmark_count}. SQL: {sql}"
+                raise SQLParsingError(msg)
+
+            return final_sql, scalar_param_tuple
+
+        # Case 0: No parameters provided
+        # Basic validation for placeholders
+        has_placeholders = False
+        for match in PARAM_REGEX.finditer(sql):
+            if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
+                "var_name"
+            ):
+                has_placeholders = True
+                break
+        if not has_placeholders:
+            # Check for ? style placeholders
             for match in QMARK_REGEX.finditer(sql):
                 if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
                     "qmark"
                 ):
-                    msg = f"SQL contains positional parameters (?) but no parameters provided. SQL: {sql}"
-                    raise SQLParsingError(msg)
+                    has_placeholders = True
+                    break
 
+        if has_placeholders:
+            msg = f"psqlpy: SQL contains parameter placeholders, but no parameters were provided. SQL: {sql}"
+            raise SQLParsingError(msg)
         return sql, ()
 
     # --- Public API Methods --- #

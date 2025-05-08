@@ -1,5 +1,7 @@
 import contextlib
 import datetime
+import logging
+import re
 from collections.abc import Iterator, Sequence
 from decimal import Decimal
 from typing import (
@@ -19,13 +21,15 @@ from google.cloud.bigquery.job import QueryJob, QueryJobConfig
 from google.cloud.exceptions import NotFound
 
 from sqlspec.base import SyncDriverAdapterProtocol
-from sqlspec.exceptions import NotFoundError, SQLSpecError
+from sqlspec.exceptions import NotFoundError, ParameterStyleMismatchError, SQLParsingError, SQLSpecError
 from sqlspec.mixins import (
     SQLTranslatorMixin,
     SyncArrowBulkOperationsMixin,
     SyncParquetExportMixin,
 )
+from sqlspec.statement import PARAM_REGEX
 from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType, T
+from sqlspec.utils.text import bind_parameters
 
 if TYPE_CHECKING:
     from google.cloud.bigquery import SchemaField
@@ -34,6 +38,8 @@ if TYPE_CHECKING:
 __all__ = ("BigQueryConnection", "BigQueryDriver")
 
 BigQueryConnection = Client
+
+logger = logging.getLogger("sqlspec")
 
 
 class BigQueryDriver(
@@ -55,7 +61,7 @@ class BigQueryDriver(
         )
 
     @staticmethod
-    def _get_bq_param_type(value: Any) -> "tuple[Optional[str], Optional[str]]":  # noqa: PLR0911, PLR0912
+    def _get_bq_param_type(value: Any) -> "tuple[Optional[str], Optional[str]]":  # noqa: PLR0911
         if isinstance(value, bool):
             return "BOOL", None
         if isinstance(value, int):
@@ -105,7 +111,63 @@ class BigQueryDriver(
 
         return None, None  # Unsupported type
 
-    def _run_query_job(  # noqa: C901, PLR0912, PLR0915 (User change)
+    def _process_sql_params(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        **kwargs: Any,
+    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
+        # 1. Merge parameters and kwargs
+        merged_params: Optional[Union[dict[str, Any], list[Any], tuple[Any, ...]]] = None
+
+        if kwargs:
+            if isinstance(parameters, dict):
+                merged_params = {**parameters, **kwargs}
+            elif parameters is not None:
+                msg = "Cannot mix positional parameters with keyword arguments for bigquery driver."
+                raise ParameterStyleMismatchError(msg)
+            else:
+                merged_params = kwargs
+        elif parameters is not None:
+            merged_params = parameters  # type: ignore
+
+        # Use bind_parameters for named parameters
+        if isinstance(merged_params, dict):
+            final_sql, final_params = bind_parameters(sql, merged_params, dialect="bigquery")
+            return final_sql, final_params
+
+        # Case 2: Sequence parameters - pass through
+        if isinstance(merged_params, (list, tuple)):
+            return sql, merged_params
+        # Case 3: Scalar parameter - wrap in tuple
+        if merged_params is not None:
+            return sql, (merged_params,)
+
+        # Case 0: No parameters provided
+        # Basic validation for placeholders
+        has_placeholders = False
+        for match in PARAM_REGEX.finditer(sql):
+            if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
+                "var_name"
+            ):
+                has_placeholders = True
+                break
+        if not has_placeholders:
+            # Check for ? style placeholders
+            for match in re.finditer(
+                r"(\"(?:[^\"]|\"\")*\")|(\'(?:[^\']|\'\')*\')|(--.*?\n)|(\/\*.*?\*\/)|(\?)", sql, re.DOTALL
+            ):
+                if match.group(5):
+                    has_placeholders = True
+                    break
+
+        if has_placeholders:
+            msg = f"bigquery: SQL contains parameter placeholders, but no parameters were provided. SQL: {sql}"
+            raise SQLParsingError(msg)
+        return sql, None
+
+    def _run_query_job(  # noqa: PLR0912, PLR0915 (User change)
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
@@ -578,7 +640,7 @@ class BigQueryDriver(
 
     # --- Mixin Implementations ---
 
-    def select_arrow(  # pyright: ignore  # noqa: PLR0912
+    def select_arrow(  # pyright: ignore
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
