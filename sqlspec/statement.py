@@ -2,7 +2,6 @@
 import logging
 import re
 from dataclasses import dataclass
-from functools import cached_property
 from typing import (
     Any,
     Optional,
@@ -42,8 +41,6 @@ class SQLStatement:
     a clean interface for parameter binding and SQL statement formatting.
     """
 
-    dialect: str
-    """The SQL dialect to use for parsing (e.g., 'postgres', 'mysql'). Defaults to 'postgres' if None."""
     sql: str
     """The raw SQL statement."""
     parameters: Optional[StatementParameterType] = None
@@ -73,45 +70,54 @@ class SQLStatement:
     def process(self) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
         """Process the SQL statement and merged parameters for execution.
 
+        This method validates the parameters against the SQL statement using sqlglot
+        parsing but returns the *original* SQL string and the merged parameters.
+        The actual formatting of SQL placeholders and parameter structures for the
+        DBAPI driver is delegated to the specific adapter.
+
         Returns:
-            A tuple containing the processed SQL string and the processed parameters
-            ready for database driver execution.
+            A tuple containing the *original* SQL string and the merged/validated
+            parameters (dict, tuple, list, or None).
 
         Raises:
-            SQLParsingError: If the SQL statement contains parameter placeholders, but no parameters were provided.
-
-        Returns:
-            A tuple containing the processed SQL string and the processed parameters
-            ready for database driver execution.
+            SQLParsingError: If the SQL statement contains parameter placeholders
+                but no parameters were provided, or if parsing fails unexpectedly.
         """
+        # Parse the SQL to find expected parameters
+        try:
+            expression = self._parse_sql()
+            # Find all parameter expressions (:name, ?, etc.)
+            sql_params = list(expression.find_all(exp.Parameter))
+        except SQLParsingError as e:
+            # If parsing fails, we cannot validate accurately.
+            # Let adapters handle potentially valid but unparseable SQL.
+            # Log the parsing error for debugging.
+            logger.debug(
+                "SQL parsing failed during validation: %s. Returning original SQL and parameters for adapter.", e
+            )
+            # Return original SQL and parameters for the adapter to attempt processing
+            # (Adapters might use regex or other means if parsing fails)
+            return self.sql, self._merged_parameters
+
         if self._merged_parameters is None:
-            # Validate that the SQL doesn't expect parameters if none were provided
-            # Parse ONLY if we need to validate
-            try:  # Add try/except in case parsing fails even here
-                expression = self._parse_sql()
-            except SQLParsingError:
-                # If parsing fails, we can't validate, but maybe that's okay if no params were passed?
-                # Log a warning? For now, let the original error propagate if needed.
-                # Or, maybe assume it's okay if _merged_parameters is None?
-                # Let's re-raise for now, as unparsable SQL is usually bad.
-                logger.warning("SQL statement is unparsable: %s", self.sql)
-                return self.sql, None
-            if list(expression.find_all(exp.Parameter)):
-                msg = "SQL statement contains parameter placeholders, but no parameters were provided."
+            # If no parameters were provided, but the parsed SQL expects them, raise an error.
+            if sql_params:
+                placeholder_types = {"named" if p.name else "positional" for p in sql_params}
+                msg = f"SQL statement contains {', '.join(placeholder_types)} parameter placeholders, but no parameters were provided. SQL: {self.sql}"
                 raise SQLParsingError(msg)
+            # No parameters provided and none found in SQL - OK
             return self.sql, None
 
+        # Validate provided parameters against parsed SQL parameters
         if isinstance(self._merged_parameters, dict):
-            # Pass only the dict, parsing happens inside
-            return self._process_dict_params(self._merged_parameters)
+            self._validate_dict_params(sql_params, self._merged_parameters)
+        elif isinstance(self._merged_parameters, (tuple, list)):
+            self._validate_sequence_params(sql_params, self._merged_parameters)
+        else:  # Scalar parameter
+            self._validate_scalar_param(sql_params, self._merged_parameters)
 
-        if isinstance(self._merged_parameters, (tuple, list)):
-            # Pass only the sequence, parsing happens inside if needed for validation
-            return self._process_sequence_params(self._merged_parameters)
-
-        # Assume it's a single scalar value otherwise
-        # Pass only the value, parsing happens inside for validation
-        return self._process_scalar_param(self._merged_parameters)
+        # Return the original SQL and the merged parameters for the adapter to process
+        return self.sql, self._merged_parameters
 
     def _parse_sql(self) -> exp.Expression:
         """Parse the SQL using sqlglot.
@@ -122,252 +128,98 @@ class SQLStatement:
         Returns:
             The parsed SQL expression.
         """
-        parse_dialect = self.dialect or "postgres"
+        # Use a generic dialect or try autodetection if specific dialect knowledge is removed.
+        # For validation purposes, 'postgres' is often a good lenient default.
+        # Alternatively, let the caller (adapter) provide the dialect if needed for parsing hints.
+        # For now, let's keep it simple and assume a generic parse works for validation.
         try:
-            read_dialect = parse_dialect or None
-            return sqlglot.parse_one(self.sql, read=read_dialect)
+            # Removed read=self.dialect as self.dialect is removed.
+            # parse_one without 'read' uses the standard dialect by default.
+            return sqlglot.parse_one(self.sql)
         except Exception as e:
-            # Ensure the original sqlglot error message is included
             error_detail = str(e)
-            msg = f"Failed to parse SQL with dialect '{parse_dialect or 'auto-detected'}': {error_detail}\nSQL: {self.sql}"
+            # Removed dialect from error message
+            msg = f"Failed to parse SQL for validation: {error_detail}\nSQL: {self.sql}"
             raise SQLParsingError(msg) from e
 
-    def _process_dict_params(
-        self,
-        parameter_dict: dict[str, Any],
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Processes dictionary parameters based on dialect capabilities.
+    def _validate_dict_params(self, sql_params: list[exp.Parameter], parameter_dict: dict[str, Any]) -> None:
+        """Validates dictionary parameters against parsed SQL parameters."""
+        named_sql_params = [p for p in sql_params if p.name]
+        unnamed_sql_params = [p for p in sql_params if not p.name]
 
-        Raises:
-            ParameterStyleMismatchError: If the SQL statement contains unnamed placeholders (e.g., '?') in the SQL query.
-            SQLParsingError: If the SQL statement contains named parameters, but no parameters were provided.
-
-        Returns:
-            A tuple containing the processed SQL string and the processed parameters
-            ready for database driver execution.
-        """
-        # Attempt to parse with sqlglot first (for other dialects like postgres, mysql)
-        named_sql_params: Optional[list[exp.Parameter]] = None
-        unnamed_sql_params: Optional[list[exp.Parameter]] = None
-        sqlglot_parsed_ok = False
-        # --- Dialect-Specific Bypasses for Native Handling ---
-        if self.dialect == "sqlite":  # Handles :name natively
-            return self.sql, parameter_dict
-
-        # Add bypass for postgres handled by specific adapters (e.g., asyncpg)
-        if self.dialect == "postgres":
-            # The adapter (e.g., asyncpg) will handle :name -> $n conversion.
-            # SQLStatement just validates parameters against the original SQL here.
-            # Perform validation using regex if sqlglot parsing fails, otherwise use sqlglot.
-            try:
-                expression = self._parse_sql()
-                sql_params = list(expression.find_all(exp.Parameter))
-                named_sql_params = [p for p in sql_params if p.name]
-                unnamed_sql_params = [p for p in sql_params if not p.name]
-
-                if unnamed_sql_params:
-                    msg = "Cannot use dictionary parameters with unnamed placeholders (e.g., '?') found by sqlglot for postgres."
-                    raise ParameterStyleMismatchError(msg)
-
-                # Validate keys using sqlglot results
-                required_keys = {p.name for p in named_sql_params}
-                provided_keys = set(parameter_dict.keys())
-                missing_keys = required_keys - provided_keys
-                if missing_keys:
-                    msg = (
-                        f"Named parameters found in SQL (via sqlglot) but not provided: {missing_keys}. SQL: {self.sql}"
-                    )
-                    raise SQLParsingError(msg)  # noqa: TRY301
-                # Allow extra keys
-
-            except SQLParsingError as e:
-                logger.debug("SQLglot parsing failed for postgres dict params, attempting regex validation: %s", e)
-                # Regex validation fallback (without conversion)
-                postgres_found_params_regex: list[str] = []
-                for match in PARAM_REGEX.finditer(self.sql):
-                    if match.group("dquote") or match.group("squote") or match.group("comment"):
-                        continue
-                    if match.group("var_name"):
-                        var_name = match.group("var_name")
-                        postgres_found_params_regex.append(var_name)
-                        if var_name not in parameter_dict:
-                            msg = f"Named parameter ':{var_name}' found in SQL (via regex) but not provided. SQL: {self.sql}"
-                            raise SQLParsingError(msg)  # noqa: B904
-
-                if not postgres_found_params_regex and parameter_dict:
-                    msg = f"Dictionary parameters provided, but no named placeholders (:name) found via regex. SQL: {self.sql}"
-                    raise ParameterStyleMismatchError(msg)  # noqa: B904
-                # Allow extra keys with regex check too
-
-            # Return the *original* SQL and the processed dict for the adapter to handle
-            return self.sql, parameter_dict
-
-        if self.dialect == "duckdb":  # Handles $name natively (and :name via driver? Check driver docs)
-            # Bypass sqlglot/regex checks. Trust user SQL ($name or ?) + dict for DuckDB driver.
-            # We lose :name -> $name conversion *if* sqlglot parsing fails, but avoid errors on valid $name SQL.
-            return self.sql, parameter_dict
-        # --- End Bypasses ---
-
-        try:
-            expression = self._parse_sql()
-            sql_params = list(expression.find_all(exp.Parameter))
-            named_sql_params = [p for p in sql_params if p.name]
-            unnamed_sql_params = [p for p in sql_params if not p.name]
-            sqlglot_parsed_ok = True
-            logger.debug("SQLglot parsed dict params successfully for: %s", self.sql)
-        except SQLParsingError as e:
-            logger.debug("SQLglot parsing failed for dict params, attempting regex fallback: %s", e)
-            # Proceed using regex fallback below
-
-        # Check for unnamed placeholders if parsing worked
-        if sqlglot_parsed_ok and unnamed_sql_params:
-            msg = "Cannot use dictionary parameters with unnamed placeholders (e.g., '?') found by sqlglot."
+        if unnamed_sql_params:
+            msg = f"Dictionary parameters provided, but found unnamed placeholders (e.g., '?') in SQL: {self.sql}"
             raise ParameterStyleMismatchError(msg)
 
-        # Determine if we need to use regex fallback
-        # Use fallback if: parsing failed OR (parsing worked BUT found no named params when a dict was provided)
-        use_regex_fallback = not sqlglot_parsed_ok or (not named_sql_params and parameter_dict)
-
-        if use_regex_fallback:
-            # Regex fallback logic for :name -> self.param_style conversion
-            # ... (regex fallback code as implemented previously) ...
-            logger.debug("Using regex fallback for dict param processing: %s", self.sql)
-            # --- Regex Fallback Logic ---
-            regex_processed_sql_parts: list[str] = []
-            ordered_params = []
-            last_end = 0
-            regex_found_params: list[str] = []
-
-            for match in PARAM_REGEX.finditer(self.sql):
-                # Skip matches that are comments or quoted strings
-                if match.group("dquote") or match.group("squote") or match.group("comment"):
-                    continue
-
-                if match.group("var_name"):
-                    var_name = match.group("var_name")
-                    regex_found_params.append(var_name)
-                    # Get start and end from the match object for the :var_name part
-                    # The var_name group itself doesn't include the leading :, so adjust start.
-                    start = match.start("var_name") - 1
-                    end = match.end("var_name")
-
-                    if var_name not in parameter_dict:
-                        msg = (
-                            f"Named parameter ':{var_name}' found in SQL (via regex) but not provided. SQL: {self.sql}"
-                        )
-                        raise SQLParsingError(msg)
-
-                    regex_processed_sql_parts.extend((self.sql[last_end:start], self.param_style))  # Use target style
-                    ordered_params.append(parameter_dict[var_name])
-                    last_end = end
-
-            regex_processed_sql_parts.append(self.sql[last_end:])
-
-            # Validation with regex results
-            if not regex_found_params and parameter_dict:
-                msg = f"Dictionary parameters provided, but no named placeholders (e.g., :name) found via regex in the SQL query for dialect '{self.dialect}'. SQL: {self.sql}"
+        if not named_sql_params and parameter_dict:
+            # Check with regex as a fallback confirmation if sqlglot finds no named params
+            regex_found = any(
+                match.group("var_name")
+                for match in PARAM_REGEX.finditer(self.sql)
+                if not (match.group("dquote") or match.group("squote") or match.group("comment"))
+            )
+            if not regex_found:
+                msg = f"Dictionary parameters provided, but no named placeholders (e.g., ':name') found in SQL: {self.sql}"
                 raise ParameterStyleMismatchError(msg)
+            # SQLglot didn't find named params but regex did - log warning, proceed.
+            logger.warning(
+                "SQLglot found no named parameters, but regex did. Proceeding with validation. SQL: %s", self.sql
+            )
 
-            provided_keys = set(parameter_dict.keys())
-            missing_keys = set(regex_found_params) - provided_keys  # Should be caught above, but double check
-            if missing_keys:
-                msg = f"Named parameters found in SQL (via regex) but not provided: {missing_keys}. SQL: {self.sql}"
-                raise SQLParsingError(msg)
-
-            extra_keys = provided_keys - set(regex_found_params)
-            if extra_keys:
-                # Allow extra keys
-                pass
-
-            return "".join(regex_processed_sql_parts), tuple(ordered_params)
-
-        # Sqlglot Logic (if parsing worked and found params)
-        # ... (sqlglot logic as implemented previously, including :name -> %s conversion) ...
-        logger.debug("Using sqlglot results for dict param processing: %s", self.sql)
-
-        # Ensure named_sql_params is iterable, default to empty list if None (shouldn't happen ideally)
-        active_named_params = named_sql_params or []
-
-        if not active_named_params and not parameter_dict:
-            # No SQL params found by sqlglot, no provided params dict -> OK
-            return self.sql, ()
-
-        # Validation with sqlglot results
-        required_keys = {p.name for p in active_named_params}  # Use active_named_params
+        required_keys = {p.name for p in named_sql_params}
         provided_keys = set(parameter_dict.keys())
 
         missing_keys = required_keys - provided_keys
         if missing_keys:
-            msg = f"Named parameters found in SQL (via sqlglot) but not provided: {missing_keys}. SQL: {self.sql}"
+            msg = f"Named parameters found in SQL but not provided: {missing_keys}. SQL: {self.sql}"
             raise SQLParsingError(msg)
 
-        extra_keys = provided_keys - required_keys
-        if extra_keys:
-            pass  # Allow extra keys
+        # Allow extra keys, as they might be used by the adapter or driver internally
+        # extra_keys = provided_keys - required_keys
+        # if extra_keys:
+        #     logger.debug("Extra parameters provided but not found in SQL: %s", extra_keys)
 
-        # Note: DuckDB handled by bypass above if sqlglot fails.
-        # This block handles successful sqlglot parse for other dialects.
-        # We don't need the specific DuckDB $name conversion here anymore,
-        # as the bypass handles the native $name case.
-        # The general logic converts :name -> self.param_style for dialects like postgres.
-        # if self.dialect == "duckdb": ... (Removed specific block here)
+    def _validate_sequence_params(
+        self, sql_params: list[exp.Parameter], params: Union[tuple[Any, ...], list[Any]]
+    ) -> None:
+        """Validates sequence parameters against parsed SQL parameters."""
+        named_sql_params = [p for p in sql_params if p.name]
+        unnamed_sql_params = [p for p in sql_params if not p.name]
 
-        # For other dialects requiring positional conversion (using sqlglot param info):
-        sqlglot_processed_parts: list[str] = []
-        ordered_params = []
-        last_end = 0
-        for param in active_named_params:  # Use active_named_params
-            start = param.this.this.start
-            end = param.this.this.end
-            sqlglot_processed_parts.extend((self.sql[last_end:start], self.param_style))
-            ordered_params.append(parameter_dict[param.name])
-            last_end = end
-        sqlglot_processed_parts.append(self.sql[last_end:])
-        return "".join(sqlglot_processed_parts), tuple(ordered_params)
+        if named_sql_params:
+            # No need to store msg if we are raising immediately
+            raise ParameterStyleMismatchError(
+                f"Sequence parameters provided, but found named placeholders (e.g., ':name') in SQL: {self.sql}"
+            )
 
-    def _process_sequence_params(
-        self, params: Union[tuple[Any, ...], list[Any]]
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Processes a sequence of parameters.
+        expected_count = len(unnamed_sql_params)
+        actual_count = len(params)
 
-        Returns:
-            A tuple containing the processed SQL string and the processed parameters
-            ready for database driver execution.
-        """
-        return self.sql, params
+        if expected_count != actual_count:
+            # Double-check with regex if counts mismatch, as parsing might miss some complex cases
+            # Simple regex for '?' outside comments/strings needed here
+            regex_count = 0
+            for match in re.finditer(
+                r"(\"(?:[^\"]|\"\")*\")|('(?:[^']|'')*')|(--.*?\\n)|(\\/\\*.*?\\*\\/)|(\\?)", self.sql, re.DOTALL
+            ):
+                if match.group(5):  # Group 5 is the question mark
+                    regex_count += 1
 
-    def _process_scalar_param(
-        self, param_value: Any
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Processes a single scalar parameter value.
+            if regex_count != actual_count:
+                # No need to store msg if we are raising immediately
+                raise SQLParsingError(
+                    f"Parameter count mismatch. SQL expects {expected_count} (sqlglot) / {regex_count} (regex) positional parameters, "
+                    f"but {actual_count} were provided. SQL: {self.sql}"
+                )
+            # Counts mismatch with sqlglot but match with simple regex - log warning, proceed.
+            logger.warning(
+                "Parameter count mismatch (sqlglot: %d, provided: %d), but regex count (%d) matches provided. Proceeding. SQL: %s",
+                expected_count,
+                actual_count,
+                regex_count,
+                self.sql,
+            )
 
-        Returns:
-            A tuple containing the processed SQL string and the processed parameters
-            ready for database driver execution.
-        """
-        return self.sql, (param_value,)
-
-    @cached_property
-    def param_style(self) -> str:
-        """Get the parameter style based on the dialect.
-
-        Returns:
-            The parameter style placeholder for the dialect.
-        """
-        dialect = self.dialect
-
-        # Map dialects to parameter styles for placeholder replacement
-        # Note: Used when converting named params (:name) for dialects needing positional.
-        # Dialects supporting named params natively (SQLite, DuckDB) are handled via bypasses.
-        dialect_to_param_style = {
-            "postgres": "%s",
-            "mysql": "%s",
-            "oracle": ":1",
-            "mssql": "?",
-            "bigquery": "?",
-            "snowflake": "?",
-            "cockroach": "%s",
-            "db2": "?",
-        }
-        # Default to '?' for unknown/unhandled dialects or when dialect=None is forced
-        return dialect_to_param_style.get(dialect, "?")
+    def _validate_scalar_param(self, sql_params: list[exp.Parameter], param_value: Any) -> None:
+        """Validates a single scalar parameter against parsed SQL parameters."""
+        self._validate_sequence_params(sql_params, (param_value,))  # Treat scalar as a single-element sequence

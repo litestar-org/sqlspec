@@ -1,11 +1,16 @@
+import logging
+import re
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 
 from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import AsyncArrowBulkOperationsMixin, SQLTranslatorMixin, SyncArrowBulkOperationsMixin
+from sqlspec.statement import PARAM_REGEX
 from sqlspec.typing import ArrowTable, StatementParameterType, T
+from sqlspec.utils.text import bind_parameters
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator, Sequence
@@ -17,8 +22,122 @@ __all__ = ("OracleAsyncConnection", "OracleAsyncDriver", "OracleSyncConnection",
 OracleSyncConnection = Connection
 OracleAsyncConnection = AsyncConnection
 
+logger = logging.getLogger("sqlspec")
+
+# Regex to find '?' placeholders, skipping those inside quotes or SQL comments
+QMARK_REGEX = re.compile(
+    r"""(?P<dquote>"[^"]*") | # Double-quoted strings
+         (?P<squote>'[^']*') | # Single-quoted strings
+         (?P<comment>--[^\n]*|/\*.*?\*/) | # SQL comments (single/multi-line)
+         (?P<qmark>\?) # The question mark placeholder
+      """,
+    re.VERBOSE | re.DOTALL,
+)
+
+
+class OracleDriverBase:
+    """Base class for Oracle drivers with common functionality."""
+
+    dialect: str = "oracle"
+
+    def _process_sql_params(  # noqa: PLR6301
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        **kwargs: Any,
+    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
+        """Process SQL and parameters for Oracle.
+
+        Oracle natively supports both named (:name) and positional parameters.
+        This method merges parameters and validates them.
+
+        Raises:
+            ParameterStyleMismatchError: If positional parameters are mixed with keyword arguments.
+            SQLParsingError: If parameter count mismatch is detected.
+
+        Returns:
+            A tuple of (sql, parameters) ready for execution.
+        """
+        # 1. Merge parameters and kwargs
+        merged_params: Optional[Union[dict[str, Any], Sequence[Any]]] = None
+
+        if kwargs:
+            if isinstance(parameters, dict):
+                merged_params = {**parameters, **kwargs}
+            elif parameters is not None:
+                msg = "Cannot mix positional parameters with keyword arguments for Oracle driver."
+                raise ParameterStyleMismatchError(msg)
+            else:
+                merged_params = kwargs
+        elif parameters is not None:
+            merged_params = parameters  # type: ignore
+
+        # Use bind_parameters for named parameters
+        if isinstance(merged_params, dict):
+            final_sql, final_params = bind_parameters(sql, merged_params, dialect="oracle")
+            return final_sql, final_params
+
+        # Case 2: Sequence parameters - check count and pass through
+        if isinstance(merged_params, (list, tuple)):
+            # Count ? placeholders
+            qmark_count = 0
+            for match in QMARK_REGEX.finditer(sql):
+                if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
+                    "qmark"
+                ):
+                    qmark_count += 1
+
+            # Validate
+            actual_count = len(merged_params)
+            if qmark_count > 0 and qmark_count != actual_count:
+                msg = f"oracle: Parameter count mismatch. SQL expects {qmark_count} positional parameters ('?'), but {actual_count} were provided. SQL: {sql}"
+                raise SQLParsingError(msg)
+
+            return sql, merged_params
+
+        # Case 3: Scalar parameter - wrap in tuple
+        # Special handling for scalar values with ? placeholder
+        if merged_params is not None:
+            qmark_count = 0
+            for match in QMARK_REGEX.finditer(sql):
+                if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
+                    "qmark"
+                ):
+                    qmark_count += 1
+
+            if qmark_count > 1:
+                msg = f"oracle: Parameter count mismatch. SQL expects {qmark_count} positional parameters ('?'), but 1 scalar was provided. SQL: {sql}"
+                raise SQLParsingError(msg)
+
+            return sql, (merged_params,)
+
+        # Case 0: No parameters provided
+        # Basic validation for placeholders
+        has_placeholders = False
+        for match in PARAM_REGEX.finditer(sql):
+            if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
+                "var_name"
+            ):
+                has_placeholders = True
+                break
+        if not has_placeholders:
+            # Check for ? style placeholders
+            for match in QMARK_REGEX.finditer(sql):
+                if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
+                    "qmark"
+                ):
+                    has_placeholders = True
+                    break
+
+        if has_placeholders:
+            msg = f"oracle: SQL contains parameter placeholders, but no parameters were provided. SQL: {sql}"
+            raise SQLParsingError(msg)
+        return sql, None
+
 
 class OracleSyncDriver(
+    OracleDriverBase,
     SyncArrowBulkOperationsMixin["OracleSyncConnection"],
     SQLTranslatorMixin["OracleSyncConnection"],
     SyncDriverAdapterProtocol["OracleSyncConnection"],
@@ -26,7 +145,6 @@ class OracleSyncDriver(
     """Oracle Sync Driver Adapter."""
 
     connection: "OracleSyncConnection"
-    dialect: str = "oracle"
 
     def __init__(self, connection: "OracleSyncConnection") -> None:
         self.connection = connection
@@ -434,6 +552,7 @@ class OracleSyncDriver(
 
 
 class OracleAsyncDriver(
+    OracleDriverBase,
     AsyncArrowBulkOperationsMixin["OracleAsyncConnection"],
     SQLTranslatorMixin["OracleAsyncConnection"],
     AsyncDriverAdapterProtocol["OracleAsyncConnection"],
@@ -441,7 +560,6 @@ class OracleAsyncDriver(
     """Oracle Async Driver Adapter."""
 
     connection: "OracleAsyncConnection"
-    dialect: str = "oracle"
 
     def __init__(self, connection: "OracleAsyncConnection") -> None:
         self.connection = connection
