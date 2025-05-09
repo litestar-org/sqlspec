@@ -1,5 +1,4 @@
 import logging
-import re
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
@@ -8,7 +7,7 @@ import aiosqlite
 from sqlspec.base import AsyncDriverAdapterProtocol
 from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin
-from sqlspec.statement import PARAM_REGEX
+from sqlspec.statement import PARAM_REGEX, QMARK_REGEX
 from sqlspec.utils.text import bind_parameters
 
 if TYPE_CHECKING:
@@ -20,16 +19,6 @@ __all__ = ("AiosqliteConnection", "AiosqliteDriver")
 AiosqliteConnection = aiosqlite.Connection
 
 logger = logging.getLogger("sqlspec")
-
-# Regex to find '?' placeholders, skipping those inside quotes or SQL comments
-QMARK_REGEX = re.compile(
-    r"""(?P<dquote>"[^"]*") | # Double-quoted strings
-         (?P<squote>'[^']*') | # Single-quoted strings
-         (?P<comment>--[^\n]*|/\*.*?\*/) | # SQL comments (single/multi-line)
-         (?P<qmark>\?) # The question mark placeholder
-      """,
-    re.VERBOSE | re.DOTALL,
-)
 
 
 class AiosqliteDriver(
@@ -75,7 +64,7 @@ class AiosqliteDriver(
             else:
                 merged_params = kwargs
         elif parameters is not None:
-            merged_params = parameters  # type: ignore
+            merged_params = parameters
 
         # Use bind_parameters for named parameters
         if isinstance(merged_params, dict):
@@ -87,7 +76,7 @@ class AiosqliteDriver(
             return sql, merged_params
         # Case 3: Scalar parameter - wrap in tuple
         if merged_params is not None:
-            return sql, (merged_params,)
+            return sql, (merged_params,)  # type: ignore[unreachable]
 
         # Case 0: No parameters provided
         # Basic validation for placeholders
@@ -100,10 +89,8 @@ class AiosqliteDriver(
                 break
         if not has_placeholders:
             # Check for ? style placeholders
-            for match in re.finditer(
-                r"(\"(?:[^\"]|\"\")*\")|(\'(?:[^\']|\'\')*\')|(--.*?\n)|(\/\*.*?\*\/)|(\?)", sql, re.DOTALL
-            ):
-                if match.group(5):
+            for match in QMARK_REGEX.finditer(sql):
+                if match.group("qmark"):
                     has_placeholders = True
                     break
 
@@ -138,10 +125,10 @@ class AiosqliteDriver(
     async def select(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["AiosqliteConnection"] = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[dict[str, Any], ModelDTOT]]":
@@ -191,10 +178,10 @@ class AiosqliteDriver(
     async def select_one(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["AiosqliteConnection"] = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[dict[str, Any], ModelDTOT]":
@@ -243,10 +230,10 @@ class AiosqliteDriver(
     async def select_one_or_none(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["AiosqliteConnection"] = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
@@ -296,10 +283,10 @@ class AiosqliteDriver(
     async def select_value(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["AiosqliteConnection"] = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Union[T, Any]":
@@ -320,7 +307,7 @@ class AiosqliteDriver(
         result_value = result[0]
         if schema_type is None:
             return result_value
-        return cast("T", schema_type(result_value))  # type: ignore[call-arg]
+        return schema_type(result_value)  # type: ignore[call-arg]
 
     @overload
     async def select_value_or_none(
@@ -347,10 +334,10 @@ class AiosqliteDriver(
     async def select_value_or_none(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["AiosqliteConnection"] = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
@@ -372,15 +359,15 @@ class AiosqliteDriver(
         result_value = result[0]
         if schema_type is None:
             return result_value
-        return cast("T", schema_type(result_value))  # type: ignore[call-arg]
+        return schema_type(result_value)  # type: ignore[call-arg]
 
     async def insert_update_delete(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["AiosqliteConnection"] = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         **kwargs: Any,
     ) -> int:
         """Insert, update, or delete data from the database.
@@ -421,10 +408,10 @@ class AiosqliteDriver(
     async def insert_update_delete_returning(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["AiosqliteConnection"] = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[dict[str, Any], ModelDTOT]":
@@ -438,8 +425,10 @@ class AiosqliteDriver(
 
         # Execute the query
         cursor = await connection.execute(sql, parameters or ())
-        await connection.commit()
         result = await cursor.fetchone()
+        await connection.commit()
+        await cursor.close()
+
         result = self.check_not_found(result)
 
         # Get column names
@@ -452,10 +441,10 @@ class AiosqliteDriver(
     async def execute_script(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["AiosqliteConnection"] = None,
+        connection: "Optional[AiosqliteConnection]" = None,
         **kwargs: Any,
     ) -> str:
         """Execute a script.
@@ -471,7 +460,7 @@ class AiosqliteDriver(
         await connection.commit()
         return "Script executed successfully."
 
-    def _connection(self, connection: Optional["AiosqliteConnection"] = None) -> "AiosqliteConnection":
+    def _connection(self, connection: "Optional[AiosqliteConnection]" = None) -> "AiosqliteConnection":
         """Get the connection to use for the operation.
 
         Args:

@@ -1,5 +1,4 @@
 import logging
-import re
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
@@ -8,7 +7,7 @@ from duckdb import DuckDBPyConnection
 from sqlspec.base import SyncDriverAdapterProtocol
 from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin, SyncArrowBulkOperationsMixin
-from sqlspec.statement import PARAM_REGEX
+from sqlspec.statement import PARAM_REGEX, QMARK_REGEX
 from sqlspec.typing import ArrowTable, StatementParameterType
 from sqlspec.utils.text import bind_parameters
 
@@ -22,16 +21,6 @@ __all__ = ("DuckDBConnection", "DuckDBDriver")
 logger = logging.getLogger("sqlspec")
 
 DuckDBConnection = DuckDBPyConnection
-
-# Regex to find '?' placeholders, skipping those inside quotes or SQL comments
-QMARK_REGEX = re.compile(
-    r"""(?P<dquote>"[^"]*") | # Double-quoted strings
-         (?P<squote>'[^']*') | # Single-quoted strings
-         (?P<comment>--[^\n]*|/\*.*?\*/) | # SQL comments (single/multi-line)
-         (?P<qmark>\?) # The question mark placeholder
-      """,
-    re.VERBOSE | re.DOTALL,
-)
 
 
 class DuckDBDriver(
@@ -76,6 +65,18 @@ class DuckDBDriver(
 
         DuckDB supports both named (:name) and positional (?) parameters.
         This method merges parameters and validates them.
+
+        Args:
+            sql: The SQL statement to process.
+            parameters: The parameters to process.
+            **kwargs: Additional keyword arguments.
+
+        Raises:
+            ParameterStyleMismatchError: If positional parameters are mixed with keyword arguments.
+            SQLParsingError: If SQL contains parameter placeholders, but no parameters were provided.
+
+        Returns:
+            A tuple of the processed SQL and parameters.
         """
         # 1. Merge parameters and kwargs
         merged_params: Optional[Union[dict[str, Any], list[Any], tuple[Any, ...]]] = None
@@ -89,7 +90,7 @@ class DuckDBDriver(
             else:
                 merged_params = kwargs
         elif parameters is not None:
-            merged_params = parameters  # type: ignore
+            merged_params = parameters
 
         # Use bind_parameters for named parameters
         if isinstance(merged_params, dict):
@@ -101,7 +102,7 @@ class DuckDBDriver(
             return sql, merged_params
         # Case 3: Scalar parameter - wrap in tuple
         if merged_params is not None:
-            return sql, (merged_params,)
+            return sql, (merged_params,)  # type: ignore[unreachable]
 
         # Case 0: No parameters provided
         # Basic validation for placeholders
@@ -113,11 +114,8 @@ class DuckDBDriver(
                 has_placeholders = True
                 break
         if not has_placeholders:
-            # Check for ? style placeholders
-            for match in re.finditer(
-                r"(\"(?:[^\"]|\"\")*\")|('(?:[^']|'')*')|(--.*?\n)|(\/\*.*?\*\/)|(\?)", sql, re.DOTALL
-            ):
-                if match.group(5):
+            for match in QMARK_REGEX.finditer(sql):
+                if match.group("qmark"):
                     has_placeholders = True
                     break
 
@@ -152,10 +150,10 @@ class DuckDBDriver(
     def select(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["DuckDBConnection"] = None,
+        connection: "Optional[DuckDBConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[dict[str, Any], ModelDTOT]]":
@@ -249,7 +247,7 @@ class DuckDBDriver(
     def select_one_or_none(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
         connection: "Optional[DuckDBConnection]" = None,
@@ -319,7 +317,7 @@ class DuckDBDriver(
             result_value = result[0]
             if schema_type is None:
                 return result_value
-            return cast("T", schema_type(result_value))  # type: ignore[call-arg]
+            return schema_type(result_value)  # type: ignore[call-arg]
 
     @overload
     def select_value_or_none(
@@ -427,10 +425,10 @@ class DuckDBDriver(
     def execute_script(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["DuckDBConnection"] = None,
+        connection: "Optional[DuckDBConnection]" = None,
         **kwargs: Any,
     ) -> str:
         connection = self._connection(connection)

@@ -1,18 +1,19 @@
+# ruff: noqa: PLR0915, C901, PLR0912, PLR0911
 import contextlib
 import logging
-import re
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast, overload
 
+import sqlglot
 from adbc_driver_manager.dbapi import Connection, Cursor
+from sqlglot import exp as sqlglot_exp
 
 from sqlspec.base import SyncDriverAdapterProtocol
 from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin, SyncArrowBulkOperationsMixin
-from sqlspec.statement import PARAM_REGEX
+from sqlspec.statement import AT_NAME_REGEX, DOLLAR_NAME_REGEX, PARAM_REGEX, QMARK_REGEX
 from sqlspec.typing import ArrowTable, StatementParameterType
-from sqlspec.utils.text import bind_parameters
 
 if TYPE_CHECKING:
     from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType, T
@@ -20,7 +21,6 @@ if TYPE_CHECKING:
 __all__ = ("AdbcConnection", "AdbcDriver")
 
 logger = logging.getLogger("sqlspec")
-
 
 AdbcConnection = Connection
 
@@ -41,7 +41,7 @@ class AdbcDriver(
         self.connection = connection
 
     @staticmethod
-    def _get_dialect(connection: "AdbcConnection") -> str:  # noqa: PLR0911
+    def _get_dialect(connection: "AdbcConnection") -> str:
         """Get the database dialect based on the driver name.
 
         Args:
@@ -78,16 +78,121 @@ class AdbcDriver(
             with contextlib.suppress(Exception):
                 cursor.close()  # type: ignore[no-untyped-call]
 
+    def _extract_colon_param_names(self, sql: str) -> list[str]:
+        try:
+            param_names = self._extract_param_names_sqlglot(sql)
+
+        except Exception:  # Catches sqlglot parsing errors or the deliberate RuntimeError  # noqa: BLE001
+            msg = f"ADBC: sqlglot parsing for :name params failed. Falling back to PARAM_REGEX. SQL: {sql}"
+            logger.debug(msg)
+            param_names = self._extract_param_names_regex(sql)
+        return param_names
+
+    @staticmethod
+    def _extract_param_names_regex(sql: str) -> list[str]:
+        param_names: list[str] = []
+        param_names.extend(
+            var_name
+            for match in PARAM_REGEX.finditer(sql)
+            if not (match.group("dquote") or match.group("squote") or match.group("comment"))
+            and (var_name := match.group("var_name"))
+        )
+        return param_names
+
+    @staticmethod
+    def _extract_param_names_sqlglot(sql: str) -> list[str]:
+        parsed_sql = sqlglot.parse_one(sql, read="mysql")
+        param_names: list[str] = [node.name for node in parsed_sql.find_all(sqlglot_exp.Parameter) if node.name]
+        if not param_names:
+            msg = "Sqlglot found no :name parameters via parsing."
+            raise SQLParsingError(msg)
+        return param_names
+
+    @staticmethod
+    def _extract_duckdb_dollar_param_names(sql: str) -> list[str]:
+        # DOLLAR_NAME_REGEX is specifically compiled to find $ followed by a letter
+        # (e.g., (?P<var_name>[a-zA-Z_][a-zA-Z0-9_]*)), so it won't match $1, $2 etc.
+        param_names: list[str] = [
+            var_name
+            for match in DOLLAR_NAME_REGEX.finditer(sql)
+            if not (match.group("dquote") or match.group("squote") or match.group("comment"))
+            and (var_name := match.group("var_name"))
+        ]
+        return param_names
+
+    @staticmethod
+    def _extract_bigquery_at_param_names(sql: str) -> list[str]:
+        param_names: list[str] = []
+        try:
+            parsed_sql = sqlglot.parse_one(sql, read="bigquery")
+            # @foo is often Parameter in sqlglot for BQ
+            param_names.extend(node.name for node in parsed_sql.find_all(sqlglot_exp.Parameter) if node.name)
+        except Exception as e:  # noqa: BLE001
+            msg = f"ADBC (bigquery): sqlglot failed to parse for @name params: {e}. Falling back to AT_NAME_REGEX. SQL: {sql}"
+            logger.debug(msg)
+            param_names.extend(
+                var_name
+                for match in AT_NAME_REGEX.finditer(sql)
+                if not (match.group("dquote") or match.group("squote") or match.group("comment"))
+                and (var_name := match.group("var_name"))
+            )
+        return param_names
+
+    @staticmethod
+    def _build_ordered_param_tuple(
+        param_names: list[str],
+        params_dict: dict[str, Any],
+        dialect_for_error_msg: str,
+        sql_for_error_msg: str,
+        placeholder_prefix_for_error_msg: str,
+    ) -> tuple[Any, ...]:
+        # If dict is empty, return empty tuple even if param_names is not (implies SQL has placeholders but no params were actually needed/provided)
+        if not params_dict:
+            return ()
+
+        # If dict is provided, but no placeholders were found in SQL to order them by
+        if not param_names and params_dict:
+            msg = (
+                f"ADBC {dialect_for_error_msg}: Dictionary parameters provided ({list(params_dict.keys())}), but no recognizable "
+                f"'{placeholder_prefix_for_error_msg}name' placeholders found in SQL to determine order. SQL: {sql_for_error_msg}"
+            )
+            raise SQLParsingError(msg)
+
+        params_values_list: list[Any] = []
+        missing_keys: list[str] = []
+        for name in param_names:
+            if name in params_dict:
+                params_values_list.append(params_dict[name])
+            else:
+                missing_keys.append(name)
+
+        if missing_keys:
+            # Format missing keys string properly
+            missing_keys_fmt = ", ".join([f"{placeholder_prefix_for_error_msg}{k}" for k in missing_keys])
+            msg = (
+                f"ADBC {dialect_for_error_msg}: Missing data for parameter(s) {missing_keys_fmt} "
+                f"found in SQL but not provided in dictionary. SQL: {sql_for_error_msg}"
+            )
+            raise SQLParsingError(msg)
+
+        # Check for unused keys provided in the dictionary
+        unused_keys = set(params_dict.keys()) - set(param_names)
+        if unused_keys:
+            msg = f"ADBC {dialect_for_error_msg}: Parameters provided in dictionary but not found in SQL: {sorted(unused_keys)}. SQL: {sql_for_error_msg}"
+            logger.warning(msg)
+            raise SQLParsingError(msg)
+
+        return tuple(params_values_list)
+
     def _process_sql_params(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
         **kwargs: Any,
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
+    ) -> "tuple[str, Optional[tuple[Any, ...]]]":  # Always returns tuple or None for params
         # 1. Merge parameters and kwargs
         merged_params: Optional[Union[dict[str, Any], list[Any], tuple[Any, ...]]] = None
-
         if kwargs:
             if isinstance(parameters, dict):
                 merged_params = {**parameters, **kwargs}
@@ -97,42 +202,208 @@ class AdbcDriver(
             else:
                 merged_params = kwargs
         elif parameters is not None:
-            merged_params = parameters  # type: ignore
+            merged_params = parameters
 
-        # Use bind_parameters for named parameters
+        # --- Dictionary Parameters Handling ---
         if isinstance(merged_params, dict):
-            final_sql, final_params = bind_parameters(sql, merged_params, dialect="adbc")
-            return final_sql, final_params
+            # Handle empty dictionary case cleanly
+            if not merged_params:
+                # Check if SQL actually requires parameters
+                if (
+                    self._extract_colon_param_names(sql)
+                    or self._extract_duckdb_dollar_param_names(sql)
+                    or self._extract_bigquery_at_param_names(sql)
+                ):
+                    msg = f"ADBC: SQL contains named placeholders but parameter dictionary is empty. SQL: {sql}"
+                    raise SQLParsingError(msg)
+                return sql, ()  # Return SQL as is, with empty tuple for params
 
-        # Case 2: Sequence parameters - pass through
+            actual_adbc_dialect = self._get_dialect(self.connection)
+            sql_to_execute: str = sql
+            ordered_param_names: list[str] = []
+            placeholder_prefix = ":"  # Default prefix for error messages
+
+            # Determine parameter order based on original SQL style (:name > $name > @name)
+            ordered_param_names = self._extract_colon_param_names(sql)
+            if not ordered_param_names:
+                if actual_adbc_dialect == "duckdb":
+                    ordered_param_names = self._extract_duckdb_dollar_param_names(sql)
+                    placeholder_prefix = "$" if ordered_param_names else ":"
+                elif actual_adbc_dialect == "bigquery":
+                    ordered_param_names = self._extract_bigquery_at_param_names(sql)
+                    placeholder_prefix = "@" if ordered_param_names else ":"
+                # Add elif for other native styles here if necessary
+
+            # Build the ordered tuple (raises error if inconsistent)
+            params_tuple = self._build_ordered_param_tuple(
+                ordered_param_names, merged_params, actual_adbc_dialect, sql, placeholder_prefix
+            )
+
+            # Transpile SQL syntax if necessary for target dialect/param style
+            if actual_adbc_dialect in {"duckdb", "sqlite"}:
+                if actual_adbc_dialect == "duckdb":
+                    msg = (
+                        f"ADBC (duckdb) PRE-TRANSPILE DictCase: SQL='{sql}', "
+                        f"placeholder_prefix='{placeholder_prefix}', "
+                        f"ordered_param_names='{ordered_param_names}', "
+                        f"params_tuple='{params_tuple}'"
+                    )
+                    logger.debug(msg)
+                try:
+                    read_dialect_for_transpile = "duckdb" if placeholder_prefix == "$" else "mysql"
+                    has_qmarks = any(
+                        True
+                        for m in QMARK_REGEX.finditer(sql)
+                        if not (m.group("dquote") or m.group("squote") or m.group("comment")) and m.group("qmark")
+                    )
+
+                    if not has_qmarks and ordered_param_names:
+                        target_write_dialect = actual_adbc_dialect
+                        msg = f"ADBC ({target_write_dialect}) DEBUG: Transpiling Dict Params. Read='{read_dialect_for_transpile}', Write='{target_write_dialect}'. SQL='{sql}'"
+                        logger.debug(msg)
+                        sql_to_execute = sqlglot.transpile(
+                            sql, read=read_dialect_for_transpile, write=target_write_dialect, pretty=False
+                        )[0]
+                        msg = f"ADBC ({target_write_dialect}) DEBUG: Transpile Dict Result='{sql_to_execute}'"
+                        logger.debug(msg)
+                    elif has_qmarks:
+                        sql_to_execute = sql
+                    else:  # No named params and no qmarks
+                        sql_to_execute = sql
+                except Exception as e:
+                    msg = (
+                        f"ADBC ({actual_adbc_dialect}): Failed to transpile SQL to 'qmark' style "
+                        f"when using dictionary parameters. Error: {e}. Original SQL: {sql}"
+                    )
+                    logger.warning(msg)
+                    raise SQLParsingError(msg) from e
+            else:
+                # Transpile to the native style (e.g., @name for BQ). Use `args` to allow sqlglot type handling.
+                try:
+                    sql_to_execute = sqlglot.transpile(sql, args=merged_params, write=actual_adbc_dialect)[0]
+                except Exception as e:  # noqa: BLE001
+                    msg = f"ADBC ({actual_adbc_dialect}): Failed to transpile SQL to native style: {e}. Using original SQL. SQL: {sql}"
+                    logger.warning(msg)
+                    sql_to_execute = sql
+
+            return sql_to_execute, params_tuple
+
+        # --- Sequence/Scalar Parameters Handling ---
         if isinstance(merged_params, (list, tuple)):
-            return sql, merged_params
-        # Case 3: Scalar parameter - wrap in tuple
-        if merged_params is not None:
+            actual_adbc_dialect = self._get_dialect(self.connection)
+            colon_names = self._extract_colon_param_names(sql)
+            # Other named param styles are not typically mixed with sequence params by users for SQLite.
+            # We focus on :name for this special SQLite handling.
+
+            if colon_names and actual_adbc_dialect == "sqlite":
+                # SQLite: SQL has :name, params are a tuple. Map them.
+                if len(colon_names) != len(merged_params):
+                    msg = (
+                        f"ADBC (sqlite): Tuple parameter count ({len(merged_params)}) does not match "
+                        f"named placeholder count ({len(colon_names)}) in SQL: {sql}"
+                    )
+                    raise SQLParsingError(msg)
+                # Parameters are already a tuple (merged_params) and in the correct order by convention.
+                # We just need to transpile the SQL.
+                try:
+                    msg = f"ADBC (sqlite) DEBUG: Transpiling Tuple/Scalar. Read='mysql', Write='sqlite'. SQL='{sql}'"
+                    logger.debug(msg)
+                    sql_to_execute = sqlglot.transpile(sql, read="mysql", write="sqlite", pretty=False)[0]
+                    msg = f"ADBC (sqlite) DEBUG: Transpile Tuple/Scalar Result='{sql_to_execute}'"
+                    logger.debug(msg)
+
+                    # Return the transpiled SQL with the original parameters (as tuple)
+                    # If execution reached here, merged_params must have been a list/tuple based on the outer check
+                    return sql_to_execute, tuple(merged_params)
+
+                except Exception as e:
+                    # Determine original param type for error message more reliably
+                    param_type_str = "tuple/list" if isinstance(parameters, (list, tuple)) else "unknown"
+                    msg = (
+                        f"ADBC (sqlite): Failed to transpile SQL with :name to 'qmark' style "
+                        f"when using {param_type_str} parameters. Error: {e}. Original SQL: {sql}"
+                    )
+                    logger.exception(msg)
+                    raise SQLParsingError(msg) from e
+            elif (
+                colon_names
+                or self._extract_duckdb_dollar_param_names(sql)
+                or self._extract_bigquery_at_param_names(sql)
+            ):
+                # For other dialects, or if not SQLite with :name, this is a mismatch.
+                msg = f"ADBC: Sequence/tuple parameters provided, but SQL contains named placeholders (:name, $name, @name). SQL: {sql}"
+                raise ParameterStyleMismatchError(msg)
+
+            # If no named placeholders were found, or if it's SQLite and we handled :name above,
+            # we assume the SQL is qmark or some other positional style compatible with the tuple.
+            return sql, tuple(merged_params)
+
+        # --- Scalar Parameters Handling (Separate Block) ---
+        if merged_params is not None and not isinstance(merged_params, (list, tuple, dict)):  # type: ignore[unreachable]
+            actual_adbc_dialect = self._get_dialect(self.connection)  # type: ignore[unreachable]
+            colon_names = self._extract_colon_param_names(sql)
+
+            if colon_names and actual_adbc_dialect == "sqlite":
+                # SQLite: SQL has :name, param is scalar.
+                if len(colon_names) != 1:
+                    msg = f"ADBC (sqlite): Scalar parameter provided, but SQL has {len(colon_names)} named placeholders (expected 1). SQL: {sql}"
+                    raise SQLParsingError(msg)
+                # Parameter is scalar (merged_params). Wrap in a tuple.
+                # Transpile SQL.
+                try:
+                    msg = f"ADBC (sqlite) DEBUG: Transpiling Scalar. Read='mysql', Write='sqlite'. SQL='{sql}'"
+                    logger.debug(msg)
+                    sql_to_execute = sqlglot.transpile(sql, read="mysql", write="sqlite", pretty=False)[0]
+                    msg = f"ADBC (sqlite) DEBUG: Transpile Scalar Result='{sql_to_execute}'"
+                    logger.debug(msg)
+
+                except Exception as e:
+                    msg = (
+                        f"ADBC (sqlite): Failed to transpile SQL with :name to 'qmark' style "
+                        f"when using a scalar parameter. Error: {e}. Original SQL: {sql}"
+                    )
+                    logger.exception(msg)
+                    raise SQLParsingError(msg) from e
+                else:
+                    return sql_to_execute, (merged_params,)  # Return scalar wrapped in tuple
+            elif (
+                colon_names
+                or self._extract_duckdb_dollar_param_names(sql)
+                or self._extract_bigquery_at_param_names(sql)
+            ):
+                # For other dialects, or if not SQLite with :name, this is a mismatch.
+                msg = f"ADBC: Scalar parameter provided, but SQL contains named placeholders. SQL: {sql}"
+                raise ParameterStyleMismatchError(msg)
+
+            # If no named placeholders, or if it's SQLite and we handled :name,
+            # check for qmark count for scalar.
+            qmark_count = sum(
+                1
+                for m in QMARK_REGEX.finditer(sql)
+                if not (m.group("dquote") or m.group("squote") or m.group("comment")) and m.group("qmark")
+            )
+            if qmark_count != 1:
+                msg = f"ADBC: Scalar parameter provided, but SQL contains {qmark_count} qmark ('?') placeholders (expected 1). SQL: {sql}"
+                raise SQLParsingError(msg)
             return sql, (merged_params,)
 
-        # Case 0: No parameters provided
-        # Basic validation for placeholders
-        has_placeholders = False
-        for match in PARAM_REGEX.finditer(sql):
-            if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
-                "var_name"
-            ):
-                has_placeholders = True
-                break
-        if not has_placeholders:
-            # Check for ? style placeholders
-            for match in re.finditer(
-                r"(\"(?:[^\"]|\"\")*\")|(\'(?:[^\']|\'\')*\')|(--.*?\n)|(\/\*.*?\*\/)|(\?)", sql, re.DOTALL
-            ):
-                if match.group(5):
-                    has_placeholders = True
-                    break
+        # --- No Parameters Provided Validation ---
+        if merged_params is None:
+            has_placeholders = bool(
+                self._extract_colon_param_names(sql)
+                or self._extract_duckdb_dollar_param_names(sql)
+                or self._extract_bigquery_at_param_names(sql)
+                or any(
+                    True
+                    for m in QMARK_REGEX.finditer(sql)
+                    if not (m.group("dquote") or m.group("squote") or m.group("comment")) and m.group("qmark")
+                )
+            )
+            if has_placeholders:
+                msg = f"ADBC: SQL statement appears to contain parameter placeholders, but no parameters were provided. SQL: {sql}"
+                raise SQLParsingError(msg)
 
-        if has_placeholders:
-            msg = f"adbc: SQL contains parameter placeholders, but no parameters were provided. SQL: {sql}"
-            raise SQLParsingError(msg)
-        return sql, None
+        return sql, None  # No parameters provided, and none found/needed
 
     @overload
     def select(
@@ -210,10 +481,10 @@ class AdbcDriver(
     def select_one(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["AdbcConnection"] = None,
+        connection: "Optional[AdbcConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
@@ -307,10 +578,10 @@ class AdbcDriver(
     def select_value(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["AdbcConnection"] = None,
+        connection: "Optional[AdbcConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Union[T, Any]":
@@ -354,10 +625,10 @@ class AdbcDriver(
     def select_value_or_none(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["AdbcConnection"] = None,
+        connection: "Optional[AdbcConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
@@ -380,10 +651,10 @@ class AdbcDriver(
     def insert_update_delete(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["AdbcConnection"] = None,
+        connection: "Optional[AdbcConnection]" = None,
         **kwargs: Any,
     ) -> int:
         """Insert, update, or delete data from the database.
@@ -423,10 +694,10 @@ class AdbcDriver(
     def insert_update_delete_returning(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["AdbcConnection"] = None,
+        connection: "Optional[AdbcConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
@@ -456,10 +727,10 @@ class AdbcDriver(
     def execute_script(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["AdbcConnection"] = None,
+        connection: "Optional[AdbcConnection]" = None,
         **kwargs: Any,
     ) -> str:
         """Execute a script.
@@ -490,9 +761,9 @@ class AdbcDriver(
         Returns:
             The results of the query as an Apache Arrow Table.
         """
-        conn = self._connection(connection)
+        connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
-        with self._with_cursor(conn) as cursor:
+        with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             return cast("ArrowTable", cursor.fetch_arrow_table())  # pyright: ignore[reportUnknownMemberType]

@@ -7,10 +7,9 @@ from psycopg import AsyncConnection, Connection
 from psycopg.rows import dict_row
 
 from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
-from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
+from sqlspec.exceptions import ParameterStyleMismatchError
 from sqlspec.mixins import SQLTranslatorMixin
-from sqlspec.statement import PARAM_REGEX
-from sqlspec.utils.text import bind_parameters
+from sqlspec.statement import PARAM_REGEX, QMARK_REGEX
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator, Sequence
@@ -24,15 +23,8 @@ __all__ = ("PsycopgAsyncConnection", "PsycopgAsyncDriver", "PsycopgSyncConnectio
 PsycopgSyncConnection = Connection
 PsycopgAsyncConnection = AsyncConnection
 
-# Regex to find '?' placeholders, skipping those inside quotes or SQL comments
-QMARK_REGEX = re.compile(
-    r"""(?P<dquote>"[^"]*") | # Double-quoted strings
-         (?P<squote>'[^']*') | # Single-quoted strings
-         (?P<comment>--[^\n]*|/\*.*?\*/) | # SQL comments (single/multi-line)
-         (?P<qmark>\?) # The question mark placeholder
-      """,
-    re.VERBOSE | re.DOTALL,
-)
+# Compile the parameter name regex once for efficiency
+PARAM_NAME_REGEX = re.compile(r":([a-zA-Z_][a-zA-Z0-9_]*)")
 
 
 class PsycopgDriverBase:
@@ -45,7 +37,6 @@ class PsycopgDriverBase:
         /,
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Process SQL and parameters, converting :name -> %(name)s if needed."""
         # 1. Merge parameters and kwargs
         merged_params: Optional[Union[dict[str, Any], Sequence[Any]]] = None
 
@@ -58,13 +49,13 @@ class PsycopgDriverBase:
             else:
                 merged_params = kwargs
         elif parameters is not None:
-            merged_params = parameters  # type: ignore
+            merged_params = parameters
 
         # Use bind_parameters for named parameters
         if isinstance(merged_params, dict):
-            final_sql, final_params = bind_parameters(sql, merged_params, dialect="postgres")
-            return final_sql, final_params
-
+            # Always convert :name to %(name)s for psycopg
+            sql_converted = PARAM_NAME_REGEX.sub(lambda m: f"%({m.group(1)})s", sql)
+            return sql_converted, merged_params
         # Case 2: Sequence parameters - leave as is (psycopg handles '%s' placeholders with tuple/list)
         if isinstance(merged_params, (list, tuple)):
             return sql, merged_params
@@ -81,18 +72,17 @@ class PsycopgDriverBase:
             ):
                 has_placeholders = True
                 break
+        has_qmark = False
         if not has_placeholders:
-            # Check for ? style placeholders
             for match in QMARK_REGEX.finditer(sql):
                 if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
                     "qmark"
                 ):
-                    has_placeholders = True
+                    has_qmark = True
                     break
-
-        if has_placeholders:
+        if has_placeholders or has_qmark:
             msg = f"psycopg: SQL contains parameter placeholders, but no parameters were provided. SQL: {sql}"
-            raise SQLParsingError(msg)
+            raise ParameterStyleMismatchError(msg)
         return sql, None
 
 
@@ -720,14 +710,9 @@ class PsycopgAsyncDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
-            try:
-                rowcount = int(cursor.rowcount)
-            except (TypeError, ValueError):
-                rowcount = -1
-            return rowcount
+            return getattr(cursor, "rowcount", -1)  # pyright: ignore[reportUnknownMemberType]
 
     @overload
     async def insert_update_delete_returning(
@@ -768,14 +753,11 @@ class PsycopgAsyncDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             result = await cursor.fetchone()
-
             if result is None:
                 return None
-
             if schema_type is not None:
                 return cast("ModelDTOT", schema_type(**result))  # pyright: ignore[reportUnknownArgumentType]
             return cast("dict[str, Any]", result)  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]

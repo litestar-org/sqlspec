@@ -1,5 +1,4 @@
 import logging
-import re
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
@@ -8,7 +7,7 @@ from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
 from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import AsyncArrowBulkOperationsMixin, SQLTranslatorMixin, SyncArrowBulkOperationsMixin
-from sqlspec.statement import PARAM_REGEX
+from sqlspec.statement import PARAM_REGEX, QMARK_REGEX
 from sqlspec.typing import ArrowTable, StatementParameterType, T
 from sqlspec.utils.text import bind_parameters
 
@@ -24,23 +23,13 @@ OracleAsyncConnection = AsyncConnection
 
 logger = logging.getLogger("sqlspec")
 
-# Regex to find '?' placeholders, skipping those inside quotes or SQL comments
-QMARK_REGEX = re.compile(
-    r"""(?P<dquote>"[^"]*") | # Double-quoted strings
-         (?P<squote>'[^']*') | # Single-quoted strings
-         (?P<comment>--[^\n]*|/\*.*?\*/) | # SQL comments (single/multi-line)
-         (?P<qmark>\?) # The question mark placeholder
-      """,
-    re.VERBOSE | re.DOTALL,
-)
-
 
 class OracleDriverBase:
     """Base class for Oracle drivers with common functionality."""
 
     dialect: str = "oracle"
 
-    def _process_sql_params(  # noqa: PLR6301
+    def _process_sql_params(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
@@ -71,7 +60,7 @@ class OracleDriverBase:
             else:
                 merged_params = kwargs
         elif parameters is not None:
-            merged_params = parameters  # type: ignore
+            merged_params = parameters
 
         # Use bind_parameters for named parameters
         if isinstance(merged_params, dict):
