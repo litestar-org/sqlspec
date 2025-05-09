@@ -74,9 +74,10 @@ def bind_parameters(
         if isinstance(parameters, dict):
             bound_sql = sqlglot.transpile(sql, args=parameters, write=dialect)[0]
             return bound_sql, parameters  # Keep dict for drivers that need it
-        # For positional parameters (list/tuple), just return as is for now
-        # (could extend to support ? -> $1, $2, etc. if needed)
+    except Exception as e:  # noqa: BLE001
+        msg = f"SQLGlot parameter binding failed: {e}. Using original SQL and parameters."
+        logger.debug(msg)
         return sql, parameters
-    except Exception as e:
-        logger.debug(f"SQLGlot parameter binding failed: {e}. Using original SQL and parameters.")
-        return sql, parameters
+    # For positional parameters (list/tuple), just return as is for now
+    # (could extend to support ? -> $1, $2, etc. if needed)
+    return sql, parameters

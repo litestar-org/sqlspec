@@ -1,8 +1,7 @@
-# ruff: noqa: PLR0915, PLR0912, C901
+# ruff: noqa: PLR0915, PLR0912, C901, PLR6301
 """Psqlpy Driver Implementation."""
 
 import logging
-import re
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from psqlpy import Connection, QueryResult
@@ -11,7 +10,7 @@ from psqlpy.exceptions import RustPSQLDriverPyBaseError
 from sqlspec.base import AsyncDriverAdapterProtocol
 from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin
-from sqlspec.statement import PARAM_REGEX
+from sqlspec.statement import PARAM_REGEX, QMARK_REGEX
 from sqlspec.utils.text import bind_parameters
 
 if TYPE_CHECKING:
@@ -25,15 +24,6 @@ __all__ = ("PsqlpyConnection", "PsqlpyDriver")
 
 
 PsqlpyConnection = Connection
-# Regex to find '?' placeholders, skipping those inside quotes or SQL comments
-QMARK_REGEX = re.compile(
-    r"""(?P<dquote>"[^"]*") | # Double-quoted strings
-         (?P<squote>\'[^\']*\') | # Single-quoted strings
-         (?P<comment>--[^\n]*|/\*.*?\*/) | # SQL comments (single/multi-line)
-         (?P<qmark>\?) # The question mark placeholder
-      """,
-    re.VERBOSE | re.DOTALL,
-)
 logger = logging.getLogger("sqlspec")
 
 
@@ -60,6 +50,18 @@ class PsqlpyDriver(
 
         psqlpy uses $1, $2 style parameters natively.
         This method converts '?' (tuple/list) and ':name' (dict) styles to $n.
+
+        Args:
+            sql: The SQL statement to process.
+            parameters: The parameters to process.
+            **kwargs: Additional keyword arguments.
+
+        Raises:
+            ParameterStyleMismatchError: If positional parameters are mixed with keyword arguments.
+            SQLParsingError: If SQL contains parameter placeholders, but no parameters were provided.
+
+        Returns:
+            A tuple of the processed SQL and parameters.
         """
         # 1. Merge parameters and kwargs
         merged_params: Optional[Union[dict[str, Any], Sequence[Any]]] = None
@@ -73,7 +75,7 @@ class PsqlpyDriver(
             else:
                 merged_params = kwargs
         elif parameters is not None:
-            merged_params = parameters  # type: ignore
+            merged_params = parameters
 
         # Use bind_parameters for named parameters
         if isinstance(merged_params, dict):
@@ -129,7 +131,7 @@ class PsqlpyDriver(
         # Convert to a one-element tuple
         if merged_params is not None:
             scalar_param_tuple = (merged_params,)
-            sequence_processed_parts: list[str] = []
+            sequence_processed_parts = []
             param_index = 1
             last_end = 0
             qmark_count = 0
@@ -205,10 +207,10 @@ class PsqlpyDriver(
     async def select(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["PsqlpyConnection"] = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
@@ -247,10 +249,10 @@ class PsqlpyDriver(
     async def select_one(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["PsqlpyConnection"] = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
@@ -290,10 +292,10 @@ class PsqlpyDriver(
     async def select_one_or_none(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["PsqlpyConnection"] = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
@@ -403,10 +405,10 @@ class PsqlpyDriver(
     async def insert_update_delete(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["PsqlpyConnection"] = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         **kwargs: Any,
     ) -> int:
         connection = self._connection(connection)
@@ -443,10 +445,10 @@ class PsqlpyDriver(
     async def insert_update_delete_returning(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["PsqlpyConnection"] = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
@@ -468,10 +470,10 @@ class PsqlpyDriver(
     async def execute_script(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["PsqlpyConnection"] = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         **kwargs: Any,
     ) -> str:
         connection = self._connection(connection)
@@ -481,7 +483,7 @@ class PsqlpyDriver(
         await connection.execute(sql, parameters=parameters)
         return sql
 
-    def _connection(self, connection: Optional["PsqlpyConnection"] = None) -> "PsqlpyConnection":
+    def _connection(self, connection: "Optional[PsqlpyConnection]" = None) -> "PsqlpyConnection":
         """Get the connection to use.
 
         Args:

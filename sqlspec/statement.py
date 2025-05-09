@@ -32,6 +32,45 @@ PARAM_REGEX = re.compile(
     re.VERBOSE | re.DOTALL,
 )
 
+# Regex to find ? placeholders, skipping those inside quotes or SQL comments
+QMARK_REGEX = re.compile(
+    r"""(?P<dquote>\"[^\"]*\") | # Double-quoted strings
+         (?P<squote>'[^']*') | # Single-quoted strings
+         (?P<comment>--[^\n]*|/\*.*?\*/) | # SQL comments (single/multi-line)
+         (?P<qmark>\?) # The question mark placeholder
+      """,
+    re.VERBOSE | re.DOTALL,
+)
+
+
+# Regex for $name style, avoiding comments/strings
+# Lookbehind ensures it's not preceded by a word char or another $
+DOLLAR_NAME_REGEX = re.compile(
+    r"""(?<![\w\$])
+    (?:
+        (?P<dquote>"(?:[^"]|"")*") |     # Double-quoted strings
+        (?P<squote>'(?:[^']|'')*') |     # Single-quoted strings
+        (?P<comment>--.*?\n|\/\*.*?\*\/) | # SQL comments
+        \$ (?P<var_name>[a-zA-Z_][a-zA-Z0-9_]*)   # $var_name identifier
+    )
+    """,
+    re.VERBOSE | re.DOTALL,
+)
+
+# Regex for @name style, avoiding comments/strings
+# Lookbehind ensures it's not preceded by a word char or another @
+AT_NAME_REGEX = re.compile(
+    r"""(?<![\w@])
+    (?:
+        (?P<dquote>"(?:[^"]|"")*") |     # Double-quoted strings
+        (?P<squote>'(?:[^']|'')*') |     # Single-quoted strings
+        (?P<comment>--.*?\n|\/\*.*?\*\/) | # SQL comments
+        @ (?P<var_name>[a-zA-Z_][a-zA-Z0-9_]*)   # @var_name identifier
+    )
+    """,
+    re.VERBOSE | re.DOTALL,
+)
+
 
 @dataclass()
 class SQLStatement:
@@ -90,7 +129,7 @@ class SQLStatement:
             sql_params = list(expression.find_all(exp.Parameter))
         except SQLParsingError as e:
             # If parsing fails, we cannot validate accurately.
-            # Let adapters handle potentially valid but unparseable SQL.
+            # Let adapters handle potentially valid but unparsable SQL.
             # Log the parsing error for debugging.
             logger.debug(
                 "SQL parsing failed during validation: %s. Returning original SQL and parameters for adapter.", e
@@ -174,11 +213,6 @@ class SQLStatement:
             msg = f"Named parameters found in SQL but not provided: {missing_keys}. SQL: {self.sql}"
             raise SQLParsingError(msg)
 
-        # Allow extra keys, as they might be used by the adapter or driver internally
-        # extra_keys = provided_keys - required_keys
-        # if extra_keys:
-        #     logger.debug("Extra parameters provided but not found in SQL: %s", extra_keys)
-
     def _validate_sequence_params(
         self, sql_params: list[exp.Parameter], params: Union[tuple[Any, ...], list[Any]]
     ) -> None:
@@ -188,29 +222,25 @@ class SQLStatement:
 
         if named_sql_params:
             # No need to store msg if we are raising immediately
-            raise ParameterStyleMismatchError(
-                f"Sequence parameters provided, but found named placeholders (e.g., ':name') in SQL: {self.sql}"
-            )
+            msg = f"Sequence parameters provided, but found named placeholders (e.g., ':name') in SQL: {self.sql}"
+            raise ParameterStyleMismatchError(msg)
 
         expected_count = len(unnamed_sql_params)
         actual_count = len(params)
 
         if expected_count != actual_count:
             # Double-check with regex if counts mismatch, as parsing might miss some complex cases
-            # Simple regex for '?' outside comments/strings needed here
             regex_count = 0
-            for match in re.finditer(
-                r"(\"(?:[^\"]|\"\")*\")|('(?:[^']|'')*')|(--.*?\\n)|(\\/\\*.*?\\*\\/)|(\\?)", self.sql, re.DOTALL
-            ):
-                if match.group(5):  # Group 5 is the question mark
+            for match in QMARK_REGEX.finditer(self.sql):
+                if match.group("qmark"):
                     regex_count += 1
 
             if regex_count != actual_count:
-                # No need to store msg if we are raising immediately
-                raise SQLParsingError(
+                msg = (
                     f"Parameter count mismatch. SQL expects {expected_count} (sqlglot) / {regex_count} (regex) positional parameters, "
                     f"but {actual_count} were provided. SQL: {self.sql}"
                 )
+                raise SQLParsingError(msg)
             # Counts mismatch with sqlglot but match with simple regex - log warning, proceed.
             logger.warning(
                 "Parameter count mismatch (sqlglot: %d, provided: %d), but regex count (%d) matches provided. Proceeding. SQL: %s",

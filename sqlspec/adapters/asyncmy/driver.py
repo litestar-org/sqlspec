@@ -1,16 +1,15 @@
 # type: ignore
 import logging
-import re
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
-import asyncmy
+from asyncmy import Connection
 
 from sqlspec.base import AsyncDriverAdapterProtocol
 from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin
-from sqlspec.statement import PARAM_REGEX
+from sqlspec.statement import PARAM_REGEX, QMARK_REGEX
 from sqlspec.utils.text import bind_parameters
 
 if TYPE_CHECKING:
@@ -20,18 +19,9 @@ if TYPE_CHECKING:
 
 __all__ = ("AsyncmyDriver",)
 
-AsyncmyConnection = asyncmy.Connection
+AsyncmyConnection = Connection
 
 logger = logging.getLogger("sqlspec")
-
-QMARK_REGEX = re.compile(
-    r"""(?P<dquote>\"[^\"]*\") | # Double-quoted strings
-         (?P<squote>'[^']*') | # Single-quoted strings
-         (?P<comment>--[^\n]*|/\*.*?\*/) | # SQL comments (single/multi-line)
-         (?P<qmark>\?) # The question mark placeholder
-      """,
-    re.VERBOSE | re.DOTALL,
-)
 
 
 class AsyncmyDriver(
@@ -99,10 +89,10 @@ class AsyncmyDriver(
                 break
         if not has_placeholders:
             # Check for ? style placeholders
-            for match in re.finditer(
-                r"(\"(?:[^\"]|\"\")*\")|(\'(?:[^\']|\'\')*\')|(--.*?\n)|(\/\*.*?\*\/)|(\?)", sql, re.DOTALL
-            ):
-                if match.group(5):
+            for match in QMARK_REGEX.finditer(sql):
+                if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
+                    "qmark"
+                ):
                     has_placeholders = True
                     break
 
@@ -156,9 +146,10 @@ class AsyncmyDriver(
             results = await cursor.fetchall()
             if not results:
                 return []
+            column_names = [c[0] for c in cursor.description or []]
             if schema_type is None:
-                return [dict(zip(cursor.column_names, row)) for row in results]
-            return [cast("ModelDTOT", schema_type(**dict(zip(cursor.column_names, row)))) for row in results]
+                return [dict(zip(column_names, row)) for row in results]
+            return [schema_type(**dict(zip(column_names, row))) for row in results]
 
     @overload
     async def select_one(
@@ -203,9 +194,10 @@ class AsyncmyDriver(
             await cursor.execute(sql, parameters)
             result = await cursor.fetchone()
             result = self.check_not_found(result)
+            column_names = [c[0] for c in cursor.description or []]
             if schema_type is None:
-                return dict(zip(cursor.column_names, result))
-            return cast("ModelDTOT", schema_type(**dict(zip(cursor.column_names, result))))
+                return dict(zip(column_names, result))
+            return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
 
     @overload
     async def select_one_or_none(
@@ -251,9 +243,10 @@ class AsyncmyDriver(
             result = await cursor.fetchone()
             if result is None:
                 return None
+            column_names = [c[0] for c in cursor.description or []]
             if schema_type is None:
-                return dict(zip(cursor.column_names, result))
-            return cast("ModelDTOT", schema_type(**dict(zip(cursor.column_names, result))))
+                return dict(zip(column_names, result))
+            return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
 
     @overload
     async def select_value(
@@ -298,11 +291,10 @@ class AsyncmyDriver(
             await cursor.execute(sql, parameters)
             result = await cursor.fetchone()
             result = self.check_not_found(result)
-            # Return first value from the row
-            result_value = result[0] if result else None
-            if schema_type is None:
-                return result_value
-            return schema_type(result_value)
+            value = result[0]
+            if schema_type is not None:
+                return schema_type(value)  # type: ignore[call-arg]
+            return value
 
     @overload
     async def select_value_or_none(
@@ -348,11 +340,10 @@ class AsyncmyDriver(
             result = await cursor.fetchone()
             if result is None:
                 return None
-            # Return first value from the row
-            result_value = result[0] if result else None
-            if schema_type is None:
-                return result_value
-            return schema_type(result_value)
+            value = result[0]
+            if schema_type is not None:
+                return schema_type(value)  # type: ignore[call-arg]
+            return value
 
     async def insert_update_delete(
         self,
@@ -413,13 +404,16 @@ class AsyncmyDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             result = await cursor.fetchone()
-            result = self.check_not_found(result)
-            if schema_type is None:
-                return dict(zip(cursor.column_names, result))
-            return cast("ModelDTOT", schema_type(**dict(zip(cursor.column_names, result))))
+            if result is None:
+                return None
+            column_names = [c[0] for c in cursor.description or []]
+            if schema_type is not None:
+                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
+            return dict(zip(column_names, result))
 
     async def execute_script(
         self,

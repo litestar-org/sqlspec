@@ -1,7 +1,6 @@
 import contextlib
 import datetime
 import logging
-import re
 from collections.abc import Iterator, Sequence
 from decimal import Decimal
 from typing import (
@@ -27,7 +26,7 @@ from sqlspec.mixins import (
     SyncArrowBulkOperationsMixin,
     SyncParquetExportMixin,
 )
-from sqlspec.statement import PARAM_REGEX
+from sqlspec.statement import PARAM_REGEX, QMARK_REGEX
 from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType, T
 from sqlspec.utils.text import bind_parameters
 
@@ -130,7 +129,7 @@ class BigQueryDriver(
             else:
                 merged_params = kwargs
         elif parameters is not None:
-            merged_params = parameters  # type: ignore
+            merged_params = parameters
 
         # Use bind_parameters for named parameters
         if isinstance(merged_params, dict):
@@ -142,7 +141,7 @@ class BigQueryDriver(
             return sql, merged_params
         # Case 3: Scalar parameter - wrap in tuple
         if merged_params is not None:
-            return sql, (merged_params,)
+            return sql, (merged_params,)  # type: ignore[unreachable]
 
         # Case 0: No parameters provided
         # Basic validation for placeholders
@@ -155,10 +154,8 @@ class BigQueryDriver(
                 break
         if not has_placeholders:
             # Check for ? style placeholders
-            for match in re.finditer(
-                r"(\"(?:[^\"]|\"\")*\")|(\'(?:[^\']|\'\')*\')|(--.*?\n)|(\/\*.*?\*\/)|(\?)", sql, re.DOTALL
-            ):
-                if match.group(5):
+            for match in QMARK_REGEX.finditer(sql):
+                if match.group("qmark"):
                     has_placeholders = True
                     break
 

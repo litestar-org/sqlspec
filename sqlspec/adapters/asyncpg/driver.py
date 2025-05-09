@@ -8,7 +8,7 @@ from typing_extensions import TypeAlias
 from sqlspec.base import AsyncDriverAdapterProtocol
 from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin
-from sqlspec.statement import PARAM_REGEX
+from sqlspec.statement import PARAM_REGEX, QMARK_REGEX
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -22,18 +22,10 @@ __all__ = ("AsyncpgConnection", "AsyncpgDriver")
 
 logger = logging.getLogger("sqlspec")
 
-# Regex to find '?' placeholders, skipping those inside quotes or SQL comments
-# Simplified version, assumes standard SQL quoting/comments
-QMARK_REGEX = re.compile(
-    r"""(?P<dquote>"[^"]*") | # Double-quoted strings
-         (?P<squote>\\'[^\\']*\\') | # Single-quoted strings
-         (?P<comment>--[^\\n]*|/\\*.*?\\*/) | # SQL comments (single/multi-line)
-         (?P<qmark>\\?) # The question mark placeholder
-      """,
-    re.VERBOSE | re.DOTALL,
-)
-
 AsyncpgConnection: TypeAlias = "Union[Connection[Any], PoolConnectionProxy[Any]]"
+
+# Compile the row count regex once for efficiency
+ROWCOUNT_REGEX = re.compile(r"^(?:INSERT|UPDATE|DELETE) \d+ (\d+)$")
 
 
 class AsyncpgDriver(
@@ -48,7 +40,7 @@ class AsyncpgDriver(
     def __init__(self, connection: "AsyncpgConnection") -> None:
         self.connection = connection
 
-    def _process_sql_params(  # noqa: PLR0912, PLR0915, PLR0914
+    def _process_sql_params(  # noqa: PLR0912, PLR0915
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
@@ -71,7 +63,7 @@ class AsyncpgDriver(
         elif parameters is not None:
             merged_params_type = type(parameters)
             # Preserve original type (dict, list, tuple, scalar) for now
-            merged_params = parameters  # type: ignore
+            merged_params = parameters
 
         # 2. Process based on merged parameter type
 
@@ -86,14 +78,12 @@ class AsyncpgDriver(
                     has_placeholders = True
                     break
             if not has_placeholders:
-                # More refined check for '?' outside comments/strings
-                if QMARK_REGEX.search(sql):
-                    # Check again avoiding comments/strings
-                    if re.search(
-                        r"(?<!['\"\\w])\\?(?!['\"\\w])",
-                        re.sub(r"(\"(?:[^\\\"]|\\\"\\\")*\")|('(?:[^']|'')*')|(--.*?\\n)|(\\/\\*.*?\\*\\/)", "", sql),
+                for match in QMARK_REGEX.finditer(sql):
+                    if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
+                        "qmark"
                     ):
                         has_placeholders = True
+                        break
 
             if has_placeholders:
                 msg = f"asyncpg: SQL contains parameter placeholders, but no parameters were provided. SQL: {sql}"
@@ -252,20 +242,26 @@ class AsyncpgDriver(
     ) -> "Sequence[Union[dict[str, Any], ModelDTOT]]":
         """Fetch data from the database.
 
+        Args:
+            sql: SQL statement.
+            parameters: Query parameters.
+            connection: Optional connection to use.
+            schema_type: Optional schema class for the result.
+            **kwargs: Additional keyword arguments.
+
         Returns:
             List of row data as either model instances or dictionaries.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        params = [] if parameters is None else parameters
-        async with connection.transaction():
-            stmt = await connection.prepare(sql)
-            results = await stmt.fetch(*params) if isinstance(params, (list, tuple)) else await stmt.fetch(params)
-            if not results:
-                return []
-            if schema_type is None:
-                return [dict(record) for record in results]
-            return [cast("ModelDTOT", schema_type(**dict(record))) for record in results]
+        parameters = parameters if parameters is not None else {}
+
+        results = await connection.fetch(sql, *parameters)  # pyright: ignore
+        if not results:
+            return []
+        if schema_type is None:
+            return [dict(row.items()) for row in results]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        return [cast("ModelDTOT", schema_type(**dict(row.items()))) for row in results]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
 
     @overload
     async def select_one(
@@ -301,19 +297,26 @@ class AsyncpgDriver(
     ) -> "Union[dict[str, Any], ModelDTOT]":
         """Fetch one row from the database.
 
+        Args:
+            sql: SQL statement.
+            parameters: Query parameters.
+            connection: Optional connection to use.
+            schema_type: Optional schema class for the result.
+            **kwargs: Additional keyword arguments.
+
         Returns:
             The first row of the query results.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        params = [] if parameters is None else parameters
-        async with connection.transaction():
-            stmt = await connection.prepare(sql)
-            result = await stmt.fetchrow(*params) if isinstance(params, (list, tuple)) else await stmt.fetchrow(params)
-            result = self.check_not_found(result)
-            if schema_type is None:
-                return dict(result)
-            return cast("ModelDTOT", schema_type(**dict(result)))
+        parameters = parameters if parameters is not None else {}
+        result = await connection.fetchrow(sql, *parameters)  # pyright: ignore
+        result = self.check_not_found(result)
+
+        if schema_type is None:
+            # Always return as dictionary
+            return dict(result.items())  # type: ignore[attr-defined]
+        return cast("ModelDTOT", schema_type(**dict(result.items())))  # type: ignore[attr-defined]
 
     @overload
     async def select_one_or_none(
@@ -349,20 +352,26 @@ class AsyncpgDriver(
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
         """Fetch one row from the database.
 
+        Args:
+            sql: SQL statement.
+            parameters: Query parameters.
+            connection: Optional connection to use.
+            schema_type: Optional schema class for the result.
+            **kwargs: Additional keyword arguments.
+
         Returns:
             The first row of the query results.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        params = [] if parameters is None else parameters
-        async with connection.transaction():
-            stmt = await connection.prepare(sql)
-            result = await stmt.fetchrow(*params) if isinstance(params, (list, tuple)) else await stmt.fetchrow(params)
-            if result is None:
-                return None
-            if schema_type is None:
-                return dict(result)
-            return cast("ModelDTOT", schema_type(**dict(result)))
+        parameters = parameters if parameters is not None else {}
+        result = await connection.fetchrow(sql, *parameters)  # pyright: ignore
+        if result is None:
+            return None
+        if schema_type is None:
+            # Always return as dictionary
+            return dict(result.items())
+        return cast("ModelDTOT", schema_type(**dict(result.items())))
 
     @overload
     async def select_value(
@@ -398,20 +407,24 @@ class AsyncpgDriver(
     ) -> "Union[T, Any]":
         """Fetch a single value from the database.
 
+        Args:
+            sql: SQL statement.
+            parameters: Query parameters.
+            connection: Optional connection to use.
+            schema_type: Optional schema class for the result.
+            **kwargs: Additional keyword arguments.
+
         Returns:
-            The first value from the first row of results.
+            The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        params = [] if parameters is None else parameters
-        async with connection.transaction():
-            stmt = await connection.prepare(sql)
-            result = await stmt.fetchrow(*params) if isinstance(params, (list, tuple)) else await stmt.fetchrow(params)
-            result = self.check_not_found(result)
-            result_value = result[0] if result else None
-            if schema_type is not None and callable(schema_type):
-                return schema_type(result_value)
-            return result_value
+        parameters = parameters if parameters is not None else {}
+        result = await connection.fetchval(sql, *parameters)  # pyright: ignore
+        result = self.check_not_found(result)
+        if schema_type is None:
+            return result
+        return schema_type(result)  # type: ignore[call-arg]
 
     @overload
     async def select_value_or_none(
@@ -452,39 +465,40 @@ class AsyncpgDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        params = [] if parameters is None else parameters
-        async with connection.transaction():
-            stmt = await connection.prepare(sql)
-            result = await stmt.fetchrow(*params) if isinstance(params, (list, tuple)) else await stmt.fetchrow(params)
-            if result is None:
-                return None
-            result_value = result[0] if result else None
-            if schema_type is not None and callable(schema_type):
-                return schema_type(result_value)
-            return result_value
+        parameters = parameters if parameters is not None else {}
+        result = await connection.fetchval(sql, *parameters)  # pyright: ignore
+        if result is None:
+            return None
+        if schema_type is None:
+            return result
+        return schema_type(result)  # type: ignore[call-arg]
 
     async def insert_update_delete(
         self,
         sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
+        parameters: Optional["StatementParameterType"] = None,
         /,
         *,
-        connection: "Optional[AsyncpgConnection]" = None,
+        connection: Optional["AsyncpgConnection"] = None,
         **kwargs: Any,
     ) -> int:
+        """Insert, update, or delete data from the database.
+
+        Args:
+            sql: SQL statement.
+            parameters: Query parameters.
+            connection: Optional connection to use.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            Row count affected by the operation.
+        """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        if parameters is None or (isinstance(parameters, (list, tuple)) and not parameters):
-            result = await connection.execute(sql)
-        elif isinstance(parameters, dict) or isinstance(parameters, (list, tuple)):
-            result = await connection.execute(sql, parameters)  # type: ignore
-        else:
-            # Scalar: wrap in tuple
-            result = await connection.execute(sql, (parameters,))  # type: ignore
-        match = re.match(r"^(?:INSERT|UPDATE|DELETE)\s+\d+\s+(\d+)$", result)
-        if match:
-            return int(match.group(1))
-        match = re.match(r"^(?:INSERT|UPDATE|DELETE)\s+(\d+)$", result)
+        parameters = parameters if parameters is not None else {}
+        result = await connection.execute(sql, *parameters)  # pyright: ignore
+        # asyncpg returns e.g. 'INSERT 0 1', 'UPDATE 0 2', etc.
+        match = ROWCOUNT_REGEX.match(result)
         if match:
             return int(match.group(1))
         return 0
@@ -520,22 +534,28 @@ class AsyncpgDriver(
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "Union[dict[str, Any], ModelDTOT]":
-        """Insert, update, or delete data from the database and return result.
+    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
+        """Insert, update, or delete data from the database and return the affected row.
+
+        Args:
+            sql: SQL statement.
+            parameters: Query parameters.
+            connection: Optional connection to use.
+            schema_type: Optional schema class for the result.
+            **kwargs: Additional keyword arguments.
 
         Returns:
-            The first row of results.
+            The affected row data as either a model instance or dictionary.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        params = [] if parameters is None else parameters
-        async with connection.transaction():
-            stmt = await connection.prepare(sql)
-            result = await stmt.fetchrow(*params) if isinstance(params, (list, tuple)) else await stmt.fetchrow(params)
-            result = self.check_not_found(result)
-            if schema_type is None:
-                return dict(result)
-            return cast("ModelDTOT", schema_type(**dict(result)))
+        parameters = parameters if parameters is not None else {}
+        result = await connection.fetchrow(sql, *parameters)  # pyright: ignore
+        if result is None:
+            return None
+        if schema_type is None:
+            return dict(result.items())  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        return cast("ModelDTOT", schema_type(**dict(result.items())))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType, reportUnknownVariableType]
 
     async def execute_script(
         self,
@@ -546,17 +566,22 @@ class AsyncpgDriver(
         connection: "Optional[AsyncpgConnection]" = None,
         **kwargs: Any,
     ) -> str:
+        """Execute a script.
+
+        Args:
+            sql: SQL statement.
+            parameters: Query parameters.
+            connection: Optional connection to use.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            Status message for the operation.
+        """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        if parameters is None or (isinstance(parameters, (list, tuple)) and not parameters):
-            await connection.execute(sql)
-        elif isinstance(parameters, dict) or isinstance(parameters, (list, tuple)):
-            await connection.execute(sql, parameters)  # type: ignore
-        else:
-            # Scalar: wrap in tuple
-            await connection.execute(sql, (parameters,))  # type: ignore
-        return "Script executed successfully."
+        parameters = parameters if parameters is not None else {}
+        return await connection.execute(sql, *parameters)  # pyright: ignore
 
-    def _connection(self, connection: Optional["AsyncpgConnection"] = None) -> "AsyncpgConnection":
+    def _connection(self, connection: "Optional[AsyncpgConnection]" = None) -> "AsyncpgConnection":
         """Return the connection to use. If None, use the default connection."""
         return connection if connection is not None else self.connection

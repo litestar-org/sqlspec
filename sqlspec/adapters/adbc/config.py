@@ -38,7 +38,7 @@ class AdbcConfig(NoPoolSyncConfig["AdbcConnection", "AdbcDriver"]):
     pool_instance: None = field(init=False, default=None, hash=False)
     """No connection pool is used for ADBC connections"""
 
-    def _set_adbc(self) -> str:  # noqa: PLR0912
+    def _set_adbc(self) -> str:
         """Identify the driver type based on the URI (if provided) or preset driver name.
 
         Raises:
