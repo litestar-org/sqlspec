@@ -1,17 +1,18 @@
-# ruff: noqa: PLR0915, PLR0912, C901, PLR6301
+# ruff: noqa: PLR0915
 """Psqlpy Driver Implementation."""
 
 import logging
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
+import sqlglot
 from psqlpy import Connection, QueryResult
 from psqlpy.exceptions import RustPSQLDriverPyBaseError
+from sqlglot import exp
 
 from sqlspec.base import AsyncDriverAdapterProtocol
 from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin
-from sqlspec.statement import PARAM_REGEX, QMARK_REGEX
-from sqlspec.utils.text import bind_parameters
+from sqlspec.statement import SQLStatement
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -45,141 +46,152 @@ class PsqlpyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         **kwargs: Any,
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
+    ) -> "tuple[str, Optional[Union[tuple[Any, ...], dict[str, Any]]]]":
         """Process SQL and parameters for psqlpy.
 
-        psqlpy uses $1, $2 style parameters natively.
-        This method converts '?' (tuple/list) and ':name' (dict) styles to $n.
-
         Args:
-            sql: The SQL statement to process.
-            parameters: The parameters to process.
+            sql: SQL statement.
+            parameters: Query parameters.
             **kwargs: Additional keyword arguments.
 
-        Raises:
-            ParameterStyleMismatchError: If positional parameters are mixed with keyword arguments.
-            SQLParsingError: If SQL contains parameter placeholders, but no parameters were provided.
-
         Returns:
-            A tuple of the processed SQL and parameters.
+            The SQL statement and parameters.
+
+        Raises:
+            ParameterStyleMismatchError: If the parameter style doesn't match the SQL statement.
+            SQLParsingError: If the SQL parsing fails.
         """
-        # 1. Merge parameters and kwargs
-        merged_params: Optional[Union[dict[str, Any], Sequence[Any]]] = None
+        # First, use SQLStatement for parameter validation
+        statement = SQLStatement(sql=sql, parameters=parameters, kwargs=kwargs)
+        sql, validated_params = statement.process()
 
-        if kwargs:
-            if isinstance(parameters, dict):
-                merged_params = {**parameters, **kwargs}
-            elif parameters is not None:
-                msg = "Cannot mix positional parameters with keyword arguments for psqlpy driver."
+        if validated_params is None:
+            return sql, None  # psqlpy can handle None
+
+        # Now use SQLGlot for PostgreSQL-specific parameter handling
+        try:
+            parsed_expression = sqlglot.parse_one(sql, read=self.dialect)
+        except Exception as e:
+            msg = f"psqlpy: Failed to parse SQL with sqlglot: {e}. SQL: {sql}"
+            raise SQLParsingError(msg) from e
+
+        # Traditional named parameters (e.g., @name, $name)
+        sql_named_param_nodes = [
+            node for node in parsed_expression.find_all(exp.Parameter) if node.name and not node.name.isdigit()
+        ]
+
+        # Named placeholders (e.g., :name which are parsed as Placeholder with this="name")
+        named_placeholder_nodes = [
+            node
+            for node in parsed_expression.find_all(exp.Placeholder)
+            if isinstance(node.this, str) and not node.this.isdigit()
+        ]
+
+        # Anonymous placeholders (?)
+        qmark_placeholder_nodes = [node for node in parsed_expression.find_all(exp.Placeholder) if node.this is None]
+
+        # PostgreSQL-specific dollar-numeric parameters like $1, $2
+        sql_numeric_dollar_nodes = [
+            node
+            for node in parsed_expression.find_all(exp.Parameter)
+            if not node.name and node.this and isinstance(node.this, str) and node.this.isdigit()
+        ]
+
+        final_sql: str
+        final_params: Optional[Union[tuple[Any, ...], dict[str, Any]]] = None
+
+        if isinstance(validated_params, dict):
+            # Dictionary parameters - need to convert named parameters from :name to $n style
+            if qmark_placeholder_nodes or sql_numeric_dollar_nodes:
+                msg = "psqlpy: Dictionary parameters provided, but SQL uses positional placeholders. Use named placeholders (e.g., :name)."
                 raise ParameterStyleMismatchError(msg)
+
+            if not sql_named_param_nodes and not named_placeholder_nodes:
+                msg = "psqlpy: Dictionary parameters provided, but no named placeholders found in SQL by sqlglot."
+                raise ParameterStyleMismatchError(msg)
+
+            # Transform named parameters to $n placeholders for psqlpy
+            param_seq = []
+
+            def _convert_named_to_dollar(node: exp.Expression) -> exp.Expression:
+                param_name = None
+                if isinstance(node, exp.Parameter) and node.name:
+                    param_name = node.name
+                elif isinstance(node, exp.Placeholder) and isinstance(node.this, str) and not node.this.isdigit():
+                    param_name = node.this
+
+                if param_name and param_name in validated_params:
+                    param_seq.append(validated_params[param_name])
+                    # Create a Parameter node that PostgreSQL will interpret as a positional parameter ($n)
+                    return exp.Parameter(this=str(len(param_seq)))
+                return node
+
+            transformed_expression = parsed_expression.transform(_convert_named_to_dollar, copy=True)
+            final_sql = transformed_expression.sql(dialect=self.dialect)
+            final_params = tuple(param_seq)
+
+        elif hasattr(validated_params, "__iter__") and not isinstance(validated_params, (str, bytes, dict)):
+            # Sequence parameters (list or tuple)
+            if sql_named_param_nodes or named_placeholder_nodes:
+                msg = "psqlpy: Sequence parameters provided, but SQL contains named placeholders. Use positional placeholders ('?' or '$1')."
+                raise ParameterStyleMismatchError(msg)
+
+            # Count placeholders for validation
+            total_positional_params = len(qmark_placeholder_nodes) + len(sql_numeric_dollar_nodes)
+            if total_positional_params != len(validated_params):
+                msg = (
+                    f"psqlpy: Parameter count mismatch. SQL expects {total_positional_params} "
+                    f"positional placeholders, but {len(validated_params)} parameters were provided. SQL: {sql}"
+                )
+                raise SQLParsingError(msg)
+
+            param_seq = list(validated_params)
+
+            # Convert question marks to $n parameters
+            if qmark_placeholder_nodes:
+                counter = [0]  # Make it mutable for the inner function
+
+                def _convert_qmark_to_dollar(node: exp.Expression) -> exp.Expression:
+                    if isinstance(node, exp.Placeholder) and node.this is None:
+                        counter[0] += 1
+                        return exp.Parameter(this=str(counter[0]))
+                    return node
+
+                transformed_expression = parsed_expression.transform(_convert_qmark_to_dollar, copy=True)
+                final_sql = transformed_expression.sql(dialect=self.dialect)
             else:
-                merged_params = kwargs
-        elif parameters is not None:
-            merged_params = parameters
+                final_sql = parsed_expression.sql(dialect=self.dialect)
 
-        # Use bind_parameters for named parameters
-        if isinstance(merged_params, dict):
-            final_sql, _ = bind_parameters(sql, merged_params, dialect="postgres")
-            # psqlpy expects positional parameters, so convert dict to tuple in order of appearance
-            # We'll use regex to find order for now
-            param_names = []
-            for match in PARAM_REGEX.finditer(sql):
-                if match.group("dquote") or match.group("squote") or match.group("comment"):
-                    continue
-                if match.group("var_name"):
-                    param_names.append(match.group("var_name"))
-            ordered_params = tuple(merged_params[name] for name in param_names)
-            # Replace :name with $1, $2, ...
-            for idx, name in enumerate(param_names, 1):
-                final_sql = final_sql.replace(f":{name}", f"${idx}")
-            return final_sql, ordered_params
+            final_params = tuple(param_seq)
 
-        # Case b: Sequence or scalar parameters (? style)
-        if isinstance(merged_params, (list, tuple)):
-            sequence_processed_parts: list[str] = []
-            param_index = 1
-            last_end = 0
-            qmark_count = 0
-
-            for match in QMARK_REGEX.finditer(sql):
-                if match.group("dquote") or match.group("squote") or match.group("comment"):
-                    continue
-
-                if match.group("qmark"):
-                    qmark_count += 1
-                    start = match.start("qmark")
-                    end = match.end("qmark")
-                    sequence_processed_parts.extend((sql[last_end:start], f"${param_index}"))
-                    last_end = end
-                    param_index += 1
-
-            sequence_processed_parts.append(sql[last_end:])
-            final_sql = "".join(sequence_processed_parts)
-
-            # Validation
-            if not qmark_count and merged_params:
-                msg = f"psqlpy: Sequence parameters provided, but no '?' placeholders found in SQL: {sql}"
+        else:  # Scalar parameter (if validated_params is not None and not a sequence)
+            if sql_named_param_nodes or named_placeholder_nodes:
+                msg = "psqlpy: Scalar parameter provided, but SQL contains named placeholders. Use a single positional placeholder ('?' or '$1')."
                 raise ParameterStyleMismatchError(msg)
 
-            actual_count = len(merged_params)
-            if qmark_count != actual_count:
-                msg = f"psqlpy: Parameter count mismatch. SQL expects {qmark_count} positional parameters ('?'), but {actual_count} were provided. SQL: {sql}"
+            total_positional_params = len(qmark_placeholder_nodes) + len(sql_numeric_dollar_nodes)
+            if total_positional_params != 1:
+                msg = (
+                    f"psqlpy: Scalar parameter provided, but SQL expects {total_positional_params} "
+                    f"positional placeholders. Expected 1. SQL: {sql}"
+                )
                 raise SQLParsingError(msg)
 
-            return final_sql, merged_params
-        # Case c: Scalar
-        # Convert to a one-element tuple
-        if merged_params is not None:
-            scalar_param_tuple = (merged_params,)
-            sequence_processed_parts = []
-            param_index = 1
-            last_end = 0
-            qmark_count = 0
+            # For scalar parameter with question mark, convert to $1
+            if qmark_placeholder_nodes:
+                transformed_expression = parsed_expression.transform(
+                    lambda node: exp.Parameter(this="1")
+                    if isinstance(node, exp.Placeholder) and node.this is None
+                    else node,
+                    copy=True,
+                )
+                final_sql = transformed_expression.sql(dialect=self.dialect)
+            else:
+                final_sql = parsed_expression.sql(dialect=self.dialect)
 
-            for match in QMARK_REGEX.finditer(sql):
-                if match.group("dquote") or match.group("squote") or match.group("comment"):
-                    continue
+            final_params = (validated_params,)  # psqlpy expects a tuple for $1
 
-                if match.group("qmark"):
-                    qmark_count += 1
-                    start = match.start("qmark")
-                    end = match.end("qmark")
-                    sequence_processed_parts.extend((sql[last_end:start], f"${param_index}"))
-                    last_end = end
-                    param_index += 1
-
-            sequence_processed_parts.append(sql[last_end:])
-            final_sql = "".join(sequence_processed_parts)
-
-            # Validation - for scalar, we expect exactly one placeholder
-            if qmark_count != 1:
-                msg = f"psqlpy: Parameter count mismatch. SQL expects 1 positional parameter ('?') for scalar input, but found {qmark_count}. SQL: {sql}"
-                raise SQLParsingError(msg)
-
-            return final_sql, scalar_param_tuple
-
-        # Case 0: No parameters provided
-        # Basic validation for placeholders
-        has_placeholders = False
-        for match in PARAM_REGEX.finditer(sql):
-            if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
-                "var_name"
-            ):
-                has_placeholders = True
-                break
-        if not has_placeholders:
-            # Check for ? style placeholders
-            for match in QMARK_REGEX.finditer(sql):
-                if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
-                    "qmark"
-                ):
-                    has_placeholders = True
-                    break
-
-        if has_placeholders:
-            msg = f"psqlpy: SQL contains parameter placeholders, but no parameters were provided. SQL: {sql}"
-            raise SQLParsingError(msg)
-        return sql, ()
+        return final_sql, final_params
 
     # --- Public API Methods --- #
     @overload

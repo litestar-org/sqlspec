@@ -74,6 +74,10 @@ class DatabaseConfig:
             msg = f"Invalid commit mode: {self.commit_mode}"  # type: ignore[unreachable]
             raise ImproperConfigurationError(detail=msg)
         self.lifespan_handler = lifespan_handler_maker(config=self.config, pool_key=self.pool_key)
-        self.connection_provider = connection_provider_maker(connection_key=self.connection_key, config=self.config)
-        self.pool_provider = pool_provider_maker(pool_key=self.pool_key, config=self.config)
-        self.session_provider = session_provider_maker(session_key=self.session_key, config=self.config)
+        self.connection_provider = connection_provider_maker(
+            connection_key=self.connection_key, pool_key=self.pool_key, config=self.config
+        )
+        self.pool_provider = pool_provider_maker(config=self.config, pool_key=self.pool_key)
+        self.session_provider = session_provider_maker(
+            session_key=self.session_key, connection_key=self.connection_key, pool_key=self.pool_key, config=self.config
+        )
