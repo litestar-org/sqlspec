@@ -1,5 +1,6 @@
 import contextlib
 import datetime
+import logging
 from collections.abc import Iterator, Sequence
 from decimal import Decimal
 from typing import (
@@ -17,9 +18,10 @@ from google.cloud import bigquery
 from google.cloud.bigquery import Client
 from google.cloud.bigquery.job import QueryJob, QueryJobConfig
 from google.cloud.exceptions import NotFound
+from sqlglot import exp
 
 from sqlspec.base import SyncDriverAdapterProtocol
-from sqlspec.exceptions import NotFoundError, SQLSpecError
+from sqlspec.exceptions import NotFoundError, ParameterStyleMismatchError, SQLParsingError, SQLSpecError
 from sqlspec.mixins import (
     SQLTranslatorMixin,
     SyncArrowBulkOperationsMixin,
@@ -34,6 +36,8 @@ if TYPE_CHECKING:
 __all__ = ("BigQueryConnection", "BigQueryDriver")
 
 BigQueryConnection = Client
+
+logger = logging.getLogger("sqlspec")
 
 
 class BigQueryDriver(
@@ -55,7 +59,7 @@ class BigQueryDriver(
         )
 
     @staticmethod
-    def _get_bq_param_type(value: Any) -> "tuple[Optional[str], Optional[str]]":  # noqa: PLR0911, PLR0912
+    def _get_bq_param_type(value: Any) -> "tuple[Optional[str], Optional[str]]":  # noqa: PLR0911
         if isinstance(value, bool):
             return "BOOL", None
         if isinstance(value, int):
@@ -105,7 +109,127 @@ class BigQueryDriver(
 
         return None, None  # Unsupported type
 
-    def _run_query_job(  # noqa: C901, PLR0912, PLR0915 (User change)
+    def _process_sql_params(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        **kwargs: Any,
+    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
+        """Process SQL and parameters for BigQuery using sqlglot for parsing and validation.
+
+        BigQuery uses named (@name) or positional (?) parameters.
+        This method merges input parameters, validates them against the parsed SQL structure,
+        and returns the SQL (potentially normalized by sqlglot) and merged parameters.
+        Actual creation of BigQuery QueryParameter objects is handled later.
+        """
+        # 1. Merge parameters and kwargs
+        merged_params: Optional[Union[dict[str, Any], list[Any], tuple[Any, ...], Any]] = None  # Allow Any for scalar
+
+        if kwargs:
+            if isinstance(parameters, dict):
+                merged_params = {**parameters, **kwargs}
+            elif parameters is not None:
+                msg = "Cannot mix positional parameters with keyword arguments for BigQuery driver."
+                raise ParameterStyleMismatchError(msg)
+            else:
+                merged_params = kwargs
+        elif parameters is not None:
+            merged_params = parameters
+        # else merged_params remains None
+
+        # 2. SQLGlot Parsing
+        try:
+            # self.dialect is "bigquery"
+            parsed_expression = sqlglot.parse_one(sql, read=self.dialect)
+        except Exception as e:
+            msg = f"bigquery: Failed to parse SQL with sqlglot: {e}. SQL: {sql}"
+            raise SQLParsingError(msg) from e
+
+        # Identify parameter types from AST
+        # BigQuery's @name are exp.Parameter with a name. '?' are exp.Placeholder.
+        sql_named_param_nodes = [node for node in parsed_expression.find_all(exp.Parameter) if node.name]
+        sql_placeholder_nodes = list(parsed_expression.find_all(exp.Placeholder))
+
+        # 3. Handle No Parameters Case
+        if merged_params is None:
+            if sql_named_param_nodes or sql_placeholder_nodes:
+                placeholder_types = set()
+                if sql_named_param_nodes:
+                    placeholder_types.add("named (e.g., @name)")
+                if sql_placeholder_nodes:
+                    placeholder_types.add("positional ('?')")
+                msg = (
+                    f"bigquery: SQL statement contains {', '.join(placeholder_types) if placeholder_types else 'unknown'} "
+                    f"parameter placeholders, but no parameters were provided. SQL: {sql}"
+                )
+                raise SQLParsingError(msg)
+            # Return original SQL if no params and no placeholders found by sqlglot
+            # _run_query_job may still transpile it if not a script.
+            return sql, None
+
+        final_sql: str
+        final_params: Optional[Union[tuple[Any, ...], dict[str, Any]]] = None
+
+        # Generate SQL using BigQuery dialect. This normalizes syntax if input was, e.g. :name.
+        # The actual BQ param objects are created in _run_query_job.
+        final_sql = parsed_expression.sql(dialect=self.dialect)
+
+        if isinstance(merged_params, dict):
+            if sql_placeholder_nodes:
+                msg = "bigquery: Dictionary parameters provided, but SQL uses positional '?' placeholders. Use named @params."
+                raise ParameterStyleMismatchError(msg)
+            if not sql_named_param_nodes and not any(f"@{key}" in sql for key in merged_params):
+                # If sqlglot found no :name (common input) or @name (native BQ)
+                # and the raw SQL doesn't contain @key for the provided dict keys.
+                msg = "bigquery: Dictionary parameters provided, but no recognizable named placeholders (e.g., @name or :name) found."
+                raise ParameterStyleMismatchError(msg)
+
+            # Validate keys only if sqlglot identified specific named parameters from a known style like :name
+            if sql_named_param_nodes:
+                sql_param_names_in_ast = {node.name for node in sql_named_param_nodes if node.name}
+                provided_keys = set(merged_params.keys())
+                missing_keys = sql_param_names_in_ast - provided_keys
+                if missing_keys:
+                    msg = f"bigquery: Named parameters {missing_keys} (from :name style) found in SQL but not provided. SQL: {sql}"
+                    raise SQLParsingError(msg)
+                extra_keys = provided_keys - sql_param_names_in_ast
+                if extra_keys:
+                    msg = f"bigquery: Parameters {extra_keys} provided but not found as :name style in SQL. Ensure they match @name style if used. SQL: {sql}"
+                    logger.warning(msg)
+            final_params = merged_params  # Pass dict; _run_query_job will make BQ params
+
+        elif isinstance(merged_params, (list, tuple)):
+            if sql_named_param_nodes:
+                msg = "bigquery: Sequence parameters provided, but SQL uses named placeholders. Use '?' placeholders."
+                raise ParameterStyleMismatchError(msg)
+
+            if len(sql_placeholder_nodes) != len(merged_params):
+                msg = (
+                    f"bigquery: Parameter count mismatch. SQL expects {len(sql_placeholder_nodes)} '?' placeholders, "
+                    f"but {len(merged_params)} were provided. SQL: {sql}"
+                )
+                raise SQLParsingError(msg)
+            final_params = tuple(merged_params)
+
+        elif merged_params is not None:  # Scalar parameter
+            if sql_named_param_nodes:
+                msg = "bigquery: Scalar parameter provided, but SQL uses named placeholders. Use a single '?'."
+                raise ParameterStyleMismatchError(msg)
+            if len(sql_placeholder_nodes) != 1:
+                msg = (
+                    f"bigquery: Scalar parameter provided, but SQL expects {len(sql_placeholder_nodes)} '?' placeholders. "
+                    f"Expected 1. SQL: {sql}"
+                )
+                raise SQLParsingError(msg)
+            final_params = (merged_params,)
+
+        else:  # Should be caught by 'merged_params is None' earlier
+            final_params = None  # Should align with the `return sql, None` path earlier
+
+        return final_sql, final_params
+
+    def _run_query_job(  # noqa: PLR0912, PLR0915 (User change)
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
@@ -578,7 +702,7 @@ class BigQueryDriver(
 
     # --- Mixin Implementations ---
 
-    def select_arrow(  # pyright: ignore  # noqa: PLR0912
+    def select_arrow(  # pyright: ignore
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,

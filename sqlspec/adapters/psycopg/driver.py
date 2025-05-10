@@ -2,13 +2,14 @@ import logging
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
+import sqlglot
 from psycopg import AsyncConnection, Connection
 from psycopg.rows import dict_row
+from sqlglot import exp
 
 from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
-from sqlspec.exceptions import SQLParsingError
+from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin
-from sqlspec.statement import PARAM_REGEX, SQLStatement
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator, Sequence
@@ -33,50 +34,169 @@ class PsycopgDriverBase:
         /,
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Process SQL and parameters, converting :name -> %(name)s if needed."""
-        stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
-        processed_sql, processed_params = stmt.process()
+        # 1. Merge parameters and kwargs
+        merged_params: Optional[Union[dict[str, Any], list[Any], tuple[Any, ...], Any]] = None
 
-        if isinstance(processed_params, dict):
-            parameter_dict = processed_params
-            processed_sql_parts: list[str] = []
-            last_end = 0
-            found_params_regex: list[str] = []
+        if kwargs:
+            if isinstance(parameters, dict):
+                merged_params = {**parameters, **kwargs}
+            elif parameters is not None:
+                msg = "Cannot mix positional parameters with keyword arguments for psycopg driver."
+                raise ParameterStyleMismatchError(msg)
+            else:
+                merged_params = kwargs
+        elif parameters is not None:
+            merged_params = parameters
+        # else merged_params remains None
 
-            for match in PARAM_REGEX.finditer(processed_sql):
-                if match.group("dquote") or match.group("squote") or match.group("comment"):
-                    continue
+        # Special case: if merged_params is an empty dict, treat it as None for parameterless queries
+        if isinstance(merged_params, dict) and not merged_params:
+            merged_params = None
 
-                if match.group("var_name"):
-                    var_name = match.group("var_name")
-                    found_params_regex.append(var_name)
-                    start = match.start("var_name") - 1
-                    end = match.end("var_name")
+        # 2. SQLGlot Parsing
+        try:
+            parsed_expression = sqlglot.parse_one(sql, read=self.dialect)
+        except Exception as e:
+            msg = f"psycopg: Failed to parse SQL with sqlglot: {e}. SQL: {sql}"
+            raise SQLParsingError(msg) from e
 
-                    if var_name not in parameter_dict:
-                        msg = (
-                            f"Named parameter ':{var_name}' found in SQL but missing from processed parameters. "
-                            f"Processed SQL: {processed_sql}"
-                        )
-                        raise SQLParsingError(msg)
+        # Traditional named parameters (e.g., @name, $name)
+        sql_named_param_nodes = [
+            node for node in parsed_expression.find_all(exp.Parameter) if node.name and not node.name.isdigit()
+        ]
 
-                    processed_sql_parts.extend((processed_sql[last_end:start], f"%({var_name})s"))
-                    last_end = end
+        # Named placeholders (e.g., :name which are parsed as Placeholder with this="name")
+        named_placeholder_nodes = [
+            node
+            for node in parsed_expression.find_all(exp.Placeholder)
+            if isinstance(node.this, str) and not node.this.isdigit()
+        ]
 
-            processed_sql_parts.append(processed_sql[last_end:])
-            final_sql = "".join(processed_sql_parts)
+        # Anonymous placeholders (?)
+        qmark_placeholder_nodes = [node for node in parsed_expression.find_all(exp.Placeholder) if node.this is None]
 
-            if not found_params_regex and parameter_dict:
-                logger.warning(
-                    "Dict params provided (%s), but no :name placeholders found. SQL: %s",
-                    list(parameter_dict.keys()),
-                    processed_sql,
+        # Numeric dollar params (e.g., $1, $2)
+        sql_numeric_dollar_nodes = [
+            node
+            for node in parsed_expression.find_all(exp.Parameter)
+            if not node.name and node.this and isinstance(node.this, str) and node.this.isdigit()
+        ]
+
+        # 3. Handle No Parameters Case
+        if merged_params is None:
+            if sql_named_param_nodes or named_placeholder_nodes or qmark_placeholder_nodes or sql_numeric_dollar_nodes:
+                placeholder_types = set()
+                if sql_named_param_nodes or named_placeholder_nodes:
+                    placeholder_types.add("named (e.g., :name)")
+                if qmark_placeholder_nodes:
+                    placeholder_types.add("qmark ('?')")
+                if sql_numeric_dollar_nodes:
+                    placeholder_types.add("numeric ($n)")
+                msg = (
+                    f"psycopg: SQL statement contains {', '.join(placeholder_types) if placeholder_types else 'unknown'} "
+                    f"parameter placeholders, but no parameters were provided. SQL: {sql}"
                 )
-                return processed_sql, parameter_dict
+                raise SQLParsingError(msg)
+            return sql, None  # psycopg can take None for params
 
-            return final_sql, parameter_dict
+        final_sql: str
+        final_params: Optional[Union[tuple[Any, ...], dict[str, Any]]] = None
 
-        return processed_sql, processed_params
+        if isinstance(merged_params, dict):
+            # Dictionary parameters. Aim for %(name)s style for psycopg.
+            if qmark_placeholder_nodes or sql_numeric_dollar_nodes:
+                msg = "psycopg: Dictionary parameters provided, but SQL uses positional placeholders ('?' or $n). Use named placeholders for dictionary params (e.g. :name, which will be converted to %(name)s)."
+                raise ParameterStyleMismatchError(msg)
+
+            if not sql_named_param_nodes and not named_placeholder_nodes and "%(" not in sql:
+                msg = "psycopg: Dictionary parameters provided, but no standard named placeholders (e.g., :name) found to convert to %(name)s, and SQL does not appear to be pyformat already."
+                raise ParameterStyleMismatchError(msg)
+
+            if sql_named_param_nodes or named_placeholder_nodes:
+                # Collect parameter names from both types of nodes
+                sql_param_names_in_ast = set()
+
+                # Get names from Parameter nodes
+                sql_param_names_in_ast.update(node.name for node in sql_named_param_nodes if node.name)
+
+                # Get names from Placeholder nodes
+                sql_param_names_in_ast.update(
+                    node.this for node in named_placeholder_nodes if isinstance(node.this, str)
+                )
+
+                provided_keys = set(merged_params.keys())
+
+                missing_keys = sql_param_names_in_ast - provided_keys
+                if missing_keys:
+                    msg = f"psycopg: Named parameters {missing_keys} (from :name style) found in SQL but not provided. SQL: {sql}"
+                    raise SQLParsingError(msg)
+
+            try:
+                final_sql = parsed_expression.sql(dialect=self.dialect, pyformat=True)
+            except Exception as e:
+                logger.exception("psycopg: Failed to generate pyformat SQL with sqlglot: %s. SQL: %s", e, sql)
+                if "%(" in sql:
+                    final_sql = sql
+                else:
+                    msg = f"psycopg: Error generating pyformat SQL: {e}"
+                    raise SQLParsingError(msg) from e
+
+            final_params = merged_params
+
+        elif isinstance(merged_params, (list, tuple)):
+            # Sequence parameters. Aim for %s style.
+            if sql_named_param_nodes or named_placeholder_nodes:
+                msg = "psycopg: Sequence parameters provided, but SQL contains named placeholders. Use '?' or '%s' for sequence parameters."
+                raise ParameterStyleMismatchError(msg)
+            if sql_numeric_dollar_nodes:
+                msg = "psycopg: Sequence parameters provided, but SQL uses $n style. Use '?' or '%s' for psycopg."
+                raise ParameterStyleMismatchError(msg)
+
+            expected_param_count = len(qmark_placeholder_nodes)
+            if expected_param_count == 0 and "%s" in sql and not qmark_placeholder_nodes:
+                logger.debug(
+                    "psycopg: No '?' found, but '%s' present with sequence params. Assuming intended for '%s' style. Count validation relies on psycopg."
+                )
+            elif expected_param_count != len(merged_params) and not ("%s" in sql and expected_param_count == 0):
+                if not ("%s" in sql and len(merged_params) > 0 and expected_param_count == 0):
+                    msg = (
+                        f"psycopg: Parameter count mismatch. SQL (based on '?' count) expects "
+                        f"{expected_param_count} positional placeholders, but {len(merged_params)} were provided. SQL: {sql}"
+                    )
+                    raise SQLParsingError(msg)
+
+            final_sql = parsed_expression.sql(dialect=self.dialect)
+            final_params = tuple(merged_params)
+
+        elif merged_params is not None:  # Scalar parameter
+            if sql_named_param_nodes or named_placeholder_nodes:
+                msg = "psycopg: Scalar parameter provided, but SQL uses named placeholders. Use a single '?' or '%s'."
+                raise ParameterStyleMismatchError(msg)
+            if sql_numeric_dollar_nodes:
+                msg = "psycopg: Scalar parameter provided, but SQL uses $n style. Use '?' or '%s' for psycopg."
+                raise ParameterStyleMismatchError(msg)
+
+            expected_param_count = len(qmark_placeholder_nodes)
+            if expected_param_count == 0 and "%s" in sql and not qmark_placeholder_nodes:
+                logger.debug(
+                    "psycopg: No '?' for scalar, but '%s' present. Assuming '%s' style. Count relies on psycopg."
+                )
+            elif expected_param_count != 1 and not ("%s" in sql and expected_param_count == 0):
+                if not ("%s" in sql and expected_param_count == 0):  # Avoid error if it might be a single %s
+                    msg = (
+                        f"psycopg: Scalar parameter provided, but SQL expects {expected_param_count} "
+                        f"positional placeholders ('?' or '%s'). Expected 1. SQL: {sql}"
+                    )
+                    raise SQLParsingError(msg)
+
+            final_sql = parsed_expression.sql(dialect=self.dialect)
+            final_params = (merged_params,)
+
+        else:  # Should be caught by 'merged_params is None' earlier
+            final_sql = sql
+            final_params = None
+
+        return final_sql, final_params
 
 
 class PsycopgSyncDriver(
@@ -91,57 +211,6 @@ class PsycopgSyncDriver(
 
     def __init__(self, connection: "PsycopgSyncConnection") -> None:
         self.connection = connection
-
-    def _process_sql_params(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        /,
-        **kwargs: Any,
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
-        processed_sql, processed_params = stmt.process()
-
-        if isinstance(processed_params, dict):
-            parameter_dict = processed_params
-            processed_sql_parts: list[str] = []
-            last_end = 0
-            found_params_regex: list[str] = []
-
-            for match in PARAM_REGEX.finditer(processed_sql):
-                if match.group("dquote") or match.group("squote") or match.group("comment"):
-                    continue
-
-                if match.group("var_name"):
-                    var_name = match.group("var_name")
-                    found_params_regex.append(var_name)
-                    start = match.start("var_name") - 1
-                    end = match.end("var_name")
-
-                    if var_name not in parameter_dict:
-                        msg = (
-                            f"Named parameter ':{var_name}' found in SQL but missing from processed parameters. "
-                            f"Processed SQL: {processed_sql}"
-                        )
-                        raise SQLParsingError(msg)
-
-                    processed_sql_parts.extend((processed_sql[last_end:start], f"%({var_name})s"))
-                    last_end = end
-
-            processed_sql_parts.append(processed_sql[last_end:])
-            final_sql = "".join(processed_sql_parts)
-
-            if not found_params_regex and parameter_dict:
-                logger.warning(
-                    "Dict params provided (%s), but no :name placeholders found. SQL: %s",
-                    list(parameter_dict.keys()),
-                    processed_sql,
-                )
-                return processed_sql, parameter_dict
-
-            return final_sql, parameter_dict
-
-        return processed_sql, processed_params
 
     @staticmethod
     @contextmanager
@@ -754,14 +823,9 @@ class PsycopgAsyncDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
-            try:
-                rowcount = int(cursor.rowcount)
-            except (TypeError, ValueError):
-                rowcount = -1
-            return rowcount
+            return getattr(cursor, "rowcount", -1)  # pyright: ignore[reportUnknownMemberType]
 
     @overload
     async def insert_update_delete_returning(
@@ -802,14 +866,11 @@ class PsycopgAsyncDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             result = await cursor.fetchone()
-
             if result is None:
                 return None
-
             if schema_type is not None:
                 return cast("ModelDTOT", schema_type(**result))  # pyright: ignore[reportUnknownArgumentType]
             return cast("dict[str, Any]", result)  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]

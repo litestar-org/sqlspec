@@ -21,7 +21,7 @@ from typing import (
 from sqlspec.exceptions import NotFoundError
 from sqlspec.statement import SQLStatement
 from sqlspec.typing import ConnectionT, ModelDTOT, PoolT, StatementParameterType, T
-from sqlspec.utils.sync_tools import maybe_async_
+from sqlspec.utils.sync_tools import ensure_async_
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
@@ -206,7 +206,7 @@ class SQLSpec:
         for config in self._configs.values():
             if config.support_connection_pooling and config.pool_instance is not None:
                 with contextlib.suppress(Exception):
-                    maybe_async_(config.close_pool)()
+                    ensure_async_(config.close_pool)()
 
     @overload
     def add_config(self, config: "SyncConfigT") -> "type[SyncConfigT]": ...
@@ -546,7 +546,7 @@ class CommonDriverAttributes(Generic[ConnectionT]):
             A tuple containing the processed SQL query and parameters.
         """
         # Instantiate SQLStatement with parameters and kwargs for internal merging
-        stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
+        stmt = SQLStatement(sql=sql, parameters=parameters, kwargs=kwargs or None)
         # Process uses the merged parameters internally
         return stmt.process()
 

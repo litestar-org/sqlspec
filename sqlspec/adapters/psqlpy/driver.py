@@ -1,17 +1,18 @@
-# ruff: noqa: PLR0915, PLR0914, PLR0912, C901
+# ruff: noqa: PLR0915
 """Psqlpy Driver Implementation."""
 
 import logging
-import re
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
+import sqlglot
 from psqlpy import Connection, QueryResult
 from psqlpy.exceptions import RustPSQLDriverPyBaseError
+from sqlglot import exp
 
 from sqlspec.base import AsyncDriverAdapterProtocol
-from sqlspec.exceptions import SQLParsingError
+from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin
-from sqlspec.statement import PARAM_REGEX, SQLStatement
+from sqlspec.statement import SQLStatement
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -24,15 +25,6 @@ __all__ = ("PsqlpyConnection", "PsqlpyDriver")
 
 
 PsqlpyConnection = Connection
-# Regex to find '?' placeholders, skipping those inside quotes or SQL comments
-QMARK_REGEX = re.compile(
-    r"""(?P<dquote>"[^"]*") | # Double-quoted strings
-         (?P<squote>\'[^\']*\') | # Single-quoted strings
-         (?P<comment>--[^\n]*|/\*.*?\*/) | # SQL comments (single/multi-line)
-         (?P<qmark>\?) # The question mark placeholder
-      """,
-    re.VERBOSE | re.DOTALL,
-)
 logger = logging.getLogger("sqlspec")
 
 
@@ -54,124 +46,152 @@ class PsqlpyDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         **kwargs: Any,
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
+    ) -> "tuple[str, Optional[Union[tuple[Any, ...], dict[str, Any]]]]":
         """Process SQL and parameters for psqlpy.
 
-        psqlpy uses $1, $2 style parameters natively.
-        This method converts '?' (tuple/list) and ':name' (dict) styles to $n.
-        It relies on SQLStatement for initial parameter validation and merging.
-
         Args:
-            sql: The SQL to process.
-            parameters: The parameters to process.
-            kwargs: Additional keyword arguments.
-
-        Raises:
-            SQLParsingError: If the SQL is invalid.
+            sql: SQL statement.
+            parameters: Query parameters.
+            **kwargs: Additional keyword arguments.
 
         Returns:
-            A tuple of the processed SQL and parameters.
+            The SQL statement and parameters.
+
+        Raises:
+            ParameterStyleMismatchError: If the parameter style doesn't match the SQL statement.
+            SQLParsingError: If the SQL parsing fails.
         """
-        stmt = SQLStatement(sql=sql, parameters=parameters, dialect=self.dialect, kwargs=kwargs or None)
-        sql, parameters = stmt.process()
+        # First, use SQLStatement for parameter validation
+        statement = SQLStatement(sql=sql, parameters=parameters, kwargs=kwargs)
+        sql, validated_params = statement.process()
 
-        # Case 1: Parameters are a dictionary
-        if isinstance(parameters, dict):
-            processed_sql_parts: list[str] = []
-            ordered_params = []
-            last_end = 0
-            param_index = 1
-            found_params_regex: list[str] = []
+        if validated_params is None:
+            return sql, None  # psqlpy can handle None
 
-            for match in PARAM_REGEX.finditer(sql):
-                if match.group("dquote") or match.group("squote") or match.group("comment"):
-                    continue
+        # Now use SQLGlot for PostgreSQL-specific parameter handling
+        try:
+            parsed_expression = sqlglot.parse_one(sql, read=self.dialect)
+        except Exception as e:
+            msg = f"psqlpy: Failed to parse SQL with sqlglot: {e}. SQL: {sql}"
+            raise SQLParsingError(msg) from e
 
-                if match.group("var_name"):  # Finds :var_name
-                    var_name = match.group("var_name")
-                    found_params_regex.append(var_name)
-                    start = match.start("var_name") - 1
-                    end = match.end("var_name")
+        # Traditional named parameters (e.g., @name, $name)
+        sql_named_param_nodes = [
+            node for node in parsed_expression.find_all(exp.Parameter) if node.name and not node.name.isdigit()
+        ]
 
-                    if var_name not in parameters:
-                        msg = f"Named parameter ':{var_name}' missing from parameters. SQL: {sql}"
-                        raise SQLParsingError(msg)
+        # Named placeholders (e.g., :name which are parsed as Placeholder with this="name")
+        named_placeholder_nodes = [
+            node
+            for node in parsed_expression.find_all(exp.Placeholder)
+            if isinstance(node.this, str) and not node.this.isdigit()
+        ]
 
-                    processed_sql_parts.extend((sql[last_end:start], f"${param_index}"))
-                    ordered_params.append(parameters[var_name])
-                    last_end = end
-                    param_index += 1
+        # Anonymous placeholders (?)
+        qmark_placeholder_nodes = [node for node in parsed_expression.find_all(exp.Placeholder) if node.this is None]
 
-            processed_sql_parts.append(sql[last_end:])
-            final_sql = "".join(processed_sql_parts)
+        # PostgreSQL-specific dollar-numeric parameters like $1, $2
+        sql_numeric_dollar_nodes = [
+            node
+            for node in parsed_expression.find_all(exp.Parameter)
+            if not node.name and node.this and isinstance(node.this, str) and node.this.isdigit()
+        ]
 
-            if not found_params_regex and parameters:
-                logger.warning(
-                    "Dict params provided (%s), but no :name placeholders found. SQL: %s",
-                    list(parameters.keys()),
-                    sql,
+        final_sql: str
+        final_params: Optional[Union[tuple[Any, ...], dict[str, Any]]] = None
+
+        if isinstance(validated_params, dict):
+            # Dictionary parameters - need to convert named parameters from :name to $n style
+            if qmark_placeholder_nodes or sql_numeric_dollar_nodes:
+                msg = "psqlpy: Dictionary parameters provided, but SQL uses positional placeholders. Use named placeholders (e.g., :name)."
+                raise ParameterStyleMismatchError(msg)
+
+            if not sql_named_param_nodes and not named_placeholder_nodes:
+                msg = "psqlpy: Dictionary parameters provided, but no named placeholders found in SQL by sqlglot."
+                raise ParameterStyleMismatchError(msg)
+
+            # Transform named parameters to $n placeholders for psqlpy
+            param_seq = []
+
+            def _convert_named_to_dollar(node: exp.Expression) -> exp.Expression:
+                param_name = None
+                if isinstance(node, exp.Parameter) and node.name:
+                    param_name = node.name
+                elif isinstance(node, exp.Placeholder) and isinstance(node.this, str) and not node.this.isdigit():
+                    param_name = node.this
+
+                if param_name and param_name in validated_params:
+                    param_seq.append(validated_params[param_name])
+                    # Create a Parameter node that PostgreSQL will interpret as a positional parameter ($n)
+                    return exp.Parameter(this=str(len(param_seq)))
+                return node
+
+            transformed_expression = parsed_expression.transform(_convert_named_to_dollar, copy=True)
+            final_sql = transformed_expression.sql(dialect=self.dialect)
+            final_params = tuple(param_seq)
+
+        elif hasattr(validated_params, "__iter__") and not isinstance(validated_params, (str, bytes, dict)):
+            # Sequence parameters (list or tuple)
+            if sql_named_param_nodes or named_placeholder_nodes:
+                msg = "psqlpy: Sequence parameters provided, but SQL contains named placeholders. Use positional placeholders ('?' or '$1')."
+                raise ParameterStyleMismatchError(msg)
+
+            # Count placeholders for validation
+            total_positional_params = len(qmark_placeholder_nodes) + len(sql_numeric_dollar_nodes)
+            if total_positional_params != len(validated_params):
+                msg = (
+                    f"psqlpy: Parameter count mismatch. SQL expects {total_positional_params} "
+                    f"positional placeholders, but {len(validated_params)} parameters were provided. SQL: {sql}"
                 )
-                return sql, ()
-
-            provided_keys = set(parameters.keys())
-            found_keys = set(found_params_regex)
-            unused_keys = provided_keys - found_keys
-            if unused_keys:
-                logger.warning("Unused parameters provided: %s. SQL: %s", unused_keys, sql)
-
-            return final_sql, tuple(ordered_params)
-
-        # Case 2: Parameters are a sequence/scalar
-        if isinstance(parameters, (list, tuple)):
-            sequence_processed_parts: list[str] = []
-            param_index = 1
-            last_end = 0
-            qmark_found = False
-
-            for match in QMARK_REGEX.finditer(sql):
-                if match.group("dquote") or match.group("squote") or match.group("comment"):
-                    continue
-
-                if match.group("qmark"):
-                    qmark_found = True
-                    start = match.start("qmark")
-                    end = match.end("qmark")
-                    sequence_processed_parts.extend((sql[last_end:start], f"${param_index}"))
-                    last_end = end
-                    param_index += 1
-
-            sequence_processed_parts.append(sql[last_end:])
-            final_sql = "".join(sequence_processed_parts)
-
-            if parameters and not qmark_found:
-                logger.warning("Sequence parameters provided, but no '?' placeholders found. SQL: %s", sql)
-                return sql, parameters
-
-            expected_params = param_index - 1
-            actual_params = len(parameters)
-            if expected_params != actual_params:
-                msg = f"Parameter count mismatch: Expected {expected_params}, got {actual_params}. SQL: {final_sql}"
                 raise SQLParsingError(msg)
 
-            return final_sql, parameters
+            param_seq = list(validated_params)
 
-        # Case 3: Parameters are None
-        if PARAM_REGEX.search(sql) or QMARK_REGEX.search(sql):
-            # Perform a simpler check if any placeholders might exist if no params are given
-            for match in PARAM_REGEX.finditer(sql):
-                if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
-                    "var_name"
-                ):
-                    msg = f"SQL contains named parameters (:name) but no parameters provided. SQL: {sql}"
-                    raise SQLParsingError(msg)
-            for match in QMARK_REGEX.finditer(sql):
-                if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
-                    "qmark"
-                ):
-                    msg = f"SQL contains positional parameters (?) but no parameters provided. SQL: {sql}"
-                    raise SQLParsingError(msg)
+            # Convert question marks to $n parameters
+            if qmark_placeholder_nodes:
+                counter = [0]  # Make it mutable for the inner function
 
-        return sql, ()
+                def _convert_qmark_to_dollar(node: exp.Expression) -> exp.Expression:
+                    if isinstance(node, exp.Placeholder) and node.this is None:
+                        counter[0] += 1
+                        return exp.Parameter(this=str(counter[0]))
+                    return node
+
+                transformed_expression = parsed_expression.transform(_convert_qmark_to_dollar, copy=True)
+                final_sql = transformed_expression.sql(dialect=self.dialect)
+            else:
+                final_sql = parsed_expression.sql(dialect=self.dialect)
+
+            final_params = tuple(param_seq)
+
+        else:  # Scalar parameter (if validated_params is not None and not a sequence)
+            if sql_named_param_nodes or named_placeholder_nodes:
+                msg = "psqlpy: Scalar parameter provided, but SQL contains named placeholders. Use a single positional placeholder ('?' or '$1')."
+                raise ParameterStyleMismatchError(msg)
+
+            total_positional_params = len(qmark_placeholder_nodes) + len(sql_numeric_dollar_nodes)
+            if total_positional_params != 1:
+                msg = (
+                    f"psqlpy: Scalar parameter provided, but SQL expects {total_positional_params} "
+                    f"positional placeholders. Expected 1. SQL: {sql}"
+                )
+                raise SQLParsingError(msg)
+
+            # For scalar parameter with question mark, convert to $1
+            if qmark_placeholder_nodes:
+                transformed_expression = parsed_expression.transform(
+                    lambda node: exp.Parameter(this="1")
+                    if isinstance(node, exp.Placeholder) and node.this is None
+                    else node,
+                    copy=True,
+                )
+                final_sql = transformed_expression.sql(dialect=self.dialect)
+            else:
+                final_sql = parsed_expression.sql(dialect=self.dialect)
+
+            final_params = (validated_params,)  # psqlpy expects a tuple for $1
+
+        return final_sql, final_params
 
     # --- Public API Methods --- #
     @overload
@@ -199,10 +219,10 @@ class PsqlpyDriver(
     async def select(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["PsqlpyConnection"] = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
@@ -241,10 +261,10 @@ class PsqlpyDriver(
     async def select_one(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["PsqlpyConnection"] = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
@@ -284,10 +304,10 @@ class PsqlpyDriver(
     async def select_one_or_none(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["PsqlpyConnection"] = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
@@ -397,10 +417,10 @@ class PsqlpyDriver(
     async def insert_update_delete(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["PsqlpyConnection"] = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         **kwargs: Any,
     ) -> int:
         connection = self._connection(connection)
@@ -437,10 +457,10 @@ class PsqlpyDriver(
     async def insert_update_delete_returning(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["PsqlpyConnection"] = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
@@ -462,10 +482,10 @@ class PsqlpyDriver(
     async def execute_script(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: Optional["PsqlpyConnection"] = None,
+        connection: "Optional[PsqlpyConnection]" = None,
         **kwargs: Any,
     ) -> str:
         connection = self._connection(connection)
@@ -475,7 +495,7 @@ class PsqlpyDriver(
         await connection.execute(sql, parameters=parameters)
         return sql
 
-    def _connection(self, connection: Optional["PsqlpyConnection"] = None) -> "PsqlpyConnection":
+    def _connection(self, connection: "Optional[PsqlpyConnection]" = None) -> "PsqlpyConnection":
         """Get the connection to use.
 
         Args:
