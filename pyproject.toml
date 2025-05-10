@@ -260,6 +260,8 @@ reportPrivateUsage = false
 reportUnknownArgumentType = false
 reportUnknownMemberType = false
 reportUnknownVariableType = false
+reportUnnecessaryComparison = false
+reportUnnecessaryIsInstance = false
 reportUnnecessaryTypeIgnoreComments = true
 root = "."
 

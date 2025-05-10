@@ -2,14 +2,14 @@ import logging
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
+import sqlglot
 from duckdb import DuckDBPyConnection
+from sqlglot import exp
 
 from sqlspec.base import SyncDriverAdapterProtocol
 from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin, SyncArrowBulkOperationsMixin
-from sqlspec.statement import PARAM_REGEX, QMARK_REGEX
 from sqlspec.typing import ArrowTable, StatementParameterType
-from sqlspec.utils.text import bind_parameters
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
@@ -63,23 +63,12 @@ class DuckDBDriver(
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
         """Process SQL and parameters for DuckDB.
 
-        DuckDB supports both named (:name) and positional (?) parameters.
-        This method merges parameters and validates them.
-
-        Args:
-            sql: The SQL statement to process.
-            parameters: The parameters to process.
-            **kwargs: Additional keyword arguments.
-
-        Raises:
-            ParameterStyleMismatchError: If positional parameters are mixed with keyword arguments.
-            SQLParsingError: If SQL contains parameter placeholders, but no parameters were provided.
-
-        Returns:
-            A tuple of the processed SQL and parameters.
+        DuckDB supports both named (:name, $name) and positional (?) parameters.
+        This method merges parameters, validates them, and ensures SQL is in a
+        consistent format for the duckdb driver using sqlglot.
         """
         # 1. Merge parameters and kwargs
-        merged_params: Optional[Union[dict[str, Any], list[Any], tuple[Any, ...]]] = None
+        merged_params: Optional[Union[dict[str, Any], list[Any], tuple[Any, ...], Any]] = None  # Allow Any for scalar
 
         if kwargs:
             if isinstance(parameters, dict):
@@ -91,38 +80,141 @@ class DuckDBDriver(
                 merged_params = kwargs
         elif parameters is not None:
             merged_params = parameters
+        # else merged_params remains None
 
-        # Use bind_parameters for named parameters
+        # Special case: if merged_params is an empty dict, treat it as None for parameterless queries
+        if isinstance(merged_params, dict) and not merged_params:
+            merged_params = None
+
+        # 2. SQLGlot Parsing
+        try:
+            # self.dialect is "duckdb"
+            parsed_expression = sqlglot.parse_one(sql, read=self.dialect)
+        except Exception as e:
+            msg = f"duckdb: Failed to parse SQL with sqlglot: {e}. SQL: {sql}"
+            raise SQLParsingError(msg) from e
+
+        # Traditional named parameters (e.g., @name, $name) parsed as Parameter nodes
+        sql_named_param_nodes = [node for node in parsed_expression.find_all(exp.Parameter) if node.name]
+
+        # Named placeholders parsed as Placeholder nodes (e.g., :name, $name in some dialects)
+        named_placeholder_nodes = [
+            node
+            for node in parsed_expression.find_all(exp.Placeholder)
+            if isinstance(node.this, str) and not node.this.isdigit()
+        ]
+
+        # Anonymous placeholders (?) parsed as Placeholder nodes with this=None
+        qmark_placeholder_nodes = [node for node in parsed_expression.find_all(exp.Placeholder) if node.this is None]
+
+        # DuckDB also uses $N for positional, sqlglot might parse these as exp.Parameter without name and numeric .this
+        sql_dollar_numeric_nodes = [
+            node
+            for node in parsed_expression.find_all(exp.Parameter)
+            if not node.name and node.this and isinstance(node.this, str) and node.this.isdigit()
+        ]
+
+        # 3. Handle No Parameters Case
+        if merged_params is None:
+            if sql_named_param_nodes or named_placeholder_nodes or qmark_placeholder_nodes or sql_dollar_numeric_nodes:
+                placeholder_types = set()
+                if sql_named_param_nodes or named_placeholder_nodes:
+                    placeholder_types.add("named (e.g., :name, $name)")
+                if qmark_placeholder_nodes:
+                    placeholder_types.add("qmark ('?')")
+                if sql_dollar_numeric_nodes:
+                    placeholder_types.add("numeric ($N)")
+                msg = (
+                    f"duckdb: SQL statement contains {', '.join(placeholder_types) if placeholder_types else 'unknown'} "
+                    f"parameter placeholders, but no parameters were provided. SQL: {sql}"
+                )
+                raise SQLParsingError(msg)
+            return sql, None  # DuckDB can take None
+
+        final_sql: str
+        final_params: Optional[Union[tuple[Any, ...], dict[str, Any]]] = None
+
         if isinstance(merged_params, dict):
-            final_sql, final_params = bind_parameters(sql, merged_params, dialect="duckdb")
-            return final_sql, final_params
+            # Dictionary parameters. DuckDB client handles :name and $name if SQL uses them.
+            # sqlglot's "duckdb" dialect should preserve/generate these.
+            if qmark_placeholder_nodes or sql_dollar_numeric_nodes:
+                msg = "duckdb: Dictionary parameters provided, but SQL uses positional placeholders ('?' or $N). Use named placeholders."
+                raise ParameterStyleMismatchError(msg)
 
-        # Case 2: Sequence parameters - pass through
-        if isinstance(merged_params, (list, tuple)):
-            return sql, merged_params
-        # Case 3: Scalar parameter - wrap in tuple
-        if merged_params is not None:
-            return sql, (merged_params,)  # type: ignore[unreachable]
+            if not sql_named_param_nodes and not named_placeholder_nodes:
+                msg = "duckdb: Dictionary parameters provided, but no named placeholders (e.g., :name, $name) found by sqlglot."
+                raise ParameterStyleMismatchError(msg)
 
-        # Case 0: No parameters provided
-        # Basic validation for placeholders
-        has_placeholders = False
-        for match in PARAM_REGEX.finditer(sql):
-            if not (match.group("dquote") or match.group("squote") or match.group("comment")) and match.group(
-                "var_name"
-            ):
-                has_placeholders = True
-                break
-        if not has_placeholders:
-            for match in QMARK_REGEX.finditer(sql):
-                if match.group("qmark"):
-                    has_placeholders = True
-                    break
+            # Collect parameter names from both types of nodes
+            sql_param_names_in_ast = set()
 
-        if has_placeholders:
-            msg = f"duckdb: SQL contains parameter placeholders, but no parameters were provided. SQL: {sql}"
-            raise SQLParsingError(msg)
-        return sql, None
+            # Get names from Parameter nodes
+            sql_param_names_in_ast.update(node.name for node in sql_named_param_nodes if node.name)
+
+            # Get names from Placeholder nodes
+            sql_param_names_in_ast.update(node.this for node in named_placeholder_nodes if isinstance(node.this, str))
+
+            provided_keys = set(merged_params.keys())
+
+            missing_keys = sql_param_names_in_ast - provided_keys
+            if missing_keys:
+                msg = f"duckdb: Named parameters {missing_keys} found in SQL but not provided. SQL: {sql}"
+                raise SQLParsingError(msg)
+
+            extra_keys = provided_keys - sql_param_names_in_ast
+            if extra_keys:
+                logger.warning(
+                    f"duckdb: Parameters {extra_keys} provided but not found in SQL. DuckDB might ignore them. SQL: {sql}"
+                )
+
+            # Generate SQL with duckdb dialect to ensure consistent named param style if input was varied.
+            # e.g. if input was :name, output for duckdb might be $name or vice-versa, sqlglot handles this.
+            final_sql = parsed_expression.sql(dialect=self.dialect)
+            final_params = merged_params  # Pass the dict directly to DuckDB
+
+        elif isinstance(merged_params, (list, tuple)):
+            # Sequence parameters. DuckDB uses '?'.
+            # sqlglot's "duckdb" dialect should generate '?' from exp.Placeholder.
+            if sql_named_param_nodes or named_placeholder_nodes:
+                msg = (
+                    "duckdb: Sequence parameters provided, but SQL uses named placeholders. Use '?' or $N placeholders."
+                )
+                raise ParameterStyleMismatchError(msg)
+
+            # If SQL already has $N, it's a mismatch for unnamed sequence params
+            if sql_dollar_numeric_nodes:
+                msg = "duckdb: Sequence parameters provided, but SQL uses $N style. Use '?' placeholders for unnamed sequences."
+                raise ParameterStyleMismatchError(msg)
+
+            if len(qmark_placeholder_nodes) != len(merged_params):
+                msg = (
+                    f"duckdb: Parameter count mismatch. SQL expects {len(qmark_placeholder_nodes)} '?' placeholders, "
+                    f"but {len(merged_params)} were provided. SQL: {sql}"
+                )
+                raise SQLParsingError(msg)
+
+            final_sql = parsed_expression.sql(dialect=self.dialect)  # Ensures qmark style from placeholders
+            final_params = tuple(merged_params)
+
+        elif merged_params is not None:  # Scalar parameter
+            if sql_named_param_nodes or named_placeholder_nodes or sql_dollar_numeric_nodes:
+                msg = "duckdb: Scalar parameter provided, but SQL uses named or $N placeholders. Use a single '?'."
+                raise ParameterStyleMismatchError(msg)
+
+            if len(qmark_placeholder_nodes) != 1:
+                msg = (
+                    f"duckdb: Scalar parameter provided, but SQL expects {len(qmark_placeholder_nodes)} '?' placeholders. "
+                    f"Expected 1. SQL: {sql}"
+                )
+                raise SQLParsingError(msg)
+            final_sql = parsed_expression.sql(dialect=self.dialect)
+            final_params = (merged_params,)
+
+        else:  # Should be caught by 'merged_params is None' earlier
+            final_sql = sql
+            final_params = None
+
+        return final_sql, final_params
 
     # --- Public API Methods --- #
     @overload

@@ -18,54 +18,55 @@ __all__ = ("SQLStatement",)
 
 logger = logging.getLogger("sqlspec")
 
-# Regex to find :param style placeholders, skipping those inside quotes or SQL comments
-# Adapted from previous version in psycopg adapter
-PARAM_REGEX = re.compile(
-    r"""(?<![:\w]) # Negative lookbehind to avoid matching things like ::type or \:escaped
-    (?:
-        (?P<dquote>"(?:[^"]|"")*") |     # Double-quoted strings (support SQL standard escaping "")
-        (?P<squote>'(?:[^']|'')*') |     # Single-quoted strings (support SQL standard escaping '')
-        (?P<comment>--.*?\n|\/\*.*?\*\/) | # SQL comments (single line or multi-line)
-        : (?P<var_name>[a-zA-Z_][a-zA-Z0-9_]*)   # :var_name identifier
-    )
-    """,
-    re.VERBOSE | re.DOTALL,
-)
+CONSOLIDATED_PARAM_REGEX = re.compile(
+    r"""
+    # Fields to skip (matched first, then ignored in processing logic)
+    (?P<dquote>"(?:[^"]|"")*") |     # Double-quoted strings (SQL standard "" escaping)
+    (?P<squote>'(?:[^']|'')*') |     # Single-quoted strings (SQL standard '' escaping)
+    (?P<comment>--.*?\n|\/\*.*?\*\/) | # SQL comments (single-line or multi-line)
 
-# Regex to find ? placeholders, skipping those inside quotes or SQL comments
-QMARK_REGEX = re.compile(
-    r"""(?P<dquote>\"[^\"]*\") | # Double-quoted strings
-         (?P<squote>'[^']*') | # Single-quoted strings
-         (?P<comment>--[^\n]*|/\*.*?\*/) | # SQL comments (single/multi-line)
-         (?P<qmark>\?) # The question mark placeholder
-      """,
-    re.VERBOSE | re.DOTALL,
-)
-
-
-# Regex for $name style, avoiding comments/strings
-# Lookbehind ensures it's not preceded by a word char or another $
-DOLLAR_NAME_REGEX = re.compile(
-    r"""(?<![\w\$])
-    (?:
-        (?P<dquote>"(?:[^"]|"")*") |     # Double-quoted strings
-        (?P<squote>'(?:[^']|'')*') |     # Single-quoted strings
-        (?P<comment>--.*?\n|\/\*.*?\*\/) | # SQL comments
-        \$ (?P<var_name>[a-zA-Z_][a-zA-Z0-9_]*)   # $var_name identifier
-    )
-    """,
-    re.VERBOSE | re.DOTALL,
-)
-
-# Regex for @name style, avoiding comments/strings
-# Lookbehind ensures it's not preceded by a word char or another @
-AT_NAME_REGEX = re.compile(
-    r"""(?<![\w@])
-    (?:
-        (?P<dquote>"(?:[^"]|"")*") |     # Double-quoted strings
-        (?P<squote>'(?:[^']|'')*') |     # Single-quoted strings
-        (?P<comment>--.*?\n|\/\*.*?\*\/) | # SQL comments
-        @ (?P<var_name>[a-zA-Z_][a-zA-Z0-9_]*)   # @var_name identifier
+    # Actual placeholders - attempt to match one of these
+    (?: # Non-capturing group for colon-numeric POSITIONAL parameter (e.g., :1, :23)
+        (?<![:\\w]) # Negative lookbehind: not preceded by ':' or word character
+        : # Literal colon
+        (?P<var_colon_numeric>[1-9][0-9]*) # Captured number (1-9 followed by 0 or more digits)
+    ) |
+    (?: # Non-capturing group for colon-prefixed named parameter (e.g., :name)
+        (?<![:\\w]) # Negative lookbehind: not preceded by ':' or word character
+        : # Literal colon
+        (?P<var_colon_named>[a-zA-Z_][a-zA-Z0-9_]*) # Captured variable name
+    ) |
+    (?: # Non-capturing group for question mark positional parameter (e.g., ?)
+        # Needs careful lookaround if we want to avoid matching e.g. JSON operators '?|'
+        # For now, keeping it simple as SQL '?' is usually well-spaced or at end of comparisons.
+        # A full context-aware parse (like sqlglot) is primary, this is a fallback.
+        (?P<var_qmark>\?) # Captured question mark
+    ) |
+    (?: # Non-capturing group for dollar-prefixed NAMED parameter (e.g., $name) - PRIORITIZE THIS OVER $n
+        (?<![\w\$]) # Negative lookbehind: not preceded by word character or '$'
+        \$ # Literal dollar
+        (?P<var_dollar>[a-zA-Z_][a-zA-Z0-9_]*) # Captured variable name (must start with letter/underscore)
+    ) |
+    (?: # Non-capturing group for at-symbol-prefixed named parameter (e.g., @name)
+        (?<![\\w@]) # Negative lookbehind: not preceded by word character or '@'
+        @ # Literal at-symbol
+        (?P<var_at>[a-zA-Z_][a-zA-Z0-9_]*) # Captured variable name
+    ) |
+    (?: # Non-capturing group for pyformat named parameter (e.g., %(name)s)
+        (?<!%) # Negative lookbehind: not preceded by '%' (to avoid %%%(name)s being treated as a param)
+        % # Literal percent
+        \((?P<var_pyformat>[a-zA-Z_][a-zA-Z0-9_]*)\) # Captured variable name inside parentheses
+        [a-zA-Z] # Type specifier (e.g., s, d, f) - simple match for any letter
+    ) |
+    (?: # Non-capturing group for format/printf POSITIONAL parameter (e.g., %s, %d) - AFTER pyformat
+        (?<!%) # Negative lookbehind: not preceded by another % (to avoid %%%%s)
+        %
+        (?P<var_format_type>[a-zA-Z]) # Captured type specifier (s, d, f, etc.)
+    ) |
+    (?: # Non-capturing group for numeric dollar POSITIONAL parameter (e.g., $1, $2)
+        (?<![\w\$]) # Negative lookbehind: not preceded by word char or '$'
+        \$ # Literal dollar
+        (?P<var_numeric>[1-9][0-9]*) # Captured number (1-9 followed by 0 or more digits)
     )
     """,
     re.VERBOSE | re.DOTALL,
@@ -125,35 +126,41 @@ class SQLStatement:
         # Parse the SQL to find expected parameters
         try:
             expression = self._parse_sql()
-            # Find all parameter expressions (:name, ?, etc.)
-            sql_params = list(expression.find_all(exp.Parameter))
+            # Find all parameter expressions (:name, ?, @name, $1, etc.)
+            # These are nodes that sqlglot considers as bind parameters.
+            all_sqlglot_placeholders = list(expression.find_all(exp.Placeholder, exp.Parameter))
         except SQLParsingError as e:
-            # If parsing fails, we cannot validate accurately.
-            # Let adapters handle potentially valid but unparsable SQL.
-            # Log the parsing error for debugging.
             logger.debug(
                 "SQL parsing failed during validation: %s. Returning original SQL and parameters for adapter.", e
             )
-            # Return original SQL and parameters for the adapter to attempt processing
-            # (Adapters might use regex or other means if parsing fails)
             return self.sql, self._merged_parameters
 
         if self._merged_parameters is None:
             # If no parameters were provided, but the parsed SQL expects them, raise an error.
-            if sql_params:
-                placeholder_types = {"named" if p.name else "positional" for p in sql_params}
-                msg = f"SQL statement contains {', '.join(placeholder_types)} parameter placeholders, but no parameters were provided. SQL: {self.sql}"
+            if all_sqlglot_placeholders:
+                placeholder_types_desc = []
+                for p_node in all_sqlglot_placeholders:
+                    if isinstance(p_node, exp.Parameter) and p_node.name:
+                        placeholder_types_desc.append(f"named (e.g., :{p_node.name}, @{p_node.name})")
+                    elif isinstance(p_node, exp.Placeholder) and p_node.this and not p_node.this.isdigit():
+                        placeholder_types_desc.append(f"named (e.g., :{p_node.this})")
+                    elif isinstance(p_node, exp.Placeholder) and p_node.this is None:
+                        placeholder_types_desc.append("positional (?)")
+                    # Add more descriptions for other types like numeric $1 if necessary
+                # Make unique descriptions
+                desc_str = ", ".join(sorted(set(placeholder_types_desc))) or "unknown"
+                msg = f"SQL statement contains {desc_str} parameter placeholders, but no parameters were provided. SQL: {self.sql}"
                 raise SQLParsingError(msg)
             # No parameters provided and none found in SQL - OK
             return self.sql, None
 
         # Validate provided parameters against parsed SQL parameters
         if isinstance(self._merged_parameters, dict):
-            self._validate_dict_params(sql_params, self._merged_parameters)
+            self._validate_dict_params(all_sqlglot_placeholders, self._merged_parameters)
         elif isinstance(self._merged_parameters, (tuple, list)):
-            self._validate_sequence_params(sql_params, self._merged_parameters)
+            self._validate_sequence_params(all_sqlglot_placeholders, self._merged_parameters)
         else:  # Scalar parameter
-            self._validate_scalar_param(sql_params, self._merged_parameters)
+            self._validate_scalar_param(all_sqlglot_placeholders, self._merged_parameters)
 
         # Return the original SQL and the merged parameters for the adapter to process
         return self.sql, self._merged_parameters
@@ -181,75 +188,124 @@ class SQLStatement:
             msg = f"Failed to parse SQL for validation: {error_detail}\nSQL: {self.sql}"
             raise SQLParsingError(msg) from e
 
-    def _validate_dict_params(self, sql_params: list[exp.Parameter], parameter_dict: dict[str, Any]) -> None:
-        """Validates dictionary parameters against parsed SQL parameters."""
-        named_sql_params = [p for p in sql_params if p.name]
-        unnamed_sql_params = [p for p in sql_params if not p.name]
+    def _validate_dict_params(
+        self, all_sqlglot_placeholders: list[Union[exp.Parameter, exp.Placeholder]], parameter_dict: dict[str, Any]
+    ) -> None:
+        sqlglot_named_params: dict[str, Union[exp.Parameter, exp.Placeholder]] = {}
+        has_positional_qmark = False
 
-        if unnamed_sql_params:
-            msg = f"Dictionary parameters provided, but found unnamed placeholders (e.g., '?') in SQL: {self.sql}"
+        for p_node in all_sqlglot_placeholders:
+            if (
+                isinstance(p_node, exp.Parameter) and p_node.name and not p_node.name.isdigit()
+            ):  # @name, $name (non-numeric)
+                sqlglot_named_params[p_node.name] = p_node
+            elif isinstance(p_node, exp.Placeholder) and p_node.this and not p_node.this.isdigit():  # :name
+                sqlglot_named_params[p_node.this] = p_node
+            elif isinstance(p_node, exp.Placeholder) and p_node.this is None:  # ?
+                has_positional_qmark = True
+            # Ignores numeric placeholders like $1, :1 for dict validation for now
+
+        if has_positional_qmark:
+            msg = f"Dictionary parameters provided, but found unnamed placeholders ('?') in SQL: {self.sql}"
             raise ParameterStyleMismatchError(msg)
 
-        if not named_sql_params and parameter_dict:
-            # Check with regex as a fallback confirmation if sqlglot finds no named params
-            regex_found = any(
-                match.group("var_name")
-                for match in PARAM_REGEX.finditer(self.sql)
-                if not (match.group("dquote") or match.group("squote") or match.group("comment"))
-            )
-            if not regex_found:
-                msg = f"Dictionary parameters provided, but no named placeholders (e.g., ':name') found in SQL: {self.sql}"
+        # Regex check as a fallback (can be simplified or removed if sqlglot is trusted)
+        regex_named_placeholders_found = False
+        for match in CONSOLIDATED_PARAM_REGEX.finditer(self.sql):
+            if match.group("dquote") or match.group("squote") or match.group("comment"):
+                continue
+            if match.group("var_colon") or match.group("var_dollar") or match.group("var_at"):
+                regex_named_placeholders_found = True
+
+        if not sqlglot_named_params and parameter_dict:
+            if not regex_named_placeholders_found:
+                msg = f"Dictionary parameters provided, but no named placeholders (e.g., ':name', '$name', '@name') found by sqlglot or regex in SQL: {self.sql}"
                 raise ParameterStyleMismatchError(msg)
-            # SQLglot didn't find named params but regex did - log warning, proceed.
             logger.warning(
                 "SQLglot found no named parameters, but regex did. Proceeding with validation. SQL: %s", self.sql
             )
 
-        required_keys = {p.name for p in named_sql_params}
+        required_keys = set(sqlglot_named_params.keys())
         provided_keys = set(parameter_dict.keys())
 
         missing_keys = required_keys - provided_keys
         if missing_keys:
-            msg = f"Named parameters found in SQL but not provided: {missing_keys}. SQL: {self.sql}"
+            msg = f"Named parameters found in SQL by sqlglot but not provided: {missing_keys}. SQL: {self.sql}"
             raise SQLParsingError(msg)
 
     def _validate_sequence_params(
-        self, sql_params: list[exp.Parameter], params: Union[tuple[Any, ...], list[Any]]
+        self,
+        all_sqlglot_placeholders: list[Union[exp.Parameter, exp.Placeholder]],
+        params: Union[tuple[Any, ...], list[Any]],
     ) -> None:
-        """Validates sequence parameters against parsed SQL parameters."""
-        named_sql_params = [p for p in sql_params if p.name]
-        unnamed_sql_params = [p for p in sql_params if not p.name]
+        sqlglot_named_param_names = []  # For detecting named params
+        sqlglot_positional_count = 0  # For counting ?, $1, :1 etc.
 
-        if named_sql_params:
-            # No need to store msg if we are raising immediately
-            msg = f"Sequence parameters provided, but found named placeholders (e.g., ':name') in SQL: {self.sql}"
+        for p_node in all_sqlglot_placeholders:
+            if isinstance(p_node, exp.Parameter) and p_node.name and not p_node.name.isdigit():  # @name, $name
+                sqlglot_named_param_names.append(p_node.name)
+            elif isinstance(p_node, exp.Placeholder) and p_node.this and not p_node.this.isdigit():  # :name
+                sqlglot_named_param_names.append(p_node.this)
+            elif isinstance(p_node, exp.Placeholder) and p_node.this is None:  # ?
+                sqlglot_positional_count += 1
+            elif isinstance(p_node, exp.Parameter) and (  # noqa: PLR0916
+                (p_node.name and p_node.name.isdigit())
+                or (
+                    not p_node.name
+                    and p_node.this
+                    and isinstance(p_node.this, (str, exp.Identifier, exp.Number))
+                    and str(p_node.this).isdigit()
+                )
+            ):
+                # $1, :1 style (parsed as Parameter with name="1" or this="1" or this=Identifier(this="1") or this=Number(this=1))
+                sqlglot_positional_count += 1
+            elif (
+                isinstance(p_node, exp.Placeholder) and p_node.this and p_node.this.isdigit()
+            ):  # :1 style (Placeholder with this="1")
+                sqlglot_positional_count += 1
+
+        # Regex check (can be simplified if sqlglot part is robust)
+        regex_named_placeholders_found = False
+        for match in CONSOLIDATED_PARAM_REGEX.finditer(self.sql):
+            if match.group("dquote") or match.group("squote") or match.group("comment"):
+                continue
+            if match.group("var_colon") or match.group("var_dollar") or match.group("var_at"):
+                regex_named_placeholders_found = True
+
+        if sqlglot_named_param_names or regex_named_placeholders_found:
+            found_by = []
+            if sqlglot_named_param_names:
+                found_by.append(f"sqlglot ({', '.join(sorted(set(sqlglot_named_param_names)))})")
+            if regex_named_placeholders_found and not sqlglot_named_param_names:
+                found_by.append("regex")
+            msg = (
+                f"Sequence parameters provided, but found named placeholders "
+                f"by {', '.join(found_by)} in SQL: {self.sql}"
+            )
             raise ParameterStyleMismatchError(msg)
 
-        expected_count = len(unnamed_sql_params)
-        actual_count = len(params)
+        expected_count_sqlglot = sqlglot_positional_count
+        actual_count_provided = len(params)
 
-        if expected_count != actual_count:
-            # Double-check with regex if counts mismatch, as parsing might miss some complex cases
-            regex_count = 0
-            for match in QMARK_REGEX.finditer(self.sql):
-                if match.group("qmark"):
-                    regex_count += 1
-
-            if regex_count != actual_count:
+        if expected_count_sqlglot != actual_count_provided:
+            if sqlglot_positional_count != actual_count_provided:
                 msg = (
-                    f"Parameter count mismatch. SQL expects {expected_count} (sqlglot) / {regex_count} (regex) positional parameters, "
-                    f"but {actual_count} were provided. SQL: {self.sql}"
+                    f"Parameter count mismatch. SQL expects {expected_count_sqlglot} (sqlglot) / {sqlglot_positional_count} (regex) positional '?' parameters, "
+                    f"but {actual_count_provided} were provided. SQL: {self.sql}"
                 )
                 raise SQLParsingError(msg)
-            # Counts mismatch with sqlglot but match with simple regex - log warning, proceed.
             logger.warning(
-                "Parameter count mismatch (sqlglot: %d, provided: %d), but regex count (%d) matches provided. Proceeding. SQL: %s",
-                expected_count,
-                actual_count,
-                regex_count,
+                "Parameter count mismatch (sqlglot: %d, provided: %d), but regex count for '?' (%d) matches provided. Proceeding. SQL: %s",
+                expected_count_sqlglot,
+                actual_count_provided,
+                sqlglot_positional_count,
                 self.sql,
             )
 
-    def _validate_scalar_param(self, sql_params: list[exp.Parameter], param_value: Any) -> None:
+    def _validate_scalar_param(
+        self, all_sqlglot_placeholders: list[Union[exp.Parameter, exp.Placeholder]], param_value: Any
+    ) -> None:
         """Validates a single scalar parameter against parsed SQL parameters."""
-        self._validate_sequence_params(sql_params, (param_value,))  # Treat scalar as a single-element sequence
+        self._validate_sequence_params(
+            all_sqlglot_placeholders, (param_value,)
+        )  # Treat scalar as a single-element sequence
