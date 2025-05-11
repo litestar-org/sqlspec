@@ -32,6 +32,7 @@ T = TypeVar("T")
 class StatementFilter(Protocol):
     """Protocol for filters that can be appended to a statement."""
 
+    @abstractmethod
     def append_to_statement(self, statement: SQLStatement) -> SQLStatement:
         """Append the filter to the statement.
 
@@ -41,7 +42,7 @@ class StatementFilter(Protocol):
         Returns:
             The modified statement.
         """
-        return statement
+        raise NotImplementedError
 
 
 @dataclass

@@ -70,18 +70,24 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
             The updated :class:`AppConfig <.config.app.AppConfig>` instance.
         """
         self._validate_dependency_keys()
-        app_config.signature_types.extend(
-            [
-                SQLSpec,
-                ConnectionT,
-                PoolT,
-                DriverT,
-                DatabaseConfig,
-                DatabaseConfigProtocol,
-                SyncConfigT,
-                AsyncConfigT,
-            ]
-        )
+
+        def store_sqlspec_in_state() -> None:
+            app_config.state.sqlspec = self
+
+        app_config.on_startup.append(store_sqlspec_in_state)
+
+        # Register types for injection
+        app_config.signature_types.extend([
+            SQLSpec,
+            ConnectionT,
+            PoolT,
+            DriverT,
+            DatabaseConfig,
+            DatabaseConfigProtocol,
+            SyncConfigT,
+            AsyncConfigT,
+        ])
+
         for c in self._plugin_configs:
             c.annotation = self.add_config(c.config)
             app_config.signature_types.append(c.annotation)

@@ -235,3 +235,40 @@ def with_ensure_async_(
     if isinstance(obj, AbstractContextManager):
         return cast("AbstractAsyncContextManager[T]", _ContextManagerWrapper(obj))
     return obj
+
+
+class NoValue:
+    """A fake "Empty class"""
+
+
+async def get_next(iterable: Any, default: Any = NoValue, *args: Any) -> Any:  # pragma: no cover
+    """Return the next item from an async iterator.
+
+    In Python <3.10, `anext` is not available. This function is a drop-in replacement.
+
+    This function will return the next value form an async iterable. If the
+    iterable is empty the StopAsyncIteration will be propagated. However, if
+    a default value is given as a second argument the exception is silenced and
+    the default value is returned instead.
+
+    Args:
+        iterable: An async iterable.
+        default: An optional default value to return if the iterable is empty.
+        *args: The remaining args
+    Return:
+        The next value of the iterable.
+
+    Raises:
+        StopAsyncIteration: The iterable given is not async.
+
+
+    """
+    has_default = bool(not isinstance(default, NoValue))
+    try:
+        return await iterable.__anext__()
+
+    except StopAsyncIteration as exc:
+        if has_default:
+            return default
+
+        raise StopAsyncIteration from exc
