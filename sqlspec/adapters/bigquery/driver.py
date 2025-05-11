@@ -13,20 +13,19 @@ from typing import (
     overload,
 )
 
-import sqlglot
 from google.cloud import bigquery
 from google.cloud.bigquery import Client
 from google.cloud.bigquery.job import QueryJob, QueryJobConfig
 from google.cloud.exceptions import NotFound
-from sqlglot import exp
 
 from sqlspec.base import SyncDriverAdapterProtocol
-from sqlspec.exceptions import NotFoundError, ParameterStyleMismatchError, SQLParsingError, SQLSpecError
+from sqlspec.exceptions import NotFoundError, ParameterStyleMismatchError, SQLSpecError
 from sqlspec.mixins import (
     SQLTranslatorMixin,
     SyncArrowBulkOperationsMixin,
     SyncParquetExportMixin,
 )
+from sqlspec.statement import SQLStatement
 from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType, T
 
 if TYPE_CHECKING:
@@ -59,7 +58,7 @@ class BigQueryDriver(
         )
 
     @staticmethod
-    def _get_bq_param_type(value: Any) -> "tuple[Optional[str], Optional[str]]":  # noqa: PLR0911
+    def _get_bq_param_type(value: Any) -> "tuple[Optional[str], Optional[str]]":
         if isinstance(value, bool):
             return "BOOL", None
         if isinstance(value, int):
@@ -116,120 +115,42 @@ class BigQueryDriver(
         /,
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Process SQL and parameters for BigQuery using sqlglot for parsing and validation.
+        """Process SQL and parameters using SQLStatement with dialect support.
 
-        BigQuery uses named (@name) or positional (?) parameters.
-        This method merges input parameters, validates them against the parsed SQL structure,
-        and returns the SQL (potentially normalized by sqlglot) and merged parameters.
-        Actual creation of BigQuery QueryParameter objects is handled later.
+        Args:
+            sql: The SQL statement to process.
+            parameters: The parameters to bind to the statement.
+            **kwargs: Additional keyword arguments (including filters).
+
+        Raises:
+            ParameterStyleMismatchError: If pre-formatted BigQuery parameters are mixed with keyword arguments.
+
+        Returns:
+            A tuple of (sql, parameters) ready for execution.
         """
-        # 1. Merge parameters and kwargs
-        merged_params: Optional[Union[dict[str, Any], list[Any], tuple[Any, ...], Any]] = None  # Allow Any for scalar
-
-        if kwargs:
-            if isinstance(parameters, dict):
-                merged_params = {**parameters, **kwargs}
-            elif parameters is not None:
-                msg = "Cannot mix positional parameters with keyword arguments for BigQuery driver."
+        # Special case: check for pre-formatted BQ parameters
+        if (
+            isinstance(parameters, (list, tuple))
+            and parameters
+            and all(isinstance(p, (bigquery.ScalarQueryParameter, bigquery.ArrayQueryParameter)) for p in parameters)
+        ):
+            if kwargs:
+                msg = "Cannot mix pre-formatted BigQuery parameters with keyword arguments."
                 raise ParameterStyleMismatchError(msg)
-            else:
-                merged_params = kwargs
-        elif parameters is not None:
-            merged_params = parameters
-        # else merged_params remains None
+            return sql, parameters
 
-        # 2. SQLGlot Parsing
-        try:
-            # self.dialect is "bigquery"
-            parsed_expression = sqlglot.parse_one(sql, read=self.dialect)
-        except Exception as e:
-            msg = f"bigquery: Failed to parse SQL with sqlglot: {e}. SQL: {sql}"
-            raise SQLParsingError(msg) from e
+        statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
+        filters = kwargs.pop("filters", None)
+        if filters:
+            for filter_obj in filters:
+                statement = statement.apply_filter(filter_obj)
 
-        # Identify parameter types from AST
-        # BigQuery's @name are exp.Parameter with a name. '?' are exp.Placeholder.
-        sql_named_param_nodes = [node for node in parsed_expression.find_all(exp.Parameter) if node.name]
-        sql_placeholder_nodes = list(parsed_expression.find_all(exp.Placeholder))
+        # Process the statement for execution
+        processed_sql, processed_params, _ = statement.process()
 
-        # 3. Handle No Parameters Case
-        if merged_params is None:
-            if sql_named_param_nodes or sql_placeholder_nodes:
-                placeholder_types = set()
-                if sql_named_param_nodes:
-                    placeholder_types.add("named (e.g., @name)")
-                if sql_placeholder_nodes:
-                    placeholder_types.add("positional ('?')")
-                msg = (
-                    f"bigquery: SQL statement contains {', '.join(placeholder_types) if placeholder_types else 'unknown'} "
-                    f"parameter placeholders, but no parameters were provided. SQL: {sql}"
-                )
-                raise SQLParsingError(msg)
-            # Return original SQL if no params and no placeholders found by sqlglot
-            # _run_query_job may still transpile it if not a script.
-            return sql, None
+        return processed_sql, processed_params
 
-        final_sql: str
-        final_params: Optional[Union[tuple[Any, ...], dict[str, Any]]] = None
-
-        # Generate SQL using BigQuery dialect. This normalizes syntax if input was, e.g. :name.
-        # The actual BQ param objects are created in _run_query_job.
-        final_sql = parsed_expression.sql(dialect=self.dialect)
-
-        if isinstance(merged_params, dict):
-            if sql_placeholder_nodes:
-                msg = "bigquery: Dictionary parameters provided, but SQL uses positional '?' placeholders. Use named @params."
-                raise ParameterStyleMismatchError(msg)
-            if not sql_named_param_nodes and not any(f"@{key}" in sql for key in merged_params):
-                # If sqlglot found no :name (common input) or @name (native BQ)
-                # and the raw SQL doesn't contain @key for the provided dict keys.
-                msg = "bigquery: Dictionary parameters provided, but no recognizable named placeholders (e.g., @name or :name) found."
-                raise ParameterStyleMismatchError(msg)
-
-            # Validate keys only if sqlglot identified specific named parameters from a known style like :name
-            if sql_named_param_nodes:
-                sql_param_names_in_ast = {node.name for node in sql_named_param_nodes if node.name}
-                provided_keys = set(merged_params.keys())
-                missing_keys = sql_param_names_in_ast - provided_keys
-                if missing_keys:
-                    msg = f"bigquery: Named parameters {missing_keys} (from :name style) found in SQL but not provided. SQL: {sql}"
-                    raise SQLParsingError(msg)
-                extra_keys = provided_keys - sql_param_names_in_ast
-                if extra_keys:
-                    msg = f"bigquery: Parameters {extra_keys} provided but not found as :name style in SQL. Ensure they match @name style if used. SQL: {sql}"
-                    logger.warning(msg)
-            final_params = merged_params  # Pass dict; _run_query_job will make BQ params
-
-        elif isinstance(merged_params, (list, tuple)):
-            if sql_named_param_nodes:
-                msg = "bigquery: Sequence parameters provided, but SQL uses named placeholders. Use '?' placeholders."
-                raise ParameterStyleMismatchError(msg)
-
-            if len(sql_placeholder_nodes) != len(merged_params):
-                msg = (
-                    f"bigquery: Parameter count mismatch. SQL expects {len(sql_placeholder_nodes)} '?' placeholders, "
-                    f"but {len(merged_params)} were provided. SQL: {sql}"
-                )
-                raise SQLParsingError(msg)
-            final_params = tuple(merged_params)
-
-        elif merged_params is not None:  # Scalar parameter
-            if sql_named_param_nodes:
-                msg = "bigquery: Scalar parameter provided, but SQL uses named placeholders. Use a single '?'."
-                raise ParameterStyleMismatchError(msg)
-            if len(sql_placeholder_nodes) != 1:
-                msg = (
-                    f"bigquery: Scalar parameter provided, but SQL expects {len(sql_placeholder_nodes)} '?' placeholders. "
-                    f"Expected 1. SQL: {sql}"
-                )
-                raise SQLParsingError(msg)
-            final_params = (merged_params,)
-
-        else:  # Should be caught by 'merged_params is None' earlier
-            final_params = None  # Should align with the `return sql, None` path earlier
-
-        return final_sql, final_params
-
-    def _run_query_job(  # noqa: PLR0912, PLR0915 (User change)
+    def _run_query_job(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
@@ -249,104 +170,44 @@ class BigQueryDriver(
         else:
             final_job_config = QueryJobConfig()  # Create a fresh config
 
-        # --- Parameter Handling Logic --- Start
-        params: Union[dict[str, Any], list[Any], None] = None
-        param_style: Optional[str] = None  # 'named' (@), 'qmark' (?)
-        use_preformatted_params = False
-        final_sql = sql  # Default to original SQL
+        # Process SQL and parameters
+        final_sql, processed_params = self._process_sql_params(sql, parameters, **kwargs)
 
-        # Check for pre-formatted BQ parameters first
+        # Handle pre-formatted parameters
         if (
-            isinstance(parameters, (list, tuple))
-            and parameters
-            and all(isinstance(p, (bigquery.ScalarQueryParameter, bigquery.ArrayQueryParameter)) for p in parameters)
+            isinstance(processed_params, (list, tuple))
+            and processed_params
+            and all(
+                isinstance(p, (bigquery.ScalarQueryParameter, bigquery.ArrayQueryParameter)) for p in processed_params
+            )
         ):
-            if kwargs:
-                msg = "Cannot mix pre-formatted BigQuery parameters with keyword arguments."
-                raise SQLSpecError(msg)
-            use_preformatted_params = True
-            final_job_config.query_parameters = list(parameters)
-            # Keep final_sql = sql, as it should match the pre-formatted named params
+            final_job_config.query_parameters = list(processed_params)
+        # Convert regular parameters to BigQuery parameters
+        elif isinstance(processed_params, dict):
+            # Convert dict params to BQ ScalarQueryParameter
+            final_job_config.query_parameters = [
+                bigquery.ScalarQueryParameter(name, self._get_bq_param_type(value)[0], value)
+                for name, value in processed_params.items()
+            ]
+        elif isinstance(processed_params, (list, tuple)):
+            # Convert list params to BQ ScalarQueryParameter
+            final_job_config.query_parameters = [
+                bigquery.ScalarQueryParameter(None, self._get_bq_param_type(value)[0], value)
+                for value in processed_params
+            ]
 
-        # Determine parameter style and merge standard parameters ONLY if not preformatted
-        if not use_preformatted_params:
-            if isinstance(parameters, dict):
-                params = {**parameters, **kwargs}
-                param_style = "named"
-            elif isinstance(parameters, (list, tuple)):
-                if kwargs:
-                    msg = "Cannot mix positional parameters with keyword arguments."
-                    raise SQLSpecError(msg)
-                # Check if it's primitives for qmark style
-                if all(
-                    not isinstance(p, (bigquery.ScalarQueryParameter, bigquery.ArrayQueryParameter)) for p in parameters
-                ):
-                    params = list(parameters)
-                    param_style = "qmark"
-                else:
-                    # Mixed list or non-BQ parameter objects
-                    msg = "Invalid mix of parameter types in list. Use only primitive values or only BigQuery QueryParameter objects."
-                    raise SQLSpecError(msg)
-
-            elif kwargs:
-                params = kwargs
-                param_style = "named"
-            elif parameters is not None and not isinstance(
-                parameters, (bigquery.ScalarQueryParameter, bigquery.ArrayQueryParameter)
-            ):
-                # Could be a single primitive value for positional
-                params = [parameters]
-                param_style = "qmark"
-            elif parameters is not None:  # Single BQ parameter object
-                msg = "Single BigQuery QueryParameter objects should be passed within a list."
-                raise SQLSpecError(msg)
-
-        # Use sqlglot to transpile ONLY if not a script and not preformatted
-        if not is_script and not use_preformatted_params:
-            try:
-                # Transpile for syntax normalization/dialect conversion if needed
-                # Use BigQuery dialect for both reading and writing
-                final_sql = sqlglot.transpile(sql, read=self.dialect, write=self.dialect)[0]
-            except Exception as e:
-                # Catch potential sqlglot errors
-                msg = f"SQL transpilation failed using sqlglot: {e!s}"  # Adjusted message
-                raise SQLSpecError(msg) from e
-            # else: If preformatted_params, final_sql remains the original sql
-
-        # --- Parameter Handling Logic --- (Moved outside the transpilation try/except)
-        # Prepare BQ parameters based on style, ONLY if not preformatted
-        if not use_preformatted_params:
-            if param_style == "named" and params:
-                # Convert dict params to BQ ScalarQueryParameter
-                if isinstance(params, dict):
-                    final_job_config.query_parameters = [
-                        bigquery.ScalarQueryParameter(name, self._get_bq_param_type(value)[0], value)
-                        for name, value in params.items()
-                    ]
-                else:
-                    # This path should ideally not be reached if param_style logic is correct
-                    msg = f"Internal error: Parameter style is 'named' but parameters are not a dict: {type(params)}"
-                    raise SQLSpecError(msg)
-            elif param_style == "qmark" and params:
-                # Convert list params to BQ ScalarQueryParameter
-                final_job_config.query_parameters = [
-                    bigquery.ScalarQueryParameter(None, self._get_bq_param_type(value)[0], value) for value in params
-                ]
-
-        # --- Parameter Handling Logic --- End
-
-        # Determine which kwargs to pass to the actual query method.
-        # We only want to pass kwargs that were *not* treated as SQL parameters.
+        # Determine which kwargs to pass to the actual query method
+        # We only want to pass kwargs that were *not* treated as SQL parameters
         final_query_kwargs = {}
         if parameters is not None and kwargs:  # Params came via arg, kwargs are separate
             final_query_kwargs = kwargs
-        # Else: If params came via kwargs, they are already handled, so don't pass them again.
+        # Else: If params came via kwargs, they are already handled, so don't pass them again
 
         # Execute query
         return conn.query(
             final_sql,
             job_config=final_job_config,
-            **final_query_kwargs,  # Pass only relevant kwargs
+            **final_query_kwargs,
         )
 
     @staticmethod
@@ -715,41 +576,13 @@ class BigQueryDriver(
         conn = self._connection(connection)
         final_job_config = job_config or self._default_query_job_config or QueryJobConfig()
 
-        # Determine parameter style and merge parameters (Similar to _run_query_job)
-        params: Union[dict[str, Any], list[Any], None] = None
-        param_style: Optional[str] = None  # 'named' (@), 'qmark' (?)
+        # Process SQL and parameters using SQLStatement
+        processed_sql, processed_params = self._process_sql_params(sql, parameters, **kwargs)
 
-        if isinstance(parameters, dict):
-            params = {**parameters, **kwargs}
-            param_style = "named"
-        elif isinstance(parameters, (list, tuple)):
-            if kwargs:
-                msg = "Cannot mix positional parameters with keyword arguments."
-                raise SQLSpecError(msg)
-            params = list(parameters)
-            param_style = "qmark"
-        elif kwargs:
-            params = kwargs
-            param_style = "named"
-        elif parameters is not None:
-            params = [parameters]
-            param_style = "qmark"
-
-        # Use sqlglot to transpile and bind parameters
-        try:
-            transpiled_sql = sqlglot.transpile(sql, args=params or {}, read=None, write=self.dialect)[0]
-        except Exception as e:
-            msg = f"SQL transpilation/binding failed using sqlglot: {e!s}"
-            raise SQLSpecError(msg) from e
-
-        # Prepare BigQuery specific parameters if named style was used
-        if param_style == "named" and params:
-            if not isinstance(params, dict):
-                # This should be logically impossible due to how param_style is set
-                msg = "Internal error: named parameter style detected but params is not a dict."
-                raise SQLSpecError(msg)
+        # Convert parameters to BigQuery format
+        if isinstance(processed_params, dict):
             query_parameters = []
-            for key, value in params.items():
+            for key, value in processed_params.items():
                 param_type, array_element_type = self._get_bq_param_type(value)
 
                 if param_type == "ARRAY" and array_element_type:
@@ -760,15 +593,17 @@ class BigQueryDriver(
                     msg = f"Unsupported parameter type for BigQuery Arrow named parameter '{key}': {type(value)}"
                     raise SQLSpecError(msg)
             final_job_config.query_parameters = query_parameters
-        elif param_style == "qmark" and params:
-            # Positional params handled by client library
-            pass
+        elif isinstance(processed_params, (list, tuple)):
+            # Convert sequence parameters
+            final_job_config.query_parameters = [
+                bigquery.ScalarQueryParameter(None, self._get_bq_param_type(value)[0], value)
+                for value in processed_params
+            ]
 
         # Execute the query and get Arrow table
         try:
-            query_job = conn.query(transpiled_sql, job_config=final_job_config)
+            query_job = conn.query(processed_sql, job_config=final_job_config)
             arrow_table = query_job.to_arrow()  # Waits for job completion
-
         except Exception as e:
             msg = f"BigQuery Arrow query execution failed: {e!s}"
             raise SQLSpecError(msg) from e
@@ -823,3 +658,14 @@ class BigQueryDriver(
         if extract_job.errors:
             msg = f"BigQuery Parquet export failed: {extract_job.errors}"
             raise SQLSpecError(msg)
+
+    def _connection(self, connection: "Optional[BigQueryConnection]" = None) -> "BigQueryConnection":
+        """Get the connection to use for the operation.
+
+        Args:
+            connection: Optional connection to use.
+
+        Returns:
+            The connection to use.
+        """
+        return connection or self.connection

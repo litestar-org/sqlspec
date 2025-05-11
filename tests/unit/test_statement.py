@@ -12,7 +12,7 @@ BASIC_PARAMETER_CASES = [
     ("Format type", "SELECT name FROM users WHERE status = %s", [("var_format_type", "s")]),
 ]
 
-COMMENTS_AND_STRINGS_CASES = [
+COMMENTS_AND_STRINGS_CASES: list[tuple[str, str, list[tuple[str, str]]]] = [
     ("Inside single quotes", "SELECT * FROM users WHERE notes = 'param: :value, other: ?'", []),
     ("Inside double quotes", 'SELECT * FROM users WHERE description = "param: :value, other: ?"', []),
     ("Single quotes with escaped quote", "SELECT 'It''s value: :not_param' FROM test", []),

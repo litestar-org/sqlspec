@@ -323,8 +323,10 @@ convention = "google"
 max-complexity = 25
 
 [tool.ruff.lint.pylint]
+max-bool-expr = 10
 max-branches = 20
 max-locals = 20
+max-returns = 15
 
 [tool.ruff.lint.pep8-naming]
 classmethod-decorators = ["classmethod"]

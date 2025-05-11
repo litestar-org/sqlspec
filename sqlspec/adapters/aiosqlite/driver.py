@@ -3,13 +3,12 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 import aiosqlite
-import sqlglot
 from sqlglot import exp
 
 from sqlspec.base import AsyncDriverAdapterProtocol
-from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin
 from sqlspec.statement import SQLStatement
+from sqlspec.typing import is_dict
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
@@ -53,169 +52,63 @@ class AiosqliteDriver(
         /,
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        # 1. Use SQLStatement for initial processing and validation
-        stmt = SQLStatement(sql, parameters, kwargs=kwargs)
-        original_sql, merged_params = stmt.process()  # `process` returns original_sql and merged_params
+        """Process SQL and parameters for aiosqlite using SQLStatement.
 
-        if merged_params is None:
-            return original_sql, None
+        aiosqlite supports both named (:name) and positional (?) parameters.
+        This method processes the SQL with dialect-aware parsing and handles
+        parameters appropriately for aiosqlite.
 
-        try:
-            parsed_expression = sqlglot.parse_one(original_sql, read=self.dialect)
-        except Exception as e:
-            msg = f"aiosqlite: Failed to re-parse SQL with sqlglot after SQLStatement validation: {e}. SQL: {original_sql}"
-            raise SQLParsingError(msg) from e
+        Args:
+            sql: SQL statement.
+            parameters: Query parameters.
+            **kwargs: Additional keyword arguments.
 
-        final_sql: str = original_sql
-        final_params_tuple: Optional[tuple[Any, ...]] = None
+        Returns:
+            Tuple of processed SQL and parameters.
+        """
+        statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
+        filters = kwargs.pop("filters", None)
+        if filters:
+            for filter_obj in filters:
+                statement = statement.apply_filter(filter_obj)
+        processed_sql, processed_params, parsed_expr = statement.process()
+        if processed_params is None:
+            return processed_sql, None
 
-        if isinstance(merged_params, dict):
-            actual_named_placeholders_in_ast: dict[str, Union[exp.Parameter, exp.Placeholder]] = {}
-            has_true_qmark_placeholders = False
+        if is_dict(processed_params):
+            # For dict parameters, we need to use ordered ? placeholders
+            # but only if we have a parsed expression to work with
+            if parsed_expr:
+                # Collect named parameters in the order they appear in the SQL
+                named_params = []
+                for node in parsed_expr.find_all(exp.Parameter, exp.Placeholder):
+                    if isinstance(node, exp.Parameter) and node.name and node.name in processed_params:
+                        named_params.append(node.name)
+                    elif (
+                        isinstance(node, exp.Placeholder)
+                        and isinstance(node.this, str)
+                        and node.this in processed_params
+                    ):
+                        named_params.append(node.this)
 
-            for node in parsed_expression.find_all(exp.Placeholder, exp.Parameter):
-                if isinstance(node, exp.Parameter) and node.name and not node.name.isdigit():
-                    actual_named_placeholders_in_ast[node.name] = node
-                elif isinstance(node, exp.Placeholder) and node.this and not node.this.isdigit():  # :name
-                    actual_named_placeholders_in_ast[node.this] = node
-                elif isinstance(node, exp.Placeholder) and node.this is None:  # ?
-                    has_true_qmark_placeholders = True
+                if named_params:
+                    # Transform SQL to use ? placeholders
+                    def _convert_to_qmark(node: exp.Expression) -> exp.Expression:
+                        if (isinstance(node, exp.Parameter) and node.name and node.name in processed_params) or (
+                            isinstance(node, exp.Placeholder)
+                            and isinstance(node.this, str)
+                            and node.this in processed_params
+                        ):
+                            return exp.Placeholder()  # ? placeholder
+                        return node
 
-            if has_true_qmark_placeholders:
-                msg = "aiosqlite: Dictionary parameters provided, but SQL uses '?' placeholders. Use named placeholders (e.g., :name)."
-                raise ParameterStyleMismatchError(msg)
-
-            if not actual_named_placeholders_in_ast and merged_params:
-                # If merged_params is not empty and no named placeholders found.
-                msg = "aiosqlite: Dictionary parameters provided, but no recognizable named placeholders found in SQL."
-                raise ParameterStyleMismatchError(msg)
-            if not actual_named_placeholders_in_ast and not merged_params:
-                # Empty dict params and no named placeholders, this is fine, but should have been caught by merged_params is None earlier if truly no params.
-                # If merged_params is an empty dict, it implies user intended named params but provided none.
-                # However, if SQL also has no named params, it could be a query without params.
-                # This path should be less common due to the `merged_params is None` check.
-                pass  # Allowing empty dict with SQL that has no named params found by sqlglot.
-
-            sql_param_names_in_ast = set(actual_named_placeholders_in_ast.keys())
-            provided_keys = set(merged_params.keys())
-
-            missing_keys = sql_param_names_in_ast - provided_keys
-            if missing_keys:
-                msg = f"aiosqlite: Named parameters {missing_keys} found in SQL but not provided. SQL: {original_sql}"
-                raise SQLParsingError(msg)
-
-            extra_keys = provided_keys - sql_param_names_in_ast
-            if extra_keys:
-                logger.warning(
-                    f"aiosqlite: Parameters {extra_keys} provided but not found in SQL. They will be ignored. SQL: {original_sql}"
-                )
-
-            ordered_param_values: list[Any] = []
-
-            def _convert_named_to_qmark(node_transform: exp.Expression) -> exp.Expression:
-                param_name = None
-                if (
-                    isinstance(node_transform, exp.Parameter)
-                    and node_transform.name
-                    and not node_transform.name.isdigit()
-                ):
-                    param_name = node_transform.name
-                elif (
-                    isinstance(node_transform, exp.Placeholder)
-                    and node_transform.this
-                    and not node_transform.this.isdigit()
-                ):
-                    param_name = node_transform.this
-
-                if param_name and param_name in merged_params:
-                    ordered_param_values.append(merged_params[param_name])
-                    return exp.Placeholder()  # Represents '?'
-                return node_transform
-
-            transformed_expression = parsed_expression.transform(_convert_named_to_qmark, copy=True)
-            final_sql = transformed_expression.sql(dialect=self.dialect)
-            final_params_tuple = tuple(ordered_param_values)
-
-        elif isinstance(merged_params, (list, tuple)):
-            # Logic for sequence parameters (should be largely correct now thanks to SQLStatement updates)
-            # SQLStatement already validated that if sequence params are given, SQL doesn't have named placeholders.
-            # It also validated counts if it could parse qmarks. The main task here is to ensure dialect-specific SQL.
-            sql_placeholder_nodes = list(
-                parsed_expression.find_all(exp.Placeholder)
-            )  # Re-fetch for this block if needed
-            sql_numeric_param_nodes = [  # Simplified numeric detection for sqlite context, primarily expecting ?
-                node
-                for node in parsed_expression.find_all(exp.Parameter)
-                if (node.name and node.name.isdigit())
-                or (not node.name and node.this and isinstance(node.this, str) and node.this.isdigit())
-            ]
-            qmark_count = sum(1 for p_node in sql_placeholder_nodes if p_node.this is None)
-            numeric_count = len(sql_numeric_param_nodes)
-            # For aiosqlite (sqlite), we primarily expect '?' (qmark). $N is not native.
-            # SQLStatement should have validated this. If SQL had $N, it should be an error from SQLStatement if dialect is sqlite.
-            # Here, we just ensure final SQL is in '?' form if it wasn't already.
-
-            # This check is somewhat redundant if SQLStatement.process() worked correctly.
-            # It should have raised ParameterStyleMismatchError if named params were in SQL with sequence input.
-            has_named_placeholders_in_ast = False
-            for node in parsed_expression.find_all(exp.Placeholder, exp.Parameter):
-                if (isinstance(node, exp.Parameter) and node.name and not node.name.isdigit()) or (
-                    isinstance(node, exp.Placeholder) and node.this and not node.this.isdigit()
-                ):
-                    has_named_placeholders_in_ast = True
-                    break
-            if has_named_placeholders_in_ast:
-                msg = f"aiosqlite: Sequence parameters provided, but SQL unexpectedly contains named placeholders after SQLStatement validation. SQL: {original_sql}"
-                raise ParameterStyleMismatchError(msg)
-
-            expected_qmarks = qmark_count + numeric_count  # Should primarily be qmark_count for sqlite
-            if expected_qmarks != len(merged_params):
-                # This might indicate SQLStatement's regex fallback was used and sqlglot count differs.
-                # Or, the SQL is malformed in a way that bypasses SQLStatement's initial validation for sequence params.
-                msg = (
-                    f"aiosqlite: Parameter count mismatch after SQLStatement validation. "
-                    f"SQL (re-parsed) expects {expected_qmarks} positional placeholders, but {len(merged_params)} were provided. SQL: {original_sql}"
-                )
-                # Check if SQLStatement validation should have caught this. This is more of an internal consistency check.
-                logger.warning(msg)  # Log as warning, as SQLStatement might have allowed it based on regex.
-                # If we proceed, it might lead to runtime errors from aiosqlite. For now, we proceed with params as is.
-
-            final_sql = parsed_expression.sql(dialect=self.dialect)  # Ensures '?' for sqlite
-            final_params_tuple = tuple(merged_params)
-
-        elif merged_params is not None:  # Scalar parameter
-            # Similar to sequence, SQLStatement should have validated this.
-            # Expecting one 'qmark' placeholder.
-            sql_placeholder_nodes = list(parsed_expression.find_all(exp.Placeholder))  # Re-fetch for this block
-            sql_numeric_param_nodes = [  # Simplified numeric detection for sqlite context
-                node
-                for node in parsed_expression.find_all(exp.Parameter)
-                if (node.name and node.name.isdigit())
-                or (not node.name and node.this and isinstance(node.this, str) and node.this.isdigit())
-            ]
-            qmark_count = sum(1 for p_node in sql_placeholder_nodes if p_node.this is None)
-            numeric_count = len(sql_numeric_param_nodes)
-
-            has_named_placeholders_in_ast = False
-            for node in parsed_expression.find_all(exp.Placeholder, exp.Parameter):
-                if (isinstance(node, exp.Parameter) and node.name and not node.name.isdigit()) or (
-                    isinstance(node, exp.Placeholder) and node.this and not node.this.isdigit()
-                ):
-                    has_named_placeholders_in_ast = True
-                    break
-            if has_named_placeholders_in_ast:
-                msg = f"aiosqlite: Scalar parameter provided, but SQL unexpectedly contains named placeholders after SQLStatement validation. SQL: {original_sql}"
-                raise ParameterStyleMismatchError(msg)
-
-            expected_qmarks = qmark_count + numeric_count
-            if expected_qmarks != 1:
-                msg = f"aiosqlite: Scalar parameter provided, but SQL (re-parsed) expects {expected_qmarks} positional placeholders (expected 1). SQL: {original_sql}"
-                raise SQLParsingError(msg)
-
-            final_sql = parsed_expression.sql(dialect=self.dialect)
-            final_params_tuple = (merged_params,)
-
-        return final_sql, final_params_tuple
+                    return parsed_expr.transform(_convert_to_qmark, copy=True).sql(dialect=self.dialect), tuple(
+                        processed_params[name] for name in named_params
+                    )
+            return processed_sql, processed_params
+        if isinstance(processed_params, (list, tuple)):
+            return processed_sql, tuple(processed_params)
+        return processed_sql, (processed_params,)
 
     # --- Public API Methods --- #
     @overload

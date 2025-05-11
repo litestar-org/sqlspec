@@ -1,18 +1,18 @@
-# ruff: noqa: PLR0915, C901, PLR0912, PLR0911
 import contextlib
 import logging
+import re
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast, overload
 
-import sqlglot
 from adbc_driver_manager.dbapi import Connection, Cursor
 from sqlglot import exp as sqlglot_exp
 
 from sqlspec.base import SyncDriverAdapterProtocol
 from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin, SyncArrowBulkOperationsMixin
-from sqlspec.typing import ArrowTable, StatementParameterType
+from sqlspec.statement import SQLStatement
+from sqlspec.typing import ArrowTable, StatementParameterType, is_dict
 
 if TYPE_CHECKING:
     from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType, T
@@ -22,6 +22,13 @@ __all__ = ("AdbcConnection", "AdbcDriver")
 logger = logging.getLogger("sqlspec")
 
 AdbcConnection = Connection
+
+# SQLite named parameter pattern - simple pattern to find parameter references
+SQLITE_PARAM_PATTERN = re.compile(r"(?::|\$|@)([a-zA-Z0-9_]+)")
+
+# Patterns to identify comments and string literals
+SQL_COMMENT_PATTERN = re.compile(r"--[^\n]*|/\*.*?\*/", re.DOTALL)
+SQL_STRING_PATTERN = re.compile(r"'[^']*'|\"[^\"]*\"")
 
 
 class AdbcDriver(
@@ -78,317 +85,197 @@ class AdbcDriver(
             with contextlib.suppress(Exception):
                 cursor.close()  # type: ignore[no-untyped-call]
 
-    def _process_sql_params(
+    def _process_sql_params(  # noqa: C901, PLR0912, PLR0915
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
         **kwargs: Any,
     ) -> "tuple[str, Optional[tuple[Any, ...]]]":  # Always returns tuple or None for params
-        # 1. Merge parameters and kwargs
-        merged_params: Optional[Union[dict[str, Any], Sequence[Any], Any]] = None  # Allow Any for scalar
+        """Process SQL and parameters for ADBC.
+
+        ADBC drivers generally use positional parameters with '?' placeholders.
+        This method processes the SQL statement and transforms parameters into the format
+        expected by ADBC drivers.
+
+        Args:
+            sql: The SQL statement to process.
+            parameters: The parameters to bind to the statement.
+            **kwargs: Additional keyword arguments (including filters).
+
+        Raises:
+            SQLParsingError: If the SQL statement cannot be parsed.
+            ParameterStyleMismatchError: If positional parameters are mixed with keyword arguments.
+
+        Returns:
+            A tuple of (sql, parameters) ready for execution.
+        """
+        # Special handling for SQLite with non-dict parameters and named placeholders
+        if self.dialect == "sqlite" and parameters is not None and not is_dict(parameters):
+            # First mask out comments and strings to avoid detecting parameters in those
+            comments = list(SQL_COMMENT_PATTERN.finditer(sql))
+            strings = list(SQL_STRING_PATTERN.finditer(sql))
+
+            all_matches = [(m.start(), m.end(), "comment") for m in comments] + [
+                (m.start(), m.end(), "string") for m in strings
+            ]
+            all_matches.sort(reverse=True)
+
+            for start, end, _ in all_matches:
+                sql = sql[:start] + " " * (end - start) + sql[end:]
+
+            # Find named parameters in clean SQL
+            named_params = list(SQLITE_PARAM_PATTERN.finditer(sql))
+
+            if named_params:
+                param_positions = [(m.start(), m.end()) for m in named_params]
+                param_positions.sort(reverse=True)
+                for start, end in param_positions:
+                    sql = sql[:start] + "?" + sql[end:]
+                if not isinstance(parameters, (list, tuple)):
+                    return sql, (parameters,)
+                return sql, tuple(parameters)
+
+        # Standard processing for all other cases
+        merged_params = parameters
         if kwargs:
-            if isinstance(parameters, dict):
+            if is_dict(parameters):
                 merged_params = {**parameters, **kwargs}
             elif parameters is not None:
                 msg = "Cannot mix positional parameters with keyword arguments for adbc driver."
                 raise ParameterStyleMismatchError(msg)
             else:
                 merged_params = kwargs
-        elif parameters is not None:
-            merged_params = parameters
-        # else merged_params remains None
 
-        # 2. SQLGlot Parsing - Use the determined dialect for reading if possible
-        # For ADBC, the input SQL style might be generic, so a neutral read dialect or auto-detection might be safer initially.
-        # However, self.dialect is set in __init__ based on the connection.
-        # If the input SQL is guaranteed to match self.dialect, this is fine.
-        # If SQL can be :name style while dialect is e.g. postgres, sqlglot needs to know.
-        # Defaulting to parsing with the target dialect; an explicit read_dialect can be added if needed.
-        try:
-            # The `read` dialect might need to be more flexible if input SQL doesn't match target ADBC driver dialect.
-            # For now, assume input SQL should be somewhat compatible or generic enough for sqlglot to parse with target dialect hints.
-            parsed_expression = sqlglot.parse_one(sql, read=self.dialect)
-        except Exception as e:
-            msg = f"ADBC ({self.dialect}): Failed to parse SQL with sqlglot: {e}. SQL: {sql}"
-            raise SQLParsingError(msg) from e
+        # 2. Create SQLStatement with dialect and process
+        statement = SQLStatement(sql, merged_params, dialect=self.dialect)
 
-        sql_named_param_nodes = [
-            node for node in parsed_expression.find_all(sqlglot_exp.Parameter) if node.name and not node.name.isdigit()
-        ]
-        sql_placeholder_nodes = list(
-            parsed_expression.find_all(sqlglot_exp.Placeholder)
-        )  # Represents '?' and also ':name' for some dialects
+        # Apply any filters if present
+        filters = kwargs.pop("filters", None)
+        if filters:
+            for filter_obj in filters:
+                statement = statement.apply_filter(filter_obj)
 
-        # More robust detection of numeric parameters (e.g., $1, :1)
-        sql_numeric_nodes = []
-        for node in parsed_expression.find_all(sqlglot_exp.Parameter):
-            is_numeric = False
-            if node.name and isinstance(node.name, str) and node.name.isdigit():  # e.g. @1
-                is_numeric = True
-            elif not node.name and node.this:
-                # Combined and corrected multi-line condition
-                is_identifier_numeric = (
-                    isinstance(node.this, sqlglot_exp.Identifier)
-                    and node.this.this
-                    and isinstance(node.this.this, str)
-                    and node.this.this.isdigit()
-                )
-                if (
-                    (isinstance(node.this, str) and node.this.isdigit())
-                    or is_identifier_numeric
-                    or isinstance(node.this, sqlglot.exp.Number)
-                ):  # Corrected: sqlglot.exp.Number
-                    is_numeric = True
-            if is_numeric:
-                sql_numeric_nodes.append(node)
+        processed_sql, processed_params, parsed_expr = statement.process()
 
-        # Numeric placeholders like :1, :2 (parsed as Placeholder(this="1"))
-        numeric_placeholder_nodes = [
-            p_node for p_node in sql_placeholder_nodes if isinstance(p_node.this, str) and p_node.this.isdigit()
-        ]
+        # Special handling for SQLite dialect with dict parameters
+        if self.dialect == "sqlite" and is_dict(processed_params):
+            # First, mask out comments and string literals with placeholders
+            masked_sql = processed_sql
 
-        # 3. Handle No Parameters Case
-        if merged_params is None:
-            if sql_named_param_nodes or sql_placeholder_nodes or sql_numeric_nodes:
-                placeholder_types = set()
-                if sql_named_param_nodes:
-                    placeholder_types.add("named (e.g., :name, @name, $name)")
-                if sql_placeholder_nodes:
-                    placeholder_types.add("positional ('?')")
-                if sql_numeric_nodes:
-                    placeholder_types.add("numeric (e.g., $1, :1)")
-                msg = (
-                    f"ADBC ({self.dialect}): SQL statement contains {', '.join(placeholder_types) if placeholder_types else 'unknown'} "
-                    f"parameter placeholders, but no parameters were provided. SQL: {sql}"
-                )
-                raise SQLParsingError(msg)
-            # ADBC execute often expects list/tuple for parameters argument, even if empty.
-            return sql, ()
+            # Replace comments and strings with placeholders
+            comments = list(SQL_COMMENT_PATTERN.finditer(masked_sql))
+            strings = list(SQL_STRING_PATTERN.finditer(masked_sql))
 
-        final_sql: str
-        final_params_seq: list[Any] = []
-
-        target_dialect = self.dialect  # Dialect determined from ADBC connection
-
-        if isinstance(merged_params, dict):
-            has_qmark_placeholders = any(
-                p_node.this is None  # Removed isinstance check as p_node is already known to be Placeholder
-                for p_node in sql_placeholder_nodes
-            )
-
-            if has_qmark_placeholders or numeric_placeholder_nodes or sql_numeric_nodes:
-                msg = (
-                    f"ADBC ({target_dialect}): Dictionary parameters provided, but SQL uses positional "
-                    f"placeholders ('?', $N, or :N). Use named placeholders (e.g. :name, @name, $name)."
-                )
-                raise ParameterStyleMismatchError(msg)
-
-            # Validate keys
-            colon_named_placeholder_nodes = [
-                p_node for p_node in sql_placeholder_nodes if isinstance(p_node.this, str) and not p_node.this.isdigit()
+            # Sort all matches by their start position (descending)
+            all_matches = [(m.start(), m.end(), "comment") for m in comments] + [
+                (m.start(), m.end(), "string") for m in strings
             ]
-            all_ast_named_params = {node.name for node in sql_named_param_nodes if node.name}
-            all_ast_named_params.update(
-                node.this for node in colon_named_placeholder_nodes if isinstance(node.this, str)
-            )
+            all_matches.sort(reverse=True)
 
-            provided_keys = set(merged_params.keys())
-            missing_keys = all_ast_named_params - provided_keys
-            if missing_keys:
-                msg = f"ADBC ({target_dialect}): Named parameters {missing_keys} found in SQL but not provided. SQL: {sql}"
-                raise SQLParsingError(msg)
-            extra_keys = provided_keys - all_ast_named_params
-            if extra_keys:
-                logger.warning(
-                    f"ADBC ({target_dialect}): Parameters {extra_keys} provided but not found in SQL. Behavior depends on underlying driver. SQL: {sql}"
+            # Replace each match with spaces to preserve positions
+            for start, end, _ in all_matches:
+                masked_sql = masked_sql[:start] + " " * (end - start) + masked_sql[end:]
+
+            # Now find parameters in the masked SQL
+            param_order = []
+            param_spans = []  # Store (start, end) of each parameter
+
+            for match in SQLITE_PARAM_PATTERN.finditer(masked_sql):
+                param_name = match.group(1)
+                if param_name in processed_params:
+                    param_order.append(param_name)
+                    param_spans.append((match.start(), match.end()))
+
+            if param_order:
+                # Replace parameters with ? placeholders in reverse order to preserve positions
+                result_sql = processed_sql
+                for i, (start, end) in enumerate(reversed(param_spans)):  # noqa: B007
+                    # Replace :param with ?
+                    result_sql = result_sql[:start] + "?" + result_sql[start + 1 + len(param_order[-(i + 1)]) :]
+
+                return result_sql, tuple(processed_params[name] for name in param_order)
+
+        if processed_params is None:
+            return processed_sql, ()
+        if (
+            isinstance(processed_params, (tuple, list))
+            or (processed_params is not None and not isinstance(processed_params, dict))
+        ) and parsed_expr is not None:
+            # Find all named placeholders
+            named_param_nodes = [
+                node
+                for node in parsed_expr.find_all(sqlglot_exp.Parameter, sqlglot_exp.Placeholder)
+                if (isinstance(node, sqlglot_exp.Parameter) and node.name and not node.name.isdigit())
+                or (
+                    isinstance(node, sqlglot_exp.Placeholder)
+                    and node.this
+                    and not isinstance(node.this, (sqlglot_exp.Identifier, sqlglot_exp.Literal))
+                    and not str(node.this).isdigit()
                 )
-
-            # Transformation logic: convert all named styles to '?' and populate final_params_seq
-            final_params_seq.clear()
-
-            def _convert_any_named_to_qmark(node: sqlglot_exp.Expression) -> sqlglot_exp.Expression:
-                param_name_to_check = None
-                if isinstance(node, sqlglot_exp.Parameter) and node.name and not node.name.isdigit():
-                    param_name_to_check = node.name
-                elif (
-                    isinstance(node, sqlglot_exp.Placeholder) and isinstance(node.this, str) and not node.this.isdigit()
-                ):
-                    param_name_to_check = node.this
-
-                if param_name_to_check and param_name_to_check in merged_params:  # merged_params is a dict here
-                    final_params_seq.append(merged_params[param_name_to_check])
-                    return sqlglot_exp.Placeholder()  # Anonymous placeholder '?'
-                return node
-
-            transformed_expression = parsed_expression.transform(_convert_any_named_to_qmark, copy=True)
-            final_sql = transformed_expression.sql(dialect=target_dialect)
-
-        elif isinstance(merged_params, (list, tuple)):
-            # Collect all types of placeholders from SQL
-            qmark_placeholders_count = sum(1 for p_node in sql_placeholder_nodes if p_node.this is None)
-
-            # Named placeholders from sqlglot_exp.Parameter (e.g., @name, $name)
-            # sql_named_param_nodes is already defined
-
-            # Named placeholders from sqlglot_exp.Placeholder (e.g., :name)
-            colon_named_placeholder_nodes = [
-                p_node for p_node in sql_placeholder_nodes if isinstance(p_node.this, str) and not p_node.this.isdigit()
             ]
 
-            # Numeric placeholders (e.g., $1, :1) - from both Parameter and Placeholder nodes
-            # numeric_placeholder_nodes and sql_numeric_nodes are already defined
+            # If we found named parameters, transform to question marks
+            if named_param_nodes:
 
-            # Get all named parameters in order of appearance in the AST
-            ordered_named_params_in_ast = []
-            # We need to iterate through the AST to get them in order. find_all gives traversal order.
-            for node in parsed_expression.find_all(sqlglot_exp.Parameter, sqlglot_exp.Placeholder):
-                if isinstance(node, sqlglot_exp.Parameter) and node.name and not node.name.isdigit():
-                    ordered_named_params_in_ast.append(node.name)
+                def convert_to_qmark(node: sqlglot_exp.Expression) -> sqlglot_exp.Expression:
+                    if (isinstance(node, sqlglot_exp.Parameter) and node.name and not node.name.isdigit()) or (
+                        isinstance(node, sqlglot_exp.Placeholder)
+                        and node.this
+                        and not isinstance(node.this, (sqlglot_exp.Identifier, sqlglot_exp.Literal))
+                        and not str(node.this).isdigit()
+                    ):
+                        return sqlglot_exp.Placeholder()
+                    return node
+
+                # Transform the SQL
+                processed_sql = parsed_expr.transform(convert_to_qmark, copy=True).sql(dialect=self.dialect)
+
+                # If it's a scalar parameter, ensure it's wrapped in a tuple
+                if not isinstance(processed_params, (tuple, list)):
+                    processed_params = (processed_params,)  # type: ignore[unreachable]
+
+        # 6. Handle dictionary parameters
+        if is_dict(processed_params):
+            # Skip conversion if there's no parsed expression to work with
+            if parsed_expr is None:
+                msg = f"ADBC ({self.dialect}): Failed to parse SQL with dictionary parameters. Cannot determine parameter order."
+                raise SQLParsingError(msg)
+
+            # Collect named parameters in the order they appear in the SQL
+            named_params = []
+            for node in parsed_expr.find_all(sqlglot_exp.Parameter, sqlglot_exp.Placeholder):
+                if isinstance(node, sqlglot_exp.Parameter) and node.name and node.name in processed_params:
+                    named_params.append(node.name)  # type: ignore[arg-type]
                 elif (
-                    isinstance(node, sqlglot_exp.Placeholder) and isinstance(node.this, str) and not node.this.isdigit()
+                    isinstance(node, sqlglot_exp.Placeholder)
+                    and isinstance(node.this, str)
+                    and node.this in processed_params
                 ):
-                    ordered_named_params_in_ast.append(node.this)
+                    named_params.append(node.this)  # type: ignore[arg-type]
 
-            # Remove duplicates while preserving order for mapping if needed (though duplicates might be intended by user in some complex SQLs)
-            # For now, let's assume unique placeholders for mapping tuple to names. If SQL has duplicate named params,
-            # this logic might need adjustment or clarification on expected behavior.
-            # A simpler approach for now: just count unique types.
-
-            has_any_named_placeholders = bool(sql_named_param_nodes or colon_named_placeholder_nodes)
-            has_any_positional_or_numeric = bool(
-                qmark_placeholders_count or numeric_placeholder_nodes or sql_numeric_nodes
-            )
-
-            if has_any_named_placeholders:
-                if has_any_positional_or_numeric:
-                    msg = f"ADBC ({target_dialect}): Sequence parameters provided, but SQL mixes named and positional/numeric placeholders. This is not supported."
-                    raise ParameterStyleMismatchError(msg)
-
-                # SQL has only named placeholders. Try to map sequence params to them by order.
-                # Re-extract ordered unique named parameter *names* for mapping.
-                # find_all preserves order. To get unique names in order:
-                unique_ordered_named_param_names = list(
-                    dict.fromkeys(ordered_named_params_in_ast)
-                )  # Python 3.7+ dict preserves insertion order
-
-                if len(unique_ordered_named_param_names) != len(merged_params):
-                    msg = (
-                        f"ADBC ({target_dialect}): Sequence parameters provided (count: {len(merged_params)}), "
-                        f"but SQL has {len(unique_ordered_named_param_names)} unique named placeholders. Counts must match."
-                    )
-                    raise SQLParsingError(msg)
-
-                # Create a temporary dict from named params and sequence values
-                temp_dict_params = dict(zip(unique_ordered_named_param_names, merged_params))
-
-                # Now, use the same transformation as the dict instance block
-                final_params_seq.clear()
-
-                def _convert_any_named_to_qmark_for_seq(node: sqlglot_exp.Expression) -> sqlglot_exp.Expression:
-                    param_name_to_check = None
-                    if isinstance(node, sqlglot_exp.Parameter) and node.name and not node.name.isdigit():
-                        param_name_to_check = node.name
-                    elif (
+            # If we found named parameters, convert them to ? placeholders
+            if named_params:
+                # Transform SQL to use ? placeholders
+                def convert_to_qmark(node: sqlglot_exp.Expression) -> sqlglot_exp.Expression:
+                    if isinstance(node, sqlglot_exp.Parameter) and node.name and node.name in processed_params:
+                        return sqlglot_exp.Placeholder()  # Anonymous ? placeholder
+                    if (
                         isinstance(node, sqlglot_exp.Placeholder)
                         and isinstance(node.this, str)
-                        and not node.this.isdigit()
+                        and node.this in processed_params
                     ):
-                        param_name_to_check = node.this
-
-                    if param_name_to_check and param_name_to_check in temp_dict_params:
-                        final_params_seq.append(temp_dict_params[param_name_to_check])
-                        return sqlglot_exp.Placeholder()  # Anonymous placeholder '?'
+                        return sqlglot_exp.Placeholder()  # Anonymous ? placeholder
                     return node
 
-                transformed_expression = parsed_expression.transform(_convert_any_named_to_qmark_for_seq, copy=True)
-                final_sql = transformed_expression.sql(dialect=target_dialect)
-
-            elif has_any_positional_or_numeric:  # SQL has only positional/numeric (or qmark) placeholders
-                final_sql = parsed_expression.sql(
-                    dialect=target_dialect
-                )  # Ensure it's in target dialect form (e.g. ? -> $1)
-                expected_param_count = (
-                    qmark_placeholders_count + len(numeric_placeholder_nodes) + len(sql_numeric_nodes)
+                return parsed_expr.transform(convert_to_qmark, copy=True).sql(dialect=self.dialect), tuple(
+                    processed_params[name]  # type: ignore[index]
+                    for name in named_params
                 )
-                if expected_param_count != len(merged_params):
-                    msg = (
-                        f"ADBC ({target_dialect}): Parameter count mismatch. SQL expects {expected_param_count} "
-                        f"positional parameters, but {len(merged_params)} were provided. SQL: {sql}, Processed SQL: {final_sql}"
-                    )
-                    raise SQLParsingError(msg)
-                final_params_seq.extend(merged_params)
-            else:  # No placeholders in SQL, but sequence params provided
-                if merged_params:  # If params is not an empty tuple/list
-                    msg = f"ADBC ({target_dialect}): Sequence parameters provided, but SQL has no placeholders."
-                    raise SQLParsingError(msg)
-                # If merged_params is empty sequence and no placeholders, that's fine.
-                final_sql = sql  # No transformation needed
-                # final_params_seq remains empty, which is correct
-
-        elif merged_params is not None:  # Scalar parameter
-            qmark_placeholders_count = sum(1 for p_node in sql_placeholder_nodes if p_node.this is None)
-            colon_named_placeholder_nodes = [
-                p_node for p_node in sql_placeholder_nodes if isinstance(p_node.this, str) and not p_node.this.isdigit()
-            ]
-
-            total_named_placeholders = len(sql_named_param_nodes) + len(colon_named_placeholder_nodes)
-            total_positional_or_numeric_placeholders = (
-                qmark_placeholders_count + len(numeric_placeholder_nodes) + len(sql_numeric_nodes)
-            )
-
-            if total_named_placeholders > 0 and total_positional_or_numeric_placeholders > 0:
-                # SQL mixes named and positional/numeric types, not allowed with scalar param.
-                msg = (
-                    f"ADBC ({target_dialect}): Scalar parameter provided, but SQL mixes named and positional/numeric "
-                    f"placeholders. Use a single placeholder of one type."
-                )
-                raise ParameterStyleMismatchError(msg)
-
-            if total_named_placeholders == 1 and total_positional_or_numeric_placeholders == 0:
-                # Case: Scalar param with exactly one NAMED placeholder (e.g., :name, @name)
-                final_params_seq.clear()
-                single_named_param_name = None
-                if sql_named_param_nodes:  # @name style
-                    single_named_param_name = sql_named_param_nodes[0].name
-                elif colon_named_placeholder_nodes:  # :name style
-                    single_named_param_name = colon_named_placeholder_nodes[0].this
-
-                def _convert_the_one_named_to_qmark(node: sqlglot_exp.Expression) -> sqlglot_exp.Expression:
-                    # This function assumes single_named_param_name is correctly identified
-                    if (isinstance(node, sqlglot_exp.Parameter) and node.name == single_named_param_name) or (
-                        isinstance(node, sqlglot_exp.Placeholder) and node.this == single_named_param_name
-                    ):
-                        final_params_seq.append(merged_params)  # Directly use scalar
-                        return sqlglot_exp.Placeholder()  # Anonymous placeholder '?'
-                    return node
-
-                transformed_expression = parsed_expression.transform(_convert_the_one_named_to_qmark, copy=True)
-                final_sql = transformed_expression.sql(dialect=target_dialect)
-
-            elif total_positional_or_numeric_placeholders == 1 and total_named_placeholders == 0:
-                # Case: Scalar param with exactly one POSITIONAL/NUMERIC placeholder (e.g., ?, $1)
-                final_sql = parsed_expression.sql(dialect=target_dialect)  # Ensure correct dialect form (e.g. ? -> $1)
-                final_params_seq.append(merged_params)
-
-            elif total_named_placeholders == 0 and total_positional_or_numeric_placeholders == 0:
-                # Case: Scalar param, but SQL has NO placeholders at all.
-                msg = f"ADBC ({target_dialect}): Scalar parameter provided, but SQL has no parameter placeholders."
-                raise SQLParsingError(msg)
-
-            else:
-                # Any other scenario: e.g. multiple named, multiple positional, etc.
-                msg = (
-                    f"ADBC ({target_dialect}): Scalar parameter provided, but SQL placeholder configuration is invalid. "
-                    f"Found {total_named_placeholders} named and {total_positional_or_numeric_placeholders} positional/numeric placeholders. "
-                    f"Expected exactly one placeholder of a consistent type for a scalar parameter."
-                )
-                raise ParameterStyleMismatchError(msg)
-
-        else:
-            return sql, ()
-
-        return final_sql, tuple(final_params_seq)
+            return processed_sql, tuple(processed_params.values())
+        if isinstance(processed_params, (list, tuple)):
+            return processed_sql, tuple(processed_params)
+        return processed_sql, (processed_params,)
 
     @overload
     def select(

@@ -474,7 +474,7 @@ def dataclass_to_dict(
     return cast("dict[str, Any]", ret)
 
 
-def schema_dump(  # noqa: PLR0911
+def schema_dump(
     data: "Union[dict[str, Any],   DataclassProtocol, Struct, BaseModel]",
     exclude_unset: bool = True,
 ) -> "dict[str, Any]":
@@ -501,6 +501,18 @@ def schema_dump(  # noqa: PLR0911
     if hasattr(data, "__dict__"):
         return data.__dict__
     return cast("dict[str, Any]", data)
+
+
+def is_dto_data(v: Any) -> TypeGuard[DTOData[Any]]:
+    """Check if a value is a Litestar DTOData object.
+
+    Args:
+        v: Value to check.
+
+    Returns:
+        bool
+    """
+    return LITESTAR_INSTALLED and isinstance(v, DTOData)
 
 
 __all__ = (
@@ -536,6 +548,7 @@ __all__ = (
     "is_dict",
     "is_dict_with_field",
     "is_dict_without_field",
+    "is_dto_data",
     "is_msgspec_struct",
     "is_msgspec_struct_with_field",
     "is_msgspec_struct_without_field",
@@ -566,3 +579,7 @@ if TYPE_CHECKING:
         from sqlspec._typing import ArrowTable
     else:
         from pyarrow import Table as ArrowTable  # noqa: TC004
+    if not LITESTAR_INSTALLED:
+        from sqlspec._typing import DTOData
+    else:
+        from litestar.dto import DTOData  # noqa: TC004

@@ -1,6 +1,3 @@
-# sqlspec/extensions/litestar/handlers.py
-"""ASGI Message handlers and dependency providers for the Litestar SQLSpec extension."""
-
 import contextlib
 from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
@@ -238,16 +235,7 @@ def connection_provider_maker(
                 msg = f"Database pool with key '{pool_key}' not found in application state. Cannot create a connection."
                 raise ImproperConfigurationError(msg)
 
-            # Acquire a new connection from the pool.
-            # This relies on the DatabaseConfigProtocol's `acquire_connection_from_pool` method.
-            if not hasattr(config, "acquire_connection_from_pool"):
-                msg = (
-                    f"The DatabaseConfigProtocol implementation for dialect '{config.dialect_name}' "  # type: ignore[attr-defined]
-                    "is missing the 'acquire_connection_from_pool' method, "
-                    "which is required for pooled connection management."
-                )
-                raise ImproperConfigurationError(msg)
-            connection = await ensure_async_(config.acquire_connection_from_pool(db_pool))  # type: ignore[attr-defined]
+            connection = await ensure_async_(config.provide_connection)(db_pool)
             set_sqlspec_scope_state(scope, connection_key, connection)
         return cast("ConnectionT", connection)
 
@@ -295,14 +283,7 @@ def session_provider_maker(
                 if db_pool is None:
                     msg = f"Database pool with key '{pool_key}' not found in application state while trying to create a session."
                     raise ImproperConfigurationError(msg)
-                if not hasattr(config, "acquire_connection_from_pool"):
-                    msg = (
-                        f"The DatabaseConfigProtocol implementation for dialect '{config.dialect_name}' "  # type: ignore[attr-defined]
-                        "is missing the 'acquire_connection_from_pool' method, "
-                        "which is required for pooled connection management."
-                    )
-                    raise ImproperConfigurationError(msg)
-                connection = await ensure_async_(config.acquire_connection_from_pool(db_pool))  # type: ignore[attr-defined]
+                connection = await ensure_async_(config.provide_session)(db_pool)
                 set_sqlspec_scope_state(scope, connection_key, connection)
 
             # Create the driver/session instance with the (pooled) connection

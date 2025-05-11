@@ -548,7 +548,8 @@ class CommonDriverAttributes(Generic[ConnectionT]):
         # Instantiate SQLStatement with parameters and kwargs for internal merging
         stmt = SQLStatement(sql=sql, parameters=parameters, kwargs=kwargs or None)
         # Process uses the merged parameters internally
-        return stmt.process()
+        processed = stmt.process()
+        return processed[0], processed[1]  # Return only the SQL and parameters, discard the third element
 
 
 class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generic[ConnectionT]):

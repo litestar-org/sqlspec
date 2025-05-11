@@ -1,15 +1,16 @@
 import logging
+import re
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
-import sqlglot
 from psycopg import AsyncConnection, Connection
 from psycopg.rows import dict_row
-from sqlglot import exp
 
 from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
-from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
+from sqlspec.exceptions import ParameterStyleMismatchError
 from sqlspec.mixins import SQLTranslatorMixin
+from sqlspec.statement import SQLStatement
+from sqlspec.typing import is_dict
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator, Sequence
@@ -20,12 +21,17 @@ logger = logging.getLogger("sqlspec")
 
 __all__ = ("PsycopgAsyncConnection", "PsycopgAsyncDriver", "PsycopgSyncConnection", "PsycopgSyncDriver")
 
+
+NAMED_PARAMS_PATTERN = re.compile(r"(?<!:):([a-zA-Z0-9_]+)")
+# Pattern matches %(name)s format while trying to avoid matches in string literals and comments
+PSYCOPG_PARAMS_PATTERN = re.compile(r"(?<!'|\"|\w)%\(([a-zA-Z0-9_]+)\)s(?!'|\")")
+
 PsycopgSyncConnection = Connection
 PsycopgAsyncConnection = AsyncConnection
 
 
 class PsycopgDriverBase:
-    dialect: str
+    dialect: str = "postgres"
 
     def _process_sql_params(
         self,
@@ -34,169 +40,51 @@ class PsycopgDriverBase:
         /,
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        # 1. Merge parameters and kwargs
-        merged_params: Optional[Union[dict[str, Any], list[Any], tuple[Any, ...], Any]] = None
+        """Process SQL and parameters using SQLStatement with dialect support.
 
-        if kwargs:
-            if isinstance(parameters, dict):
-                merged_params = {**parameters, **kwargs}
-            elif parameters is not None:
-                msg = "Cannot mix positional parameters with keyword arguments for psycopg driver."
-                raise ParameterStyleMismatchError(msg)
-            else:
-                merged_params = kwargs
-        elif parameters is not None:
-            merged_params = parameters
-        # else merged_params remains None
+        Args:
+            sql: The SQL statement to process.
+            parameters: The parameters to bind to the statement.
+            **kwargs: Additional keyword arguments (including filters).
 
-        # Special case: if merged_params is an empty dict, treat it as None for parameterless queries
-        if isinstance(merged_params, dict) and not merged_params:
-            merged_params = None
+        Raises:
+            ParameterStyleMismatchError: If the parameter style is mismatched.
 
-        # 2. SQLGlot Parsing
-        try:
-            parsed_expression = sqlglot.parse_one(sql, read=self.dialect)
-        except Exception as e:
-            msg = f"psycopg: Failed to parse SQL with sqlglot: {e}. SQL: {sql}"
-            raise SQLParsingError(msg) from e
+        Returns:
+            A tuple of (sql, parameters) ready for execution.
+        """
+        statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
+        filters = kwargs.pop("filters", None)
+        if filters:
+            for filter_obj in filters:
+                statement = statement.apply_filter(filter_obj)
 
-        # Traditional named parameters (e.g., @name, $name)
-        sql_named_param_nodes = [
-            node for node in parsed_expression.find_all(exp.Parameter) if node.name and not node.name.isdigit()
-        ]
+        processed_sql, processed_params, _ = statement.process()
 
-        # Named placeholders (e.g., :name which are parsed as Placeholder with this="name")
-        named_placeholder_nodes = [
-            node
-            for node in parsed_expression.find_all(exp.Placeholder)
-            if isinstance(node.this, str) and not node.this.isdigit()
-        ]
+        if is_dict(processed_params):
+            named_params = NAMED_PARAMS_PATTERN.findall(processed_sql)
 
-        # Anonymous placeholders (?)
-        qmark_placeholder_nodes = [node for node in parsed_expression.find_all(exp.Placeholder) if node.this is None]
+            if not named_params:
+                if PSYCOPG_PARAMS_PATTERN.search(processed_sql):
+                    return processed_sql, processed_params
 
-        # Numeric dollar params (e.g., $1, $2)
-        sql_numeric_dollar_nodes = [
-            node
-            for node in parsed_expression.find_all(exp.Parameter)
-            if not node.name and node.this and isinstance(node.this, str) and node.this.isdigit()
-        ]
+                if processed_params:
+                    msg = "psycopg: Dictionary parameters provided, but no named placeholders found in SQL."
+                    raise ParameterStyleMismatchError(msg)
+                return processed_sql, None
 
-        # 3. Handle No Parameters Case
-        if merged_params is None:
-            if sql_named_param_nodes or named_placeholder_nodes or qmark_placeholder_nodes or sql_numeric_dollar_nodes:
-                placeholder_types = set()
-                if sql_named_param_nodes or named_placeholder_nodes:
-                    placeholder_types.add("named (e.g., :name)")
-                if qmark_placeholder_nodes:
-                    placeholder_types.add("qmark ('?')")
-                if sql_numeric_dollar_nodes:
-                    placeholder_types.add("numeric ($n)")
-                msg = (
-                    f"psycopg: SQL statement contains {', '.join(placeholder_types) if placeholder_types else 'unknown'} "
-                    f"parameter placeholders, but no parameters were provided. SQL: {sql}"
-                )
-                raise SQLParsingError(msg)
-            return sql, None  # psycopg can take None for params
+            # Convert named parameters to psycopg's preferred format
+            return NAMED_PARAMS_PATTERN.sub("%s", processed_sql), tuple(processed_params[name] for name in named_params)
 
-        final_sql: str
-        final_params: Optional[Union[tuple[Any, ...], dict[str, Any]]] = None
+        # For sequence parameters, ensure they're a tuple
+        if isinstance(processed_params, (list, tuple)):
+            return processed_sql, tuple(processed_params)
 
-        if isinstance(merged_params, dict):
-            # Dictionary parameters. Aim for %(name)s style for psycopg.
-            if qmark_placeholder_nodes or sql_numeric_dollar_nodes:
-                msg = "psycopg: Dictionary parameters provided, but SQL uses positional placeholders ('?' or $n). Use named placeholders for dictionary params (e.g. :name, which will be converted to %(name)s)."
-                raise ParameterStyleMismatchError(msg)
+        # For scalar parameter or None
+        if processed_params is not None:
+            return processed_sql, (processed_params,)
 
-            if not sql_named_param_nodes and not named_placeholder_nodes and "%(" not in sql:
-                msg = "psycopg: Dictionary parameters provided, but no standard named placeholders (e.g., :name) found to convert to %(name)s, and SQL does not appear to be pyformat already."
-                raise ParameterStyleMismatchError(msg)
-
-            if sql_named_param_nodes or named_placeholder_nodes:
-                # Collect parameter names from both types of nodes
-                sql_param_names_in_ast = set()
-
-                # Get names from Parameter nodes
-                sql_param_names_in_ast.update(node.name for node in sql_named_param_nodes if node.name)
-
-                # Get names from Placeholder nodes
-                sql_param_names_in_ast.update(
-                    node.this for node in named_placeholder_nodes if isinstance(node.this, str)
-                )
-
-                provided_keys = set(merged_params.keys())
-
-                missing_keys = sql_param_names_in_ast - provided_keys
-                if missing_keys:
-                    msg = f"psycopg: Named parameters {missing_keys} (from :name style) found in SQL but not provided. SQL: {sql}"
-                    raise SQLParsingError(msg)
-
-            try:
-                final_sql = parsed_expression.sql(dialect=self.dialect, pyformat=True)
-            except Exception as e:
-                logger.exception("psycopg: Failed to generate pyformat SQL with sqlglot: %s. SQL: %s", e, sql)
-                if "%(" in sql:
-                    final_sql = sql
-                else:
-                    msg = f"psycopg: Error generating pyformat SQL: {e}"
-                    raise SQLParsingError(msg) from e
-
-            final_params = merged_params
-
-        elif isinstance(merged_params, (list, tuple)):
-            # Sequence parameters. Aim for %s style.
-            if sql_named_param_nodes or named_placeholder_nodes:
-                msg = "psycopg: Sequence parameters provided, but SQL contains named placeholders. Use '?' or '%s' for sequence parameters."
-                raise ParameterStyleMismatchError(msg)
-            if sql_numeric_dollar_nodes:
-                msg = "psycopg: Sequence parameters provided, but SQL uses $n style. Use '?' or '%s' for psycopg."
-                raise ParameterStyleMismatchError(msg)
-
-            expected_param_count = len(qmark_placeholder_nodes)
-            if expected_param_count == 0 and "%s" in sql and not qmark_placeholder_nodes:
-                logger.debug(
-                    "psycopg: No '?' found, but '%s' present with sequence params. Assuming intended for '%s' style. Count validation relies on psycopg."
-                )
-            elif expected_param_count != len(merged_params) and not ("%s" in sql and expected_param_count == 0):
-                if not ("%s" in sql and len(merged_params) > 0 and expected_param_count == 0):
-                    msg = (
-                        f"psycopg: Parameter count mismatch. SQL (based on '?' count) expects "
-                        f"{expected_param_count} positional placeholders, but {len(merged_params)} were provided. SQL: {sql}"
-                    )
-                    raise SQLParsingError(msg)
-
-            final_sql = parsed_expression.sql(dialect=self.dialect)
-            final_params = tuple(merged_params)
-
-        elif merged_params is not None:  # Scalar parameter
-            if sql_named_param_nodes or named_placeholder_nodes:
-                msg = "psycopg: Scalar parameter provided, but SQL uses named placeholders. Use a single '?' or '%s'."
-                raise ParameterStyleMismatchError(msg)
-            if sql_numeric_dollar_nodes:
-                msg = "psycopg: Scalar parameter provided, but SQL uses $n style. Use '?' or '%s' for psycopg."
-                raise ParameterStyleMismatchError(msg)
-
-            expected_param_count = len(qmark_placeholder_nodes)
-            if expected_param_count == 0 and "%s" in sql and not qmark_placeholder_nodes:
-                logger.debug(
-                    "psycopg: No '?' for scalar, but '%s' present. Assuming '%s' style. Count relies on psycopg."
-                )
-            elif expected_param_count != 1 and not ("%s" in sql and expected_param_count == 0):
-                if not ("%s" in sql and expected_param_count == 0):  # Avoid error if it might be a single %s
-                    msg = (
-                        f"psycopg: Scalar parameter provided, but SQL expects {expected_param_count} "
-                        f"positional placeholders ('?' or '%s'). Expected 1. SQL: {sql}"
-                    )
-                    raise SQLParsingError(msg)
-
-            final_sql = parsed_expression.sql(dialect=self.dialect)
-            final_params = (merged_params,)
-
-        else:  # Should be caught by 'merged_params is None' earlier
-            final_sql = sql
-            final_params = None
-
-        return final_sql, final_params
+        return processed_sql, None
 
 
 class PsycopgSyncDriver(
@@ -207,7 +95,6 @@ class PsycopgSyncDriver(
     """Psycopg Sync Driver Adapter."""
 
     connection: "PsycopgSyncConnection"
-    dialect: str = "postgres"
 
     def __init__(self, connection: "PsycopgSyncConnection") -> None:
         self.connection = connection
@@ -565,7 +452,6 @@ class PsycopgAsyncDriver(
     """Psycopg Async Driver Adapter."""
 
     connection: "PsycopgAsyncConnection"
-    dialect: str = "postgres"
 
     def __init__(self, connection: "PsycopgAsyncConnection") -> None:
         self.connection = connection
@@ -608,8 +494,8 @@ class PsycopgAsyncDriver(
         parameters: "Optional[StatementParameterType]" = None,
         /,
         *,
-        connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch data from the database.
@@ -619,15 +505,14 @@ class PsycopgAsyncDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        results: list[Union[ModelDTOT, dict[str, Any]]] = []
-
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             results = await cursor.fetchall()
             if not results:
                 return []
+
             if schema_type is not None:
-                return [cast("ModelDTOT", schema_type(**cast("dict[str,Any]", row))) for row in results]  # pyright: ignore[reportUnknownArgumentType]
+                return [cast("ModelDTOT", schema_type(**row)) for row in results]  # pyright: ignore[reportUnknownArgumentType]
             return [cast("dict[str,Any]", row) for row in results]  # pyright: ignore[reportUnknownArgumentType]
 
     @overload
@@ -669,7 +554,6 @@ class PsycopgAsyncDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             row = await cursor.fetchone()
@@ -717,7 +601,6 @@ class PsycopgAsyncDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             row = await cursor.fetchone()
@@ -766,7 +649,6 @@ class PsycopgAsyncDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             row = await cursor.fetchone()
@@ -777,6 +659,28 @@ class PsycopgAsyncDriver(
                 return schema_type(val)  # type: ignore[call-arg]
             return val
 
+    @overload
+    async def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
+        schema_type: None = None,
+        **kwargs: Any,
+    ) -> "Optional[Any]": ...
+    @overload
+    async def select_value_or_none(
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *,
+        connection: "Optional[PsycopgAsyncConnection]" = None,
+        schema_type: "type[T]",
+        **kwargs: Any,
+    ) -> "Optional[T]": ...
     async def select_value_or_none(
         self,
         sql: str,
@@ -794,7 +698,6 @@ class PsycopgAsyncDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             row = await cursor.fetchone()
@@ -891,7 +794,6 @@ class PsycopgAsyncDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             return str(cursor.statusmessage) if cursor.statusmessage is not None else "DONE"

@@ -67,7 +67,6 @@ def test_driver_insert_returning(adbc_session: AdbcConfig, params: Any, style: P
 
 
 @xfail_if_driver_missing
-@pytest.mark.xdist_group("sqlite")
 def test_driver_select(adbc_session: AdbcConfig) -> None:
     """Test select functionality with simple tuple parameters."""
     params = ("test_name",)
@@ -95,7 +94,6 @@ def test_driver_select(adbc_session: AdbcConfig) -> None:
 
 
 @xfail_if_driver_missing
-@pytest.mark.xdist_group("sqlite")
 def test_driver_select_value(adbc_session: AdbcConfig) -> None:
     """Test select_value functionality with simple tuple parameters."""
     params = ("test_name",)
@@ -122,7 +120,6 @@ def test_driver_select_value(adbc_session: AdbcConfig) -> None:
 
 
 @xfail_if_driver_missing
-@pytest.mark.xdist_group("sqlite")
 def test_driver_insert(adbc_session: AdbcConfig) -> None:
     """Test insert functionality."""
     with adbc_session.provide_session() as driver:
@@ -147,7 +144,6 @@ def test_driver_insert(adbc_session: AdbcConfig) -> None:
 
 
 @xfail_if_driver_missing
-@pytest.mark.xdist_group("sqlite")
 def test_driver_select_normal(adbc_session: AdbcConfig) -> None:
     """Test select functionality."""
     with adbc_session.provide_session() as driver:
@@ -185,7 +181,6 @@ def test_driver_select_normal(adbc_session: AdbcConfig) -> None:
     ],
 )
 @xfail_if_driver_missing
-@pytest.mark.xdist_group("sqlite")
 def test_param_styles(adbc_session: AdbcConfig, param_style: str) -> None:
     """Test different parameter styles."""
     with adbc_session.provide_session() as driver:
@@ -215,7 +210,6 @@ def test_param_styles(adbc_session: AdbcConfig, param_style: str) -> None:
 
 
 @xfail_if_driver_missing
-@pytest.mark.xdist_group("sqlite")
 def test_driver_select_arrow(adbc_session: AdbcConfig) -> None:
     """Test select_arrow functionality."""
     with adbc_session.provide_session() as driver:
@@ -253,7 +247,6 @@ def test_driver_select_arrow(adbc_session: AdbcConfig) -> None:
 
 
 @xfail_if_driver_missing
-@pytest.mark.xdist_group("sqlite")
 def test_driver_named_params_with_scalar(adbc_session: AdbcConfig) -> None:
     """Test that scalar parameters work with named parameters in SQL."""
     with adbc_session.provide_session() as driver:
@@ -281,7 +274,6 @@ def test_driver_named_params_with_scalar(adbc_session: AdbcConfig) -> None:
 
 
 @xfail_if_driver_missing
-@pytest.mark.xdist_group("sqlite")
 def test_driver_named_params_with_tuple(adbc_session: AdbcConfig) -> None:
     """Test that tuple parameters work with named parameters in SQL."""
     with adbc_session.provide_session() as driver:

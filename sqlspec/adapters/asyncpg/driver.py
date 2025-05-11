@@ -1,14 +1,13 @@
 import logging
 import re
+from re import Match
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
-import sqlglot
 from asyncpg import Connection
 from sqlglot import exp
 from typing_extensions import TypeAlias
 
 from sqlspec.base import AsyncDriverAdapterProtocol
-from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
 from sqlspec.mixins import SQLTranslatorMixin
 from sqlspec.statement import SQLStatement
 
@@ -28,6 +27,24 @@ AsyncpgConnection: TypeAlias = "Union[Connection[Any], PoolConnectionProxy[Any]]
 
 # Compile the row count regex once for efficiency
 ROWCOUNT_REGEX = re.compile(r"^(?:INSERT|UPDATE|DELETE) \d+ (\d+)$")
+
+# Improved regex to match question mark placeholders only when they are outside string literals and comments
+# This pattern handles:
+# 1. Single quoted strings with escaped quotes
+# 2. Double quoted strings with escaped quotes
+# 3. Single-line comments (-- to end of line)
+# 4. Multi-line comments (/* to */)
+# 5. Only question marks outside of these contexts are considered parameters
+QUESTION_MARK_PATTERN = re.compile(
+    r"""
+    (?:'[^']*(?:''[^']*)*') |           # Skip single-quoted strings (with '' escapes)
+    (?:"[^"]*(?:""[^"]*)*") |           # Skip double-quoted strings (with "" escapes)
+    (?:--.*?(?:\n|$)) |                 # Skip single-line comments
+    (?:/\*(?:[^*]|\*(?!/))*\*/) |       # Skip multi-line comments
+    (\?)                                # Capture only question marks outside of these contexts
+    """,
+    re.VERBOSE | re.DOTALL,
+)
 
 
 class AsyncpgDriver(
@@ -49,134 +66,92 @@ class AsyncpgDriver(
         /,
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        # First, use SQLStatement for parameter validation
-        statement = SQLStatement(sql=sql, parameters=parameters, kwargs=kwargs)
-        sql, validated_params = statement.process()
+        """Process SQL and parameters for AsyncPG using SQLStatement.
 
-        if validated_params is None:
-            return sql, ()  # asyncpg expects an empty tuple for no params
+        This method applies filters (if provided), processes the SQL through SQLStatement
+        with dialect support, and converts parameters to the format required by AsyncPG.
 
-        # Now use SQLGlot for PostgreSQL-specific parameter handling
-        try:
-            parsed_expression = sqlglot.parse_one(sql, read=self.dialect)
-        except Exception as e:
-            msg = f"asyncpg: Failed to parse SQL with sqlglot: {e}. SQL: {sql}"
-            raise SQLParsingError(msg) from e
+        Args:
+            sql: SQL statement.
+            parameters: Query parameters.
+            **kwargs: Additional keyword arguments.
 
-        # Find different types of parameter nodes in the AST
-        # Traditional named parameters (e.g., @name, $name)
-        sql_named_param_nodes = [node for node in parsed_expression.find_all(exp.Parameter) if node.name]
+        Returns:
+            Tuple of processed SQL and parameters.
+        """
+        # Handle scalar parameter by converting to a single-item tuple
+        if parameters is not None and not isinstance(parameters, (list, tuple, dict)):
+            parameters = (parameters,)
 
-        # For PostgreSQL dialect, ':name' gets parsed as Placeholder with this='name'
-        colon_named_placeholder_nodes = [
-            node
-            for node in parsed_expression.find_all(exp.Placeholder)
-            if isinstance(node.this, str) and not node.this.isdigit()
-        ]
+        # Create a SQLStatement with PostgreSQL dialect
+        statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
 
-        # Anonymous placeholders (?)
-        question_mark_nodes = [node for node in parsed_expression.find_all(exp.Placeholder) if node.this is None]
+        # Apply any filters if present
+        filters = kwargs.pop("filters", None)
+        if filters:
+            for filter_obj in filters:
+                statement = statement.apply_filter(filter_obj)
 
-        # PostgreSQL-specific dollar-numeric parameters like $1, $2
-        sql_numeric_dollar_nodes = [
-            node
-            for node in parsed_expression.find_all(exp.Parameter)
-            if not node.name and node.this and isinstance(node.this, str) and node.this.isdigit()
-        ]
+        # Process the statement
+        processed_sql, processed_params, parsed_expr = statement.process()
 
-        final_params_seq = []
+        if processed_params is None:
+            return processed_sql, ()
 
-        if isinstance(validated_params, dict):
-            # Dictionary parameters - convert named parameters to PostgreSQL style ($n)
-            if question_mark_nodes or sql_numeric_dollar_nodes:
-                msg = "asyncpg: Dictionary parameters provided, but SQL uses positional placeholders. Use named placeholders (e.g., :name)."
-                raise ParameterStyleMismatchError(msg)
+        # Convert question marks to PostgreSQL style $N parameters
+        if isinstance(processed_params, (list, tuple)) and "?" in processed_sql:
+            # Use a counter to generate $1, $2, etc. for each ? in the SQL that's outside strings/comments
+            param_index = 0
 
-            # With PostgreSQL dialect, :name is parsed as Placeholder, not Parameter
-            if not sql_named_param_nodes and not colon_named_placeholder_nodes:
-                msg = "asyncpg: Dictionary parameters provided, but no named placeholders found in SQL by sqlglot."
-                raise ParameterStyleMismatchError(msg)
+            def replace_question_mark(match: Match[str]) -> str:
+                # Only process the match if it's not in a skipped context (string/comment)
+                if match.group(1):  # This is a question mark outside string/comment
+                    nonlocal param_index
+                    param_index += 1
+                    return f"${param_index}"
+                # Return the entire matched text unchanged for strings/comments
+                return match.group(0)
 
-            # Transform both types of named parameters to $n placeholders
-            def _convert_named_to_dollar(node: exp.Expression) -> exp.Expression:
-                param_name = None
-                if isinstance(node, exp.Parameter) and node.name:
-                    param_name = node.name
-                elif isinstance(node, exp.Placeholder) and isinstance(node.this, str) and not node.this.isdigit():
-                    param_name = node.this
+            processed_sql = QUESTION_MARK_PATTERN.sub(replace_question_mark, processed_sql)
 
-                if param_name and param_name in validated_params:
-                    final_params_seq.append(validated_params[param_name])
-                    # Create a Parameter node that PostgreSQL will interpret as a positional parameter ($n)
-                    # The position is determined by the order in final_params_seq
-                    return exp.Parameter(this=str(len(final_params_seq)))
-                return node
+        # Now handle the asyncpg-specific parameter conversion - asyncpg requires positional parameters
+        if isinstance(processed_params, dict):
+            if parsed_expr is not None:
+                # Find named parameters
+                named_params = []
+                for node in parsed_expr.find_all(exp.Parameter, exp.Placeholder):
+                    if isinstance(node, exp.Parameter) and node.name and node.name in processed_params:
+                        named_params.append(node.name)
+                    elif (
+                        isinstance(node, exp.Placeholder)
+                        and isinstance(node.this, str)
+                        and node.this in processed_params
+                    ):
+                        named_params.append(node.this)
 
-            transformed_expression = parsed_expression.transform(_convert_named_to_dollar, copy=True)
-            final_sql = transformed_expression.sql(dialect=self.dialect)
+                # Convert named parameters to positional
+                if named_params:
+                    # Transform the SQL to use $1, $2, etc.
+                    def replace_named_with_positional(node: exp.Expression) -> exp.Expression:
+                        if isinstance(node, exp.Parameter) and node.name and node.name in processed_params:
+                            idx = named_params.index(node.name) + 1
+                            return exp.Parameter(this=str(idx))
+                        if (
+                            isinstance(node, exp.Placeholder)
+                            and isinstance(node.this, str)
+                            and node.this in processed_params
+                        ):
+                            idx = named_params.index(node.this) + 1
+                            return exp.Parameter(this=str(idx))
+                        return node
 
-        elif hasattr(validated_params, "__iter__") and not isinstance(validated_params, (str, bytes, dict)):
-            # Sequence parameters (list or tuple)
-            if sql_named_param_nodes or colon_named_placeholder_nodes:
-                msg = (
-                    "asyncpg: Sequence parameters provided, but SQL contains named placeholders. Use '?' placeholders."
-                )
-                raise ParameterStyleMismatchError(msg)
-
-            # Count placeholders for validation
-            total_placeholders = len(question_mark_nodes) + len(sql_numeric_dollar_nodes)
-            if total_placeholders != len(validated_params):
-                msg = (
-                    f"asyncpg: Parameter count mismatch. SQL expects {total_placeholders} placeholders, "
-                    f"but {len(validated_params)} parameters were provided. SQL: {sql}"
-                )
-                raise SQLParsingError(msg)
-
-            # For PostgreSQL, convert ? to $n
-            def _convert_qmark_to_dollar(node: exp.Expression) -> exp.Expression:
-                if isinstance(node, exp.Placeholder) and node.this is None:
-                    position = len(final_params_seq) + 1  # PostgreSQL positions are 1-indexed
-                    final_params_seq.append(validated_params[position - 1])
-                    return exp.Parameter(this=str(position))
-                return node
-
-            transformed_expression = parsed_expression.transform(_convert_qmark_to_dollar, copy=True)
-            final_sql = transformed_expression.sql(dialect=self.dialect)
-
-            # If we didn't add any parameters via transformation (e.g., SQL already uses $n style),
-            # just add all parameters in order
-            if not final_params_seq and validated_params:
-                final_params_seq.extend(validated_params)
-
-        else:  # Scalar parameter
-            if sql_named_param_nodes or colon_named_placeholder_nodes:
-                msg = "asyncpg: Scalar parameter provided, but SQL contains named placeholders. Use a '?' placeholder."
-                raise ParameterStyleMismatchError(msg)
-
-            total_placeholders = len(question_mark_nodes) + len(sql_numeric_dollar_nodes)
-            if total_placeholders != 1:
-                msg = (
-                    f"asyncpg: Scalar parameter provided, but SQL expects {total_placeholders} placeholders. "
-                    f"Expected exactly 1. SQL: {sql}"
-                )
-                raise SQLParsingError(msg)
-
-            # Convert single ? to $1
-            def _convert_single_qmark_to_dollar(node: exp.Expression) -> exp.Expression:
-                if isinstance(node, exp.Placeholder) and node.this is None:
-                    final_params_seq.append(validated_params)
-                    return exp.Parameter(this="1")
-                return node
-
-            transformed_expression = parsed_expression.transform(_convert_single_qmark_to_dollar, copy=True)
-            final_sql = transformed_expression.sql(dialect=self.dialect)
-
-            # If we didn't add the parameter via transformation (e.g., SQL already uses $1),
-            # add it directly
-            if not final_params_seq:
-                final_params_seq.append(validated_params)
-
-        return final_sql, tuple(final_params_seq)
+                    return parsed_expr.transform(replace_named_with_positional, copy=True).sql(
+                        dialect=self.dialect
+                    ), tuple(processed_params[name] for name in named_params)
+            return processed_sql, tuple(processed_params.values())
+        if isinstance(processed_params, (list, tuple)):
+            return processed_sql, tuple(processed_params)
+        return processed_sql, (processed_params,)  # type: ignore[unreachable]
 
     @overload
     async def select(
