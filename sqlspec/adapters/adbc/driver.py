@@ -1,7 +1,7 @@
 import contextlib
 import logging
 import re
-from collections.abc import Generator, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast, overload
 
@@ -9,7 +9,7 @@ from adbc_driver_manager.dbapi import Connection, Cursor
 from sqlglot import exp as sqlglot_exp
 
 from sqlspec.base import SyncDriverAdapterProtocol
-from sqlspec.exceptions import ParameterStyleMismatchError, SQLParsingError
+from sqlspec.exceptions import SQLParsingError
 from sqlspec.filters import StatementFilter
 from sqlspec.mixins import ResultConverter, SQLTranslatorMixin, SyncArrowBulkOperationsMixin
 from sqlspec.statement import SQLStatement
@@ -107,14 +107,24 @@ class AdbcDriver(
             **kwargs: Additional keyword arguments.
 
         Raises:
-            ParameterStyleMismatchError: If positional parameters are mixed with keyword arguments.
             SQLParsingError: If the SQL statement cannot be parsed.
 
         Returns:
             A tuple of (sql, parameters) ready for execution.
         """
+        passed_parameters: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
+        combined_filters_list: list[StatementFilter] = list(filters)
+
+        if parameters is not None:
+            if isinstance(parameters, StatementFilter):
+                combined_filters_list.insert(0, parameters)
+                # passed_parameters remains None
+            else:
+                # If parameters is not a StatementFilter, it's actual data parameters.
+                passed_parameters = parameters
+
         # Special handling for SQLite with non-dict parameters and named placeholders
-        if self.dialect == "sqlite" and parameters is not None and not is_dict(parameters):
+        if self.dialect == "sqlite" and passed_parameters is not None and not is_dict(passed_parameters):
             # First mask out comments and strings to avoid detecting parameters in those
             comments = list(SQL_COMMENT_PATTERN.finditer(sql))
             strings = list(SQL_STRING_PATTERN.finditer(sql))
@@ -135,26 +145,15 @@ class AdbcDriver(
                 param_positions.sort(reverse=True)
                 for start, end in param_positions:
                     sql = sql[:start] + "?" + sql[end:]
-                if not isinstance(parameters, (list, tuple)):
-                    return sql, (parameters,)
-                return sql, tuple(parameters)
+                if not isinstance(passed_parameters, (list, tuple)):
+                    passed_parameters = (passed_parameters,)
+                passed_parameters = tuple(passed_parameters)
 
         # Standard processing for all other cases
-        merged_params = parameters
-        if kwargs:
-            if is_dict(parameters):
-                merged_params = {**parameters, **kwargs}
-            elif parameters is not None:
-                msg = "Cannot mix positional parameters with keyword arguments for adbc driver."
-                raise ParameterStyleMismatchError(msg)
-            else:
-                merged_params = kwargs
+        statement = SQLStatement(sql, passed_parameters, kwargs=kwargs, dialect=self.dialect)
 
-        # 2. Create SQLStatement with dialect and process
-        statement = SQLStatement(sql, merged_params, dialect=self.dialect)
-
-        # Apply any filters
-        for filter_obj in filters:
+        # Apply any filters from combined_filters_list
+        for filter_obj in combined_filters_list:
             statement = statement.apply_filter(filter_obj)
 
         processed_sql, processed_params, parsed_expr = statement.process()
@@ -442,7 +441,7 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -452,7 +451,7 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -461,7 +460,7 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
@@ -495,7 +494,7 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -505,7 +504,7 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -514,7 +513,7 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
@@ -576,7 +575,7 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -586,7 +585,7 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -595,7 +594,7 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -652,12 +651,11 @@ class AdbcDriver(
 
     # --- Arrow Bulk Operations ---
 
-    def select_arrow(  # pyright: ignore[reportUnknownParameterType]
+    def select_arrow(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         **kwargs: Any,
     ) -> "ArrowTable":  # pyright: ignore[reportUnknownVariableType]

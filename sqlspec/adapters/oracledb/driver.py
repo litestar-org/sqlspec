@@ -485,8 +485,7 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         **kwargs: Any,
     ) -> "ArrowTable":  # pyright: ignore[reportUnknownVariableType]
@@ -497,7 +496,7 @@ class OracleSyncDriver(
         """
 
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         results = connection.fetch_df_all(sql, parameters)
         return cast("ArrowTable", ArrowTable.from_arrays(arrays=results.column_arrays(), names=results.column_names()))  # pyright: ignore
 
@@ -917,12 +916,11 @@ class OracleAsyncDriver(
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             return str(cursor.rowcount)  # pyright: ignore[reportUnknownMemberType]
 
-    async def select_arrow(  # pyright: ignore[reportUnknownParameterType]
+    async def select_arrow(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         **kwargs: Any,
     ) -> "ArrowTable":  # pyright: ignore[reportUnknownVariableType]
@@ -931,6 +929,7 @@ class OracleAsyncDriver(
         Args:
             sql: The SQL query string.
             parameters: Parameters for the query.
+            filters: Statement filters to apply.
             connection: Optional connection override.
             **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
@@ -939,7 +938,7 @@ class OracleAsyncDriver(
         """
 
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         results = await connection.fetch_df_all(sql, parameters)
         return ArrowTable.from_arrays(arrays=results.column_arrays(), names=results.column_names())  # pyright: ignore
 

@@ -166,7 +166,7 @@ class BigQueryDriver(
         if job_config:
             final_job_config = job_config
         elif self._default_query_job_config:
-            final_job_config = QueryJobConfig.from_api_repr(self._default_query_job_config.to_api_repr())  # type: ignore[no-untyped-call]
+            final_job_config = QueryJobConfig.from_api_repr(self._default_query_job_config.to_api_repr())  # type: ignore[assignment]
         else:
             final_job_config = QueryJobConfig()
 

@@ -162,18 +162,13 @@ class AiosqliteDriver(
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
-        # Execute the query
-        cursor = await connection.execute(sql, parameters or ())
-        results = await cursor.fetchall()
-        if not results:
-            return []
-
-        # Get column names
-        column_names = [column[0] for column in cursor.description]
-
-        # Convert to dicts first
-        dict_results = [dict(zip(column_names, row)) for row in results]
-        return self.to_schema(dict_results, schema_type=schema_type)
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters or ())
+            results = await cursor.fetchall()
+            if not results:
+                return []
+            column_names = [column[0] for column in cursor.description]
+            return self.to_schema([dict(zip(column_names, row)) for row in results], schema_type=schema_type)
 
     @overload
     async def select_one(
@@ -212,17 +207,14 @@ class AiosqliteDriver(
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
-        # Execute the query
-        cursor = await connection.execute(sql, parameters or ())
-        result = await cursor.fetchone()
-        result = self.check_not_found(result)
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters or ())
+            result = await cursor.fetchone()
+            result = self.check_not_found(result)
 
-        # Get column names
-        column_names = [column[0] for column in cursor.description]
-
-        # Convert to dict and then use ResultConverter
-        dict_result = dict(zip(column_names, result))
-        return self.to_schema(dict_result, schema_type=schema_type)
+            # Get column names
+            column_names = [column[0] for column in cursor.description]
+            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
 
     @overload
     async def select_one_or_none(
@@ -261,18 +253,13 @@ class AiosqliteDriver(
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
-        # Execute the query
-        cursor = await connection.execute(sql, parameters or ())
-        result = await cursor.fetchone()
-        if result is None:
-            return None
-
-        # Get column names
-        column_names = [column[0] for column in cursor.description]
-
-        # Convert to dict and then use ResultConverter
-        dict_result = dict(zip(column_names, result))
-        return self.to_schema(dict_result, schema_type=schema_type)
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters or ())
+            result = await cursor.fetchone()
+            if result is None:
+                return None
+            column_names = [column[0] for column in cursor.description]
+            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
 
     @overload
     async def select_value(
@@ -311,16 +298,16 @@ class AiosqliteDriver(
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
-        # Execute the query
-        cursor = await connection.execute(sql, parameters or ())
-        result = await cursor.fetchone()
-        result = self.check_not_found(result)
+        async with self._with_cursor(connection) as cursor:
+            await cursor.execute(sql, parameters or ())
+            result = await cursor.fetchone()
+            result = self.check_not_found(result)
 
-        # Return first value from the row
-        result_value = result[0]
-        if schema_type is None:
-            return result_value
-        return schema_type(result_value)  # type: ignore[call-arg]
+            # Return first value from the row
+            result_value = result[0]
+            if schema_type is None:
+                return result_value
+            return schema_type(result_value)  # type: ignore[call-arg]
 
     @overload
     async def select_value_or_none(
@@ -359,17 +346,16 @@ class AiosqliteDriver(
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
-        # Execute the query
-        cursor = await connection.execute(sql, parameters or ())
-        result = await cursor.fetchone()
-        if result is None:
-            return None
-
-        # Return first value from the row
-        result_value = result[0]
-        if schema_type is None:
-            return result_value
-        return schema_type(result_value)  # type: ignore[call-arg]
+        async with self._with_cursor(connection) as cursor:
+            # Execute the query
+            await cursor.execute(sql, parameters or ())
+            result = await cursor.fetchone()
+            if result is None:
+                return None
+            result_value = result[0]
+            if schema_type is None:
+                return result_value
+            return schema_type(result_value)  # type: ignore[call-arg]
 
     async def insert_update_delete(
         self,
@@ -386,11 +372,10 @@ class AiosqliteDriver(
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-
-        # Execute the query
-        cursor = await connection.execute(sql, parameters or ())
-        await connection.commit()
-        return cursor.rowcount
+        async with self._with_cursor(connection) as cursor:
+            # Execute the query
+            await cursor.execute(sql, parameters or ())
+            return cursor.rowcount
 
     @overload
     async def insert_update_delete_returning(
@@ -429,20 +414,13 @@ class AiosqliteDriver(
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
-        # Execute the query
-        cursor = await connection.execute(sql, parameters or ())
-        result = await cursor.fetchone()
-        await connection.commit()
-        await cursor.close()
-
-        result = self.check_not_found(result)
-
-        # Get column names
-        column_names = [column[0] for column in cursor.description]
-
-        # Convert to dict and then use ResultConverter
-        dict_result = dict(zip(column_names, result))
-        return self.to_schema(dict_result, schema_type=schema_type)
+        async with self._with_cursor(connection) as cursor:
+            # Execute the query
+            await cursor.execute(sql, parameters or ())
+            result = await cursor.fetchone()
+            result = self.check_not_found(result)
+            column_names = [column[0] for column in cursor.description]
+            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
 
     async def execute_script(
         self,
@@ -459,10 +437,12 @@ class AiosqliteDriver(
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
 
-        # Execute the script
-        await connection.executescript(sql)
-        await connection.commit()
-        return "Script executed successfully."
+        async with self._with_cursor(connection) as cursor:
+            if parameters:
+                await cursor.execute(sql, parameters)
+            else:
+                await cursor.executescript(sql)
+            return "DONE"
 
     def _connection(self, connection: "Optional[AiosqliteConnection]" = None) -> "AiosqliteConnection":
         """Get the connection to use for the operation.

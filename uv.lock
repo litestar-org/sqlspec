@@ -3745,6 +3745,10 @@ performance = [
     { name = "msgspec" },
     { name = "sqlglot", extra = ["rs"] },
 ]
+polars = [
+    { name = "polars" },
+    { name = "pyarrow" },
+]
 psqlpy = [
     { name = "psqlpy" },
 ]
@@ -3887,9 +3891,11 @@ requires-dist = [
     { name = "msgspec", marker = "extra == 'performance'" },
     { name = "oracledb", marker = "extra == 'oracledb'" },
     { name = "orjson", marker = "extra == 'orjson'" },
+    { name = "polars", marker = "extra == 'polars'" },
     { name = "psqlpy", marker = "extra == 'psqlpy'" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'psycopg'" },
     { name = "pyarrow", marker = "extra == 'adbc'" },
+    { name = "pyarrow", marker = "extra == 'polars'" },
     { name = "pydantic", marker = "extra == 'pydantic'" },
     { name = "pydantic-extra-types", marker = "extra == 'pydantic'" },
     { name = "pymssql", marker = "extra == 'pymssql'" },
@@ -3899,7 +3905,7 @@ requires-dist = [
     { name = "typing-extensions" },
     { name = "uuid-utils", marker = "extra == 'uuid'", specifier = ">=0.6.1" },
 ]
-provides-extras = ["adbc", "aioodbc", "aiosqlite", "asyncmy", "asyncpg", "bigquery", "duckdb", "fastapi", "flask", "litestar", "msgspec", "nanoid", "oracledb", "orjson", "performance", "psqlpy", "psycopg", "pydantic", "pymssql", "pymysql", "spanner", "uuid"]
+provides-extras = ["adbc", "aioodbc", "aiosqlite", "asyncmy", "asyncpg", "bigquery", "duckdb", "fastapi", "flask", "litestar", "msgspec", "nanoid", "oracledb", "orjson", "performance", "polars", "psqlpy", "psycopg", "pydantic", "pymssql", "pymysql", "spanner", "uuid"]
 
 [package.metadata.requires-dev]
 build = [{ name = "bump-my-version" }]
