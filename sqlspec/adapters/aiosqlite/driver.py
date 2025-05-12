@@ -6,14 +6,14 @@ import aiosqlite
 from sqlglot import exp
 
 from sqlspec.base import AsyncDriverAdapterProtocol
+from sqlspec.filters import StatementFilter
 from sqlspec.mixins import ResultConverter, SQLTranslatorMixin
 from sqlspec.statement import SQLStatement
 from sqlspec.typing import is_dict
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Sequence
+    from collections.abc import AsyncGenerator, Mapping, Sequence  # Added Mapping, Sequence
 
-    from sqlspec.filters import StatementFilter
     from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 __all__ = ("AiosqliteConnection", "AiosqliteDriver")
@@ -51,7 +51,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
@@ -63,17 +62,27 @@ class AiosqliteDriver(
 
         Args:
             sql: SQL statement.
-            parameters: Query parameters.
+            parameters: Query parameters. Can be data or a StatementFilter.
             *filters: Statement filters to apply.
             **kwargs: Additional keyword arguments.
 
         Returns:
             Tuple of processed SQL and parameters.
         """
-        statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
+        passed_parameters: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
+        combined_filters_list: list[StatementFilter] = list(filters)
 
-        # Apply any filters
-        for filter_obj in filters:
+        if parameters is not None:
+            if isinstance(parameters, StatementFilter):
+                combined_filters_list.insert(0, parameters)
+                # _actual_data_params remains None
+            else:
+                # If parameters is not a StatementFilter, it's actual data parameters.
+                passed_parameters = parameters  # type: ignore[assignment]
+
+        statement = SQLStatement(sql, passed_parameters, kwargs=kwargs, dialect=self.dialect)
+
+        for filter_obj in combined_filters_list:
             statement = statement.apply_filter(filter_obj)
 
         processed_sql, processed_params, parsed_expr = statement.process()
@@ -121,7 +130,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
@@ -132,7 +140,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -142,7 +149,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -174,7 +180,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
@@ -185,7 +190,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -195,7 +199,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -226,7 +229,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
@@ -237,7 +239,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -247,7 +248,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -279,7 +279,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
@@ -290,7 +289,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[T]",
@@ -300,7 +298,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -330,7 +327,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
@@ -341,7 +337,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[T]",
@@ -351,7 +346,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -381,7 +375,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         **kwargs: Any,
@@ -404,7 +397,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
@@ -415,7 +407,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -425,7 +416,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -458,7 +448,6 @@ class AiosqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         connection: "Optional[AiosqliteConnection]" = None,
         **kwargs: Any,
     ) -> str:

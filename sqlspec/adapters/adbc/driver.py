@@ -91,7 +91,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         **kwargs: Any,
     ) -> "tuple[str, Optional[tuple[Any, ...]]]":  # Always returns tuple or None for params
@@ -284,7 +283,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         schema_type: None = None,
@@ -295,7 +293,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -305,7 +302,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
-        /,
         *filters: "StatementFilter",
         connection: Optional["AdbcConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -341,7 +337,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         schema_type: None = None,
@@ -352,7 +347,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -362,7 +356,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -396,7 +389,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         schema_type: None = None,
@@ -407,7 +399,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -417,7 +408,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: Optional["StatementParameterType"] = None,
-        /,
         *filters: "StatementFilter",
         connection: Optional["AdbcConnection"] = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -452,7 +442,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: StatementFilter,
         connection: "Optional[AdbcConnection]" = None,
         schema_type: None = None,
@@ -463,7 +452,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: StatementFilter,
         connection: "Optional[AdbcConnection]" = None,
         schema_type: "type[T]",
@@ -473,7 +461,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: StatementFilter,
         connection: "Optional[AdbcConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -508,7 +495,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: StatementFilter,
         connection: "Optional[AdbcConnection]" = None,
         schema_type: None = None,
@@ -519,7 +505,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: StatementFilter,
         connection: "Optional[AdbcConnection]" = None,
         schema_type: "type[T]",
@@ -529,7 +514,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: StatementFilter,
         connection: "Optional[AdbcConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -564,7 +548,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         **kwargs: Any,
@@ -572,14 +555,14 @@ class AdbcDriver(
         """Execute an insert, update, or delete statement.
 
         Args:
-            sql: The SQL statement to execute.
+            sql: The SQL statement string.
             parameters: The parameters for the statement (dict, tuple, list, or None).
             *filters: Statement filters to apply.
             connection: Optional connection override.
             **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
         Returns:
-            The number of rows affected by the statement.
+            Row count affected by the operation.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
@@ -593,7 +576,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: StatementFilter,
         connection: "Optional[AdbcConnection]" = None,
         schema_type: None = None,
@@ -604,7 +586,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: StatementFilter,
         connection: "Optional[AdbcConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -614,16 +595,15 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: StatementFilter,
         connection: "Optional[AdbcConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
-        """Insert, update, or delete data from the database and return result.
+        """Insert, update, or delete data with RETURNING clause.
 
         Args:
-            sql: The SQL statement to execute.
+            sql: The SQL statement string.
             parameters: The parameters for the statement (dict, tuple, list, or None).
             *filters: Statement filters to apply.
             connection: Optional connection override.
@@ -631,7 +611,7 @@ class AdbcDriver(
             **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
         Returns:
-            The first row of results.
+            The returned row data, or None if no row returned.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
@@ -648,7 +628,6 @@ class AdbcDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         connection: "Optional[AdbcConnection]" = None,
         **kwargs: Any,
     ) -> str:
@@ -692,7 +671,7 @@ class AdbcDriver(
             **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
         Returns:
-            An Apache Arrow Table containing the query results.
+            An Arrow Table containing the query results.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)

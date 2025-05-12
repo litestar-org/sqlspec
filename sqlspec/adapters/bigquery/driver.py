@@ -1,7 +1,7 @@
 import contextlib
 import datetime
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from decimal import Decimal
 from typing import (
     TYPE_CHECKING,
@@ -69,8 +69,6 @@ class BigQueryDriver(
         if isinstance(value, float):
             return "FLOAT64", None
         if isinstance(value, Decimal):
-            # Precision/scale might matter, but BQ client handles conversion.
-            # Defaulting to BIGNUMERIC, NUMERIC might be desired in some cases though (User change)
             return "BIGNUMERIC", None
         if isinstance(value, str):
             return "STRING", None
@@ -78,23 +76,17 @@ class BigQueryDriver(
             return "BYTES", None
         if isinstance(value, datetime.date):
             return "DATE", None
-        # DATETIME is for timezone-naive values
         if isinstance(value, datetime.datetime) and value.tzinfo is None:
             return "DATETIME", None
-        # TIMESTAMP is for timezone-aware values
         if isinstance(value, datetime.datetime) and value.tzinfo is not None:
             return "TIMESTAMP", None
         if isinstance(value, datetime.time):
             return "TIME", None
 
-        # Handle Arrays - Determine element type
         if isinstance(value, (list, tuple)):
             if not value:
-                # Cannot determine type of empty array, BQ requires type.
-                # Raise or default? Defaulting is risky. Let's raise.
                 msg = "Cannot determine BigQuery ARRAY type for empty sequence."
                 raise SQLSpecError(msg)
-            # Infer type from first element
             first_element = value[0]
             element_type, _ = BigQueryDriver._get_bq_param_type(first_element)
             if element_type is None:
@@ -102,55 +94,59 @@ class BigQueryDriver(
                 raise SQLSpecError(msg)
             return "ARRAY", element_type
 
-        # Handle Structs (basic dict mapping) - Requires careful handling
-        # if isinstance(value, dict):
-        #    # This requires recursive type mapping for sub-fields.
-        #    # For simplicity, users might need to construct StructQueryParameter manually.
-        #    # return "STRUCT", None # Placeholder if implementing  # noqa: ERA001
-        #    raise SQLSpecError("Automatic STRUCT mapping not implemented. Please use bigquery.StructQueryParameter.")  # noqa: ERA001
-
-        return None, None  # Unsupported type
+        return None, None
 
     def _process_sql_params(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
         """Process SQL and parameters using SQLStatement with dialect support.
 
+        This method also handles the separation of StatementFilter instances that might be
+        passed in the 'parameters' argument.
+
         Args:
             sql: The SQL statement to process.
-            parameters: The parameters to bind to the statement.
-            *filters: Statement filters to apply.
-            **kwargs: Additional keyword arguments.
+            parameters: The parameters to bind to the statement. This can be a
+                        Mapping (dict), Sequence (list/tuple), a single StatementFilter, or None.
+            *filters: Additional statement filters to apply.
+            **kwargs: Additional keyword arguments (treated as named parameters for the SQL statement).
 
         Raises:
             ParameterStyleMismatchError: If pre-formatted BigQuery parameters are mixed with keyword arguments.
 
         Returns:
-            A tuple of (sql, parameters) ready for execution.
+            A tuple of (processed_sql, processed_parameters) ready for execution.
         """
-        # Special case: check for pre-formatted BQ parameters
+        passed_parameters: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
+        combined_filters_list: list[StatementFilter] = list(filters)
+
+        if parameters is not None:
+            if isinstance(parameters, StatementFilter):
+                combined_filters_list.insert(0, parameters)
+            else:
+                passed_parameters = parameters
+
         if (
-            isinstance(parameters, (list, tuple))
-            and parameters
-            and all(isinstance(p, (bigquery.ScalarQueryParameter, bigquery.ArrayQueryParameter)) for p in parameters)
+            isinstance(passed_parameters, (list, tuple))
+            and passed_parameters
+            and all(
+                isinstance(p, (bigquery.ScalarQueryParameter, bigquery.ArrayQueryParameter)) for p in passed_parameters
+            )
         ):
             if kwargs:
                 msg = "Cannot mix pre-formatted BigQuery parameters with keyword arguments."
                 raise ParameterStyleMismatchError(msg)
-            return sql, parameters
+            return sql, passed_parameters
 
-        statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
+        statement = SQLStatement(sql, passed_parameters, kwargs=kwargs, dialect=self.dialect)
 
-        # Apply any filters
-        for filter_obj in filters:
+        for filter_obj in combined_filters_list:
             statement = statement.apply_filter(filter_obj)
 
-        # Process the statement for execution
         processed_sql, processed_params, _ = statement.process()
 
         return processed_sql, processed_params
@@ -159,8 +155,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
         is_script: bool = False,
@@ -168,19 +163,15 @@ class BigQueryDriver(
     ) -> "QueryJob":
         conn = self._connection(connection)
 
-        # Determine the final job config, creating a new one if necessary
-        # to avoid modifying a shared default config.
         if job_config:
-            final_job_config = job_config  # Use the provided config directly
+            final_job_config = job_config
         elif self._default_query_job_config:
-            final_job_config = QueryJobConfig()
+            final_job_config = QueryJobConfig.from_api_repr(self._default_query_job_config.to_api_repr())  # type: ignore[no-untyped-call]
         else:
-            final_job_config = QueryJobConfig()  # Create a fresh config
+            final_job_config = QueryJobConfig()
 
-        # Process SQL and parameters
         final_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
-        # Handle pre-formatted parameters
         if (
             isinstance(processed_params, (list, tuple))
             and processed_params
@@ -189,31 +180,24 @@ class BigQueryDriver(
             )
         ):
             final_job_config.query_parameters = list(processed_params)
-        # Convert regular parameters to BigQuery parameters
         elif isinstance(processed_params, dict):
-            # Convert dict params to BQ ScalarQueryParameter
             final_job_config.query_parameters = [
                 bigquery.ScalarQueryParameter(name, self._get_bq_param_type(value)[0], value)
                 for name, value in processed_params.items()
             ]
         elif isinstance(processed_params, (list, tuple)):
-            # Convert list params to BQ ScalarQueryParameter
             final_job_config.query_parameters = [
                 bigquery.ScalarQueryParameter(None, self._get_bq_param_type(value)[0], value)
                 for value in processed_params
             ]
 
-        # Determine which kwargs to pass to the actual query method
-        # We only want to pass kwargs that were *not* treated as SQL parameters
         final_query_kwargs = {}
-        if parameters is not None and kwargs:  # Params came via arg, kwargs are separate
+        if parameters is not None and kwargs:
             final_query_kwargs = kwargs
-        # Else: If params came via kwargs, they are already handled, so don't pass them again
 
-        # Execute query
         return conn.query(
             final_sql,
-            job_config=final_job_config,
+            job_config=final_job_config,  # pyright: ignore
             **final_query_kwargs,
         )
 
@@ -238,15 +222,12 @@ class BigQueryDriver(
         schema_type: "Optional[type[ModelDTOT]]" = None,
     ) -> Sequence[Union[ModelDTOT, dict[str, Any]]]:
         processed_results = []
-        # Create a quick lookup map for schema fields from the passed schema
         schema_map = {field.name: field for field in schema}
 
         for row in rows:
-            # row here is now a Row object from the iterator
             row_dict = {}
-            for key, value in row.items():  # Use row.items() on the Row object
+            for key, value in row.items():
                 field = schema_map.get(key)
-                # Workaround remains the same
                 if field and field.field_type == "TIMESTAMP" and isinstance(value, str) and "." in value:
                     try:
                         parsed_value = datetime.datetime.fromtimestamp(float(value), tz=datetime.timezone.utc)
@@ -263,8 +244,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -274,8 +254,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -284,27 +263,12 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
-        """Fetch data from the database.
-
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional schema class for the result.
-            job_config: Optional job configuration.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            List of row data as either model instances or dictionaries.
-        """
         query_job = self._run_query_job(
             sql, parameters, *filters, connection=connection, job_config=job_config, **kwargs
         )
@@ -315,8 +279,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -326,8 +289,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -336,8 +298,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
@@ -348,14 +309,8 @@ class BigQueryDriver(
         )
         rows_iterator = query_job.result()
         try:
-            # Pass the iterator containing only the first row to _rows_to_results
-            # This ensures the timestamp workaround is applied consistently.
-            # We need to pass the original iterator for schema access, but only consume one row.
             first_row = next(rows_iterator)
-            # Create a simple iterator yielding only the first row for processing
             single_row_iter = iter([first_row])
-            # We need RowIterator type for schema, create mock/proxy if needed, or pass schema
-            # Let's try passing schema directly to _rows_to_results (requires modifying it)
             results = self._rows_to_results(single_row_iter, rows_iterator.schema, schema_type)
             return results[0]
         except StopIteration:
@@ -367,8 +322,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -378,8 +332,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -388,8 +341,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
@@ -401,9 +353,7 @@ class BigQueryDriver(
         rows_iterator = query_job.result()
         try:
             first_row = next(rows_iterator)
-            # Create a simple iterator yielding only the first row for processing
             single_row_iter = iter([first_row])
-            # Pass schema directly
             results = self._rows_to_results(single_row_iter, rows_iterator.schema, schema_type)
             return results[0]
         except StopIteration:
@@ -414,8 +364,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
@@ -426,8 +375,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -436,8 +384,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
@@ -450,8 +397,7 @@ class BigQueryDriver(
         try:
             first_row = next(iter(rows))
             value = first_row[0]
-            # Apply timestamp workaround if necessary
-            field = rows.schema[0]  # Get schema for the first column
+            field = rows.schema[0]
             if field and field.field_type == "TIMESTAMP" and isinstance(value, str) and "." in value:
                 with contextlib.suppress(ValueError):
                     value = datetime.datetime.fromtimestamp(float(value), tz=datetime.timezone.utc)
@@ -466,8 +412,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -477,8 +422,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -487,8 +431,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
@@ -506,8 +449,7 @@ class BigQueryDriver(
         try:
             first_row = next(iter(rows))
             value = first_row[0]
-            # Apply timestamp workaround if necessary
-            field = rows.schema[0]  # Get schema for the first column
+            field = rows.schema[0]
             if field and field.field_type == "TIMESTAMP" and isinstance(value, str) and "." in value:
                 with contextlib.suppress(ValueError):
                     value = datetime.datetime.fromtimestamp(float(value), tz=datetime.timezone.utc)
@@ -520,32 +462,23 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: Optional[StatementParameterType] = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: Optional["BigQueryConnection"] = None,
         job_config: Optional[QueryJobConfig] = None,
         **kwargs: Any,
     ) -> int:
-        """Executes INSERT, UPDATE, DELETE and returns affected row count.
-
-        Returns:
-            int: The number of rows affected by the DML statement.
-        """
         query_job = self._run_query_job(
             sql, parameters, *filters, connection=connection, job_config=job_config, **kwargs
         )
-        # DML statements might not return rows, check job properties
-        # num_dml_affected_rows might be None initially, wait might be needed
-        query_job.result()  # Ensure completion
-        return query_job.num_dml_affected_rows or 0  # Return 0 if None
+        query_job.result()
+        return query_job.num_dml_affected_rows or 0
 
     @overload
     def insert_update_delete_returning(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -555,8 +488,7 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -565,31 +497,23 @@ class BigQueryDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
         **kwargs: Any,
     ) -> Union[ModelDTOT, dict[str, Any]]:
-        """BigQuery DML RETURNING equivalent is complex, often requires temp tables or scripting."""
         msg = "BigQuery does not support `RETURNING` clauses directly in the same way as some other SQL databases. Consider multi-statement queries or alternative approaches."
         raise NotImplementedError(msg)
 
     def execute_script(
         self,
-        sql: str,  # Expecting a script here
-        parameters: "Optional[StatementParameterType]" = None,  # Parameters might be complex in scripts
-        /,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
         connection: "Optional[BigQueryConnection]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
         **kwargs: Any,
     ) -> str:
-        """Executes a BigQuery script and returns the job ID.
-
-        Returns:
-            str: The job ID of the executed script.
-        """
         query_job = self._run_query_job(
             sql,
             parameters,
@@ -600,14 +524,11 @@ class BigQueryDriver(
         )
         return str(query_job.job_id)
 
-    # --- Mixin Implementations ---
-
     def select_arrow(  # pyright: ignore
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[BigQueryConnection]" = None,
         job_config: "Optional[QueryJobConfig]" = None,
         **kwargs: Any,
@@ -615,10 +536,8 @@ class BigQueryDriver(
         conn = self._connection(connection)
         final_job_config = job_config or self._default_query_job_config or QueryJobConfig()
 
-        # Process SQL and parameters using SQLStatement
         processed_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
-        # Convert parameters to BigQuery format
         if isinstance(processed_params, dict):
             query_parameters = []
             for key, value in processed_params.items():
@@ -633,16 +552,14 @@ class BigQueryDriver(
                     raise SQLSpecError(msg)
             final_job_config.query_parameters = query_parameters
         elif isinstance(processed_params, (list, tuple)):
-            # Convert sequence parameters
             final_job_config.query_parameters = [
                 bigquery.ScalarQueryParameter(None, self._get_bq_param_type(value)[0], value)
                 for value in processed_params
             ]
 
-        # Execute the query and get Arrow table
         try:
             query_job = conn.query(processed_sql, job_config=final_job_config)
-            arrow_table = query_job.to_arrow()  # Waits for job completion
+            arrow_table = query_job.to_arrow()
         except Exception as e:
             msg = f"BigQuery Arrow query execution failed: {e!s}"
             raise SQLSpecError(msg) from e
@@ -650,31 +567,34 @@ class BigQueryDriver(
 
     def select_to_parquet(
         self,
-        sql: str,  # Expects table ID: project.dataset.table
+        sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         destination_uri: "Optional[str]" = None,
         connection: "Optional[BigQueryConnection]" = None,
         job_config: "Optional[bigquery.ExtractJobConfig]" = None,
         **kwargs: Any,
     ) -> None:
-        """Exports a BigQuery table to Parquet files in Google Cloud Storage.
-
-        Raises:
-            NotImplementedError: If the SQL is not a fully qualified table ID or if parameters are provided.
-            NotFoundError: If the source table is not found.
-            SQLSpecError: If the Parquet export fails.
-        """
         if destination_uri is None:
             msg = "destination_uri is required"
             raise SQLSpecError(msg)
         conn = self._connection(connection)
-        if "." not in sql or parameters is not None:
-            msg = "select_to_parquet currently expects a fully qualified table ID (project.dataset.table) as the `sql` argument and no `parameters`."
+
+        if parameters is not None:
+            msg = (
+                "select_to_parquet expects a fully qualified table ID (e.g., 'project.dataset.table') "
+                "as the `sql` argument and does not support `parameters`."
+            )
             raise NotImplementedError(msg)
 
-        source_table_ref = bigquery.TableReference.from_string(sql, default_project=conn.project)
+        try:
+            source_table_ref = bigquery.TableReference.from_string(sql, default_project=conn.project)
+        except ValueError as e:
+            msg = (
+                "select_to_parquet expects a fully qualified table ID (e.g., 'project.dataset.table') "
+                f"as the `sql` argument. Parsing failed for input '{sql}': {e!s}"
+            )
+            raise NotImplementedError(msg) from e
 
         final_extract_config = job_config or bigquery.ExtractJobConfig()  # type: ignore[no-untyped-call]
         final_extract_config.destination_format = bigquery.DestinationFormat.PARQUET
@@ -684,9 +604,8 @@ class BigQueryDriver(
                 source_table_ref,
                 destination_uri,
                 job_config=final_extract_config,
-                # Location is correctly inferred by the client library
             )
-            extract_job.result()  # Wait for completion
+            extract_job.result()
 
         except NotFound:
             msg = f"Source table not found for Parquet export: {source_table_ref}"
@@ -699,12 +618,4 @@ class BigQueryDriver(
             raise SQLSpecError(msg)
 
     def _connection(self, connection: "Optional[BigQueryConnection]" = None) -> "BigQueryConnection":
-        """Get the connection to use for the operation.
-
-        Args:
-            connection: Optional connection to use.
-
-        Returns:
-            The connection to use.
-        """
         return connection or self.connection

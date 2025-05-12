@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections import abc
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Generic, Literal, Optional, Protocol, Union, cast
+from typing import Any, Generic, Literal, Optional, Protocol, Union, cast, runtime_checkable
 
 from sqlglot import exp
 from typing_extensions import TypeAlias, TypeVar
@@ -30,6 +30,7 @@ __all__ = (
 T = TypeVar("T")
 
 
+@runtime_checkable
 class StatementFilter(Protocol):
     """Protocol for filters that can be appended to a statement."""
 
