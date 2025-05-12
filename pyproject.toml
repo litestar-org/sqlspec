@@ -7,7 +7,12 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.9, <4.0"
-version = "0.10.1"
+version = "0.11.0"
+
+[project.urls]
+Discord = "https://discord.gg/litestar"
+Issue = "https://github.com/litestar-org/sqlspec/issues/"
+Source = "https://github.com/litestar-org/sqlspec"
 
 [project.optional-dependencies]
 adbc = ["adbc_driver_manager", "pyarrow"]
