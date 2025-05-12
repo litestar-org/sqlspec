@@ -3,7 +3,7 @@
 import logging
 import re
 from re import Match
-from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
 from psqlpy import Connection, QueryResult
 from psqlpy.exceptions import RustPSQLDriverPyBaseError
@@ -11,7 +11,8 @@ from sqlglot import exp
 
 from sqlspec.base import AsyncDriverAdapterProtocol
 from sqlspec.exceptions import SQLParsingError
-from sqlspec.mixins import SQLTranslatorMixin
+from sqlspec.filters import StatementFilter
+from sqlspec.mixins import ResultConverter, SQLTranslatorMixin
 from sqlspec.statement import SQLStatement
 from sqlspec.typing import is_dict
 
@@ -49,6 +50,7 @@ logger = logging.getLogger("sqlspec")
 class PsqlpyDriver(
     SQLTranslatorMixin["PsqlpyConnection"],
     AsyncDriverAdapterProtocol["PsqlpyConnection"],
+    ResultConverter,
 ):
     """Psqlpy Postgres Driver Adapter."""
 
@@ -63,6 +65,7 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *filters: StatementFilter,
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], dict[str, Any]]]]":
         """Process SQL and parameters for psqlpy.
@@ -70,6 +73,7 @@ class PsqlpyDriver(
         Args:
             sql: SQL statement.
             parameters: Query parameters.
+            *filters: Statement filters to apply.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -85,11 +89,9 @@ class PsqlpyDriver(
         # Create and process the statement
         statement = SQLStatement(sql=sql, parameters=parameters, kwargs=kwargs, dialect=self.dialect)
 
-        # Apply any filters if present
-        filters = kwargs.pop("filters", None)
-        if filters:
-            for filter_obj in filters:
-                statement = statement.apply_filter(filter_obj)
+        # Apply any filters
+        for filter_obj in filters:
+            statement = statement.apply_filter(filter_obj)
 
         # Process the statement
         sql, validated_params, parsed_expr = statement.process()
@@ -161,7 +163,7 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -172,7 +174,7 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -182,20 +184,33 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
+        """Fetch data from the database.
+
+        Args:
+            sql: The SQL query string.
+            parameters: The parameters for the query (dict, tuple, list, or None).
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            schema_type: Optional schema class for the result.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+
+        Returns:
+            List of row data as either model instances or dictionaries.
+        """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         parameters = parameters or []  # psqlpy expects a list/tuple
 
         results: QueryResult = await connection.fetch(sql, parameters=parameters)
 
-        if schema_type is None:
-            return cast("list[dict[str, Any]]", results.result())
-        return results.as_class(as_class=schema_type)
+        # Convert to dicts and use ResultConverter
+        dict_results = results.result()
+        return self.to_schema(dict_results, schema_type=schema_type)
 
     @overload
     async def select_one(
@@ -203,7 +218,7 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -214,7 +229,7 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -224,21 +239,36 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
+        """Fetch one row from the database.
+
+        Args:
+            sql: The SQL query string.
+            parameters: The parameters for the query (dict, tuple, list, or None).
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            schema_type: Optional schema class for the result.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+
+        Returns:
+            The first row of the query results.
+        """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         parameters = parameters or []
 
         result = await connection.fetch(sql, parameters=parameters)
 
-        if schema_type is None:
-            result = cast("list[dict[str, Any]]", result.result())  # type: ignore[assignment]
-            return cast("dict[str, Any]", result[0])  # type: ignore[index]
-        return result.as_class(as_class=schema_type)[0]
+        # Convert to dict and use ResultConverter
+        dict_results = result.result()
+        if not dict_results:
+            self.check_not_found(None)
+
+        return self.to_schema(dict_results[0], schema_type=schema_type)
 
     @overload
     async def select_one_or_none(
@@ -246,7 +276,7 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -257,7 +287,7 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -267,25 +297,35 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
+        """Fetch one row from the database or return None if no rows found.
+
+        Args:
+            sql: The SQL query string.
+            parameters: The parameters for the query (dict, tuple, list, or None).
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            schema_type: Optional schema class for the result.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+
+        Returns:
+            The first row of the query results, or None if no results found.
+        """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         parameters = parameters or []
 
         result = await connection.fetch(sql, parameters=parameters)
-        if schema_type is None:
-            result = cast("list[dict[str, Any]]", result.result())  # type: ignore[assignment]
-            if len(result) == 0:  # type: ignore[arg-type]
-                return None
-            return cast("dict[str, Any]", result[0])  # type: ignore[index]
-        result = cast("list[ModelDTOT]", result.as_class(as_class=schema_type))  # type: ignore[assignment]
-        if len(result) == 0:  # type: ignore[arg-type]
+        dict_results = result.result()
+
+        if not dict_results:
             return None
-        return cast("ModelDTOT", result[0])  # type: ignore[index]
+
+        return self.to_schema(dict_results[0], schema_type=schema_type)
 
     @overload
     async def select_value(
@@ -293,7 +333,7 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -304,7 +344,7 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -314,16 +354,30 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Union[T, Any]":
+        """Fetch a single value from the database.
+
+        Args:
+            sql: The SQL query string.
+            parameters: The parameters for the query (dict, tuple, list, or None).
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            schema_type: Optional type to convert the result to.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+
+        Returns:
+            The first value of the first row of the query results.
+        """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         parameters = parameters or []
 
         value = await connection.fetch_val(sql, parameters=parameters)
+        value = self.check_not_found(value)
 
         if schema_type is None:
             return value
@@ -335,7 +389,7 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -346,7 +400,7 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -356,13 +410,26 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
+        """Fetch a single value or None if not found.
+
+        Args:
+            sql: The SQL query string.
+            parameters: The parameters for the query (dict, tuple, list, or None).
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            schema_type: Optional type to convert the result to.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+
+        Returns:
+            The first value of the first row of the query results, or None if no results found.
+        """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         parameters = parameters or []
         try:
             value = await connection.fetch_val(sql, parameters=parameters)
@@ -380,12 +447,24 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         **kwargs: Any,
     ) -> int:
+        """Execute an insert, update, or delete statement.
+
+        Args:
+            sql: The SQL statement to execute.
+            parameters: The parameters for the statement (dict, tuple, list, or None).
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+
+        Returns:
+            The number of rows affected by the statement.
+        """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         parameters = parameters or []
 
         await connection.execute(sql, parameters=parameters)
@@ -399,7 +478,7 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -410,7 +489,7 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -420,41 +499,61 @@ class PsqlpyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: StatementFilter,
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
+    ) -> "Union[ModelDTOT, dict[str, Any]]":
+        """Insert, update, or delete data from the database and return result.
+
+        Args:
+            sql: The SQL statement to execute.
+            parameters: The parameters for the statement (dict, tuple, list, or None).
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            schema_type: Optional schema class for the result.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+
+        Returns:
+            The first row of results.
+        """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         parameters = parameters or []
 
         result = await connection.execute(sql, parameters=parameters)
-        if schema_type is None:
-            result = result.result()  # type: ignore[assignment]
-            if len(result) == 0:  # type: ignore[arg-type]
-                return None
-            return cast("dict[str, Any]", result[0])  # type: ignore[index]
-        result = result.as_class(as_class=schema_type)  # type: ignore[assignment]
-        if len(result) == 0:  # type: ignore[arg-type]
-            return None
-        return cast("ModelDTOT", result[0])  # type: ignore[index]
+        dict_results = result.result()
+
+        if not dict_results:
+            self.check_not_found(None)
+
+        return self.to_schema(dict_results[0], schema_type=schema_type)
 
     async def execute_script(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
         connection: "Optional[PsqlpyConnection]" = None,
         **kwargs: Any,
     ) -> str:
+        """Execute a SQL script.
+
+        Args:
+            sql: The SQL script to execute.
+            parameters: The parameters for the script (dict, tuple, list, or None).
+            connection: Optional connection override.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+
+        Returns:
+            A success message.
+        """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
         parameters = parameters or []
 
         await connection.execute(sql, parameters=parameters)
-        return sql
+        return "Script executed successfully"
 
     def _connection(self, connection: "Optional[PsqlpyConnection]" = None) -> "PsqlpyConnection":
         """Get the connection to use.

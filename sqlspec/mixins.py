@@ -243,27 +243,27 @@ class ResultConverter:
     def to_schema(data: "dict[str, Any]", *, schema_type: "type[ModelDTOT]") -> "ModelDTOT": ...
     @overload
     @staticmethod
-    def to_schema(data: "Sequence[ModelT]", *, schema_type: None = None) -> "list[ModelT]": ...
+    def to_schema(data: "Sequence[ModelT]", *, schema_type: None = None) -> "Sequence[ModelT]": ...
     @overload
     @staticmethod
-    def to_schema(data: "Sequence[dict[str, Any]]", *, schema_type: "type[ModelDTOT]") -> "list[ModelDTOT]": ...
+    def to_schema(data: "Sequence[dict[str, Any]]", *, schema_type: "type[ModelDTOT]") -> "Sequence[ModelDTOT]": ...
 
     @staticmethod
     def to_schema(
         data: "Union[ModelT, Sequence[ModelT], dict[str, Any], Sequence[dict[str, Any]], ModelDTOT, Sequence[ModelDTOT]]",
         *,
         schema_type: "Optional[type[ModelDTOT]]" = None,
-    ) -> "Union[ModelT,  list[ModelT], ModelDTOT, list[ModelDTOT]]":
+    ) -> "Union[ModelT, Sequence[ModelT], ModelDTOT, Sequence[ModelDTOT]]":
         if schema_type is None:
             if not isinstance(data, Sequence):
                 return cast("ModelT", data)
-            return cast("list[ModelT]", data)
+            return cast("Sequence[ModelT]", data)
         if is_dataclass(schema_type):
             if not isinstance(data, Sequence):
                 # data is assumed to be dict[str, Any] as per the method's overloads
                 return cast("ModelDTOT", schema_type(**data))  # type: ignore[operator]
             # data is assumed to be Sequence[dict[str, Any]]
-            return cast("list[ModelDTOT]", [schema_type(**item) for item in data])  # type: ignore[operator]
+            return cast("Sequence[ModelDTOT]", [schema_type(**item) for item in data])  # type: ignore[operator]
         if is_msgspec_struct(schema_type):
             if not isinstance(data, Sequence):
                 return cast(
@@ -279,7 +279,7 @@ class ResultConverter:
                     ),
                 )
             return cast(
-                "list[ModelDTOT]",
+                "Sequence[ModelDTOT]",
                 convert(
                     obj=data,
                     type=list[schema_type],  # type: ignore[valid-type]
@@ -298,7 +298,7 @@ class ResultConverter:
                     get_type_adapter(schema_type).validate_python(data, from_attributes=True),  # pyright: ignore
                 )
             return cast(
-                "list[ModelDTOT]",
+                "Sequence[ModelDTOT]",
                 get_type_adapter(list[schema_type]).validate_python(data, from_attributes=True),  # type: ignore[valid-type] # pyright: ignore[reportUnknownArgumentType]
             )
 

@@ -1,18 +1,19 @@
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
 import aiosqlite
 from sqlglot import exp
 
 from sqlspec.base import AsyncDriverAdapterProtocol
-from sqlspec.mixins import SQLTranslatorMixin
+from sqlspec.mixins import ResultConverter, SQLTranslatorMixin
 from sqlspec.statement import SQLStatement
 from sqlspec.typing import is_dict
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
+    from sqlspec.filters import StatementFilter
     from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 __all__ = ("AiosqliteConnection", "AiosqliteDriver")
@@ -24,6 +25,7 @@ logger = logging.getLogger("sqlspec")
 class AiosqliteDriver(
     SQLTranslatorMixin["AiosqliteConnection"],
     AsyncDriverAdapterProtocol["AiosqliteConnection"],
+    ResultConverter,
 ):
     """SQLite Async Driver Adapter."""
 
@@ -50,6 +52,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *filters: "StatementFilter",
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
         """Process SQL and parameters for aiosqlite using SQLStatement.
@@ -61,16 +64,18 @@ class AiosqliteDriver(
         Args:
             sql: SQL statement.
             parameters: Query parameters.
+            *filters: Statement filters to apply.
             **kwargs: Additional keyword arguments.
 
         Returns:
             Tuple of processed SQL and parameters.
         """
         statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
-        filters = kwargs.pop("filters", None)
-        if filters:
-            for filter_obj in filters:
-                statement = statement.apply_filter(filter_obj)
+
+        # Apply any filters
+        for filter_obj in filters:
+            statement = statement.apply_filter(filter_obj)
+
         processed_sql, processed_params, parsed_expr = statement.process()
         if processed_params is None:
             return processed_sql, None
@@ -117,7 +122,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -128,7 +133,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -138,7 +143,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -149,7 +154,7 @@ class AiosqliteDriver(
             List of row data as either model instances or dictionaries.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
         # Execute the query
         cursor = await connection.execute(sql, parameters or ())
@@ -160,9 +165,9 @@ class AiosqliteDriver(
         # Get column names
         column_names = [column[0] for column in cursor.description]
 
-        if schema_type is None:
-            return [dict(zip(column_names, row)) for row in results]
-        return [cast("ModelDTOT", schema_type(**dict(zip(column_names, row)))) for row in results]
+        # Convert to dicts first
+        dict_results = [dict(zip(column_names, row)) for row in results]
+        return self.to_schema(dict_results, schema_type=schema_type)
 
     @overload
     async def select_one(
@@ -170,7 +175,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -181,7 +186,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -191,7 +196,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -202,7 +207,7 @@ class AiosqliteDriver(
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
         # Execute the query
         cursor = await connection.execute(sql, parameters or ())
@@ -212,9 +217,9 @@ class AiosqliteDriver(
         # Get column names
         column_names = [column[0] for column in cursor.description]
 
-        if schema_type is None:
-            return dict(zip(column_names, result))
-        return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
+        # Convert to dict and then use ResultConverter
+        dict_result = dict(zip(column_names, result))
+        return self.to_schema(dict_result, schema_type=schema_type)
 
     @overload
     async def select_one_or_none(
@@ -222,7 +227,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -233,7 +238,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -243,7 +248,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -254,7 +259,7 @@ class AiosqliteDriver(
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
         # Execute the query
         cursor = await connection.execute(sql, parameters or ())
@@ -265,9 +270,9 @@ class AiosqliteDriver(
         # Get column names
         column_names = [column[0] for column in cursor.description]
 
-        if schema_type is None:
-            return dict(zip(column_names, result))
-        return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
+        # Convert to dict and then use ResultConverter
+        dict_result = dict(zip(column_names, result))
+        return self.to_schema(dict_result, schema_type=schema_type)
 
     @overload
     async def select_value(
@@ -275,7 +280,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -286,7 +291,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -296,7 +301,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
@@ -307,7 +312,7 @@ class AiosqliteDriver(
             The first value from the first row of results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
         # Execute the query
         cursor = await connection.execute(sql, parameters or ())
@@ -326,7 +331,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -337,7 +342,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -347,7 +352,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
@@ -358,7 +363,7 @@ class AiosqliteDriver(
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
         # Execute the query
         cursor = await connection.execute(sql, parameters or ())
@@ -377,7 +382,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         **kwargs: Any,
     ) -> int:
@@ -387,7 +392,7 @@ class AiosqliteDriver(
             Row count affected by the operation.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
         # Execute the query
         cursor = await connection.execute(sql, parameters or ())
@@ -400,7 +405,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -411,7 +416,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -421,7 +426,7 @@ class AiosqliteDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AiosqliteConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -432,7 +437,7 @@ class AiosqliteDriver(
             The first row of results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
         # Execute the query
         cursor = await connection.execute(sql, parameters or ())
@@ -445,16 +450,15 @@ class AiosqliteDriver(
         # Get column names
         column_names = [column[0] for column in cursor.description]
 
-        if schema_type is None:
-            return dict(zip(column_names, result))
-        return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
+        # Convert to dict and then use ResultConverter
+        dict_result = dict(zip(column_names, result))
+        return self.to_schema(dict_result, schema_type=schema_type)
 
     async def execute_script(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
         connection: "Optional[AiosqliteConnection]" = None,
         **kwargs: Any,
     ) -> str:

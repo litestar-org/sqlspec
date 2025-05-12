@@ -1,29 +1,34 @@
 import logging
 import re
 from re import Match
-from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
 from asyncpg import Connection
 from sqlglot import exp
 from typing_extensions import TypeAlias
 
 from sqlspec.base import AsyncDriverAdapterProtocol
-from sqlspec.mixins import SQLTranslatorMixin
+from sqlspec.mixins import ResultConverter, SQLTranslatorMixin
 from sqlspec.statement import SQLStatement
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from asyncpg import Record
     from asyncpg.connection import Connection
     from asyncpg.pool import PoolConnectionProxy
 
+    from sqlspec.filters import StatementFilter
     from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 __all__ = ("AsyncpgConnection", "AsyncpgDriver")
 
 logger = logging.getLogger("sqlspec")
 
-AsyncpgConnection: TypeAlias = "Union[Connection[Any], PoolConnectionProxy[Any]]"
+if TYPE_CHECKING:
+    AsyncpgConnection: TypeAlias = Union[Connection[Record], PoolConnectionProxy[Record]]
+else:
+    AsyncpgConnection: TypeAlias = "Union[Connection, PoolConnectionProxy]"
 
 # Compile the row count regex once for efficiency
 ROWCOUNT_REGEX = re.compile(r"^(?:INSERT|UPDATE|DELETE) \d+ (\d+)$")
@@ -50,6 +55,7 @@ QUESTION_MARK_PATTERN = re.compile(
 class AsyncpgDriver(
     SQLTranslatorMixin["AsyncpgConnection"],
     AsyncDriverAdapterProtocol["AsyncpgConnection"],
+    ResultConverter,
 ):
     """AsyncPG Postgres Driver Adapter."""
 
@@ -64,6 +70,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *filters: "StatementFilter",
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
         """Process SQL and parameters for AsyncPG using SQLStatement.
@@ -74,6 +81,7 @@ class AsyncpgDriver(
         Args:
             sql: SQL statement.
             parameters: Query parameters.
+            *filters: Statement filters to apply.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -86,11 +94,9 @@ class AsyncpgDriver(
         # Create a SQLStatement with PostgreSQL dialect
         statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
 
-        # Apply any filters if present
-        filters = kwargs.pop("filters", None)
-        if filters:
-            for filter_obj in filters:
-                statement = statement.apply_filter(filter_obj)
+        # Apply any filters
+        for filter_obj in filters:
+            statement = statement.apply_filter(filter_obj)
 
         # Process the statement
         processed_sql, processed_params, parsed_expr = statement.process()
@@ -159,7 +165,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -170,7 +176,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -180,7 +186,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -188,6 +194,7 @@ class AsyncpgDriver(
         """Fetch data from the database.
 
         Args:
+            *filters: Statement filters to apply.
             sql: SQL statement.
             parameters: Query parameters.
             connection: Optional connection to use.
@@ -198,15 +205,13 @@ class AsyncpgDriver(
             List of row data as either model instances or dictionaries.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         parameters = parameters if parameters is not None else ()
 
         results = await connection.fetch(sql, *parameters)  # pyright: ignore
         if not results:
             return []
-        if schema_type is None:
-            return [dict(row.items()) for row in results]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-        return [cast("ModelDTOT", schema_type(**dict(row.items()))) for row in results]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        return self.to_schema([dict(row.items()) for row in results], schema_type=schema_type)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
 
     @overload
     async def select_one(
@@ -214,7 +219,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -225,7 +230,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -235,7 +240,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -243,6 +248,7 @@ class AsyncpgDriver(
         """Fetch one row from the database.
 
         Args:
+            *filters: Statement filters to apply.
             sql: SQL statement.
             parameters: Query parameters.
             connection: Optional connection to use.
@@ -253,15 +259,11 @@ class AsyncpgDriver(
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         parameters = parameters if parameters is not None else ()
         result = await connection.fetchrow(sql, *parameters)  # pyright: ignore
         result = self.check_not_found(result)
-
-        if schema_type is None:
-            # Always return as dictionary
-            return dict(result.items())  # type: ignore[attr-defined]
-        return cast("ModelDTOT", schema_type(**dict(result.items())))  # type: ignore[attr-defined]
+        return self.to_schema(dict(result.items()), schema_type=schema_type)
 
     @overload
     async def select_one_or_none(
@@ -269,7 +271,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -280,7 +282,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -290,7 +292,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -298,6 +300,7 @@ class AsyncpgDriver(
         """Fetch one row from the database.
 
         Args:
+            *filters: Statement filters to apply.
             sql: SQL statement.
             parameters: Query parameters.
             connection: Optional connection to use.
@@ -308,15 +311,12 @@ class AsyncpgDriver(
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         parameters = parameters if parameters is not None else ()
         result = await connection.fetchrow(sql, *parameters)  # pyright: ignore
         if result is None:
             return None
-        if schema_type is None:
-            # Always return as dictionary
-            return dict(result.items())
-        return cast("ModelDTOT", schema_type(**dict(result.items())))
+        return self.to_schema(dict(result.items()), schema_type=schema_type)
 
     @overload
     async def select_value(
@@ -324,7 +324,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -335,7 +335,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -345,7 +345,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
@@ -353,6 +353,7 @@ class AsyncpgDriver(
         """Fetch a single value from the database.
 
         Args:
+            *filters: Statement filters to apply.
             sql: SQL statement.
             parameters: Query parameters.
             connection: Optional connection to use.
@@ -363,7 +364,7 @@ class AsyncpgDriver(
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         parameters = parameters if parameters is not None else ()
         result = await connection.fetchval(sql, *parameters)  # pyright: ignore
         result = self.check_not_found(result)
@@ -377,7 +378,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -388,7 +389,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -398,18 +399,26 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[T, Any]]":
         """Fetch a single value from the database.
 
+        Args:
+            *filters: Statement filters to apply.
+            sql: SQL statement.
+            parameters: Query parameters.
+            connection: Optional connection to use.
+            schema_type: Optional schema class for the result.
+            **kwargs: Additional keyword arguments.
+
         Returns:
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         parameters = parameters if parameters is not None else ()
         result = await connection.fetchval(sql, *parameters)  # pyright: ignore
         if result is None:
@@ -421,15 +430,16 @@ class AsyncpgDriver(
     async def insert_update_delete(
         self,
         sql: str,
-        parameters: Optional["StatementParameterType"] = None,
+        parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: Optional["AsyncpgConnection"] = None,
         **kwargs: Any,
     ) -> int:
         """Insert, update, or delete data from the database.
 
         Args:
+            *filters: Statement filters to apply.
             sql: SQL statement.
             parameters: Query parameters.
             connection: Optional connection to use.
@@ -439,7 +449,7 @@ class AsyncpgDriver(
             Row count affected by the operation.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         parameters = parameters if parameters is not None else ()
         result = await connection.execute(sql, *parameters)  # pyright: ignore
         # asyncpg returns e.g. 'INSERT 0 1', 'UPDATE 0 2', etc.
@@ -454,7 +464,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -465,7 +475,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -475,7 +485,7 @@ class AsyncpgDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -483,6 +493,7 @@ class AsyncpgDriver(
         """Insert, update, or delete data from the database and return the affected row.
 
         Args:
+            *filters: Statement filters to apply.
             sql: SQL statement.
             parameters: Query parameters.
             connection: Optional connection to use.
@@ -493,21 +504,19 @@ class AsyncpgDriver(
             The affected row data as either a model instance or dictionary.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         parameters = parameters if parameters is not None else ()
         result = await connection.fetchrow(sql, *parameters)  # pyright: ignore
         if result is None:
             return None
-        if schema_type is None:
-            return dict(result.items())  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-        return cast("ModelDTOT", schema_type(**dict(result.items())))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType, reportUnknownVariableType]
+
+        return self.to_schema(dict(result.items()), schema_type=schema_type)
 
     async def execute_script(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
         connection: "Optional[AsyncpgConnection]" = None,
         **kwargs: Any,
     ) -> str:

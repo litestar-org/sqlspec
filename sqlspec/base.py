@@ -19,13 +19,14 @@ from typing import (
 )
 
 from sqlspec.exceptions import NotFoundError
-from sqlspec.filters import StatementFilter
 from sqlspec.statement import SQLStatement
 from sqlspec.typing import ConnectionT, ModelDTOT, PoolT, StatementParameterType, T
 from sqlspec.utils.sync_tools import ensure_async_
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
+
+    from sqlspec.filters import StatementFilter
 
 
 __all__ = (
@@ -534,13 +535,19 @@ class CommonDriverAttributes(Generic[ConnectionT]):
         return item_or_none
 
     def _process_sql_params(
-        self, sql: str, parameters: "Optional[StatementParameterType]" = None, /, **kwargs: Any
+        self,
+        sql: str,
+        parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
+        **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
         """Process SQL query and parameters using SQLStatement for validation and formatting.
 
         Args:
             sql: The SQL query string.
             parameters: Parameters for the query.
+            *filters: Statement filters to apply.
             **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
         Returns:
@@ -548,6 +555,11 @@ class CommonDriverAttributes(Generic[ConnectionT]):
         """
         # Instantiate SQLStatement with parameters and kwargs for internal merging
         stmt = SQLStatement(sql=sql, parameters=parameters, kwargs=kwargs or None)
+
+        # Apply all statement filters
+        for filter_obj in filters:
+            stmt = stmt.apply_filter(filter_obj)
+
         # Process uses the merged parameters internally
         processed = stmt.process()
         return processed[0], processed[1]  # Return only the SQL and parameters, discard the third element
@@ -563,9 +575,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def select(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -575,9 +588,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def select(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -586,9 +600,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def select(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
@@ -598,9 +613,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def select_one(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -610,9 +626,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def select_one(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -621,9 +638,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def select_one(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: Optional[StatementParameterType] = None,
+        /,
+        *filters: "StatementFilter",
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
@@ -633,9 +651,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def select_one_or_none(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -645,9 +664,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def select_one_or_none(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -656,9 +676,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def select_one_or_none(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: Optional[StatementParameterType] = None,
+        /,
+        *filters: "StatementFilter",
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
@@ -668,9 +689,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def select_value(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -680,9 +702,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def select_value(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -691,9 +714,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def select_value(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: Optional[StatementParameterType] = None,
+        /,
+        *filters: "StatementFilter",
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[T]] = None,
         **kwargs: Any,
@@ -703,9 +727,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def select_value_or_none(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -715,9 +740,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def select_value_or_none(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -726,9 +752,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def select_value_or_none(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: Optional[StatementParameterType] = None,
+        /,
+        *filters: "StatementFilter",
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[T]] = None,
         **kwargs: Any,
@@ -737,9 +764,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def insert_update_delete(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: Optional[StatementParameterType] = None,
+        /,
+        *filters: "StatementFilter",
         connection: Optional[ConnectionT] = None,
         **kwargs: Any,
     ) -> int: ...
@@ -748,9 +776,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def insert_update_delete_returning(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -760,9 +789,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def insert_update_delete_returning(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -771,9 +801,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def insert_update_delete_returning(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: Optional[StatementParameterType] = None,
+        /,
+        *filters: "StatementFilter",
         connection: Optional[ConnectionT] = None,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
@@ -784,6 +815,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         self,
         sql: str,
         parameters: Optional[StatementParameterType] = None,
+        /,
         connection: Optional[ConnectionT] = None,
         **kwargs: Any,
     ) -> str: ...
@@ -799,9 +831,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def select(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -811,9 +844,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def select(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -822,9 +856,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def select(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -834,9 +869,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def select_one(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -846,9 +882,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def select_one(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -857,9 +894,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def select_one(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -869,9 +907,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def select_one_or_none(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -881,9 +920,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def select_one_or_none(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -892,9 +932,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def select_one_or_none(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -904,9 +945,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def select_value(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -916,9 +958,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def select_value(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -927,9 +970,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def select_value(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
@@ -939,9 +983,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def select_value_or_none(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -951,9 +996,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def select_value_or_none(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -962,9 +1008,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def select_value_or_none(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
@@ -973,9 +1020,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def insert_update_delete(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         **kwargs: Any,
     ) -> int: ...
@@ -984,9 +1032,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def insert_update_delete_returning(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -996,9 +1045,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def insert_update_delete_returning(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -1007,9 +1057,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def insert_update_delete_returning(
         self,
-        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -1020,6 +1071,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
+        /,
         connection: "Optional[ConnectionT]" = None,
         **kwargs: Any,
     ) -> str: ...

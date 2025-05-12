@@ -3,19 +3,20 @@ import logging
 import re
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
 from asyncmy import Connection
 
 from sqlspec.base import AsyncDriverAdapterProtocol
 from sqlspec.exceptions import ParameterStyleMismatchError
-from sqlspec.mixins import SQLTranslatorMixin
+from sqlspec.mixins import ResultConverter, SQLTranslatorMixin
 from sqlspec.statement import SQLStatement
 from sqlspec.typing import is_dict
 
 if TYPE_CHECKING:
     from asyncmy.cursors import Cursor
 
+    from sqlspec.filters import StatementFilter
     from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 __all__ = ("AsyncmyDriver",)
@@ -31,6 +32,7 @@ MYSQL_PLACEHOLDER_PATTERN = re.compile(r"(?<!%)%s")
 class AsyncmyDriver(
     SQLTranslatorMixin["AsyncmyConnection"],
     AsyncDriverAdapterProtocol["AsyncmyConnection"],
+    ResultConverter,
 ):
     """Asyncmy MySQL/MariaDB Driver Adapter."""
 
@@ -54,6 +56,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *filters: "StatementFilter",
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
         """Process SQL and parameters using SQLStatement with dialect support.
@@ -61,7 +64,8 @@ class AsyncmyDriver(
         Args:
             sql: The SQL statement to process.
             parameters: The parameters to bind to the statement.
-            **kwargs: Additional keyword arguments (including filters).
+            *filters: Statement filters to apply.
+            **kwargs: Additional keyword arguments.
 
         Raises:
             ParameterStyleMismatchError: If the parameter style is not supported.
@@ -102,11 +106,9 @@ class AsyncmyDriver(
         # Create a SQLStatement with MySQL dialect
         statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
 
-        # Apply any filters if present
-        filters = kwargs.pop("filters", None)
-        if filters:
-            for filter_obj in filters:
-                statement = statement.apply_filter(filter_obj)
+        # Apply any filters
+        for filter_obj in filters:
+            statement = statement.apply_filter(filter_obj)
 
         # Process the statement for execution
         processed_sql, processed_params, _ = statement.process()
@@ -135,7 +137,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -146,7 +148,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -156,7 +158,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -167,16 +169,17 @@ class AsyncmyDriver(
             List of row data as either model instances or dictionaries.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             results = await cursor.fetchall()
             if not results:
                 return []
             column_names = [c[0] for c in cursor.description or []]
-            if schema_type is None:
-                return [dict(zip(column_names, row)) for row in results]
-            return [schema_type(**dict(zip(column_names, row))) for row in results]
+
+            # Convert to dicts first
+            dict_results = [dict(zip(column_names, row)) for row in results]
+            return self.to_schema(dict_results, schema_type=schema_type)
 
     @overload
     async def select_one(
@@ -184,7 +187,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -195,7 +198,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -205,7 +208,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -216,15 +219,16 @@ class AsyncmyDriver(
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             result = await cursor.fetchone()
             result = self.check_not_found(result)
             column_names = [c[0] for c in cursor.description or []]
-            if schema_type is None:
-                return dict(zip(column_names, result))
-            return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
+
+            # Convert to dict and use ResultConverter
+            dict_result = dict(zip(column_names, result))
+            return self.to_schema(dict_result, schema_type=schema_type)
 
     @overload
     async def select_one_or_none(
@@ -232,7 +236,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -243,7 +247,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -253,7 +257,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -264,16 +268,17 @@ class AsyncmyDriver(
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             result = await cursor.fetchone()
             if result is None:
                 return None
             column_names = [c[0] for c in cursor.description or []]
-            if schema_type is None:
-                return dict(zip(column_names, result))
-            return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
+
+            # Convert to dict and use ResultConverter
+            dict_result = dict(zip(column_names, result))
+            return self.to_schema(dict_result, schema_type=schema_type)
 
     @overload
     async def select_value(
@@ -281,7 +286,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -292,7 +297,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -302,7 +307,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
@@ -313,7 +318,7 @@ class AsyncmyDriver(
             The first value from the first row of results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             result = await cursor.fetchone()
@@ -329,7 +334,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -340,7 +345,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -350,7 +355,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
@@ -361,7 +366,7 @@ class AsyncmyDriver(
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             result = await cursor.fetchone()
@@ -377,7 +382,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         **kwargs: Any,
     ) -> int:
@@ -387,7 +392,7 @@ class AsyncmyDriver(
             Row count affected by the operation.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             return cursor.rowcount
@@ -398,7 +403,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -409,7 +414,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -419,7 +424,7 @@ class AsyncmyDriver(
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -430,7 +435,7 @@ class AsyncmyDriver(
             The first row of results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
@@ -438,16 +443,15 @@ class AsyncmyDriver(
             if result is None:
                 return None
             column_names = [c[0] for c in cursor.description or []]
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))
-            return dict(zip(column_names, result))
+
+            # Convert to dict and use ResultConverter
+            dict_result = dict(zip(column_names, result))
+            return self.to_schema(dict_result, schema_type=schema_type)
 
     async def execute_script(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[AsyncmyConnection]" = None,
         **kwargs: Any,
     ) -> str:

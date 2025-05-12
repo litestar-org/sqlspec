@@ -1,5 +1,8 @@
 from typing import Any, TypeVar
 
+__all__ = ("SingletonMeta",)
+
+
 _T = TypeVar("_T")
 
 
