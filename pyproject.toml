@@ -7,7 +7,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.9, <4.0"
-version = "0.11.0"
+version = "0.11.1"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
