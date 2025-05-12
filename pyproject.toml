@@ -7,7 +7,12 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.9, <4.0"
-version = "0.10.1"
+version = "0.11.0"
+
+[project.urls]
+Discord = "https://discord.gg/litestar"
+Issue = "https://github.com/litestar-org/sqlspec/issues/"
+Source = "https://github.com/litestar-org/sqlspec"
 
 [project.optional-dependencies]
 adbc = ["adbc_driver_manager", "pyarrow"]
@@ -249,6 +254,10 @@ module = [
   "pyarrow.*",
 ]
 
+[[tool.mypy.overrides]]
+disable_error_code = "ignore-without-code"
+module = "sqlspec.extensions.litestar.providers"
+
 [tool.pyright]
 disableBytesTypePromotions = true
 exclude = ["**/node_modules", "**/__pycache__", ".venv", "tools", "docs"]
@@ -260,6 +269,8 @@ reportPrivateUsage = false
 reportUnknownArgumentType = false
 reportUnknownMemberType = false
 reportUnknownVariableType = false
+reportUnnecessaryComparison = false
+reportUnnecessaryIsInstance = false
 reportUnnecessaryTypeIgnoreComments = true
 root = "."
 
@@ -318,7 +329,13 @@ select = ["ALL"]
 convention = "google"
 
 [tool.ruff.lint.mccabe]
-max-complexity = 18
+max-complexity = 25
+
+[tool.ruff.lint.pylint]
+max-bool-expr = 10
+max-branches = 20
+max-locals = 20
+max-returns = 15
 
 [tool.ruff.lint.pep8-naming]
 classmethod-decorators = ["classmethod"]

@@ -83,7 +83,9 @@ class AsyncpgConfig(AsyncDatabaseConfig["AsyncpgConnection", "Pool", "AsyncpgDri
     """For dialects that support the JSON datatype, this is a Python callable that will render a given object as JSON.
     By default, SQLSpec's :attr:`encode_json() <sqlspec._serialization.encode_json>` is used."""
     connection_type: "type[AsyncpgConnection]" = field(
-        hash=False, init=False, default_factory=lambda: PoolConnectionProxy
+        hash=False,
+        init=False,
+        default_factory=lambda: PoolConnectionProxy,  # type: ignore[assignment]
     )
     """Type of the connection object"""
     driver_type: "type[AsyncpgDriver]" = field(hash=False, init=False, default_factory=lambda: AsyncpgDriver)  # type: ignore[type-abstract,unused-ignore]
