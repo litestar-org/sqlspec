@@ -7,13 +7,14 @@ from datetime import datetime
 from typing import Any, Generic, Literal, Optional, Protocol, Union, cast
 
 from sqlglot import exp
-from typing_extensions import TypeVar
+from typing_extensions import TypeAlias, TypeVar
 
 from sqlspec.statement import SQLStatement
 
 __all__ = (
     "BeforeAfter",
     "CollectionFilter",
+    "FilterTypes",
     "InAnyFilter",
     "LimitOffset",
     "NotInCollectionFilter",
@@ -314,3 +315,16 @@ def apply_filter(statement: SQLStatement, filter_obj: StatementFilter) -> SQLSta
         The modified statement.
     """
     return filter_obj.append_to_statement(statement)
+
+
+FilterTypes: TypeAlias = Union[
+    BeforeAfter,
+    OnBeforeAfter,
+    CollectionFilter[Any],
+    LimitOffset,
+    OrderBy,
+    SearchFilter,
+    NotInCollectionFilter[Any],
+    NotInSearchFilter,
+]
+"""Aggregate type alias of the types supported for collection filtering."""

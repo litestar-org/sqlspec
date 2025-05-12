@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Union
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.handlers import (
@@ -12,7 +12,7 @@ from sqlspec.extensions.litestar.handlers import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
+    from collections.abc import AsyncGenerator, Awaitable
     from contextlib import AbstractAsyncContextManager
 
     from litestar import Litestar
@@ -29,6 +29,15 @@ DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
 DEFAULT_SESSION_KEY = "db_session"
 
+__all__ = (
+    "DEFAULT_COMMIT_MODE",
+    "DEFAULT_CONNECTION_KEY",
+    "DEFAULT_POOL_KEY",
+    "DEFAULT_SESSION_KEY",
+    "CommitMode",
+    "DatabaseConfig",
+)
+
 
 @dataclass
 class DatabaseConfig:
@@ -39,9 +48,11 @@ class DatabaseConfig:
     commit_mode: "CommitMode" = field(default=DEFAULT_COMMIT_MODE)
     extra_commit_statuses: "Optional[set[int]]" = field(default=None)
     extra_rollback_statuses: "Optional[set[int]]" = field(default=None)
-    connection_provider: "Callable[[State,Scope], Awaitable[ConnectionT]]" = field(init=False, repr=False, hash=False)  # pyright: ignore[reportGeneralTypeIssues]
+    connection_provider: "Callable[[State, Scope], AsyncGenerator[ConnectionT, None]]" = field(  # pyright: ignore[reportGeneralTypeIssues]
+        init=False, repr=False, hash=False
+    )
     pool_provider: "Callable[[State,Scope], Awaitable[PoolT]]" = field(init=False, repr=False, hash=False)  # pyright: ignore[reportGeneralTypeIssues]
-    session_provider: "Callable[[State,Scope], Awaitable[DriverT]]" = field(init=False, repr=False, hash=False)  # pyright: ignore[reportGeneralTypeIssues]
+    session_provider: "Callable[[Any], AsyncGenerator[DriverT, None]]" = field(init=False, repr=False, hash=False)  # pyright: ignore[reportGeneralTypeIssues]
     before_send_handler: "BeforeMessageSendHookHandler" = field(init=False, repr=False, hash=False)
     lifespan_handler: "Callable[[Litestar], AbstractAsyncContextManager[None]]" = field(
         init=False,
@@ -79,5 +90,5 @@ class DatabaseConfig:
         )
         self.pool_provider = pool_provider_maker(config=self.config, pool_key=self.pool_key)
         self.session_provider = session_provider_maker(
-            session_key=self.session_key, connection_key=self.connection_key, pool_key=self.pool_key, config=self.config
+            config=self.config, connection_dependency_key=self.connection_key
         )

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Literal, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from litestar.di import Provide
 from litestar.plugins import InitPluginProtocol
@@ -17,13 +17,6 @@ from sqlspec.typing import ConnectionT, PoolT
 if TYPE_CHECKING:
     from click import Group
     from litestar.config.app import AppConfig
-
-
-CommitMode = Literal["manual", "autocommit", "autocommit_include_redirect"]
-DEFAULT_COMMIT_MODE: CommitMode = "manual"
-DEFAULT_CONNECTION_KEY = "db_connection"
-DEFAULT_POOL_KEY = "db_pool"
-DEFAULT_SESSION_KEY = "db_session"
 
 
 class SQLSpec(InitPluginProtocol, SQLSpecBase):
@@ -77,16 +70,18 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
         app_config.on_startup.append(store_sqlspec_in_state)
 
         # Register types for injection
-        app_config.signature_types.extend([
-            SQLSpec,
-            ConnectionT,
-            PoolT,
-            DriverT,
-            DatabaseConfig,
-            DatabaseConfigProtocol,
-            SyncConfigT,
-            AsyncConfigT,
-        ])
+        app_config.signature_types.extend(
+            [
+                SQLSpec,
+                ConnectionT,
+                PoolT,
+                DriverT,
+                DatabaseConfig,
+                DatabaseConfigProtocol,
+                SyncConfigT,
+                AsyncConfigT,
+            ]
+        )
 
         for c in self._plugin_configs:
             c.annotation = self.add_config(c.config)

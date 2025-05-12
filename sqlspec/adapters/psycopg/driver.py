@@ -1,14 +1,15 @@
 import logging
 import re
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
 from psycopg import AsyncConnection, Connection
 from psycopg.rows import dict_row
 
 from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
 from sqlspec.exceptions import ParameterStyleMismatchError
-from sqlspec.mixins import SQLTranslatorMixin
+from sqlspec.filters import StatementFilter
+from sqlspec.mixins import ResultConverter, SQLTranslatorMixin
 from sqlspec.statement import SQLStatement
 from sqlspec.typing import is_dict
 
@@ -38,6 +39,7 @@ class PsycopgDriverBase:
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
         /,
+        *filters: StatementFilter,
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
         """Process SQL and parameters using SQLStatement with dialect support.
@@ -45,7 +47,8 @@ class PsycopgDriverBase:
         Args:
             sql: The SQL statement to process.
             parameters: The parameters to bind to the statement.
-            **kwargs: Additional keyword arguments (including filters).
+            *filters: Statement filters to apply.
+            **kwargs: Additional keyword arguments.
 
         Raises:
             ParameterStyleMismatchError: If the parameter style is mismatched.
@@ -54,10 +57,10 @@ class PsycopgDriverBase:
             A tuple of (sql, parameters) ready for execution.
         """
         statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
-        filters = kwargs.pop("filters", None)
-        if filters:
-            for filter_obj in filters:
-                statement = statement.apply_filter(filter_obj)
+
+        # Apply all statement filters
+        for filter_obj in filters:
+            statement = statement.apply_filter(filter_obj)
 
         processed_sql, processed_params, _ = statement.process()
 
@@ -112,10 +115,9 @@ class PsycopgSyncDriver(
     @overload
     def select(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -123,20 +125,18 @@ class PsycopgSyncDriver(
     @overload
     def select(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Sequence[ModelDTOT]": ...
     def select(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         connection: "Optional[PsycopgSyncConnection]" = None,
         **kwargs: Any,
@@ -147,24 +147,22 @@ class PsycopgSyncDriver(
             List of row data as either model instances or dictionaries.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
             results = cursor.fetchall()
             if not results:
                 return []
 
-            if schema_type is not None:
-                return [cast("ModelDTOT", schema_type(**row)) for row in results]  # pyright: ignore[reportUnknownArgumentType]
-            return [cast("dict[str,Any]", row) for row in results]  # pyright: ignore[reportUnknownArgumentType]
+            # Use ResultConverter for batch conversion
+            return ResultConverter.to_schema(results, schema_type=schema_type)
 
     @overload
     def select_one(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -172,20 +170,18 @@ class PsycopgSyncDriver(
     @overload
     def select_one(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
     def select_one(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -196,22 +192,21 @@ class PsycopgSyncDriver(
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
             row = cursor.fetchone()
             row = self.check_not_found(row)
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**cast("dict[str,Any]", row)))
-            return cast("dict[str,Any]", row)
+
+            # Use ResultConverter for single row conversion
+            return ResultConverter.to_schema(row, schema_type=schema_type)
 
     @overload
     def select_one_or_none(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -219,20 +214,18 @@ class PsycopgSyncDriver(
     @overload
     def select_one_or_none(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Optional[ModelDTOT]": ...
     def select_one_or_none(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -243,23 +236,22 @@ class PsycopgSyncDriver(
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
             row = cursor.fetchone()
             if row is None:
                 return None
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**cast("dict[str,Any]", row)))
-            return cast("dict[str,Any]", row)
+
+            # Use ResultConverter for single row conversion
+            return ResultConverter.to_schema(row, schema_type=schema_type)
 
     @overload
     def select_value(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -267,20 +259,18 @@ class PsycopgSyncDriver(
     @overload
     def select_value(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "T": ...
     def select_value(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
@@ -291,7 +281,7 @@ class PsycopgSyncDriver(
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
             row = cursor.fetchone()
@@ -305,10 +295,9 @@ class PsycopgSyncDriver(
     @overload
     def select_value_or_none(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -316,20 +305,18 @@ class PsycopgSyncDriver(
     @overload
     def select_value_or_none(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "Optional[T]": ...
     def select_value_or_none(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
@@ -340,7 +327,7 @@ class PsycopgSyncDriver(
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
             row = cursor.fetchone()
@@ -355,10 +342,9 @@ class PsycopgSyncDriver(
 
     def insert_update_delete(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         **kwargs: Any,
     ) -> int:
@@ -368,7 +354,7 @@ class PsycopgSyncDriver(
             The number of rows affected by the operation.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
             return getattr(cursor, "rowcount", -1)  # pyright: ignore[reportUnknownMemberType]
@@ -376,10 +362,9 @@ class PsycopgSyncDriver(
     @overload
     def insert_update_delete_returning(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -387,20 +372,18 @@ class PsycopgSyncDriver(
     @overload
     def insert_update_delete_returning(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
     def insert_update_delete_returning(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -411,7 +394,7 @@ class PsycopgSyncDriver(
             The first row of results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
             result = cursor.fetchone()
@@ -419,16 +402,13 @@ class PsycopgSyncDriver(
             if result is None:
                 return None
 
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**result))  # pyright: ignore[reportUnknownArgumentType]
-            return cast("dict[str, Any]", result)  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
+            # Use ResultConverter for single row conversion
+            return ResultConverter.to_schema(result, schema_type=schema_type)
 
     def execute_script(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgSyncConnection]" = None,
         **kwargs: Any,
     ) -> str:
@@ -469,10 +449,9 @@ class PsycopgAsyncDriver(
     @overload
     async def select(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -480,20 +459,18 @@ class PsycopgAsyncDriver(
     @overload
     async def select(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Sequence[ModelDTOT]": ...
     async def select(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         **kwargs: Any,
@@ -504,24 +481,22 @@ class PsycopgAsyncDriver(
             List of row data as either model instances or dictionaries.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             results = await cursor.fetchall()
             if not results:
                 return []
 
-            if schema_type is not None:
-                return [cast("ModelDTOT", schema_type(**row)) for row in results]  # pyright: ignore[reportUnknownArgumentType]
-            return [cast("dict[str,Any]", row) for row in results]  # pyright: ignore[reportUnknownArgumentType]
+            # Use ResultConverter for batch conversion
+            return ResultConverter.to_schema(results, schema_type=schema_type)
 
     @overload
     async def select_one(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -529,20 +504,18 @@ class PsycopgAsyncDriver(
     @overload
     async def select_one(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
     async def select_one(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -553,22 +526,21 @@ class PsycopgAsyncDriver(
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             row = await cursor.fetchone()
             row = self.check_not_found(row)
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**cast("dict[str,Any]", row)))
-            return cast("dict[str,Any]", row)
+
+            # Use ResultConverter for single row conversion
+            return ResultConverter.to_schema(row, schema_type=schema_type)
 
     @overload
     async def select_one_or_none(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -576,20 +548,18 @@ class PsycopgAsyncDriver(
     @overload
     async def select_one_or_none(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "Optional[ModelDTOT]": ...
     async def select_one_or_none(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         **kwargs: Any,
@@ -600,23 +570,22 @@ class PsycopgAsyncDriver(
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             row = await cursor.fetchone()
             if row is None:
                 return None
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**cast("dict[str,Any]", row)))
-            return cast("dict[str,Any]", row)
+
+            # Use ResultConverter for single row conversion
+            return ResultConverter.to_schema(row, schema_type=schema_type)
 
     @overload
     async def select_value(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -624,20 +593,18 @@ class PsycopgAsyncDriver(
     @overload
     async def select_value(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "T": ...
     async def select_value(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
@@ -648,7 +615,7 @@ class PsycopgAsyncDriver(
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             row = await cursor.fetchone()
@@ -662,10 +629,9 @@ class PsycopgAsyncDriver(
     @overload
     async def select_value_or_none(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -673,20 +639,18 @@ class PsycopgAsyncDriver(
     @overload
     async def select_value_or_none(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
     ) -> "Optional[T]": ...
     async def select_value_or_none(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
@@ -697,7 +661,7 @@ class PsycopgAsyncDriver(
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             row = await cursor.fetchone()
@@ -712,10 +676,9 @@ class PsycopgAsyncDriver(
 
     async def insert_update_delete(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         **kwargs: Any,
     ) -> int:
@@ -725,7 +688,7 @@ class PsycopgAsyncDriver(
             The number of rows affected by the operation.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             return getattr(cursor, "rowcount", -1)  # pyright: ignore[reportUnknownMemberType]
@@ -733,10 +696,9 @@ class PsycopgAsyncDriver(
     @overload
     async def insert_update_delete_returning(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -744,20 +706,18 @@ class PsycopgAsyncDriver(
     @overload
     async def insert_update_delete_returning(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "ModelDTOT": ...
     async def insert_update_delete_returning(
         self,
+        *filters: StatementFilter,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -768,22 +728,20 @@ class PsycopgAsyncDriver(
             The first row of results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             result = await cursor.fetchone()
             if result is None:
                 return None
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**result))  # pyright: ignore[reportUnknownArgumentType]
-            return cast("dict[str, Any]", result)  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
+
+            # Use ResultConverter for single row conversion
+            return ResultConverter.to_schema(result, schema_type=schema_type)
 
     async def execute_script(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         **kwargs: Any,
     ) -> str:

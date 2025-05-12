@@ -1,4 +1,8 @@
+# ruff: noqa: PLC2801
 import contextlib
+import inspect
+from collections.abc import AsyncGenerator
+from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 from litestar.constants import HTTP_DISCONNECT, HTTP_RESPONSE_START, WEBSOCKET_CLOSE, WEBSOCKET_DISCONNECT
@@ -12,8 +16,7 @@ from sqlspec.extensions.litestar._utils import (
 from sqlspec.utils.sync_tools import ensure_async_
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Coroutine
-    from contextlib import AbstractAsyncContextManager
+    from collections.abc import Awaitable, Coroutine
 
     from litestar import Litestar
     from litestar.datastructures.state import State
@@ -25,6 +28,16 @@ if TYPE_CHECKING:
 
 SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, HTTP_DISCONNECT, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
 """ASGI events that terminate a session scope."""
+
+__all__ = (
+    "SESSION_TERMINUS_ASGI_EVENTS",
+    "autocommit_handler_maker",
+    "connection_provider_maker",
+    "lifespan_handler_maker",
+    "manual_handler_maker",
+    "pool_provider_maker",
+    "session_provider_maker",
+)
 
 
 def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
@@ -46,7 +59,8 @@ def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope
         """
         connection = get_sqlspec_scope_state(scope, connection_scope_key)
         if connection and message["type"] in SESSION_TERMINUS_ASGI_EVENTS:
-            await ensure_async_(connection.close)()
+            if hasattr(connection, "close") and callable(connection.close):
+                await ensure_async_(connection.close)()
             delete_sqlspec_scope_state(scope, connection_scope_key)
 
     return handler
@@ -97,12 +111,14 @@ def autocommit_handler_maker(
                 if (message["status"] in commit_range or message["status"] in extra_commit_statuses) and message[
                     "status"
                 ] not in extra_rollback_statuses:
-                    await ensure_async_(connection.commit)()
-                else:
+                    if hasattr(connection, "commit") and callable(connection.commit):
+                        await ensure_async_(connection.commit)()
+                elif hasattr(connection, "rollback") and callable(connection.rollback):
                     await ensure_async_(connection.rollback)()
         finally:
             if connection and message["type"] in SESSION_TERMINUS_ASGI_EVENTS:
-                await ensure_async_(connection.close)()
+                if hasattr(connection, "close") and callable(connection.close):
+                    await ensure_async_(connection.close)()
                 delete_sqlspec_scope_state(scope, connection_scope_key)
 
     return handler
@@ -162,7 +178,7 @@ def pool_provider_maker(
         The generated pool provider.
     """
 
-    async def provide_pool(state: "State", scope: "Scope") -> "PoolT":  # pylint: disable=unused-argument
+    async def provide_pool(state: "State", scope: "Scope") -> "PoolT":
         """Provides the database pool from `app.state`.
 
         Args:
@@ -192,103 +208,64 @@ def pool_provider_maker(
 
 
 def connection_provider_maker(
-    connection_key: str,  # Key for storing connection in request scope
-    pool_key: str,  # Key for retrieving pool from app state
-    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]",  # Needed for acquire_connection_from_pool
-) -> "Callable[[State, Scope], Awaitable[ConnectionT]]":
-    """Build the connection provider to inject a database connection acquired from the pool.
+    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]",
+    pool_key: str,
+    connection_key: str,
+) -> "Callable[[State, Scope], AsyncGenerator[ConnectionT, None]]":
+    async def provide_connection(state: "State", scope: "Scope") -> "AsyncGenerator[ConnectionT, None]":
+        db_pool = state.get(pool_key)
+        if db_pool is None:
+            msg = f"Database pool with key '{pool_key}' not found. Cannot create a connection."
+            raise ImproperConfigurationError(msg)
 
-    Args:
-        connection_key: The key to store the acquired connection in the ASGI scope for reuse
-                        within the same request.
-        pool_key: The key used to retrieve the connection pool from `app.state`.
-        config: The database configuration object, expected to have a method
-                for acquiring connections from a pool instance.
+        connection_cm = config.provide_connection(db_pool)
 
-    Returns:
-        The generated connection provider.
-    """
+        if not isinstance(connection_cm, AbstractAsyncContextManager):
+            conn_instance: ConnectionT
+            if hasattr(connection_cm, "__await__"):
+                conn_instance = await cast("Awaitable[ConnectionT]", connection_cm)
+            else:
+                conn_instance = cast("ConnectionT", connection_cm)
+            set_sqlspec_scope_state(scope, connection_key, conn_instance)
+            yield conn_instance
+            return
 
-    async def provide_connection(state: "State", scope: "Scope") -> "ConnectionT":
-        """Provides a database connection from the application pool.
-
-        A connection is acquired from the pool and stored in the request scope
-        to be reused if the dependency is requested multiple times in the same request.
-        The `before_send` handler is responsible for closing this connection (returning it to the pool).
-
-        Args:
-            state: The Litestar application State object.
-            scope: The ASGI scope.
-
-        Returns:
-            A database connection.
-
-        Raises:
-            ImproperConfigurationError: If the pool is not found or cannot provide a connection.
-        """
-        # Check if a connection is already stored in the current request's scope
-        connection = get_sqlspec_scope_state(scope, connection_key)
-        if connection is None:
-            # Get the application-level pool from app.state
-            db_pool = state.get(pool_key)
-            if db_pool is None:
-                msg = f"Database pool with key '{pool_key}' not found in application state. Cannot create a connection."
-                raise ImproperConfigurationError(msg)
-
-            connection = await ensure_async_(config.provide_connection)(db_pool)
-            set_sqlspec_scope_state(scope, connection_key, connection)
-        return cast("ConnectionT", connection)
+        entered_connection: Optional[ConnectionT] = None
+        try:
+            entered_connection = await connection_cm.__aenter__()
+            set_sqlspec_scope_state(scope, connection_key, entered_connection)
+            yield entered_connection
+        finally:
+            if entered_connection is not None:
+                await connection_cm.__aexit__(None, None, None)
+            delete_sqlspec_scope_state(scope, connection_key)  # Optional: clear from scope
 
     return provide_connection
 
 
 def session_provider_maker(
-    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", session_key: str, connection_key: str, pool_key: str
-) -> "Callable[[State, Scope], Awaitable[DriverT]]":
-    """Build the session provider (DriverT instance) using a pooled connection.
+    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", connection_dependency_key: str
+) -> "Callable[[Any], AsyncGenerator[DriverT, None]]":
+    async def provide_session(*args: Any, **kwargs: Any) -> "AsyncGenerator[DriverT, None]":
+        yield cast("DriverT", config.driver_type(connection=args[0] if args else kwargs.get(connection_dependency_key)))  # pyright: ignore
 
-    Args:
-        session_key: The key to store the DriverT instance in the ASGI scope.
-        connection_key: The key for the underlying ConnectionT in the ASGI scope. This
-                        ensures the same connection instance is used and managed.
-        pool_key: The key to retrieve the connection pool from `app.state`.
-        config: The database configuration object.
+    conn_type_annotation = config.connection_type
 
-    Returns:
-        The generated session provider.
-    """
+    db_conn_param = inspect.Parameter(
+        name=connection_dependency_key, kind=inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=conn_type_annotation
+    )
 
-    async def provide_session(state: "State", scope: "Scope") -> "DriverT":
-        """Provides a DriverT instance (session) wrapping a pooled database connection.
+    provider_signature = inspect.Signature(
+        parameters=[db_conn_param],
+        return_annotation=AsyncGenerator[config.driver_type, None],  # type: ignore[name-defined]
+    )
 
-        The underlying connection is managed (acquired and stored in scope) similarly
-        to `provide_connection`.
+    provide_session.__signature__ = provider_signature  # type: ignore[attr-defined]
 
-        Args:
-            state: The Litestar application State object.
-            scope: The ASGI scope.
+    if not hasattr(provide_session, "__annotations__") or provide_session.__annotations__ is None:
+        provide_session.__annotations__ = {}
 
-        Returns:
-            A DriverT instance.
-
-        Raises:
-            ImproperConfigurationError: If the pool is not found or cannot provide a connection.
-        """
-        session = get_sqlspec_scope_state(scope, session_key)
-        if session is None:
-            # Get or create the underlying connection for this request scope
-            connection = get_sqlspec_scope_state(scope, connection_key)
-            if connection is None:
-                db_pool = state.get(pool_key)
-                if db_pool is None:
-                    msg = f"Database pool with key '{pool_key}' not found in application state while trying to create a session."
-                    raise ImproperConfigurationError(msg)
-                connection = await ensure_async_(config.provide_session)(db_pool)
-                set_sqlspec_scope_state(scope, connection_key, connection)
-
-            # Create the driver/session instance with the (pooled) connection
-            session = config.driver_type(connection=connection)  # pyright: ignore[reportCallIssue]
-            set_sqlspec_scope_state(scope, session_key, session)
-        return cast("DriverT", session)
+    provide_session.__annotations__[connection_dependency_key] = conn_type_annotation
+    provide_session.__annotations__["return"] = config.driver_type
 
     return provide_session

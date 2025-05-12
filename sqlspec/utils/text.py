@@ -1,30 +1,53 @@
 """General utility functions."""
 
-import logging
 import re
 import unicodedata
-from typing import Any, Optional, Union
+from functools import lru_cache
+from typing import Optional
 
-import sqlglot
+# Compiled regex for slugify
+_SLUGIFY_REMOVE_INVALID_CHARS_RE = re.compile(r"[^\w\s-]")
+_SLUGIFY_COLLAPSE_SEPARATORS_RE = re.compile(r"[-\s]+")
+
+# Compiled regex for snake_case
+# Handles sequences like "HTTPRequest" -> "HTTP_Request" or "SSLError" -> "SSL_Error"
+_SNAKE_CASE_RE_ACRONYM_SEQUENCE = re.compile(r"([A-Z\d]+)([A-Z][a-z])")
+# Handles transitions like "camelCase" -> "camel_Case" or "PascalCase" -> "Pascal_Case" (partially)
+_SNAKE_CASE_RE_LOWER_UPPER_TRANSITION = re.compile(r"([a-z\d])([A-Z])")
+# Replaces hyphens, spaces, and dots with a single underscore
+_SNAKE_CASE_RE_REPLACE_SEP = re.compile(r"[-\s.]+")
+# Cleans up multiple consecutive underscores
+_SNAKE_CASE_RE_CLEAN_MULTIPLE_UNDERSCORE = re.compile(r"__+")
 
 __all__ = (
-    "bind_parameters",
+    "camelize",
     "check_email",
     "slugify",
+    "snake_case",
 )
-
-logger = logging.getLogger("sqlspec")
 
 
 def check_email(email: str) -> str:
-    """Validate an email."""
+    """Validate an email.
+
+    Very simple email validation.
+
+    Args:
+        email (str): The email to validate.
+
+    Raises:
+        ValueError: If the email is invalid.
+
+    Returns:
+        str: The validated email.
+    """
     if "@" not in email:
         msg = "Invalid email!"
         raise ValueError(msg)
     return email.lower()
 
 
-def slugify(value: str, allow_unicode: bool = False, separator: "Optional[str]" = None) -> str:
+def slugify(value: str, allow_unicode: bool = False, separator: Optional[str] = None) -> str:
     """Slugify.
 
     Convert to ASCII if ``allow_unicode`` is ``False``. Convert spaces or repeated
@@ -45,39 +68,41 @@ def slugify(value: str, allow_unicode: bool = False, separator: "Optional[str]" 
         value = unicodedata.normalize("NFKC", value)
     else:
         value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
-    value = re.sub(r"[^\w\s-]", "", value.lower())
+    value = _SLUGIFY_REMOVE_INVALID_CHARS_RE.sub("", value.lower())
     if separator is not None:
-        return re.sub(r"[-\s]+", "-", value).strip("-_").replace("-", separator)
-    return re.sub(r"[-\s]+", "-", value).strip("-_")
+        return _SLUGIFY_COLLAPSE_SEPARATORS_RE.sub("-", value).strip("-_").replace("-", separator)
+    return _SLUGIFY_COLLAPSE_SEPARATORS_RE.sub("-", value).strip("-_")
 
 
-def bind_parameters(
-    sql: str,
-    parameters: Optional[Union[dict[str, Any], list[Any], tuple[Any, ...]]] = None,
-    dialect: str = "generic",
-) -> tuple[str, Optional[Union[dict[str, Any], list[Any], tuple[Any, ...]]]]:
-    """Bind parameters to SQL using SQLGlot with fallback to original SQL/params.
+@lru_cache(maxsize=100)
+def camelize(string: str) -> str:
+    """Convert a string to camel case.
 
     Args:
-        sql: The SQL query string.
-        parameters: The parameters to bind (dict, list, tuple, or None).
-        dialect: The SQL dialect for parameter substitution.
+        string (str): The string to convert.
 
     Returns:
-        A tuple of (possibly rewritten SQL, parameters for driver).
+        str: The converted string.
     """
-    if not parameters:
-        return sql, None
+    return "".join(word if index == 0 else word.capitalize() for index, word in enumerate(string.split("_")))
 
-    try:
-        # For named parameters (dict)
-        if isinstance(parameters, dict):
-            bound_sql = sqlglot.transpile(sql, args=parameters, write=dialect)[0]
-            return bound_sql, parameters  # Keep dict for drivers that need it
-    except Exception as e:  # noqa: BLE001
-        msg = f"SQLGlot parameter binding failed: {e}. Using original SQL and parameters."
-        logger.debug(msg)
-        return sql, parameters
-    # For positional parameters (list/tuple), just return as is for now
-    # (could extend to support ? -> $1, $2, etc. if needed)
-    return sql, parameters
+
+@lru_cache(maxsize=100)
+def snake_case(string: str) -> str:
+    """Convert a string to snake_case.
+
+    Handles CamelCase, PascalCase, strings with spaces, hyphens, or dots
+    as separators, and ensures single underscores. It also correctly
+    handles acronyms (e.g., "HTTPRequest" becomes "http_request").
+
+    Args:
+        string: The string to convert.
+
+    Returns:
+        The snake_case version of the string.
+    """
+    s = _SNAKE_CASE_RE_ACRONYM_SEQUENCE.sub(r"\1_\2", string)
+    s = _SNAKE_CASE_RE_LOWER_UPPER_TRANSITION.sub(r"\1_\2", s)
+    s = _SNAKE_CASE_RE_REPLACE_SEP.sub("_", s).lower()
+    s = _SNAKE_CASE_RE_CLEAN_MULTIPLE_UNDERSCORE.sub("_", s)
+    return s.strip("_")

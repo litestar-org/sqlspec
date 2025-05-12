@@ -249,6 +249,10 @@ module = [
   "pyarrow.*",
 ]
 
+[[tool.mypy.overrides]]
+disable_error_code = "ignore-without-code"
+module = "sqlspec.extensions.litestar.providers"
+
 [tool.pyright]
 disableBytesTypePromotions = true
 exclude = ["**/node_modules", "**/__pycache__", ".venv", "tools", "docs"]
