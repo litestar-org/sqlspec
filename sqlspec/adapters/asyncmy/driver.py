@@ -180,12 +180,12 @@ class AsyncmyDriver(
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
-            await cursor.execute(final_sql, final_params)
+            await cursor.execute(sql, parameters)
             results = await cursor.fetchall()
             if not results:
                 return []
             column_names = [c[0] for c in cursor.description or []]
-            return self.to_schema(dict_[dict(zip(column_names, row)) for row in results]esults, schema_type=schema_type)
+            return self.to_schema([dict(zip(column_names, row)) for row in results], schema_type=schema_type)
 
     @overload
     async def select_one(

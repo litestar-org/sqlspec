@@ -78,7 +78,7 @@ class AiosqliteDriver(
                 # _actual_data_params remains None
             else:
                 # If parameters is not a StatementFilter, it's actual data parameters.
-                passed_parameters = parameters  # type: ignore[assignment]
+                passed_parameters = parameters
 
         statement = SQLStatement(sql, passed_parameters, kwargs=kwargs, dialect=self.dialect)
 

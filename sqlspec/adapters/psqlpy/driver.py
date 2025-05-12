@@ -17,7 +17,7 @@ from sqlspec.statement import SQLStatement
 from sqlspec.typing import is_dict
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from psqlpy import QueryResult
 
@@ -64,8 +64,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], dict[str, Any]]]]":
         """Process SQL and parameters for psqlpy.
@@ -82,15 +81,19 @@ class PsqlpyDriver(
         Raises:
             SQLParsingError: If the SQL parsing fails.
         """
-        # Handle scalar parameter by converting to a single-item tuple
-        if parameters is not None and not isinstance(parameters, (list, tuple, dict)):
-            parameters = (parameters,)
+        data_params_for_statement: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
+        combined_filters_list: list[StatementFilter] = list(filters)
 
-        # Create and process the statement
-        statement = SQLStatement(sql=sql, parameters=parameters, kwargs=kwargs, dialect=self.dialect)
+        if parameters is not None:
+            if isinstance(parameters, StatementFilter):
+                combined_filters_list.insert(0, parameters)
+            else:
+                data_params_for_statement = parameters
+        if data_params_for_statement is not None and not isinstance(data_params_for_statement, (list, tuple, dict)):
+            data_params_for_statement = (data_params_for_statement,)
+        statement = SQLStatement(sql, data_params_for_statement, kwargs=kwargs, dialect=self.dialect)
 
-        # Apply any filters
-        for filter_obj in filters:
+        for filter_obj in combined_filters_list:
             statement = statement.apply_filter(filter_obj)
 
         # Process the statement
@@ -162,8 +165,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -173,8 +175,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -183,8 +184,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -217,8 +217,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -228,8 +227,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -238,8 +236,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -275,8 +272,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -286,8 +282,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -296,8 +291,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
@@ -332,8 +326,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -343,8 +336,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -353,8 +345,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
@@ -388,8 +379,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -399,8 +389,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[T]",
         **kwargs: Any,
@@ -409,8 +398,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
         **kwargs: Any,
@@ -446,8 +434,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         **kwargs: Any,
     ) -> int:
@@ -477,8 +464,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: None = None,
         **kwargs: Any,
@@ -488,8 +474,7 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "type[ModelDTOT]",
         **kwargs: Any,
@@ -498,16 +483,15 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *filters: StatementFilter,
+        *filters: "StatementFilter",
         connection: "Optional[PsqlpyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
-        """Insert, update, or delete data from the database and return result.
+        """Insert, update, or delete data with RETURNING clause.
 
         Args:
-            sql: The SQL statement to execute.
+            sql: The SQL statement with RETURNING clause.
             parameters: The parameters for the statement (dict, tuple, list, or None).
             *filters: Statement filters to apply.
             connection: Optional connection override.
@@ -515,15 +499,15 @@ class PsqlpyDriver(
             **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
         Returns:
-            The first row of results.
+            The returned row data, as either a model instance or dictionary.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         parameters = parameters or []
 
-        result = await connection.execute(sql, parameters=parameters)
-        dict_results = result.result()
+        result = await connection.fetch(sql, parameters=parameters)
 
+        dict_results = result.result()
         if not dict_results:
             self.check_not_found(None)
 
@@ -533,7 +517,6 @@ class PsqlpyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         connection: "Optional[PsqlpyConnection]" = None,
         **kwargs: Any,
     ) -> str:
