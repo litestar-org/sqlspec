@@ -5,14 +5,14 @@ from sqlite3 import Cursor
 from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
 from sqlspec.base import SyncDriverAdapterProtocol
+from sqlspec.filters import StatementFilter
 from sqlspec.mixins import ResultConverter, SQLTranslatorMixin
 from sqlspec.statement import SQLStatement
 from sqlspec.typing import is_dict
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Sequence
+    from collections.abc import Generator, Mapping, Sequence
 
-    from sqlspec.filters import StatementFilter
     from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 __all__ = ("SqliteConnection", "SqliteDriver")
@@ -51,7 +51,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
@@ -71,9 +70,19 @@ class SqliteDriver(
             A tuple of (processed SQL, processed parameters).
         """
         # Create a SQLStatement with SQLite dialect
-        statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
+        data_params_for_statement: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
+        combined_filters_list: list[StatementFilter] = list(filters)
 
-        for filter_obj in filters:
+        if parameters is not None:
+            if isinstance(parameters, StatementFilter):
+                combined_filters_list.insert(0, parameters)
+            else:
+                data_params_for_statement = parameters
+        if data_params_for_statement is not None and not isinstance(data_params_for_statement, (list, tuple, dict)):
+            data_params_for_statement = (data_params_for_statement,)
+        statement = SQLStatement(sql, data_params_for_statement, kwargs=kwargs, dialect=self.dialect)
+
+        for filter_obj in combined_filters_list:
             statement = statement.apply_filter(filter_obj)
 
         processed_sql, processed_params, _ = statement.process()
@@ -95,7 +104,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: None = None,
@@ -106,7 +114,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -116,7 +123,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -146,7 +152,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: None = None,
@@ -157,7 +162,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -167,7 +171,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -186,10 +189,7 @@ class SqliteDriver(
         cursor.execute(sql, parameters or [])
         result = cursor.fetchone()
         result = self.check_not_found(result)
-
-        # Get column names
         column_names = [column[0] for column in cursor.description]
-
         return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
 
     @overload
@@ -197,7 +197,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: None = None,
@@ -208,7 +207,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -218,7 +216,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -238,9 +235,7 @@ class SqliteDriver(
             if result is None:
                 return None
 
-            # Get column names
             column_names = [column[0] for column in cursor.description]
-
             return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
 
     @overload
@@ -248,7 +243,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: None = None,
@@ -259,7 +253,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: "type[T]",
@@ -269,7 +262,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -287,8 +279,6 @@ class SqliteDriver(
             cursor.execute(sql, parameters or [])
             result = cursor.fetchone()
             result = self.check_not_found(result)
-
-            # Return first value from the row
             result_value = result[0]
             if schema_type is None:
                 return result_value
@@ -299,7 +289,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: None = None,
@@ -310,7 +299,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: "type[T]",
@@ -320,7 +308,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -339,8 +326,6 @@ class SqliteDriver(
             result = cursor.fetchone()
             if result is None:
                 return None
-
-            # Return first value from the row
             result_value = result[0]
             if schema_type is None:
                 return result_value
@@ -350,7 +335,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         **kwargs: Any,
@@ -372,7 +356,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: None = None,
@@ -383,7 +366,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -393,7 +375,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[SqliteConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -418,7 +399,6 @@ class SqliteDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         connection: "Optional[SqliteConnection]" = None,
         **kwargs: Any,
     ) -> str:

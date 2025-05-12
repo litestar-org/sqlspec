@@ -13,15 +13,26 @@ The Asyncpg database also demonstrates how to use the plugin loader and `secrets
 # ]
 # ///
 
+from typing import Annotated, Optional
+
 from litestar import Litestar, get
+from litestar.params import Dependency
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgPoolConfig
-from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
+from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec, providers
+from sqlspec.filters import FilterTypes
 
 
-@get("/")
-async def simple_asyncpg(db_session: AsyncpgDriver) -> dict[str, str]:
-    return await db_session.select_one("SELECT 'Hello, world!' AS greeting")
+@get(
+    "/",
+    dependencies=providers.create_filter_dependencies({"search": "greeting", "search_ignore_case": True}),
+)
+async def simple_asyncpg(
+    db_session: AsyncpgDriver, filters: Annotated[list[FilterTypes], Dependency(skip_validation=True)]
+) -> Optional[dict[str, str]]:
+    return await db_session.select_one_or_none(
+        "SELECT greeting FROM (select 'Hello, world!' as greeting) as t", *filters
+    )
 
 
 sqlspec = SQLSpec(

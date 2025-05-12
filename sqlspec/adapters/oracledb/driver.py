@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 
 from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+from sqlspec.filters import StatementFilter
 from sqlspec.mixins import (
     AsyncArrowBulkOperationsMixin,
     ResultConverter,
@@ -15,9 +16,8 @@ from sqlspec.statement import SQLStatement
 from sqlspec.typing import ArrowTable, StatementParameterType, T
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator, Sequence
+    from collections.abc import AsyncGenerator, Generator, Mapping, Sequence
 
-    from sqlspec.filters import StatementFilter
     from sqlspec.typing import ModelDTOT
 
 __all__ = ("OracleAsyncConnection", "OracleAsyncDriver", "OracleSyncConnection", "OracleSyncDriver")
@@ -37,7 +37,6 @@ class OracleDriverBase:
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], dict[str, Any]]]]":
@@ -52,15 +51,22 @@ class OracleDriverBase:
         Returns:
             A tuple of (sql, parameters) ready for execution.
         """
-        # Special case: Oracle treats empty dicts as None
-        if isinstance(parameters, dict) and not parameters and not kwargs:
+        data_params_for_statement: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
+        combined_filters_list: list[StatementFilter] = list(filters)
+
+        if parameters is not None:
+            if isinstance(parameters, StatementFilter):
+                combined_filters_list.insert(0, parameters)
+            else:
+                data_params_for_statement = parameters
+        if data_params_for_statement is not None and not isinstance(data_params_for_statement, (list, tuple, dict)):
+            data_params_for_statement = (data_params_for_statement,)
+
+        if isinstance(data_params_for_statement, dict) and not data_params_for_statement and not kwargs:
             return sql, None
 
-        # Create a SQLStatement with appropriate dialect
-        statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
-
-        # Apply any filters
-        for filter_obj in filters:
+        statement = SQLStatement(sql, data_params_for_statement, kwargs=kwargs, dialect=self.dialect)
+        for filter_obj in combined_filters_list:
             statement = statement.apply_filter(filter_obj)
 
         processed_sql, processed_params, _ = statement.process()
@@ -102,7 +108,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: None = None,
@@ -113,7 +118,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -123,7 +127,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -149,7 +152,7 @@ class OracleSyncDriver(
             results = cursor.fetchall()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
             if not results:
                 return []
-            # Get column names
+            # Get column names from description
             column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
 
             return self.to_schema([dict(zip(column_names, row)) for row in results], schema_type=schema_type)
@@ -159,7 +162,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: None = None,
@@ -170,7 +172,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -180,7 +181,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -217,7 +217,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: None = None,
@@ -228,7 +227,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -238,7 +236,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -276,7 +273,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: None = None,
@@ -287,7 +283,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "type[T]",
@@ -297,7 +292,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -333,7 +327,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: None = None,
@@ -344,7 +337,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "type[T]",
@@ -354,7 +346,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -390,7 +381,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         **kwargs: Any,
@@ -419,7 +409,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: None = None,
@@ -430,7 +419,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -440,7 +428,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -473,7 +460,6 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         connection: "Optional[OracleSyncConnection]" = None,
         **kwargs: Any,
     ) -> str:
@@ -482,7 +468,6 @@ class OracleSyncDriver(
         Args:
             sql: The SQL script to execute.
             parameters: The parameters for the script (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
             connection: Optional connection override.
             **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
@@ -500,8 +485,7 @@ class OracleSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
         **kwargs: Any,
     ) -> "ArrowTable":  # pyright: ignore[reportUnknownVariableType]
@@ -512,7 +496,7 @@ class OracleSyncDriver(
         """
 
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         results = connection.fetch_df_all(sql, parameters)
         return cast("ArrowTable", ArrowTable.from_arrays(arrays=results.column_arrays(), names=results.column_names()))  # pyright: ignore
 
@@ -557,7 +541,6 @@ class OracleAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: None = None,
@@ -568,7 +551,6 @@ class OracleAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -578,13 +560,20 @@ class OracleAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
         """Fetch data from the database.
+
+        Args:
+            sql: The SQL query string.
+            parameters: The parameters for the query (dict, tuple, list, or None).
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            schema_type: Optional schema class for the result.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
         Returns:
             List of row data as either model instances or dictionaries.
@@ -597,20 +586,16 @@ class OracleAsyncDriver(
             results = await cursor.fetchall()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
             if not results:
                 return []
-            # Get column names
+            # Get column names from description
             column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
 
-            if schema_type:
-                return [cast("ModelDTOT", schema_type(**dict(zip(column_names, row)))) for row in results]  # pyright: ignore
-
-            return [dict(zip(column_names, row)) for row in results]  # pyright: ignore
+            return self.to_schema([dict(zip(column_names, row)) for row in results], schema_type=schema_type)
 
     @overload
     async def select_one(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: None = None,
@@ -621,7 +606,6 @@ class OracleAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -631,13 +615,20 @@ class OracleAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[ModelDTOT, dict[str, Any]]":
         """Fetch one row from the database.
+
+        Args:
+            sql: The SQL query string.
+            parameters: The parameters for the query (dict, tuple, list, or None).
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            schema_type: Optional schema class for the result.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
         Returns:
             The first row of the query results.
@@ -649,20 +640,15 @@ class OracleAsyncDriver(
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
             result = self.check_not_found(result)  # pyright: ignore[reportUnknownArgumentType]
-            # Get column names
             column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
 
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))  # pyright: ignore[reportUnknownArgumentType]
-            # Always return dictionaries
-            return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
+            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
 
     @overload
     async def select_one_or_none(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: None = None,
@@ -673,7 +659,6 @@ class OracleAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -683,16 +668,23 @@ class OracleAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
-        """Fetch one row from the database.
+        """Fetch one row from the database or return None if no rows found.
+
+        Args:
+            sql: The SQL query string.
+            parameters: The parameters for the query (dict, tuple, list, or None).
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            schema_type: Optional schema class for the result.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
         Returns:
-            The first row of the query results.
+            The first row of the query results, or None if no results found.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
@@ -700,24 +692,16 @@ class OracleAsyncDriver(
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-
             if result is None:
                 return None
-
-            # Get column names
             column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))  # pyright: ignore[reportUnknownArgumentType]
-            # Always return dictionaries
-            return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
+            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
 
     @overload
     async def select_value(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: None = None,
@@ -728,7 +712,6 @@ class OracleAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "type[T]",
@@ -738,7 +721,6 @@ class OracleAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -763,7 +745,7 @@ class OracleAsyncDriver(
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            result = self.check_not_found(result)
+            result = self.check_not_found(result)  # pyright: ignore[reportUnknownArgumentType]
 
             if schema_type is None:
                 return result[0]  # pyright: ignore[reportUnknownArgumentType]
@@ -774,7 +756,6 @@ class OracleAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: None = None,
@@ -785,7 +766,6 @@ class OracleAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "type[T]",
@@ -795,7 +775,6 @@ class OracleAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -831,12 +810,11 @@ class OracleAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         **kwargs: Any,
     ) -> int:
-        """Execute an insert, update, or delete statement.
+        """Insert, update, or delete data from the database.
 
         Args:
             sql: The SQL statement to execute.
@@ -846,21 +824,20 @@ class OracleAsyncDriver(
             **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
         Returns:
-            The number of rows affected by the statement.
+            Row count affected by the operation.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            return cursor.rowcount  # pyright: ignore[reportUnknownMemberType]
+            return cursor.rowcount  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
 
     @overload
     async def insert_update_delete_returning(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: None = None,
@@ -871,7 +848,6 @@ class OracleAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -881,7 +857,6 @@ class OracleAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -889,8 +864,16 @@ class OracleAsyncDriver(
     ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
         """Insert, update, or delete data from the database and return result.
 
+        Args:
+            sql: The SQL statement with RETURNING clause.
+            parameters: The parameters for the statement (dict, tuple, list, or None).
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            schema_type: Optional schema class for the result.
+            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+
         Returns:
-            The first row of results.
+            The returned row data, as either a model instance or dictionary.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
@@ -898,7 +881,6 @@ class OracleAsyncDriver(
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-
             if result is None:
                 return None
 
@@ -907,14 +889,12 @@ class OracleAsyncDriver(
 
             if schema_type is not None:
                 return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))  # pyright: ignore[reportUnknownArgumentType]
-            # Always return dictionaries
             return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
 
     async def execute_script(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         connection: "Optional[OracleAsyncConnection]" = None,
         **kwargs: Any,
     ) -> str:
@@ -936,12 +916,11 @@ class OracleAsyncDriver(
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             return str(cursor.rowcount)  # pyright: ignore[reportUnknownMemberType]
 
-    async def select_arrow(  # pyright: ignore[reportUnknownParameterType]
+    async def select_arrow(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
         **kwargs: Any,
     ) -> "ArrowTable":  # pyright: ignore[reportUnknownVariableType]
@@ -950,6 +929,7 @@ class OracleAsyncDriver(
         Args:
             sql: The SQL query string.
             parameters: Parameters for the query.
+            filters: Statement filters to apply.
             connection: Optional connection override.
             **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
@@ -958,7 +938,7 @@ class OracleAsyncDriver(
         """
 
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         results = await connection.fetch_df_all(sql, parameters)
         return ArrowTable.from_arrays(arrays=results.column_arrays(), names=results.column_names())  # pyright: ignore
 

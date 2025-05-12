@@ -5,14 +5,14 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 from duckdb import DuckDBPyConnection
 
 from sqlspec.base import SyncDriverAdapterProtocol
+from sqlspec.filters import StatementFilter
 from sqlspec.mixins import ResultConverter, SQLTranslatorMixin, SyncArrowBulkOperationsMixin
 from sqlspec.statement import SQLStatement
 from sqlspec.typing import ArrowTable, StatementParameterType
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Sequence
+    from collections.abc import Generator, Mapping, Sequence
 
-    from sqlspec.filters import StatementFilter
     from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType, T
 
 __all__ = ("DuckDBConnection", "DuckDBDriver")
@@ -58,7 +58,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
@@ -77,10 +76,18 @@ class DuckDBDriver(
         Returns:
             Tuple of processed SQL and parameters.
         """
-        statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
+        data_params_for_statement: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
+        combined_filters_list: list[StatementFilter] = list(filters)
 
-        # Apply any filters
-        for filter_obj in filters:
+        if parameters is not None:
+            if isinstance(parameters, StatementFilter):
+                combined_filters_list.insert(0, parameters)
+            else:
+                data_params_for_statement = parameters
+        if data_params_for_statement is not None and not isinstance(data_params_for_statement, (list, tuple, dict)):
+            data_params_for_statement = (data_params_for_statement,)
+        statement = SQLStatement(sql, data_params_for_statement, kwargs=kwargs, dialect=self.dialect)
+        for filter_obj in combined_filters_list:
             statement = statement.apply_filter(filter_obj)
 
         processed_sql, processed_params, _ = statement.process()
@@ -98,7 +105,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: None = None,
@@ -109,7 +115,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -119,7 +124,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -138,17 +142,13 @@ class DuckDBDriver(
             if not results:
                 return []
             column_names = [column[0] for column in cursor.description or []]
-
-            # Convert to dicts first
-            dict_results = [dict(zip(column_names, row)) for row in results]
-            return self.to_schema(dict_results, schema_type=schema_type)
+            return self.to_schema([dict(zip(column_names, row)) for row in results], schema_type=schema_type)
 
     @overload
     def select_one(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: None = None,
@@ -159,7 +159,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -169,7 +168,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -187,17 +185,13 @@ class DuckDBDriver(
             result = cursor.fetchone()
             result = self.check_not_found(result)
             column_names = [column[0] for column in cursor.description or []]
-
-            # Convert to dict and use ResultConverter
-            dict_result = dict(zip(column_names, result))
-            return self.to_schema(dict_result, schema_type=schema_type)
+            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
 
     @overload
     def select_one_or_none(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: None = None,
@@ -208,7 +202,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -218,7 +211,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -237,17 +229,13 @@ class DuckDBDriver(
             if result is None:
                 return None
             column_names = [column[0] for column in cursor.description or []]
-
-            # Convert to dict and use ResultConverter
-            dict_result = dict(zip(column_names, result))
-            return self.to_schema(dict_result, schema_type=schema_type)
+            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
 
     @overload
     def select_value(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: None = None,
@@ -258,7 +246,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: "type[T]",
@@ -268,7 +255,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -295,7 +281,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: None = None,
@@ -306,7 +291,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: "type[T]",
@@ -316,7 +300,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -337,7 +320,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         **kwargs: Any,
@@ -354,7 +336,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: None = None,
@@ -365,7 +346,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -375,7 +355,6 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -389,16 +368,12 @@ class DuckDBDriver(
             result = cursor.fetchall()
             result = self.check_not_found(result)
             column_names = [col[0] for col in cursor.description or []]
-
-            # Convert to dict and use ResultConverter
-            dict_result = dict(zip(column_names, result[0]))
-            return self.to_schema(dict_result, schema_type=schema_type)
+            return self.to_schema(dict(zip(column_names, result[0])), schema_type=schema_type)
 
     def execute_script(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         connection: "Optional[DuckDBConnection]" = None,
         **kwargs: Any,
     ) -> str:
@@ -415,8 +390,7 @@ class DuckDBDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[DuckDBConnection]" = None,
         **kwargs: Any,
     ) -> "ArrowTable":
@@ -425,6 +399,7 @@ class DuckDBDriver(
         Args:
             sql: The SQL query string.
             parameters: Parameters for the query.
+            *filters: Optional filters to apply to the SQL statement.
             connection: Optional connection override.
             **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
@@ -432,10 +407,6 @@ class DuckDBDriver(
             An Apache Arrow Table containing the query results.
         """
         connection = self._connection(connection)
-
-        # Extract filters from kwargs if present
-        filters = kwargs.pop("filters", [])
-
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         with self._with_cursor(connection) as cursor:
             params = [] if parameters is None else parameters

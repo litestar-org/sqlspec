@@ -8,17 +8,17 @@ from sqlglot import exp
 from typing_extensions import TypeAlias
 
 from sqlspec.base import AsyncDriverAdapterProtocol
+from sqlspec.filters import StatementFilter
 from sqlspec.mixins import ResultConverter, SQLTranslatorMixin
 from sqlspec.statement import SQLStatement
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from asyncpg import Record
     from asyncpg.connection import Connection
     from asyncpg.pool import PoolConnectionProxy
 
-    from sqlspec.filters import StatementFilter
     from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 __all__ = ("AsyncpgConnection", "AsyncpgDriver")
@@ -69,7 +69,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
@@ -80,22 +79,33 @@ class AsyncpgDriver(
 
         Args:
             sql: SQL statement.
-            parameters: Query parameters.
+            parameters: Query parameters. Can be data or a StatementFilter.
             *filters: Statement filters to apply.
             **kwargs: Additional keyword arguments.
 
         Returns:
             Tuple of processed SQL and parameters.
         """
-        # Handle scalar parameter by converting to a single-item tuple
-        if parameters is not None and not isinstance(parameters, (list, tuple, dict)):
-            parameters = (parameters,)
+        data_params_for_statement: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
+        combined_filters_list: list[StatementFilter] = list(filters)
+
+        if parameters is not None:
+            if isinstance(parameters, StatementFilter):
+                combined_filters_list.insert(0, parameters)
+                # data_params_for_statement remains None
+            else:
+                # If parameters is not a StatementFilter, it's actual data parameters.
+                data_params_for_statement = parameters
+
+        # Handle scalar parameter by converting to a single-item tuple if it's data
+        if data_params_for_statement is not None and not isinstance(data_params_for_statement, (list, tuple, dict)):
+            data_params_for_statement = (data_params_for_statement,)
 
         # Create a SQLStatement with PostgreSQL dialect
-        statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
+        statement = SQLStatement(sql, data_params_for_statement, kwargs=kwargs, dialect=self.dialect)
 
-        # Apply any filters
-        for filter_obj in filters:
+        # Apply any filters from the combined list
+        for filter_obj in combined_filters_list:
             statement = statement.apply_filter(filter_obj)
 
         # Process the statement
@@ -164,7 +174,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: None = None,
@@ -175,7 +184,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -185,7 +193,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -194,9 +201,9 @@ class AsyncpgDriver(
         """Fetch data from the database.
 
         Args:
-            *filters: Statement filters to apply.
             sql: SQL statement.
-            parameters: Query parameters.
+            parameters: Query parameters. Can be data or a StatementFilter.
+            *filters: Statement filters to apply.
             connection: Optional connection to use.
             schema_type: Optional schema class for the result.
             **kwargs: Additional keyword arguments.
@@ -218,7 +225,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: None = None,
@@ -229,7 +235,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -239,7 +244,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -248,9 +252,9 @@ class AsyncpgDriver(
         """Fetch one row from the database.
 
         Args:
-            *filters: Statement filters to apply.
             sql: SQL statement.
-            parameters: Query parameters.
+            parameters: Query parameters. Can be data or a StatementFilter.
+            *filters: Statement filters to apply.
             connection: Optional connection to use.
             schema_type: Optional schema class for the result.
             **kwargs: Additional keyword arguments.
@@ -270,7 +274,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: None = None,
@@ -281,7 +284,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -291,7 +293,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -300,9 +301,9 @@ class AsyncpgDriver(
         """Fetch one row from the database.
 
         Args:
-            *filters: Statement filters to apply.
             sql: SQL statement.
-            parameters: Query parameters.
+            parameters: Query parameters. Can be data or a StatementFilter.
+            *filters: Statement filters to apply.
             connection: Optional connection to use.
             schema_type: Optional schema class for the result.
             **kwargs: Additional keyword arguments.
@@ -323,7 +324,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: None = None,
@@ -334,7 +334,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "type[T]",
@@ -344,7 +343,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -353,9 +351,9 @@ class AsyncpgDriver(
         """Fetch a single value from the database.
 
         Args:
-            *filters: Statement filters to apply.
             sql: SQL statement.
-            parameters: Query parameters.
+            parameters: Query parameters. Can be data or a StatementFilter.
+            *filters: Statement filters to apply.
             connection: Optional connection to use.
             schema_type: Optional schema class for the result.
             **kwargs: Additional keyword arguments.
@@ -377,7 +375,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: None = None,
@@ -388,7 +385,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "type[T]",
@@ -398,7 +394,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -407,9 +402,9 @@ class AsyncpgDriver(
         """Fetch a single value from the database.
 
         Args:
-            *filters: Statement filters to apply.
             sql: SQL statement.
-            parameters: Query parameters.
+            parameters: Query parameters. Can be data or a StatementFilter.
+            *filters: Statement filters to apply.
             connection: Optional connection to use.
             schema_type: Optional schema class for the result.
             **kwargs: Additional keyword arguments.
@@ -431,7 +426,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: Optional["AsyncpgConnection"] = None,
         **kwargs: Any,
@@ -439,9 +433,9 @@ class AsyncpgDriver(
         """Insert, update, or delete data from the database.
 
         Args:
-            *filters: Statement filters to apply.
             sql: SQL statement.
-            parameters: Query parameters.
+            parameters: Query parameters. Can be data or a StatementFilter.
+            *filters: Statement filters to apply.
             connection: Optional connection to use.
             **kwargs: Additional keyword arguments.
 
@@ -463,7 +457,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: None = None,
@@ -474,7 +467,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -484,7 +476,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -493,9 +484,9 @@ class AsyncpgDriver(
         """Insert, update, or delete data from the database and return the affected row.
 
         Args:
-            *filters: Statement filters to apply.
             sql: SQL statement.
-            parameters: Query parameters.
+            parameters: Query parameters. Can be data or a StatementFilter.
+            *filters: Statement filters to apply.
             connection: Optional connection to use.
             schema_type: Optional schema class for the result.
             **kwargs: Additional keyword arguments.
@@ -516,7 +507,6 @@ class AsyncpgDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         connection: "Optional[AsyncpgConnection]" = None,
         **kwargs: Any,
     ) -> str:

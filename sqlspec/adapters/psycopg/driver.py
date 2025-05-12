@@ -8,14 +8,14 @@ from psycopg.rows import dict_row
 
 from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
 from sqlspec.exceptions import ParameterStyleMismatchError
+from sqlspec.filters import StatementFilter
 from sqlspec.mixins import ResultConverter, SQLTranslatorMixin
 from sqlspec.statement import SQLStatement
 from sqlspec.typing import is_dict
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator, Sequence
+    from collections.abc import AsyncGenerator, Generator, Mapping, Sequence
 
-    from sqlspec.filters import StatementFilter
     from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 logger = logging.getLogger("sqlspec")
@@ -38,7 +38,6 @@ class PsycopgDriverBase:
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
@@ -56,10 +55,20 @@ class PsycopgDriverBase:
         Returns:
             A tuple of (sql, parameters) ready for execution.
         """
-        statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
+        data_params_for_statement: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
+        combined_filters_list: list[StatementFilter] = list(filters)
+
+        if parameters is not None:
+            if isinstance(parameters, StatementFilter):
+                combined_filters_list.insert(0, parameters)
+            else:
+                data_params_for_statement = parameters
+        if data_params_for_statement is not None and not isinstance(data_params_for_statement, (list, tuple, dict)):
+            data_params_for_statement = (data_params_for_statement,)
+        statement = SQLStatement(sql, data_params_for_statement, kwargs=kwargs, dialect=self.dialect)
 
         # Apply all statement filters
-        for filter_obj in filters:
+        for filter_obj in combined_filters_list:
             statement = statement.apply_filter(filter_obj)
 
         processed_sql, processed_params, _ = statement.process()
@@ -118,7 +127,6 @@ class PsycopgSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
@@ -129,7 +137,6 @@ class PsycopgSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -139,7 +146,6 @@ class PsycopgSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         schema_type: "Optional[type[ModelDTOT]]" = None,
         connection: "Optional[PsycopgSyncConnection]" = None,
@@ -165,7 +171,6 @@ class PsycopgSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
@@ -176,7 +181,6 @@ class PsycopgSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -186,7 +190,6 @@ class PsycopgSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -201,17 +204,15 @@ class PsycopgSyncDriver(
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
-            row = cursor.fetchone()
-            row = self.check_not_found(row)
-
-            return self.to_schema(cast("dict[str, Any]", row), schema_type=schema_type)
+            result = cursor.fetchone()
+            result = self.check_not_found(result)
+            return self.to_schema(cast("dict[str, Any]", result), schema_type=schema_type)
 
     @overload
     def select_one_or_none(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
@@ -222,7 +223,6 @@ class PsycopgSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -232,7 +232,6 @@ class PsycopgSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -241,23 +240,22 @@ class PsycopgSyncDriver(
         """Fetch one row from the database.
 
         Returns:
-            The first row of the query results.
+            The first row of the query results, or None if no results.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
-            row = cursor.fetchone()
-            if row is None:
+            result = cursor.fetchone()
+            if result is None:
                 return None
-            return self.to_schema(cast("dict[str, Any]", row), schema_type=schema_type)
+            return self.to_schema(cast("dict[str, Any]", result), schema_type=schema_type)
 
     @overload
     def select_value(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
@@ -268,7 +266,6 @@ class PsycopgSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[T]",
@@ -278,7 +275,6 @@ class PsycopgSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -287,26 +283,25 @@ class PsycopgSyncDriver(
         """Fetch a single value from the database.
 
         Returns:
-            The first value from the first row of results, or None if no results.
+            The first value from the first row of results.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
-            row = cursor.fetchone()
-            row = self.check_not_found(row)
-            val = next(iter(row.values())) if row else None
-            val = self.check_not_found(val)
-            if schema_type is not None:
-                return schema_type(val)  # type: ignore[call-arg]
-            return val
+            result = cursor.fetchone()
+            result = self.check_not_found(result)
+
+            value = next(iter(result.values()))  # Get the first value from the row
+            if schema_type is None:
+                return value
+            return schema_type(value)  # type: ignore[call-arg]
 
     @overload
     def select_value_or_none(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
@@ -317,7 +312,6 @@ class PsycopgSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[T]",
@@ -327,7 +321,6 @@ class PsycopgSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -342,29 +335,27 @@ class PsycopgSyncDriver(
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
-            row = cursor.fetchone()
-            if row is None:
+            result = cursor.fetchone()
+            if result is None:
                 return None
-            val = next(iter(row.values())) if row else None
-            if val is None:
-                return None
-            if schema_type is not None:
-                return schema_type(val)  # type: ignore[call-arg]
-            return val
+
+            value = next(iter(result.values()))  # Get the first value from the row
+            if schema_type is None:
+                return value
+            return schema_type(value)  # type: ignore[call-arg]
 
     def insert_update_delete(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         **kwargs: Any,
     ) -> int:
-        """Execute an INSERT, UPDATE, or DELETE query and return the number of affected rows.
+        """Insert, update, or delete data from the database.
 
         Returns:
-            The number of rows affected by the operation.
+            Row count affected by the operation.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
@@ -377,7 +368,6 @@ class PsycopgSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: None = None,
@@ -388,7 +378,6 @@ class PsycopgSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -398,33 +387,28 @@ class PsycopgSyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgSyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
-        """Insert, update, or delete data from the database and return result.
+    ) -> "Union[ModelDTOT, dict[str, Any]]":
+        """Insert, update, or delete data with RETURNING clause.
 
         Returns:
-            The first row of results.
+            The returned row data, as either a model instance or dictionary.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         with self._with_cursor(connection) as cursor:
             cursor.execute(sql, parameters)
             result = cursor.fetchone()
-
-            if result is None:
-                return None
-
+            result = self.check_not_found(result)
             return self.to_schema(cast("dict[str, Any]", result), schema_type=schema_type)
 
     def execute_script(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         connection: "Optional[PsycopgSyncConnection]" = None,
         **kwargs: Any,
     ) -> str:
@@ -468,7 +452,6 @@ class PsycopgAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
@@ -479,7 +462,6 @@ class PsycopgAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -489,7 +471,6 @@ class PsycopgAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         schema_type: "Optional[type[ModelDTOT]]" = None,
         connection: "Optional[PsycopgAsyncConnection]" = None,
@@ -507,6 +488,7 @@ class PsycopgAsyncDriver(
             results = await cursor.fetchall()
             if not results:
                 return []
+
             return self.to_schema(cast("Sequence[dict[str, Any]]", results), schema_type=schema_type)
 
     @overload
@@ -514,7 +496,6 @@ class PsycopgAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
@@ -525,7 +506,6 @@ class PsycopgAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -535,7 +515,6 @@ class PsycopgAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -550,17 +529,15 @@ class PsycopgAsyncDriver(
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
-            row = await cursor.fetchone()
-            row = self.check_not_found(row)
-
-            return self.to_schema(cast("dict[str, Any]", row), schema_type=schema_type)
+            result = await cursor.fetchone()
+            result = self.check_not_found(result)
+            return self.to_schema(cast("dict[str, Any]", result), schema_type=schema_type)
 
     @overload
     async def select_one_or_none(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
@@ -571,7 +548,6 @@ class PsycopgAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -581,7 +557,6 @@ class PsycopgAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         schema_type: "Optional[type[ModelDTOT]]" = None,
         connection: "Optional[PsycopgAsyncConnection]" = None,
@@ -590,25 +565,22 @@ class PsycopgAsyncDriver(
         """Fetch one row from the database.
 
         Returns:
-            The first row of the query results.
+            The first row of the query results, or None if no results.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
-            row = await cursor.fetchone()
-            if row is None:
+            result = await cursor.fetchone()
+            if result is None:
                 return None
-
-            # Use self.to_schema from ResultConverter mixin
-            return self.to_schema(cast("dict[str, Any]", row), schema_type=schema_type)
+            return self.to_schema(cast("dict[str, Any]", result), schema_type=schema_type)
 
     @overload
     async def select_value(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
@@ -619,7 +591,6 @@ class PsycopgAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[T]",
@@ -629,7 +600,6 @@ class PsycopgAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -638,26 +608,25 @@ class PsycopgAsyncDriver(
         """Fetch a single value from the database.
 
         Returns:
-            The first value from the first row of results, or None if no results.
+            The first value from the first row of results.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
-            row = await cursor.fetchone()
-            row = self.check_not_found(row)
-            val = next(iter(row.values())) if row else None
-            val = self.check_not_found(val)
-            if schema_type is not None:
-                return schema_type(val)  # type: ignore[call-arg]
-            return val
+            result = await cursor.fetchone()
+            result = self.check_not_found(result)
+
+            value = next(iter(result.values()))  # Get the first value from the row
+            if schema_type is None:
+                return value
+            return schema_type(value)  # type: ignore[call-arg]
 
     @overload
     async def select_value_or_none(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
@@ -668,7 +637,6 @@ class PsycopgAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[T]",
@@ -678,7 +646,6 @@ class PsycopgAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -693,29 +660,27 @@ class PsycopgAsyncDriver(
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
-            row = await cursor.fetchone()
-            if row is None:
+            result = await cursor.fetchone()
+            if result is None:
                 return None
-            val = next(iter(row.values())) if row else None
-            if val is None:
-                return None
-            if schema_type is not None:
-                return schema_type(val)  # type: ignore[call-arg]
-            return val
+
+            value = next(iter(result.values()))  # Get the first value from the row
+            if schema_type is None:
+                return value
+            return schema_type(value)  # type: ignore[call-arg]
 
     async def insert_update_delete(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         **kwargs: Any,
     ) -> int:
-        """Execute an INSERT, UPDATE, or DELETE query and return the number of affected rows.
+        """Insert, update, or delete data from the database.
 
         Returns:
-            The number of rows affected by the operation.
+            Row count affected by the operation.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
@@ -728,7 +693,6 @@ class PsycopgAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: None = None,
@@ -739,7 +703,6 @@ class PsycopgAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -749,32 +712,28 @@ class PsycopgAsyncDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[PsycopgAsyncConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
-        """Insert, update, or delete data from the database and return result.
+    ) -> "Union[ModelDTOT, dict[str, Any]]":
+        """Insert, update, or delete data with RETURNING clause.
 
         Returns:
-            The first row of results.
+            The returned row data, as either a model instance or dictionary.
         """
         connection = self._connection(connection)
         sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
             await cursor.execute(sql, parameters)
             result = await cursor.fetchone()
-            if result is None:
-                return None
-
+            result = self.check_not_found(result)
             return self.to_schema(cast("dict[str, Any]", result), schema_type=schema_type)
 
     async def execute_script(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         connection: "Optional[PsycopgAsyncConnection]" = None,
         **kwargs: Any,
     ) -> str:

@@ -34,6 +34,7 @@ from sqlspec.typing import (
 )
 
 if TYPE_CHECKING:
+    from sqlspec.filters import StatementFilter
     from sqlspec.typing import ArrowTable
 
 __all__ = (
@@ -51,12 +52,11 @@ class SyncArrowBulkOperationsMixin(Generic[ConnectionT]):
     __supports_arrow__: "ClassVar[bool]" = True
 
     @abstractmethod
-    def select_arrow(  # pyright: ignore[reportUnknownParameterType]
+    def select_arrow(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         **kwargs: Any,
     ) -> "ArrowTable":  # pyright: ignore[reportUnknownReturnType]
@@ -65,6 +65,7 @@ class SyncArrowBulkOperationsMixin(Generic[ConnectionT]):
         Args:
             sql: The SQL query string.
             parameters: Parameters for the query.
+            filters: Optional filters to apply to the query.
             connection: Optional connection override.
             **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
@@ -80,12 +81,11 @@ class AsyncArrowBulkOperationsMixin(Generic[ConnectionT]):
     __supports_arrow__: "ClassVar[bool]" = True
 
     @abstractmethod
-    async def select_arrow(  # pyright: ignore[reportUnknownParameterType]
+    async def select_arrow(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         **kwargs: Any,
     ) -> "ArrowTable":  # pyright: ignore[reportUnknownReturnType]
@@ -94,6 +94,7 @@ class AsyncArrowBulkOperationsMixin(Generic[ConnectionT]):
         Args:
             sql: The SQL query string.
             parameters: Parameters for the query.
+            filters: Optional filters to apply to the query.
             connection: Optional connection override.
             **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
 
@@ -111,8 +112,7 @@ class SyncParquetExportMixin(Generic[ConnectionT]):
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         **kwargs: Any,
     ) -> None:
@@ -128,8 +128,7 @@ class AsyncParquetExportMixin(Generic[ConnectionT]):
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
-        *,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         **kwargs: Any,
     ) -> None:

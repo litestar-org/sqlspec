@@ -1,7 +1,7 @@
 # type: ignore
 import logging
 import re
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
@@ -9,14 +9,16 @@ from asyncmy import Connection
 
 from sqlspec.base import AsyncDriverAdapterProtocol
 from sqlspec.exceptions import ParameterStyleMismatchError
+from sqlspec.filters import StatementFilter
 from sqlspec.mixins import ResultConverter, SQLTranslatorMixin
 from sqlspec.statement import SQLStatement
 from sqlspec.typing import is_dict
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
     from asyncmy.cursors import Cursor
 
-    from sqlspec.filters import StatementFilter
     from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 __all__ = ("AsyncmyDriver",)
@@ -55,7 +57,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
@@ -63,7 +64,7 @@ class AsyncmyDriver(
 
         Args:
             sql: The SQL statement to process.
-            parameters: The parameters to bind to the statement.
+            parameters: The parameters to bind to the statement. Can be data or a StatementFilter.
             *filters: Statement filters to apply.
             **kwargs: Additional keyword arguments.
 
@@ -73,41 +74,52 @@ class AsyncmyDriver(
         Returns:
             A tuple of (sql, parameters) ready for execution.
         """
+        # Convert filters tuple to a list to allow modification
+        current_filters: list[StatementFilter] = list(filters)
+        actual_parameters: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
+
+        if parameters is not None:
+            if isinstance(parameters, StatementFilter):
+                current_filters.insert(0, parameters)
+                # actual_parameters remains None
+            else:
+                actual_parameters = parameters  # type: ignore[assignment]
+
         # Handle MySQL-specific placeholders (%s) which SQLGlot doesn't parse well
         # If %s placeholders are present, handle them directly
         mysql_placeholders_count = len(MYSQL_PLACEHOLDER_PATTERN.findall(sql))
 
         if mysql_placeholders_count > 0:
             # For MySQL format placeholders, minimal processing is needed
-            if parameters is None:
+            if actual_parameters is None:
                 if mysql_placeholders_count > 0:
                     msg = f"asyncmy: SQL statement contains {mysql_placeholders_count} format placeholders ('%s'), but no parameters were provided. SQL: {sql}"
                     raise ParameterStyleMismatchError(msg)
                 return sql, None
 
             # Convert dict to tuple if needed
-            if is_dict(parameters):
+            if is_dict(actual_parameters):
                 # MySQL's %s placeholders require positional params
                 msg = "asyncmy: Dictionary parameters provided with '%s' placeholders. MySQL format placeholders require tuple/list parameters."
                 raise ParameterStyleMismatchError(msg)
 
             # Convert to tuple (handles both scalar and sequence cases)
-            if not isinstance(parameters, (list, tuple)):
+            if not isinstance(actual_parameters, (list, tuple)):
                 # Scalar parameter case
-                return sql, (parameters,)
+                return sql, (actual_parameters,)
 
             # Sequence parameter case - ensure appropriate length
-            if len(parameters) != mysql_placeholders_count:
-                msg = f"asyncmy: Parameter count mismatch. SQL expects {mysql_placeholders_count} '%s' placeholders, but {len(parameters)} parameters were provided. SQL: {sql}"
+            if len(actual_parameters) != mysql_placeholders_count:  # type: ignore[arg-type]
+                msg = f"asyncmy: Parameter count mismatch. SQL expects {mysql_placeholders_count} '%s' placeholders, but {len(actual_parameters)} parameters were provided. SQL: {sql}"  # type: ignore[arg-type]
                 raise ParameterStyleMismatchError(msg)
 
-            return sql, tuple(parameters)
+            return sql, tuple(actual_parameters)  # type: ignore[arg-type]
 
         # Create a SQLStatement with MySQL dialect
-        statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
+        statement = SQLStatement(sql, actual_parameters, kwargs=kwargs, dialect=self.dialect)
 
         # Apply any filters
-        for filter_obj in filters:
+        for filter_obj in current_filters:  # Use the modified list of filters
             statement = statement.apply_filter(filter_obj)
 
         # Process the statement for execution
@@ -136,7 +148,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
@@ -147,7 +158,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -157,7 +167,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -176,17 +185,13 @@ class AsyncmyDriver(
             if not results:
                 return []
             column_names = [c[0] for c in cursor.description or []]
-
-            # Convert to dicts first
-            dict_results = [dict(zip(column_names, row)) for row in results]
-            return self.to_schema(dict_results, schema_type=schema_type)
+            return self.to_schema([dict(zip(column_names, row)) for row in results], schema_type=schema_type)
 
     @overload
     async def select_one(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
@@ -197,7 +202,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -207,7 +211,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -225,17 +228,13 @@ class AsyncmyDriver(
             result = await cursor.fetchone()
             result = self.check_not_found(result)
             column_names = [c[0] for c in cursor.description or []]
-
-            # Convert to dict and use ResultConverter
-            dict_result = dict(zip(column_names, result))
-            return self.to_schema(dict_result, schema_type=schema_type)
+            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
 
     @overload
     async def select_one_or_none(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
@@ -246,7 +245,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -256,7 +254,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -275,17 +272,13 @@ class AsyncmyDriver(
             if result is None:
                 return None
             column_names = [c[0] for c in cursor.description or []]
-
-            # Convert to dict and use ResultConverter
-            dict_result = dict(zip(column_names, result))
-            return self.to_schema(dict_result, schema_type=schema_type)
+            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
 
     @overload
     async def select_value(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
@@ -296,7 +289,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[T]",
@@ -306,7 +298,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -333,7 +324,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
@@ -344,7 +334,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[T]",
@@ -354,7 +343,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "Optional[type[T]]" = None,
@@ -381,7 +369,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         **kwargs: Any,
@@ -402,7 +389,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: None = None,
@@ -413,7 +399,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "type[ModelDTOT]",
@@ -423,7 +408,6 @@ class AsyncmyDriver(
         self,
         sql: str,
         parameters: "Optional[StatementParameterType]" = None,
-        /,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
         schema_type: "Optional[type[ModelDTOT]]" = None,
