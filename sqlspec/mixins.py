@@ -1,3 +1,4 @@
+import dataclasses
 import datetime
 from abc import abstractmethod
 from collections.abc import Sequence
@@ -257,10 +258,10 @@ class ResultConverter:
             if not isinstance(data, Sequence):
                 return cast("ModelT", data)
             return cast("Sequence[ModelT]", data)
-        if is_dataclass(schema_type):
+        if dataclasses.is_dataclass(schema_type):
             if not isinstance(data, Sequence):
                 # data is assumed to be dict[str, Any] as per the method's overloads
-                return cast("ModelDTOT", schema_type(**data))  # type: ignore[operator]
+                return cast("ModelDTOT", schema_type(data))  # type: ignore[operator]
             # data is assumed to be Sequence[dict[str, Any]]
             return cast("Sequence[ModelDTOT]", [schema_type(**item) for item in data])  # type: ignore[operator]
         if is_msgspec_struct(schema_type):
