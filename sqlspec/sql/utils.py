@@ -124,18 +124,16 @@ def extract_tables(sql: str, dialect: DialectType = None) -> list[str]:
 
     try:
         parsed = sqlglot.parse_one(sql, read=dialect)
-        tables: list[str] = []  # Initialize with type hint
-
-        for table_exp in parsed.find_all(exp.Table):  # Renamed variable to avoid conflict
+        tables: list[str] = []
+        for table_exp in parsed.find_all(exp.Table):
             table_name = table_exp.name
             if table_exp.db:
                 table_name = f"{table_exp.db}.{table_name}"
             if table_exp.catalog:
                 table_name = f"{table_exp.catalog}.{table_name}"
             tables.append(table_name)
-
         return sorted(set(tables))
-    except ParseError as e:  # Catch specific ParseError
+    except ParseError as e:
         logger.warning("Failed to parse SQL for table extraction: %s", str(e)[:100])
         return []
 

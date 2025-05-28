@@ -135,13 +135,10 @@ class DeleteBuilder(QueryBuilder):
             table_expr = exp.table_(table, alias=alias)
         elif hasattr(table, "build"):  # QueryBuilder instance
             # For subqueries, we need to build the SQL and parse it back
-            subquery_sql = table.build().sql  # type: ignore[attr-defined]
-            subquery = exp.paren(exp.maybe_parse(subquery_sql, dialect=self.dialect))
-            table_expr = exp.alias_(subquery, alias) if alias else subquery
+            subquery = exp.paren(exp.maybe_parse(table.build().sql, dialect=self.dialect))  # type: ignore[attr-defined]
+            table_expr = exp.alias_(subquery, alias) if alias else subquery  # type: ignore[assignment]
         else:
-            # It's already an Expression - cast to fix typing
-            expr_table = cast("exp.Expression", table)
-            table_expr = exp.alias_(expr_table, alias) if alias else expr_table
+            table_expr = exp.alias_(table, alias) if alias else table  # type: ignore[assignment]
 
         on_expr = exp.condition(on) if isinstance(on, str) else on
         join_expr = exp.Join(this=table_expr, on=on_expr, kind=join_type)

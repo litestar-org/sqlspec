@@ -188,7 +188,7 @@ Empty: Final = EmptyEnum.EMPTY
 
 
 @runtime_checkable
-class ArrowTableResult(Protocol):  # type: ignore[no-redef]
+class ArrowTableResult(Protocol):
     """This is a typed shim for pyarrow.Table."""
 
     def to_batches(self, batch_size: int) -> Any: ...
@@ -217,7 +217,7 @@ try:
 
     PYARROW_INSTALLED = True
 except ImportError:
-    ArrowTable = ArrowTableResult  # type: ignore[no-redef,assignment.misc]
+    ArrowTable = ArrowTableResult  # type: ignore[assignment,misc]
 
     PYARROW_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 

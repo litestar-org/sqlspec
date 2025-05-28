@@ -1,5 +1,5 @@
 ---
-applyTo: '**'
+applyTo: '**/*.py'
 ---
 # Foundational Rules for AI Agent Code Generation (sqlspec Project)
 
@@ -13,6 +13,9 @@ applyTo: '**'
 2. **Virtual Environment**:
     * Always work within the project\'s virtual environment (likely `.venv`, managed by `uv`).
 
+3. **Prefix Command***:
+    * Use the `uv` command prefix for all Python commands to ensure they run within the correct virtual environment. For example, use `uv run python` instead of just `python`.
+
 ## Code Structure & Style
 
 3. **Directory Structure**:
@@ -24,19 +27,16 @@ applyTo: '**'
     * Strive for small, focused modules and functions.
     * Avoid circular dependencies between modules.
 
-5. **Asynchronous Code**:
-    * Given the presence of `asyncpg`, `aiosqlite`, `asyncmy`, prefer asynchronous implementations (`async/await`) for I/O-bound operations, especially within database adapters.
-
 6. **Type Hinting**:
     * Use type hints for all function signatures and variable declarations.
-    * Ensure code passes `mypy` checks. This is critical.
+    * Ensure code passes `mypy` checks, strict checks in Pyright and all RUFF checks should be addressed or suppressed. This is critical.
 
 7. **Linting and Formatting (Specifics)**:
     * **Ruff**: The primary linter and formatter is Ruff.
         * Ensure all code passes `ruff` checks (it will auto-fix where possible).
         * Ensure all code is formatted by `ruff-format`.
     * **Flake8 Dunder All**:
-        * For modules not in `test*` or `tools`, ensure `__all__` is defined and uses a tuple.
+        * ensure `__all__` is defined and uses a tuple.
     * **Slotscheck**:
         * For classes (excluding those in `docs` or `.github`), consider using `__slots__` to reduce memory footprint, especially if many instances of the class are expected. `slotscheck` will verify this.
     * **Other Pre-commit Hooks**:
@@ -62,12 +62,20 @@ applyTo: '**'
 
 10. **Test Fixtures**:
     * Utilize `pytest` fixtures for test setup and teardown, especially for database connections or shared resources. Look for existing fixtures in `tests/fixtures/` or within test modules.
+    * Design tests to be as parameterized and complete as possible, covering various scenarios and edge cases.
+
 
 ## Documentation
 
 11. **Docstrings**:
     * Write clear and concise docstrings for all public modules, classes, functions, and methods, following a consistent style (e.g., Google or NumPy style, check existing docs for prevalence).
     * Explain the purpose, arguments, and return values.
+    * Use type hints in docstrings where applicable.
+    * Exceptions must be documented and described in the docstrings.
+    * Args and Kwargs should be documented in the docstring, especially for public APIs.
+    * Use `:param` and `:return` directives for parameters and return values in docstrings, especially for public APIs.
+    * Do not document the return type of it is None.  Only document the return type if it is not None.
+    * Use `:raises` directive to document exceptions that a function may raise.
 
 12. **Project Documentation**:
     * Update or add documentation in the `docs/` directory as needed. This likely uses Sphinx.

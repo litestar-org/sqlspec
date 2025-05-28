@@ -25,8 +25,8 @@ def test_limit_offset_filter_apply() -> None:
 
     stmt_no_params = SQLStatement("SELECT * FROM projects")
     # limit_offset_filter_no_params = LimitOffset(limit=20, offset=0) # Unused variable
-    stmt_no_params.limit(20, use_parameter=False)
-    stmt_no_params.offset(0, use_parameter=False)
+    stmt_no_params = stmt_no_params.limit(20, use_parameter=False)
+    stmt_no_params = stmt_no_params.offset(0, use_parameter=False)
     sql_no_params = stmt_no_params.get_sql(placeholder_style="qmark")
     assert sql_no_params == "SELECT * FROM projects LIMIT 20 OFFSET 0"
 
@@ -37,7 +37,7 @@ def test_order_by_filter_apply() -> None:
     order_by_asc_filter = OrderBy(field_name="name", sort_order="asc")
     stmt_asc = order_by_asc_filter.append_to_statement(stmt_asc)
     sql_asc = stmt_asc.get_sql()
-    assert sql_asc == "SELECT * FROM products ORDER BY name ASC"
+    assert sql_asc == "SELECT * FROM products ORDER BY name"  # SQLGlot omits ASC (default)
 
     stmt_desc = SQLStatement("SELECT * FROM products")
     order_by_desc_filter = OrderBy(field_name="category", sort_order="desc")
@@ -49,8 +49,8 @@ def test_order_by_filter_apply() -> None:
     order_by_invalid_sort_filter = OrderBy(field_name="price", sort_order="INVALID_SORT")  # type: ignore
     stmt_invalid_sort = order_by_invalid_sort_filter.append_to_statement(stmt_invalid_sort)
     sql_invalid_sort = stmt_invalid_sort.get_sql()
-    # Default to ASC if sort_order is invalid
-    assert sql_invalid_sort == "SELECT * FROM products ORDER BY price ASC"
+    # Default to ASC if sort_order is invalid (SQLGlot omits ASC keyword)
+    assert sql_invalid_sort == "SELECT * FROM products ORDER BY price"
 
 
 def test_search_filter_apply() -> None:
@@ -78,8 +78,8 @@ def test_search_filter_apply() -> None:
     )
     assert "OR" in sql_multi
     # Parameters are added for each field, so we expect two identical parameters
-    assert params_multi.count("%error%") == 2
-    assert len(params_multi) == 2
+    assert params_multi.count("%error%") == 2  # type: ignore[union-attr]
+    assert len(params_multi) == 2  # type: ignore[union-attr]
 
     stmt_no_value = SQLStatement("SELECT * FROM data")
     search_filter_no_value = SearchFilter(field_name="content", value="")
@@ -95,7 +95,7 @@ def test_not_in_search_filter_apply() -> None:
     stmt = not_in_search_filter.append_to_statement(stmt)
     sql = stmt.get_sql(placeholder_style="qmark")
     params = stmt.get_parameters_for_style("qmark")
-    assert sql == "SELECT * FROM users WHERE NOT (username LIKE ?)"
+    assert sql == "SELECT * FROM users WHERE NOT username LIKE ?"  # SQLGlot renders NOT without parentheses
     assert params == ["%admin%"]
 
     stmt_multi_field = SQLStatement("SELECT * FROM events")
@@ -105,12 +105,12 @@ def test_not_in_search_filter_apply() -> None:
     params_multi = stmt_multi_field.get_parameters_for_style("qmark")
 
     assert "SELECT * FROM events WHERE" in sql_multi
-    assert ("NOT (type ILIKE ?)" in sql_multi and "NOT (detail ILIKE ?)" in sql_multi) or (
-        "NOT (detail ILIKE ?)" in sql_multi and "NOT (type ILIKE ?)" in sql_multi
-    )
+    assert ("NOT type ILIKE ?" in sql_multi and "NOT detail ILIKE ?" in sql_multi) or (
+        "NOT detail ILIKE ?" in sql_multi and "NOT type ILIKE ?" in sql_multi
+    )  # SQLGlot renders NOT without parentheses
     assert "AND" in sql_multi
-    assert params_multi.count("%debug%") == 2
-    assert len(params_multi) == 2
+    assert params_multi.count("%debug%") == 2  # pyright: ignore
+    assert len(params_multi) == 2  # pyright: ignore
 
     stmt_no_value = SQLStatement("SELECT * FROM items")
     not_in_search_filter_no_value = NotInSearchFilter(field_name="description", value="")
@@ -150,7 +150,7 @@ def test_not_in_collection_filter_apply() -> None:
     stmt = not_in_collection_filter.append_to_statement(stmt)
     sql = stmt.get_sql(placeholder_style="qmark")
     params = stmt.get_parameters_for_style("qmark")
-    assert sql == "SELECT * FROM products WHERE category_id NOT IN (?, ?, ?)"
+    assert sql == "SELECT * FROM products WHERE NOT category_id IN (?, ?, ?)"
     assert params == [1, 2, 3]
 
     stmt_empty_values = SQLStatement("SELECT * FROM products")

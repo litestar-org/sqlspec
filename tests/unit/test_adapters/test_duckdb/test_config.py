@@ -27,8 +27,8 @@ class MockDuckDB(DuckDBConfig):
     def create_connection(*args: Any, **kwargs: Any) -> duckdb.DuckDBPyConnection:
         """Mock create_connection method."""
         # If a connection was provided, use it, otherwise create a new mock
-        if hasattr(args[0], "_connection") and args[0]._connection is not None:  # noqa: SLF001
-            return args[0]._connection  # type: ignore[no-any-return]  # noqa: SLF001
+        if hasattr(args[0], "_connection") and args[0]._connection is not None:
+            return args[0]._connection  # type: ignore[no-any-return]
         return MagicMock(spec=duckdb.DuckDBPyConnection)
 
     @property
@@ -111,7 +111,7 @@ def test_create_connection() -> None:
     )
     connection = config.create_connection()
     assert isinstance(connection, MagicMock)
-    assert connection._spec_class == duckdb.DuckDBPyConnection  # noqa: SLF001
+    assert connection._spec_class == duckdb.DuckDBPyConnection
 
 
 def test_create_connection_error() -> None:

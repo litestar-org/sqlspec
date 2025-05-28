@@ -16,10 +16,10 @@ from typing import (
 )
 from uuid import UUID
 
-from sqlglot import parse_one
+from sqlglot import exp, parse_one
 from sqlglot.dialects.dialect import DialectType
 
-from sqlspec.exceptions import SQLConversionError, SQLParsingError, SQLSpecError
+from sqlspec.exceptions import SQLConversionError, SQLSpecError
 from sqlspec.sql.statement import SQLStatement, Statement
 from sqlspec.typing import (
     ConnectionT,
@@ -61,30 +61,29 @@ class SQLTranslatorMixin(Generic[ConnectionT]):
             to_dialect: The target dialect to convert to.
             pretty: Whether to pretty-print the SQL query.
 
+        Raises:
+            SQLConversionError: If the SQL query cannot be converted to the target dialect.
+
         Returns:
             The converted SQL query string.
-
-        Raises:
-            SQLParsingError: If the SQL query cannot be parsed.
-            SQLConversionError: If the SQL query cannot be converted to the target dialect.
         """
-        if isinstance(sql, str):
-            try:
-                parsed = parse_one(sql, dialect=self.dialect)
-            except Exception as e:
-                error_msg = f"Failed to parse SQL: {e!s}"
-                raise SQLParsingError(error_msg) from e
-        elif isinstance(sql, SQLStatement):
-            parsed = sql.expression
+        parsed_expression: exp.Expression
+        if sql is not None and isinstance(sql, SQLStatement):
+            if sql.expression is None:
+                msg = "Statement could not be parsed"
+                raise SQLConversionError(msg)
+            parsed_expression = sql.expression
+        elif isinstance(sql, exp.Expression):
+            parsed_expression = sql
         else:
-            parsed = sql
-        if to_dialect is None:
-            to_dialect = self.dialect
-        parsed = parsed.expression if isinstance(parsed, SQLStatement) else parsed
+            parsed_expression = parse_one(sql, dialect=self.dialect)
+
+        target_dialect = to_dialect if to_dialect is not None else self.dialect
+
         try:
-            return parsed.sql(dialect=to_dialect, pretty=pretty)
+            return parsed_expression.sql(dialect=target_dialect, pretty=pretty)
         except Exception as e:
-            error_msg = f"Failed to convert SQL to {to_dialect}: {e!s}"
+            error_msg = f"Failed to convert SQL expression to {target_dialect}: {e!s}"
             raise SQLConversionError(error_msg) from e
 
 

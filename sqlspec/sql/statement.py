@@ -1,4 +1,4 @@
-# ruff: noqa: PLR0917, SLF001
+# ruff: noqa: PLR0917, SLF001, PLR0904
 """Provides the SQLStatement class for representing and manipulating SQL queries.
 
 For adapter developers:
@@ -15,9 +15,8 @@ If placeholder_style is not specified, the method falls back to dialect-based lo
 """
 
 import logging
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
-from weakref import WeakKeyDictionary
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import sqlglot
 from sqlglot import exp
@@ -27,17 +26,21 @@ from sqlspec.exceptions import (
     ParameterError,
     RiskLevel,
     SQLInjectionError,
+    SQLParsingError,
+    SQLSpecError,
     SQLValidationError,
 )
-from sqlspec.sql.filters import StatementFilter, apply_filter  # Add StatementFilter import
+from sqlspec.sql.filters import apply_filter
+from sqlspec.sql.parameters import ParameterConverter, ParameterStyle, ParameterValidator
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from sqlglot.dialects.dialect import DialectType
+    from sqlglot.expressions import Condition
 
     from sqlspec.sql.filters import StatementFilter
-    from sqlspec.sql.parameters import ParameterInfo, ParameterStyle
+    from sqlspec.sql.parameters import ParameterInfo
     from sqlspec.typing import StatementParameterType
 
 __all__ = (
@@ -45,9 +48,8 @@ __all__ = (
     "SQLStatement",
     "SQLValidator",
     "Statement",
+    "UsesExpression",
     "ValidationResult",
-    "is_sql_safe",
-    "sanitize_sql",
     "validate_sql",
 )
 
@@ -88,8 +90,16 @@ class UsesExpression:
             raise SQLValidationError(msg, sql_str, RiskLevel.HIGH) from e
 
 
-class ValidationResult(UsesExpression):
+class ValidationResult:
     """Result of SQL validation with detailed information."""
+
+    __slots__ = (
+        "is_safe",
+        "issues",
+        "risk_level",
+        "sanitized_sql",
+        "warnings",
+    )
 
     def __init__(
         self,
@@ -109,12 +119,13 @@ class ValidationResult(UsesExpression):
         return self.is_safe
 
 
-@dataclass
-class SQLSanitizer(UsesExpression):
-    """High-performance SQL sanitizer with caching."""
+class SQLPreprocessor(UsesExpression):
+    """Base class for SQL preprocessors that can apply filters."""
 
-    # Class-level cache for parsed expressions
-    _cache: ClassVar[WeakKeyDictionary[str, exp.Expression]] = WeakKeyDictionary()
+
+@dataclass
+class SQLSanitizer(SQLPreprocessor):
+    """SQL Sanitizer"""
 
     strict_mode: bool = True
     """Whether to use strict validation rules."""
@@ -181,7 +192,7 @@ class SQLSanitizer(UsesExpression):
 
 
 @dataclass
-class SQLValidator(UsesExpression):
+class SQLValidator(SQLPreprocessor):
     """Comprehensive SQL validator with security checks."""
 
     strict_mode: bool = True
@@ -252,7 +263,7 @@ class SQLValidator(UsesExpression):
         return ValidationResult(is_safe=is_safe, risk_level=risk_level, issues=issues, warnings=warnings)
 
     @staticmethod
-    def _check_injection_patterns_ast(expression: exp.Expression) -> list[str]:
+    def _check_injection_patterns_ast(expression: "exp.Expression") -> list[str]:
         """Check for injection patterns in the AST.
 
         Returns:
@@ -272,7 +283,7 @@ class SQLValidator(UsesExpression):
         return issues
 
     @staticmethod
-    def _check_unsafe_patterns_ast(expression: exp.Expression) -> list[str]:
+    def _check_unsafe_patterns_ast(expression: "exp.Expression") -> list[str]:
         """Check for unsafe patterns in the AST.
 
         Returns:
@@ -288,7 +299,7 @@ class SQLValidator(UsesExpression):
 
         return issues
 
-    def _check_statement_type(self, parsed: exp.Expression) -> list[str]:
+    def _check_statement_type(self, parsed: "exp.Expression") -> list[str]:
         issues = []
         if isinstance(parsed, (exp.Create, exp.Drop, exp.Alter)) and not self.allow_ddl:
             issues.append(f"DDL statement not allowed: {type(parsed).__name__}")
@@ -309,21 +320,7 @@ class SQLValidator(UsesExpression):
         return warnings
 
 
-def sanitize_sql(sql: "Statement", dialect: "DialectType" = None, strict: bool = True) -> "exp.Expression":
-    """Sanitize SQL string for safe execution.
-
-    Args:
-        sql: SQL string, expression, or Query object to sanitize
-        dialect: SQL dialect for parsing
-        strict: Whether to use strict sanitization
-
-    Returns:
-        Sanitized SQL string
-    """
-    return SQLSanitizer(strict_mode=strict).sanitize(sql, dialect)
-
-
-def validate_sql(sql: Statement, dialect: "DialectType" = None, strict: bool = True) -> ValidationResult:
+def validate_sql(sql: "Statement", dialect: "DialectType" = None, strict: bool = True) -> "ValidationResult":
     """Validate SQL string for security and safety.
 
     Args:
@@ -335,28 +332,6 @@ def validate_sql(sql: Statement, dialect: "DialectType" = None, strict: bool = T
         ValidationResult with detailed information
     """
     return SQLValidator(strict_mode=strict).validate(sql, dialect)
-
-
-def is_sql_safe(sql: "Statement", dialect: "DialectType" = None) -> bool:
-    """Quick check if SQL is safe for execution.
-
-    Args:
-        sql: SQL string, expression, or Query object to check
-        dialect: SQL dialect for parsing
-
-    Returns:
-        True if SQL is safe, False otherwise
-    """
-    try:
-        # Validate with strict=True by default for safety checks
-        result = validate_sql(sql, dialect, strict=True)
-    except SQLValidationError:
-        return False
-    except Exception:  # noqa: BLE001
-        logger.debug("is_sql_safe encountered an unexpected exception during validation.", exc_info=True)
-        return False
-    else:
-        return result.is_safe
 
 
 @dataclass
@@ -381,6 +356,18 @@ class StatementConfig:
     cache_parsed_expression: bool = True
     """Whether to cache the parsed expression for performance."""
 
+    validator: SQLValidator = field(default_factory=lambda: SQLValidator(strict_mode=True))
+    """SQL validator to use. Defaults to strict mode validator."""
+
+    sanitizer: SQLSanitizer = field(default_factory=lambda: SQLSanitizer(strict_mode=True))
+    """SQL sanitizer to use. Defaults to strict mode sanitizer."""
+
+    parameter_converter: ParameterConverter = field(default_factory=ParameterConverter)
+    """Parameter converter to use for parameter processing."""
+
+    parameter_validator: ParameterValidator = field(default_factory=ParameterValidator)
+    """Parameter validator to use for parameter validation."""
+
 
 class SQLStatement:
     """Represents a SQL statement with parameters and validation.
@@ -388,6 +375,7 @@ class SQLStatement:
     This class provides a unified interface for SQL statements with automatic parameter
     binding, validation, and sanitization. It supports multiple parameter styles and
     can work with raw SQL strings, sqlglot expressions, or query builder objects.
+    It is designed to be immutable; methods that modify the statement return a new instance.
 
     Key Features:
     - Intelligent parameter binding from args, kwargs, or explicit parameters
@@ -396,6 +384,7 @@ class SQLStatement:
     - Filter composition from sqlspec.sql.filters
     - Performance optimizations with caching
     - Configurable behavior for different use cases
+    - Immutability: Modification methods return new instances.
 
     Example usage:
         >>> stmt = SQLStatement(
@@ -414,6 +403,16 @@ class SQLStatement:
         >>> stmt = stmt.append_filter(SearchFilter("name", "John"))
     """
 
+    __slots__ = (
+        "_dialect",
+        "_merged_parameters",
+        "_original_input",
+        "_parameter_info",
+        "_parsed_expression",
+        "_statement_config",
+        "_validation_result",
+    )
+
     def __init__(
         self,
         sql: Statement,
@@ -422,44 +421,32 @@ class SQLStatement:
         args: "Optional[Sequence[Any]]" = None,
         kwargs: "Optional[Mapping[str, Any]]" = None,
         dialect: "Optional[DialectType]" = None,
-        config: Optional[StatementConfig] = None,
-        validator: Optional[SQLValidator] = None,
-        sanitizer: Optional[SQLSanitizer] = None,
+        statement_config: Optional[StatementConfig] = None,
+        _existing_statement_copy_data: Optional[dict[str, Any]] = None,
     ) -> None:
-        """Initialize SQLStatement.
-
-        Args:
-            sql: SQL string, expression, or SQLStatement to wrap
-            parameters: Primary parameters (dict, list, tuple, or scalar)
-            args: Positional arguments for parameters
-            kwargs: Keyword arguments for parameters
-            dialect: SQL dialect for parsing and transformation
-            config: Configuration for statement behavior
-            validator: Custom SQL validator (uses default if None)
-            sanitizer: Custom SQL sanitizer (uses default if None)
-
-        """
-        # Handle recursive SQLStatement wrapping
+        """Initialize a SQLStatement instance."""
+        _existing_statement_copy_data = _existing_statement_copy_data or {}
+        statement_config = statement_config or StatementConfig()
         if isinstance(sql, SQLStatement):
-            self._copy_from_existing(sql, parameters, args, kwargs, dialect, config, validator, sanitizer)
+            self._copy_from_existing(
+                existing=sql,
+                parameters=parameters,
+                args=args,
+                kwargs=kwargs,
+                dialect=dialect,
+                statement_config=statement_config,
+            )
             return
 
-        # Store configuration
-        self._config = config or StatementConfig()
-        self._dialect = dialect
-        self._validator = validator or SQLValidator(strict_mode=self._config.strict_mode)
-        self._sanitizer = sanitizer or SQLSanitizer(strict_mode=self._config.strict_mode)
-
-        # Store original SQL for reference
-        self._original_sql = str(sql) if not isinstance(sql, exp.Expression) else None
-
-        # Initialize parameter converter
-        from sqlspec.sql.parameters import ParameterConverter
-
-        self._parameter_converter = ParameterConverter()
-
-        # Process parameters and SQL
-        self._initialize_statement(sql, parameters, args, kwargs)
+        self._statement_config = _existing_statement_copy_data.get("_statement_config", statement_config)
+        self._dialect = _existing_statement_copy_data.get("_dialect", dialect)
+        self._original_input = _existing_statement_copy_data.get("_original_input", sql)
+        self._parsed_expression = _existing_statement_copy_data.get("_parsed_expression", None)
+        self._parameter_info = _existing_statement_copy_data.get("_parameter_info", [])
+        self._merged_parameters = _existing_statement_copy_data.get("_merged_parameters", [])
+        self._validation_result = _existing_statement_copy_data.get("_validation_result", None)
+        if not _existing_statement_copy_data:
+            self._initialize_statement(self._original_input, parameters, args, kwargs)
 
     def _copy_from_existing(
         self,
@@ -468,31 +455,23 @@ class SQLStatement:
         args: "Optional[Sequence[Any]]",
         kwargs: "Optional[Mapping[str, Any]]",
         dialect: "Optional[DialectType]",
-        config: Optional[StatementConfig],
-        validator: Optional[SQLValidator],
-        sanitizer: Optional[SQLSanitizer],
+        statement_config: Optional[StatementConfig],
     ) -> None:
         """Copy from existing SQLStatement, optionally overriding values."""
-        self._config = config or existing._config
-        self._dialect = dialect or existing._dialect
-        self._validator = validator or existing._validator
-        self._sanitizer = sanitizer or existing._sanitizer
-        self._original_sql = existing._original_sql
-        self._parameter_converter = existing._parameter_converter
+        self._statement_config = statement_config if statement_config is not None else existing._statement_config
+        self._dialect = dialect if dialect is not None else existing._dialect
+        self._original_input = existing._original_input
 
         # If new parameters provided, re-process with existing SQL
         if parameters is not None or args is not None or kwargs is not None:
-            # Use the original expression from the existing statement
-            original_expr = existing._raw_expression
-            self._initialize_statement(original_expr, parameters, args, kwargs)
+            # Use the raw expression from the existing statement
+            current_sql_source = existing._original_input
+            self._initialize_statement(current_sql_source, parameters, args, kwargs)
         else:
-            # Copy all processed state
-            self._raw_expression = existing._raw_expression
+            self._original_input = existing._original_input
             self._parsed_expression = existing._parsed_expression
             self._parameter_info = existing._parameter_info
             self._merged_parameters = existing._merged_parameters
-            self._placeholder_map = existing._placeholder_map
-            self._transformed_sql = existing._transformed_sql
             self._validation_result = existing._validation_result
 
     def _initialize_statement(
@@ -506,12 +485,12 @@ class SQLStatement:
 
         Raises:
             SQLValidationError: If SQL parsing fails when parsing is enabled.
+
         """
         # Store raw expression (could be string, Expression, or other)
-        self._raw_expression = sql
+        self._original_input = sql
 
-        # Convert to sqlglot expression if parsing enabled
-        if self._config.enable_parsing:
+        if self._statement_config.enable_parsing:
             if isinstance(sql, exp.Expression):
                 self._parsed_expression = sql
             else:
@@ -519,18 +498,62 @@ class SQLStatement:
         else:
             self._parsed_expression = None
 
-        # Process parameters
-        if self._config.enable_parsing and self._parsed_expression is not None:
-            # Use sqlglot-based parameter processing
-            self._process_parameters_with_parsing(str(sql), parameters, args, kwargs)
+        if self._statement_config.enable_parsing and self._parsed_expression is not None:
+            # Check if we have placeholders but no parameters - in this case, be lenient during initialization
+            has_any_parameters = parameters is not None or args is not None or kwargs is not None
+            if not has_any_parameters:
+                temp_config = replace(self._statement_config, enable_validation=False)
+                original_config = self._statement_config
+                self._statement_config = temp_config
+                try:
+                    self._process_parameters_with_parsing(str(sql), parameters, args, kwargs)
+                finally:
+                    # Restore original config
+                    self._statement_config = original_config
+            else:
+                self._process_parameters_with_parsing(str(sql), parameters, args, kwargs)
         else:
-            # Use regex-based parameter processing (no sqlglot)
             self._process_parameters_without_parsing(str(sql), parameters, args, kwargs)
 
-        # Validate if enabled
-        if self._config.enable_validation:
-            self._validation_result = self._validator.validate(self._parsed_expression or str(sql), self._dialect)
-            if not self._validation_result.is_safe and self._config.strict_mode:
+        # Sanitize if enabled and parsing is enabled
+        if (
+            self._statement_config.enable_parsing
+            and self._statement_config.enable_sanitization
+            and self._parsed_expression
+        ):
+            try:
+                # Ensure the dialect is passed to the sanitizer
+                sanitized_expr = self._statement_config.sanitizer.sanitize(
+                    self._parsed_expression, self._dialect
+                )
+                # Update the original input if sanitization changes the expression
+                # and the original input was an expression itself or parsing is enabled.
+                # This ensures that .sql property reflects the sanitized version.
+                if sanitized_expr is not self._parsed_expression:
+                    self._parsed_expression = sanitized_expr
+                    # If the original input was a string, we don't update it directly.
+                    # The .sql property will generate from _parsed_expression.
+                    # If original input was an expression, update it to keep them in sync.
+                    if isinstance(self._original_input, exp.Expression):
+                        self._original_input = self._parsed_expression
+
+            except (SQLValidationError, ValueError, TypeError) as e:
+                if self._statement_config.strict_mode:
+                    msg = "SQL sanitization failed"
+                    raise SQLValidationError(
+                        msg, str(sql), self._validation_result.risk_level if self._validation_result else RiskLevel.LOW
+                    ) from e
+                logger.warning("SQL sanitization failed during initialization: %s", e)
+
+        if self._statement_config.enable_validation:
+            self._validation_result = self._statement_config.validator.validate(
+                self._parsed_expression or str(sql), self._dialect
+            )
+            if (
+                self._validation_result is not None
+                and not self._validation_result.is_safe
+                and self._statement_config.strict_mode
+            ):
                 msg = f"SQL validation failed: {', '.join(self._validation_result.issues)}"
                 raise SQLValidationError(msg, str(sql), self._validation_result.risk_level)
         else:
@@ -548,7 +571,7 @@ class SQLStatement:
         try:
             return UsesExpression.get_expression(sql_str, self._dialect)
         except SQLValidationError:
-            if self._config.strict_mode:
+            if self._statement_config.strict_mode:
                 raise
             logger.warning("Failed to parse SQL, continuing without parsed expression: %s", sql_str)
             return exp.Select()  # Return empty select as fallback
@@ -568,26 +591,19 @@ class SQLStatement:
             ValueError: If parameter values are invalid.
         """
         try:
-            (
-                self._transformed_sql,
-                self._parameter_info,
-                self._merged_parameters,
-                self._placeholder_map,
-            ) = self._parameter_converter.convert_parameters(
-                sql_str,
-                parameters,
-                args,
-                kwargs,
-                validate=self._config.enable_validation,
+            _, self._parameter_info, self._merged_parameters, _ = (
+                self._statement_config.parameter_converter.convert_parameters(
+                    sql_str, parameters, args, kwargs, validate=self._statement_config.enable_validation
+                )
             )
         except (ParameterError, ValueError, TypeError) as e:
-            if self._config.strict_mode:
+            if self._statement_config.strict_mode:
                 raise
             logger.warning("Parameter processing failed, using basic merge: %s", e)
             self._parameter_info = []
-            self._merged_parameters = self._parameter_converter.merge_parameters(parameters, args, kwargs)
-            self._placeholder_map = {}
-            self._transformed_sql = sql_str
+            self._merged_parameters = self._statement_config.parameter_converter.merge_parameters(
+                parameters, args, kwargs
+            )
 
     def _process_parameters_without_parsing(
         self,
@@ -602,24 +618,39 @@ class SQLStatement:
             ParameterError: If mixed parameters are used when not allowed.
         """
         # Check for mixed parameters if not allowed
-        if not self._config.allow_mixed_parameters and args and kwargs:
+        if not self._statement_config.allow_mixed_parameters and args and kwargs:
             msg = "Cannot mix args and kwargs when parsing is disabled"
             raise ParameterError(msg, sql_str)
 
-        # Simple parameter merging
-        self._merged_parameters = self._parameter_converter.merge_parameters(parameters, args, kwargs)
-        self._parameter_info = []  # No detailed info without parsing
-        self._placeholder_map = {}
-        self._transformed_sql = sql_str
+        # When parsing is disabled and mixed parameters are allowed, store as tuple
+        if args and kwargs and self._statement_config.allow_mixed_parameters:
+            self._merged_parameters = (list(args) if args else [], dict(kwargs) if kwargs else {})
+        else:
+            # Simple parameter merging for other cases
+            self._merged_parameters = self._statement_config.parameter_converter.merge_parameters(
+                parameters, args, kwargs
+            )
+        self._parameter_info = []
 
     @property
     def sql(self) -> str:
-        """Get the original SQL string."""
-        return self._original_sql or str(self._raw_expression)
+        """Get the SQL string if provided as string, or generated SQL from expression."""
+        # If parsing is enabled and we have a parsed (and possibly sanitized) expression,
+        # generate the SQL from it. Otherwise, return the original input string.
+        if self._statement_config.enable_parsing and self._parsed_expression is not None:
+            return self.get_sql()  # Calls the method that uses _parsed_expression
+        return str(self._original_input)
 
     @property
-    def expression(self) -> Optional[exp.Expression]:
-        """Get the parsed sqlglot expression if available."""
+    def config(self) -> "StatementConfig":
+        """Get the statement configuration."""
+        return self._statement_config
+
+    @property
+    def expression(self) -> "Optional[exp.Expression]":
+        """Get the parsed and potentially sanitized sqlglot expression if available and parsing enabled."""
+        if not self._statement_config.enable_parsing:
+            return None
         return self._parsed_expression
 
     @property
@@ -633,20 +664,33 @@ class SQLStatement:
         return self._parameter_info
 
     @property
-    def placeholder_map(self) -> "dict[str, Union[str, int]]":
-        """Get the placeholder mapping for internal use."""
-        return self._placeholder_map
-
-    @property
-    def validation_result(self) -> Optional[ValidationResult]:
+    def validation_result(self) -> "Optional[ValidationResult]":
         """Get the validation result if validation was performed."""
+        return self._validation_result
+
+    def validate(self) -> "ValidationResult":
+        """Validate the statement and return detailed results.
+
+        Returns:
+            ValidationResult with validation details.
+        """
+        if self._validation_result is None:
+            if self._statement_config.enable_validation:
+                return self._statement_config.validator.validate(
+                    self.expression if self.expression is not None else self.sql, self._dialect
+                )
+            return ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
         return self._validation_result
 
     @property
     def is_safe(self) -> bool:
-        """Check if the statement is safe for execution."""
+        """Check if the statement is safe based on validation results.
+
+        Returns:
+            True if the statement is safe, False otherwise.
+        """
         if self._validation_result is None:
-            return True  # Assume safe if not validated
+            return True
         return self._validation_result.is_safe
 
     def get_sql(
@@ -654,15 +698,17 @@ class SQLStatement:
         placeholder_style: "Optional[Union[str, ParameterStyle]]" = None,
         statement_separator: str = ";",
         include_statement_separator: bool = False,
+        dialect: "Optional[DialectType]" = None,
     ) -> str:
         """Get SQL string with specified placeholder style.
 
         Args:
-            placeholder_style: Target placeholder style for the SQL output.
+            placeholder_style: The target placeholder style.
                 Can be a string ('qmark', 'named', 'pyformat_named', etc.) or ParameterStyle enum.
-                If None, uses dialect-appropriate default.
-            statement_separator: Optional statement separator to use (default is ';').
-            include_statement_separator: Whether to ensure SQL ends with statement separator.
+                If None, uses dialect-appropriate default or existing SQL if parsing disabled.
+            statement_separator: The statement separator to use.
+            include_statement_separator: Whether to include the statement separator.
+            dialect: The SQL dialect to use for SQL generation.
 
         Returns:
             SQL string with placeholders in the requested style.
@@ -676,24 +722,44 @@ class SQLStatement:
             >>> stmt.get_sql(placeholder_style="named")
             'SELECT * FROM users WHERE id = :param_0'
         """
-        if placeholder_style is None:
-            sql = self._original_sql or str(self._raw_expression)
-        else:
-            # Convert placeholder style and transform SQL
-            sql = self._transform_sql_placeholders(placeholder_style)
+        target_dialect = dialect if dialect is not None else self._dialect
 
-        if include_statement_separator and not sql.rstrip().endswith(";"):
-            sql = sql.rstrip() + ";"
+        if not self._statement_config.enable_parsing and self.expression is None:
+            sql = str(self._original_input)
+            if include_statement_separator and not sql.rstrip().endswith(statement_separator):
+                sql = sql.rstrip() + statement_separator
+            return sql
+
+        if self.expression is not None:
+            if placeholder_style is None:
+                sql = self.expression.sql(dialect=target_dialect)
+            else:
+                sql = self._transform_sql_placeholders(placeholder_style, self.expression, target_dialect)
+        else:
+            sql = str(self._original_input)
+
+        if include_statement_separator and not sql.rstrip().endswith(statement_separator):
+            sql = sql.rstrip() + statement_separator
 
         return sql
 
-    def _transform_sql_placeholders(self, target_style: "Union[str, ParameterStyle]") -> str:
-        """Transform SQL placeholders to target style.
+    def _transform_sql_placeholders(
+        self,
+        target_style: "Union[str, ParameterStyle]",
+        expression_to_render: "exp.Expression",
+        dialect: "Optional[DialectType]" = None,
+    ) -> str:
+        """Transform SQL placeholders to target style using the provided expression.
+
+        Args:
+            target_style: The target placeholder style.
+            expression_to_render: The sqlglot expression to render.
+            dialect: The SQL dialect to use for rendering.
 
         Returns:
             SQL string with placeholders transformed to the target style.
         """
-        from sqlspec.sql.parameters import ParameterStyle
+        target_dialect = dialect if dialect is not None else self._dialect
 
         # Convert string to enum
         if isinstance(target_style, str):
@@ -708,75 +774,103 @@ class SQLStatement:
                 "pyformat_positional": ParameterStyle.PYFORMAT_POSITIONAL,
                 "static": ParameterStyle.STATIC,
             }
-            target_style = style_map.get(target_style.lower(), ParameterStyle.QMARK)
-
-        # If no parsing was done, return original SQL
-        if not self._config.enable_parsing or not self._parsed_expression:
-            return self._original_sql or str(self._raw_expression)
+            try:
+                target_style_enum = style_map[target_style.lower()]
+            except KeyError:
+                logger.warning("Unknown placeholder_style '%s', defaulting to qmark.", target_style)
+                target_style_enum = ParameterStyle.QMARK
+        else:
+            target_style_enum = target_style
 
         # For STATIC style, replace all placeholders with actual values
-        if target_style == ParameterStyle.STATIC:
-            return self._generate_static_sql()
+        if target_style_enum == ParameterStyle.STATIC:
+            return self._generate_static_sql(expression_to_render)
 
-        # Transform using sqlglot dialect transpilation
-        try:
-            # Convert the parsed expression to target dialect format
-            dialect_map = {
-                ParameterStyle.QMARK: "sqlite",
-                ParameterStyle.NAMED_COLON: "oracle",
-                ParameterStyle.NAMED_AT: "tsql",
-                ParameterStyle.NAMED_DOLLAR: "postgres",
-                ParameterStyle.NUMERIC: "postgres",
-                ParameterStyle.PYFORMAT_NAMED: "mysql",
-                ParameterStyle.PYFORMAT_POSITIONAL: "mysql",
-            }
+        # Get the SQL with current placeholders
+        sql = expression_to_render.sql(dialect=target_dialect)
 
-            target_dialect = dialect_map.get(target_style, "sqlite")
-            return self._parsed_expression.sql(dialect=target_dialect)
-        except (SQLGlotParseError, ValueError, AttributeError) as e:
-            logger.warning("Failed to transform placeholders to %s: %s", target_style, e)
-            return self._original_sql or str(self._raw_expression)
+        # Convert placeholders to target style
+        return self._convert_placeholder_style(sql, target_style_enum)
 
-    def _generate_static_sql(self) -> str:
-        """Generate SQL with parameters substituted as literals.
+    def _convert_placeholder_style(self, sql: str, target_style: "ParameterStyle") -> str:
+        """Convert placeholder style in SQL string.
+
+        Args:
+            sql: SQL string with current placeholders
+            target_style: Target placeholder style
+
+        Returns:
+            SQL string with converted placeholders
+        """
+
+        parameters_info = self.config.parameter_validator.extract_parameters(sql)
+
+        if not parameters_info:
+            return sql
+
+        # Build the converted SQL by replacing parameters in reverse order (to preserve positions)
+        result_sql = sql
+        for param_info in reversed(parameters_info):
+            start_pos = param_info.position
+            end_pos = start_pos + len(param_info.placeholder_text)
+
+            # Generate the new placeholder based on target style
+            if target_style == ParameterStyle.QMARK:
+                new_placeholder = "?"
+            elif target_style == ParameterStyle.NAMED_COLON:
+                new_placeholder = f":{param_info.name}" if param_info.name else f":param_{param_info.ordinal}"
+            elif target_style == ParameterStyle.NAMED_DOLLAR:
+                new_placeholder = f"${param_info.name}" if param_info.name else f"$param_{param_info.ordinal}"
+            elif target_style == ParameterStyle.NUMERIC:
+                new_placeholder = f":{param_info.ordinal + 1}"  # 1-based numbering
+            elif target_style == ParameterStyle.NAMED_AT:
+                new_placeholder = f"@{param_info.name}" if param_info.name else f"@param_{param_info.ordinal}"
+            elif target_style == ParameterStyle.PYFORMAT_NAMED:
+                new_placeholder = f"%({param_info.name})s" if param_info.name else f"%(param_{param_info.ordinal})s"
+            elif target_style == ParameterStyle.PYFORMAT_POSITIONAL:
+                new_placeholder = "%s"
+            else:
+                # For unsupported styles, keep original
+                new_placeholder = param_info.placeholder_text
+
+            # Replace the placeholder in the SQL
+            result_sql = result_sql[:start_pos] + new_placeholder + result_sql[end_pos:]
+
+        return result_sql
+
+    def _generate_static_sql(self, expression_to_render: exp.Expression) -> str:
+        """Generate SQL with parameters substituted as literals from the given expression.
+
+        Args:
+            expression_to_render: The sqlglot expression to use for generating static SQL.
 
         Returns:
             SQL string with parameter values directly substituted.
-
-        Note:
-            This method creates SQL with embedded values, which should only be used
-            for debugging, logging, or testing purposes. It is NOT recommended for
-            actual database execution as it bypasses parameterized queries.
         """
         if not self._merged_parameters:
-            return self._original_sql or str(self._raw_expression)
+            return expression_to_render.sql(dialect=self._dialect)
 
-        # Use the parameter infrastructure to do proper substitution
-        # If we have parameter_info and placeholder_map, use that for precision
-        if self._parameter_info and self._placeholder_map:
-            return self._generate_static_sql_with_parsing()
-        # Fallback to simple approach for basic cases
-        return self._generate_static_sql_simple()
+        if self._parameter_info and self._merged_parameters:
+            return self._generate_static_sql_with_parsing(expression_to_render)
+        return self._generate_static_sql_simple(expression_to_render)
 
-    def _generate_static_sql_with_parsing(self) -> str:
-        """Generate static SQL using parameter info from parsing.
+    def _generate_static_sql_with_parsing(self, expression_to_render: exp.Expression) -> str:
+        """Generate static SQL using parameter info from parsing, applied to the given expression.
+
+        Args:
+            expression_to_render: The sqlglot expression to use as the base.
 
         Returns:
             SQL string with parameter values substituted using precise positioning.
         """
-        # Start with the original SQL
-        sql = self._original_sql or str(self._raw_expression)
+        sql = expression_to_render.sql(dialect=self._dialect)
 
-        # Sort parameters by position in reverse order so we don't mess up positions
-        # when doing replacements
         sorted_params = sorted(self._parameter_info, key=lambda p: p.position, reverse=True)
 
         for param_info in sorted_params:
-            # Get the parameter value
             if param_info.name and isinstance(self._merged_parameters, dict):
                 value = self._merged_parameters.get(param_info.name)
             elif isinstance(self._merged_parameters, (list, tuple)):
-                # For positional parameters, use ordinal index
                 if param_info.ordinal < len(self._merged_parameters):
                     value = self._merged_parameters[param_info.ordinal]
                 else:
@@ -784,50 +878,90 @@ class SQLStatement:
             else:
                 value = None
 
-            # Escape the value for SQL
             escaped_value = self._escape_value(value)
 
-            # Replace the exact placeholder text at the exact position
             start_pos = param_info.position
             end_pos = start_pos + len(param_info.placeholder_text)
             sql = sql[:start_pos] + escaped_value + sql[end_pos:]
 
         return sql
 
-    def _generate_static_sql_simple(self) -> str:
-        """Simple static SQL generation for fallback cases.
+    def _generate_static_sql_simple(self, expression_to_render: exp.Expression) -> str:
+        """Generate static SQL with robust parameter substitution using parameter parsing.
+
+        This method uses the same robust parameter detection as _convert_placeholder_style
+        to avoid false positives when replacing placeholders with literal values.
+
+        Args:
+            expression_to_render: The sqlglot expression to use as the base.
 
         Returns:
-            SQL string with parameter values substituted using simple replacement.
+            SQL string with parameter values substituted using precise positioning.
         """
-        sql = self._original_sql or str(self._raw_expression)
+
+        sql = expression_to_render.sql(dialect=self._dialect)
+
+        if not self._merged_parameters:
+            return sql
+
+        parameters_info = self.config.parameter_validator.extract_parameters(sql)
+
+        if not parameters_info:
+            return sql
+
+        # Replace parameters in reverse order to preserve positions
+        result_sql = sql
+        for param_info in reversed(parameters_info):
+            start_pos = param_info.position
+            end_pos = start_pos + len(param_info.placeholder_text)
+            value = self._get_parameter_value_for_substitution(param_info)
+            escaped_value = self._escape_value(value)
+            result_sql = result_sql[:start_pos] + escaped_value + result_sql[end_pos:]
+
+        return result_sql
+
+    def _get_parameter_value_for_substitution(self, param_info: "ParameterInfo") -> Any:
+        """Get the parameter value for substitution based on ParameterInfo.
+
+        Args:
+            param_info: ParameterInfo containing parameter details.
+
+        Returns:
+            The parameter value to substitute, or None if not found.
+        """
+        if not self._merged_parameters:
+            return None
+
+        # Named parameter - look up by name
+        if param_info.name:
+            if isinstance(self._merged_parameters, dict):
+                return self._merged_parameters.get(param_info.name)
+            # If name exists but we have a list/tuple, can't match by name
+            return None
+
+        # Positional parameter - handle different parameter container types
+        if isinstance(self._merged_parameters, (list, tuple)):
+            # Direct positional access by ordinal
+            if 0 <= param_info.ordinal < len(self._merged_parameters):
+                return self._merged_parameters[param_info.ordinal]
+            return None
 
         if isinstance(self._merged_parameters, dict):
-            # Replace named parameters
-            for name, value in self._merged_parameters.items():
-                escaped_value = self._escape_value(value)
-                # Replace different named parameter styles
-                sql = sql.replace(f":{name}", escaped_value)
-                sql = sql.replace(f"@{name}", escaped_value)
-                sql = sql.replace(f"${{{name}}}", escaped_value)
-                sql = sql.replace(f"%({name})s", escaped_value)
-        elif isinstance(self._merged_parameters, (list, tuple)):
-            # Replace positional placeholders in order
-            for value in self._merged_parameters:
-                escaped_value = self._escape_value(value)
-                # Replace first occurrence of positional placeholders
-                if "?" in sql:
-                    sql = sql.replace("?", escaped_value, 1)
-                elif "%s" in sql:
-                    sql = sql.replace("%s", escaped_value, 1)
-                else:
-                    break  # No more placeholders to replace
+            # Mixed parameter style - positional parameters get names like _arg_{ordinal}
+            generated_name = f"_arg_{param_info.ordinal}"
+            return self._merged_parameters.get(generated_name)
 
-        return sql
+        # Scalar parameter - only valid for single parameter (ordinal 0)
+        if param_info.ordinal == 0:
+            return self._merged_parameters
+
+        return None
 
     @staticmethod
     def _escape_value(value: Any) -> str:
         """Escape a value for safe inclusion in SQL (basic implementation).
+
+        TODO: Enhance with proper SQL escaping for different data types.
 
         Args:
             value: The value to escape for SQL inclusion.
@@ -872,7 +1006,7 @@ class SQLStatement:
             style_lower = style.lower()
             if style_lower in {"dict", "named"}:
                 return self._convert_to_dict_parameters()
-            if style_lower in {"list", "positional"}:
+            if style_lower in {"list", "positional", "qmark"}:
                 return self._convert_to_list_parameters()
             if style_lower == "tuple":
                 params = self._convert_to_list_parameters()
@@ -912,6 +1046,9 @@ class SQLStatement:
                 return result
             # Fallback: create generic names
             return {f"param_{i}": value for i, value in enumerate(self._merged_parameters)}
+        # If _merged_parameters is None or a single scalar value
+        if self._merged_parameters is None:
+            return {}
         return {"param_0": self._merged_parameters}
 
     def _convert_to_list_parameters(self) -> list[Any]:
@@ -933,6 +1070,20 @@ class SQLStatement:
             # Fallback: just return values in order
             return list(self._merged_parameters.values())
         return [self._merged_parameters]
+
+    def get_parameters_for_style(self, style: "Union[str, ParameterStyle]") -> "StatementParameterType":
+        """Get parameters in the specified format.
+
+        This is an alias for get_parameters() for backward compatibility.
+
+        Args:
+            style: Target parameter style. Can be 'dict', 'list', 'tuple', 'qmark',
+                  'named', or a ParameterStyle enum.
+
+        Returns:
+            Parameters in the requested format.
+        """
+        return self.get_parameters(style)
 
     def copy(
         self,
@@ -969,7 +1120,7 @@ class SQLStatement:
         # If not, but new parameters/args/kwargs are, use existing SQL with new params.
         # Otherwise, it's a shallow copy or a copy with other attributes (dialect, config, etc.) changed.
 
-        final_sql = sql if sql is not None else self._raw_expression
+        final_sql = sql if sql is not None else self._original_input
         final_parameters = parameters
         final_args = args
         final_kwargs = kwargs
@@ -981,6 +1132,9 @@ class SQLStatement:
             # We still need to pass the existing parameters to the constructor if they exist
             final_parameters = self._merged_parameters  # or self._parameter_info depending on how __init__ consumes it
             # The constructor will handle None for args/kwargs if final_parameters is already merged
+        elif sql is not None and parameters is None and args is None and kwargs is None:
+            # When copying with new SQL but no new parameters, preserve existing parameters
+            final_parameters = self._merged_parameters
 
         return SQLStatement(
             sql=final_sql if final_sql is not None else self.sql,  # Fallback to self.sql if _raw_expression was None
@@ -988,9 +1142,7 @@ class SQLStatement:
             args=final_args,
             kwargs=final_kwargs,
             dialect=dialect if dialect is not None else self._dialect,
-            config=config if config is not None else self._config,
-            validator=validator if validator is not None else self._validator,
-            sanitizer=sanitizer if sanitizer is not None else self._sanitizer,
+            statement_config=config if config is not None else self._statement_config,
         )
 
     def append_filter(self, filter_to_apply: "StatementFilter") -> "SQLStatement":
@@ -1004,16 +1156,6 @@ class SQLStatement:
         """
         return apply_filter(self, filter_to_apply)
 
-    def validate(self) -> ValidationResult:
-        """Validate the statement and return detailed results.
-
-        Returns:
-            ValidationResult with validation details.
-        """
-        if self._validation_result is None:
-            self._validation_result = self._validator.validate(self._parsed_expression or self.sql, self._dialect)
-        return self._validation_result
-
     def sanitize(self) -> "SQLStatement":
         """Return a sanitized version of the statement.
 
@@ -1023,19 +1165,11 @@ class SQLStatement:
         Raises:
             SQLValidationError: If SQL sanitization fails.
         """
-        if not self._config.enable_sanitization:
+        if not self._statement_config.enable_sanitization or not self.expression:
             return self
 
         try:
-            sanitized_expr = self._sanitizer.sanitize(self._parsed_expression or self.sql, self._dialect)
-            return SQLStatement(
-                sanitized_expr,
-                self._merged_parameters,
-                dialect=self._dialect,
-                config=self._config,
-                validator=self._validator,
-                sanitizer=self._sanitizer,
-            )
+            return self.copy(sql=self._statement_config.sanitizer.sanitize(self.expression, self._dialect))
         except (SQLValidationError, ValueError, TypeError) as e:
             msg = f"SQL sanitization failed: {e}"
             raise SQLValidationError(msg, self.sql, RiskLevel.HIGH) from e
@@ -1054,5 +1188,182 @@ class SQLStatement:
         Returns:
             Detailed string representation including SQL and parameters.
         """
-        params_repr = f", parameters={self._merged_parameters!r}" if self._merged_parameters else ""
-        return f"SQLStatement({self.sql!r}{params_repr})"
+        current_sql_for_repr = self.get_sql()
+
+        # Always show parameters if they were explicitly provided (even if empty)
+        params_repr = ""
+        if self._merged_parameters is not None:
+            params_repr = f", parameters={self._merged_parameters!r}"
+
+        config_repr = f", _config={self._statement_config!r}" if self._statement_config else ""
+        return f"SQLStatement(sql={current_sql_for_repr!r}{params_repr}{config_repr})"
+
+    def _get_current_expression_for_modification(self) -> exp.Expression:
+        if not self._statement_config.enable_parsing:
+            msg = "Cannot modify expression if parsing is disabled."
+            raise SQLSpecError(msg)
+
+        if self.expression is None:
+            logger.debug("No existing expression to modify, starting with a new Select.")
+            return exp.Select()
+        return self.expression.copy()
+
+    def where(self, *conditions: "Union[Condition, str]") -> "SQLStatement":
+        """Applies WHERE conditions and returns a new SQLStatement.
+
+        Args:
+            *conditions: One or more condition strings or sqlglot Condition expressions.
+
+        Raises:
+            SQLParsingError: If the condition cannot be parsed.
+            TypeError: If the condition is not a string or sqlglot Condition.
+
+        Returns:
+            A new SQLStatement instance with the conditions applied.
+        """
+        new_expr = self._get_current_expression_for_modification()
+
+        for cond_item in conditions:
+            condition_expression: Condition
+            if isinstance(cond_item, str):
+                try:
+                    parsed_node = sqlglot.parse_one(cond_item, read=self._dialect)
+                    if not isinstance(parsed_node, exp.Condition):
+                        condition_expression = exp.condition(parsed_node)  # type: ignore
+                    else:
+                        condition_expression = parsed_node
+                except Exception as e:
+                    msg = f"Failed to parse string condition: '{cond_item}'. Error: {e}"
+                    raise SQLParsingError(msg) from e
+            elif isinstance(cond_item, exp.Condition):
+                condition_expression = cond_item
+            else:
+                try:
+                    condition_expression = exp.condition(cond_item)  # type: ignore
+                except Exception as e:
+                    msg = f"Invalid condition type: {type(cond_item)}. Must be str or sqlglot.exp.Condition. Error: {e}"
+                    raise TypeError(msg) from e
+
+            new_expr = new_expr.where(condition_expression)  # type: ignore[attr-defined] # sqlglot's where appends
+
+        return self.copy(sql=new_expr)
+
+    def limit(self, limit_value: int, use_parameter: bool = False) -> "SQLStatement":
+        """Applies a LIMIT clause and returns a new SQLStatement.
+
+        Args:
+            limit_value: The limit value.
+            use_parameter: If True, treats limit_value as a parameter name (str) or adds a new parameter.
+
+        Returns:
+            A new SQLStatement instance with the limit applied.
+        """
+        new_expr = self._get_current_expression_for_modification()
+        if use_parameter:
+            param_name = self.get_unique_parameter_name("limit_val")
+            new_stmt = self.add_named_parameter(param_name, limit_value)
+            expr_with_param = new_stmt._get_current_expression_for_modification()
+            expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
+            return new_stmt.copy(sql=expr_with_param)  # Copy again with the modified expression
+
+        new_expr = new_expr.limit(limit_value)  # type: ignore[attr-defined]
+        return self.copy(sql=new_expr)
+
+    def offset(self, offset_value: int, use_parameter: bool = False) -> "SQLStatement":
+        """Applies an OFFSET clause and returns a new SQLStatement.
+
+        Args:
+            offset_value: The offset value.
+            use_parameter: If True, treats offset_value as a parameter name (str) or adds a new parameter.
+
+        Returns:
+            A new SQLStatement instance with the offset applied.
+        """
+        new_expr = self._get_current_expression_for_modification()
+        if use_parameter:
+            param_name = self.get_unique_parameter_name("offset_val")
+            new_stmt = self.add_named_parameter(param_name, offset_value)
+            expr_with_param = new_stmt._get_current_expression_for_modification()
+            expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
+            return new_stmt.copy(sql=expr_with_param)
+
+        new_expr = new_expr.offset(offset_value)  # type: ignore[attr-defined]
+        return self.copy(sql=new_expr)
+
+    def order_by(self, *order_expressions: "Union[str, exp.Order, exp.Ordered]") -> "SQLStatement":
+        """Applies ORDER BY clauses and returns a new SQLStatement.
+
+        Args:
+            *order_expressions: Column names (str) or sqlglot Order/Ordered expressions.
+
+        Raises:
+            TypeError: If the order expression is not a string or sqlglot Order/Ordered.
+
+        Returns:
+            A new SQLStatement instance with ordering applied.
+        """
+        new_expr = self._get_current_expression_for_modification()
+        parsed_orders = []
+        for o_expr in order_expressions:
+            if isinstance(o_expr, str):
+                # Basic parsing for "col asc", "col desc", "col"
+                parts = o_expr.strip().lower().split()
+                col_name = parts[0]
+                direction = "asc"
+                if len(parts) > 1 and parts[1] in {"asc", "desc"}:
+                    direction = parts[1]
+
+                order_exp = exp.column(col_name)
+                if direction == "desc":
+                    parsed_orders.append(order_exp.desc())
+                else:
+                    parsed_orders.append(order_exp.asc())
+
+            elif isinstance(o_expr, (exp.Order, exp.Ordered)):
+                parsed_orders.append(o_expr)
+            else:
+                msg = f"Unsupported order_by type: {type(o_expr)}"
+                raise TypeError(msg)
+
+        if parsed_orders:
+            new_expr = new_expr.order_by(*parsed_orders)  # type: ignore[attr-defined]
+        return self.copy(sql=new_expr)
+
+    def add_named_parameter(self, name: str, value: Any) -> "SQLStatement":
+        """Adds a named parameter and returns a new SQLStatement.
+
+        Args:
+            name: The name of the parameter.
+            value: The value of the parameter.
+
+        Returns:
+            A new SQLStatement instance with the parameter added.
+        """
+        current_params_dict = self._convert_to_dict_parameters()
+        current_params_dict[name] = value
+
+        # Create a temporary config with validation disabled but parsing enabled for building operations
+        from dataclasses import replace
+
+        building_config = replace(self._statement_config, enable_validation=False, enable_parsing=True)
+
+        return self.copy(parameters=current_params_dict, config=building_config)
+
+    def get_unique_parameter_name(self, base_name: str) -> str:
+        """Generates a unique parameter name based on the current parameters.
+
+        Args:
+            base_name: The desired base name for the parameter.
+
+        Returns:
+            A unique parameter name (e.g., "base_name", "base_name_1", etc.).
+        """
+        params_dict = self._convert_to_dict_parameters()
+        if base_name not in params_dict:
+            return base_name
+        i = 1
+        while True:
+            name = f"{base_name}_{i}"
+            if name not in params_dict:
+                return name
+            i += 1

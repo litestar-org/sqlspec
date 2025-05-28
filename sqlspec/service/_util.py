@@ -2,13 +2,16 @@ from collections.abc import Sequence
 from functools import partial
 from typing import (
     Any,
+    Optional,
     TypeVar,
+    Union,
     cast,
     overload,
 )
 
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.filters import LimitOffset, StatementFilter
+from sqlspec.service.pagination import OffsetPagination
+from sqlspec.sql.filters import FilterTypeT, LimitOffset, StatementFilter
 from sqlspec.sql.mixins import _DEFAULT_TYPE_DECODERS, _default_msgspec_deserializer
 from sqlspec.typing import (
     BaseModel,
@@ -23,10 +26,31 @@ from sqlspec.typing import (
     is_pydantic_model,
 )
 
-__all__ = ("ResultConverter", )
+__all__ = ("ResultConverter", "find_filter")
 
 
 T = TypeVar("T")
+
+
+def find_filter(
+    filter_type: "type[FilterTypeT]",
+    filters: "Optional[Sequence[StatementFilter]]" = None,
+) -> "Optional[FilterTypeT]":
+    """Get the filter specified by filter type from the filters.
+
+    Args:
+        filter_type: The type of filter to find.
+        filters: filter types to apply to the query
+
+    Returns:
+        The match filter instance or None
+    """
+    if filters is None:
+        return None
+    return next(
+        (cast("Optional[FilterTypeT]", filter_) for filter_ in filters if isinstance(filter_, filter_type)),
+        None,
+    )
 
 
 class ResultConverter:
@@ -85,7 +109,7 @@ class ResultConverter:
         filters: "Sequence[StatementFilter] | None" = None,
         *,
         schema_type: "type[ModelDTOT] | None" = None,
-    ) -> "ModelT |  ModelDTOT |  OffsetPagination[ModelT] | OffsetPagination[ModelDTOT]":
+    ) -> "Union[ModelT,   ModelDTOT ,  OffsetPagination[ModelT] , OffsetPagination[ModelDTOT]]":
         # Handle single items first (these are not paginated)
         if not isinstance(data, Sequence):
             if schema_type is None:

@@ -7,6 +7,7 @@ import pytest
 from sqlglot import exp
 
 from sqlspec.base import CommonDriverAttributes, NoPoolAsyncConfig, NoPoolSyncConfig, SQLSpec, SyncDatabaseConfig
+from sqlspec.sql.parameters import ParameterStyle
 from sqlspec.sql.statement import SQLStatement
 
 
@@ -195,6 +196,9 @@ def driver_attributes() -> CommonDriverAttributes:
         def __init__(self) -> None:
             super().__init__()
             self.dialect = "sqlite"
+
+        def _get_placeholder_style(self) -> ParameterStyle:
+            return ParameterStyle.NAMED_COLON
 
     return TestDriverAttributes()
 

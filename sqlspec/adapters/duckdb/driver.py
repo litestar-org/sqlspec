@@ -160,7 +160,7 @@ class DuckDBDriver(
         # DuckDB uses positional parameters. SQLStatement.merged_parameters might be a dict
         # if named parameters were provided. We need to order them according to parameter_info.
 
-        if statement.parameter_style == ParameterStyle.NAMED and isinstance(statement.merged_parameters, dict):
+        if statement.parameter_style == ParameterStyle.NAMED_COLON and isinstance(statement.merged_parameters, dict):
             ordered_values = []
             for p_info in statement.parameter_info:
                 if p_info.name in statement.merged_parameters:

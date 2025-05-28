@@ -76,7 +76,7 @@ class UpdateBuilder(QueryBuilder):
         value_expr = exp.Placeholder(this=param_name)
 
         set_expr = exp.Set(this=col_expr, expression=value_expr)
-        self._expression = self._expression.set(set_expr, copy=False)
+        self._expression = self._expression.set(set_expr, copy=False)  # type: ignore[call-arg,arg-type,func-returns-value]
         return self
 
     def where(self, condition: Union[str, exp.Expression]) -> "UpdateBuilder":
@@ -127,16 +127,16 @@ class UpdateBuilder(QueryBuilder):
         # Handle different table types
         if isinstance(table, str):
             table_expr = exp.table_(table, alias=alias)
-        elif hasattr(table, "build"):  # QueryBuilder instance
-            subquery = exp.paren(exp.maybe_parse(table.build().sql, dialect=self.dialect))
-            table_expr = exp.alias_(subquery, alias) if alias else subquery
+        elif hasattr(table, "build"):
+            subquery = exp.paren(exp.maybe_parse(table.build().sql, dialect=self.dialect))  # pyright: ignore
+            table_expr = exp.alias_(subquery, alias) if alias else subquery  # type: ignore[assignment]
         else:
-            table_expr = exp.alias_(table, alias) if alias else table
+            table_expr = exp.alias_(table, alias) if alias else table  # type: ignore[assignment]
 
         on_expr = exp.condition(on) if isinstance(on, str) else on
         join_expr = exp.Join(this=table_expr, on=on_expr, kind=join_type)
 
-        self._expression = self._expression.join(join_expr, copy=False)
+        self._expression = self._expression.join(join_expr, copy=False)  # type: ignore[attr-defined]
         return self
 
     def inner_join(

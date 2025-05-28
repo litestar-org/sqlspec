@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Generic, Literal, Optional, Protocol, Union, runtime_checkable
 
-from sqlglot import Expression, exp
+from sqlglot import exp
 from typing_extensions import TypeAlias, TypeVar
 
 if TYPE_CHECKING:
@@ -67,25 +67,23 @@ class BeforeAfter(StatementFilter):
     """Filter results where field later than this."""
 
     def append_to_statement(self, query: "SQLStatement") -> "SQLStatement":
-        conditions = []
+        conditions: list[Condition] = []
         col_expr = exp.column(self.field_name)
 
         if self.before:
-            param_name = query.add_parameter(
-                self.before, name=query.get_unique_parameter_name(f"{self.field_name}_before")
-            )
+            param_name = query.get_unique_parameter_name(f"{self.field_name}_before")
+            query = query.add_named_parameter(param_name, self.before)
             conditions.append(exp.LT(this=col_expr, expression=exp.Placeholder(this=param_name)))
         if self.after:
-            param_name = query.add_parameter(
-                self.after, name=query.get_unique_parameter_name(f"{self.field_name}_after")
-            )
+            param_name = query.get_unique_parameter_name(f"{self.field_name}_after")
+            query = query.add_named_parameter(param_name, self.after)
             conditions.append(exp.GT(this=col_expr, expression=exp.Placeholder(this=param_name)))
 
         if conditions:
             final_condition = conditions[0]
             for cond in conditions[1:]:
                 final_condition = exp.And(this=final_condition, expression=cond)
-            query.where(final_condition)
+            query = query.where(final_condition)
         return query
 
 
@@ -101,25 +99,22 @@ class OnBeforeAfter(StatementFilter):
     """Filter results where field on or later than this."""
 
     def append_to_statement(self, query: "SQLStatement") -> "SQLStatement":
-        conditions: list[exp.Expression] = []
-        col_expr = exp.column(self.field_name)
+        conditions: list[Condition] = []
 
         if self.on_or_before:
-            param_name = query.add_parameter(
-                self.on_or_before, name=query.get_unique_parameter_name(f"{self.field_name}_on_or_before")
-            )
-            conditions.append(exp.LTE(this=col_expr, expression=exp.Placeholder(this=param_name)))
+            param_name = query.get_unique_parameter_name(f"{self.field_name}_on_or_before")
+            query = query.add_named_parameter(param_name, self.on_or_before)
+            conditions.append(exp.LTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=param_name)))
         if self.on_or_after:
-            param_name = query.add_parameter(
-                self.on_or_after, name=query.get_unique_parameter_name(f"{self.field_name}_on_or_after")
-            )
-            conditions.append(exp.GTE(this=col_expr, expression=exp.Placeholder(this=param_name)))
+            param_name = query.get_unique_parameter_name(f"{self.field_name}_on_or_after")
+            query = query.add_named_parameter(param_name, self.on_or_after)
+            conditions.append(exp.GTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=param_name)))
 
         if conditions:
             final_condition = conditions[0]
             for cond in conditions[1:]:
                 final_condition = exp.And(this=final_condition, expression=cond)
-            query.where(final_condition)
+            query = query.where(final_condition)
         return query
 
 
@@ -146,21 +141,17 @@ class CollectionFilter(InAnyFilter[T]):
         if self.values is None:
             return query
 
-        if not self.values:  # Empty collection
-            query.where(exp.false())  # Ensures no rows are returned for an empty IN clause
-            return query
+        if not self.values:
+            return query.where(exp.false())
 
         placeholder_expressions: list[exp.Placeholder] = []
 
         for i, value_item in enumerate(self.values):
-            param_key = query.add_parameter(
-                value_item, name=query.get_unique_parameter_name(f"{self.field_name}_in_{i}")
-            )
+            param_key = query.get_unique_parameter_name(f"{self.field_name}_in_{i}")
+            query = query.add_named_parameter(param_key, value_item)
             placeholder_expressions.append(exp.Placeholder(this=param_key))
 
-        in_condition = exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions)
-        query.where(in_condition)
-        return query
+        return query.where(exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
 
 
 @dataclass
@@ -176,20 +167,16 @@ class NotInCollectionFilter(InAnyFilter[T]):
 
     def append_to_statement(self, query: "SQLStatement") -> "SQLStatement":
         if self.values is None or not self.values:
-            return query  # No filter applied if values is None or empty
+            return query
 
         placeholder_expressions: list[exp.Placeholder] = []
 
         for i, value_item in enumerate(self.values):
-            param_key = query.add_parameter(
-                value_item, name=query.get_unique_parameter_name(f"{self.field_name}_notin_{i}")
-            )
+            param_key = query.get_unique_parameter_name(f"{self.field_name}_notin_{i}")
+            query = query.add_named_parameter(param_key, value_item)
             placeholder_expressions.append(exp.Placeholder(this=param_key))
 
-        in_expr = exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions)
-        not_in_condition = exp.Not(this=in_expr)
-        query.where(not_in_condition)
-        return query
+        return query.where(exp.Not(this=exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions)))
 
 
 class PaginationFilter(StatementFilter, ABC):
@@ -210,9 +197,7 @@ class LimitOffset(PaginationFilter):
     """Value for ``OFFSET`` clause of query."""
 
     def append_to_statement(self, query: "SQLStatement") -> "SQLStatement":
-        query.limit(self.limit, use_parameter=True)
-        query.offset(self.offset, use_parameter=True)
-        return query
+        return query.limit(self.limit, use_parameter=True).offset(self.offset, use_parameter=True)
 
 
 @dataclass
@@ -228,12 +213,9 @@ class OrderBy(StatementFilter):
         normalized_sort_order = self.sort_order.lower()
         if normalized_sort_order not in {"asc", "desc"}:
             normalized_sort_order = "asc"
-
         if normalized_sort_order == "desc":
-            query.order_by(exp.column(self.field_name).desc())
-        else:
-            query.order_by(exp.column(self.field_name).asc())
-        return query
+            return query.order_by(exp.column(self.field_name).desc())
+        return query.order_by(exp.column(self.field_name).asc())
 
 
 @dataclass
@@ -252,25 +234,26 @@ class SearchFilter(StatementFilter):
             return query
 
         search_value_with_wildcards = f"%{self.value}%"
-        search_val_param_name = query.add_parameter(
-            search_value_with_wildcards, name=query.get_unique_parameter_name("search_val")
-        )
+        search_val_param_name = query.get_unique_parameter_name("search_val")
+        query = query.add_named_parameter(search_val_param_name, search_value_with_wildcards)
 
         pattern_expr = exp.Placeholder(this=search_val_param_name)
         like_op = exp.ILike if self.ignore_case else exp.Like
 
         if isinstance(self.field_name, str):
-            condition = like_op(this=exp.column(self.field_name), expression=pattern_expr)
-            query.where(condition)
-        elif isinstance(self.field_name, set) and self.field_name:
-            field_conditions = [like_op(this=exp.column(field), expression=pattern_expr) for field in self.field_name]
+            return query.where(like_op(this=exp.column(self.field_name), expression=pattern_expr))
+        if isinstance(self.field_name, set) and self.field_name:
+            field_conditions: list[Condition] = [
+                like_op(this=exp.column(field), expression=pattern_expr) for field in self.field_name
+            ]
             if not field_conditions:
                 return query
 
             final_condition: Condition = field_conditions[0]
-            for cond in field_conditions[1:]:
-                final_condition = exp.Or(this=final_condition, expression=cond)
-            query.where(final_condition)
+            if len(field_conditions) > 1:
+                for cond in field_conditions[1:]:
+                    final_condition = exp.Or(this=final_condition, expression=cond)
+            return query.where(final_condition)
 
         return query
 
@@ -284,27 +267,26 @@ class NotInSearchFilter(SearchFilter):
             return query
 
         search_value_with_wildcards = f"%{self.value}%"
-        search_val_param_name = query.add_parameter(
-            search_value_with_wildcards, name=query.get_unique_parameter_name("not_search_val")
-        )
+        search_val_param_name = query.get_unique_parameter_name("not_search_val")
+        query = query.add_named_parameter(search_val_param_name, search_value_with_wildcards)
 
         pattern_expr = exp.Placeholder(this=search_val_param_name)
         like_op = exp.ILike if self.ignore_case else exp.Like
 
         if isinstance(self.field_name, str):
-            condition = exp.Not(this=like_op(this=exp.column(self.field_name), expression=pattern_expr))
-            query.where(condition)
-        elif isinstance(self.field_name, set) and self.field_name:
-            field_conditions: list[Expression] = [
+            return query.where(exp.Not(this=like_op(this=exp.column(self.field_name), expression=pattern_expr)))
+        if isinstance(self.field_name, set) and self.field_name:
+            field_conditions: list[Condition] = [
                 exp.Not(this=like_op(this=exp.column(field), expression=pattern_expr)) for field in self.field_name
             ]
             if not field_conditions:
                 return query
 
-            final_condition = field_conditions[0]
-            for cond in field_conditions[1:]:
-                final_condition = exp.And(this=final_condition, expression=cond)
-            query.where(final_condition)
+            final_condition: Condition = field_conditions[0]
+            if len(field_conditions) > 1:
+                for cond in field_conditions[1:]:
+                    final_condition = exp.And(this=final_condition, expression=cond)
+            return query.where(final_condition)
 
         return query
 

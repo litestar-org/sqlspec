@@ -22,7 +22,7 @@ from sqlglot import exp
 
 from sqlspec.exceptions import NotFoundError, SQLValidationError
 from sqlspec.sql.filters import StatementFilter, apply_filter
-from sqlspec.sql.statement import SQLSanitizer, SQLStatement, SQLValidator, Statement
+from sqlspec.sql.statement import SQLSanitizer, SQLStatement, SQLValidator, Statement, StatementConfig
 from sqlspec.typing import ConnectionT, PoolT, StatementParameterType, T
 from sqlspec.utils.sync_tools import ensure_async_
 
@@ -589,7 +589,7 @@ class CommonDriverAttributes(Generic[ConnectionT]):
         return connection if connection is not None else self.connection
 
     @staticmethod
-    def returns_rows(expression: "exp.Expression") -> bool:
+    def returns_rows(expression: "Optional[exp.Expression]") -> bool:
         """Determine if a SQL expression is expected to return rows.
 
         Args:
@@ -598,7 +598,8 @@ class CommonDriverAttributes(Generic[ConnectionT]):
         Returns:
             True if the statement returns rows, False otherwise
         """
-        # Check for statements that return rows
+        if expression is None:
+            return False
         if isinstance(expression, (exp.Select, exp.Show, exp.Describe, exp.Pragma, exp.With)):
             return True
         if isinstance(expression, exp.Command):
@@ -630,8 +631,7 @@ class CommonDriverAttributes(Generic[ConnectionT]):
         sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
-        validator: Optional["SQLValidator"] = None,
-        sanitizer: Optional["SQLSanitizer"] = None,
+        statement_config: Optional["StatementConfig"] = None,
         **kwargs: Any,
     ) -> "tuple[str, Union[dict[str, Any], list[Any]], SQLStatement]":
         """Process SQL query and parameters using the Query object for validation and formatting.
@@ -640,8 +640,7 @@ class CommonDriverAttributes(Generic[ConnectionT]):
             sql: The SQL query string or sqlglot Expression.
             parameters: Parameters for the query.
             *filters: Statement filters to apply.
-            validator: Optional SQLValidator instance. If provided, its `min_risk_to_raise` attribute determines if validation issues cause an exception.
-            sanitizer: Optional SQLSanitizer instance.
+            statement_config: Optional SQLStatementConfig instance. If provided, its attributes determine the processing behavior.
             **kwargs: Additional keyword arguments to merge with parameters for the Query object.
 
         Raises:
@@ -663,47 +662,49 @@ class CommonDriverAttributes(Generic[ConnectionT]):
                 sql=sql,
                 parameters=processed_parameters,
                 dialect=getattr(self, "dialect", None),
-                validator=validator,
-                sanitizer=sanitizer,
+                statement_config=statement_config or StatementConfig(),
             )
             if not isinstance(sql, SQLStatement)
             else sql
         )
-        # If an existing SQLStatement is passed, and new validator/sanitizer are provided,
-        # the new ones take precedence as SQLStatement is re-created effectively if not an instance.
-        # If it is an instance, the existing validator/sanitizer on the instance will be used
-        # by its properties like .expression unless we explicitly re-set them or re-create.
-        # Current SQLStatement.__init__ defaults to new SQLValidator()/SQLSanitizer() if None is passed.
-        # So, if validator/sanitizer are passed here, they are used in construction.
-        # If sql is already an SQLStatement, its existing validator/sanitizer are used unless overridden.
-        # This part seems fine for now, the passed validator/sanitizer will be used for the new stmt.
-
-        # Apply filters
         for filter_obj in filters:
             stmt = apply_filter(stmt, filter_obj)
+        validation_result = stmt.validate()
 
-        # Perform validation using the statement's configured validator.
-        # The SQLStatement's .expression property itself applies sanitization upon first access.
-        # The SQLStatement's .validator.validate() then checks this (potentially sanitized) expression.
-        validation_result = stmt.validator.validate(stmt.expression, stmt._dialect)  # type: ignore[attr-defined]
-
-        # Use the validator's configured min_risk_to_raise to determine if an exception should be thrown
         if (
-            not validation_result.is_safe
-            and stmt.validator.min_risk_to_raise is not None
-            and validation_result.risk_level.value >= stmt.validator.min_risk_to_raise.value
-        ):  # type: ignore[attr-defined]
-            # Construct a comprehensive error message
+            validation_result is not None
+            and not validation_result.is_safe
+            and stmt.config.validator.min_risk_to_raise is not None
+            and validation_result.risk_level is not None
+            and validation_result.risk_level.value >= stmt.config.validator.min_risk_to_raise.value
+        ):
             error_msg = f"SQL validation failed with risk level {validation_result.risk_level}:\n"
-            error_msg += "Issues:\n" + "\n".join([f"- {issue}" for issue in validation_result.issues])
+            error_msg += "Issues:\n" + "\n".join([f"- {issue}" for issue in validation_result.issues or []])
             if validation_result.warnings:
                 error_msg += "\nWarnings:\n" + "\n".join([f"- {warn}" for warn in validation_result.warnings])
-            raise SQLValidationError(error_msg, stmt.get_sql(), validation_result.risk_level)  # type: ignore[attr-defined]
+            raise SQLValidationError(error_msg, stmt.get_sql(), validation_result.risk_level)
 
         placeholder_style = self._get_placeholder_style()
         rendered_sql = stmt.get_sql(placeholder_style=placeholder_style)
-        rendered_params = stmt.get_ordered_parameters(placeholder_style=placeholder_style)
-        return rendered_sql, rendered_params, stmt
+        rendered_params = stmt.get_parameters(style=placeholder_style)
+
+        if isinstance(rendered_params, (list, dict)):
+            return rendered_sql, rendered_params, stmt
+        if rendered_params is None:
+            from sqlspec.sql.parameters import ParameterStyle
+
+            return (
+                rendered_sql,
+                (
+                    []
+                    if placeholder_style
+                    in {ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.PYFORMAT_POSITIONAL}
+                    else {}
+                ),
+                stmt,
+            )
+
+        return rendered_sql, [rendered_params], stmt
 
 
 class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generic[ConnectionT]):

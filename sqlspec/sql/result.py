@@ -405,7 +405,7 @@ class ArrowResult(StatementResult[ArrowTable]):
             msg = "No Arrow table available"
             raise ValueError(msg)
 
-        return self.arrow_table.column_names  # type: ignore[no-any-return]
+        return self.arrow_table.column_names
 
     def num_rows(self) -> int:
         """Get the number of rows in the Arrow table.
@@ -420,7 +420,7 @@ class ArrowResult(StatementResult[ArrowTable]):
             msg = "No Arrow table available"
             raise ValueError(msg)
 
-        return self.arrow_table.num_rows  # type: ignore[no-any-return]
+        return self.arrow_table.num_rows
 
     def num_columns(self) -> int:
         """Get the number of columns in the Arrow table.

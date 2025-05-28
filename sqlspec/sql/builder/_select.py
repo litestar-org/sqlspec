@@ -912,32 +912,28 @@ class SelectBuilder(QueryBuilder):
             if isinstance(partition_by, str):
                 over_args["partition_by"] = [exp.column(partition_by)]
             elif isinstance(partition_by, list):
-                over_args["partition_by"] = [exp.column(col) if isinstance(col, str) else col for col in partition_by]
+                over_args["partition_by"] = [exp.column(col) if isinstance(col, str) else col for col in partition_by]  # type: ignore[misc]
             elif isinstance(partition_by, exp.Expression):
-                over_args["partition_by"] = [partition_by]
+                over_args["partition_by"] = [partition_by]  # type: ignore[list-item]
 
         # Handle order by
         if order_by:
             if isinstance(order_by, str):
-                over_args["order"] = [exp.column(order_by).asc()]
+                over_args["order"] = [exp.column(order_by).asc()]  # type: ignore[list-item]
             elif isinstance(order_by, list):
-                over_args["order"] = [exp.column(col).asc() if isinstance(col, str) else col for col in order_by]
+                over_args["order"] = [exp.column(col).asc() if isinstance(col, str) else col for col in order_by]  # type: ignore[misc]
             elif isinstance(order_by, exp.Expression):
                 over_args["order"] = [order_by]
 
         # Handle frame specification
         if frame:
-            frame_expr = exp.maybe_parse(frame, dialect=self.dialect)
+            frame_expr = exp.maybe_parse(frame, dialect=self.dialect)  # type: ignore[var-annotated]
             if frame_expr:
                 over_args["frame"] = frame_expr
 
         # Create window expression
         window_expr = exp.Window(this=func_expr, **over_args)
-
-        # Add to SELECT with optional alias
-        select_expr = exp.alias_(window_expr, alias) if alias else window_expr
-
-        self._expression = self._expression.select(select_expr, copy=False)
+        self._expression = self._expression.select(exp.alias_(window_expr, alias) if alias else window_expr, copy=False)
         return self
 
     def case_(self, alias: Optional[str] = None) -> "CaseBuilder":

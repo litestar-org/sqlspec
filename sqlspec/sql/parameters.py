@@ -9,7 +9,7 @@ import logging
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum
 from typing import Any, Final, Optional, Union
 
 from sqlspec.exceptions import (
@@ -30,7 +30,6 @@ __all__ = (
 
 logger = logging.getLogger("sqlspec.sql.parameters")
 
-# Compiled regex patterns for maximum performance
 # Single comprehensive regex that captures all parameter types in one pass
 _PARAMETER_REGEX: Final = re.compile(
     r"""
@@ -42,7 +41,6 @@ _PARAMETER_REGEX: Final = re.compile(
     (?P<dollar_quoted_string>\$(?P<dollar_quote_tag_inner>\w*)?\$[\s\S]*?\$\4\$) |
     (?P<line_comment>--[^\r\n]*) |                             # Group 5: Line comments
     (?P<block_comment>/\*(?:[^*]|\*(?!/))*\*/) |               # Group 6: Block comments
-
     # Specific non-parameter tokens that resemble parameters or contain parameter-like chars
     # These are matched to prevent them from being identified as parameters.
     (?P<pg_q_operator>\?\?|\?\||\?&) |                         # Group 7: PostgreSQL JSON operators ??, ?|, ?&
@@ -61,26 +59,26 @@ _PARAMETER_REGEX: Final = re.compile(
 )
 
 
-class ParameterStyle(Enum):
-    """Parameter style enumeration with optimized comparison."""
+class ParameterStyle(str, Enum):
+    """Parameter style enumeration with string values."""
 
-    NONE = auto()
-    STATIC = auto()  # Note: STATIC style is defined but not currently used in detection logic.
-    QMARK = auto()
-    NUMERIC = auto()
-    NAMED_COLON = auto()
-    NAMED_AT = auto()
-    NAMED_DOLLAR = auto()
-    PYFORMAT_NAMED = auto()
-    PYFORMAT_POSITIONAL = auto()
+    NONE = "none"
+    STATIC = "static"  # Note: STATIC style is defined but not currently used in detection logic.
+    QMARK = "qmark"
+    NUMERIC = "numeric"
+    NAMED_COLON = "named_colon"
+    NAMED_AT = "named_at"
+    NAMED_DOLLAR = "named_dollar"
+    PYFORMAT_NAMED = "pyformat_named"
+    PYFORMAT_POSITIONAL = "pyformat_positional"
 
     def __str__(self) -> str:
         """String representation for better error messages.
 
         Returns:
-            Lowercase name of the style.
+            The enum value as a string.
         """
-        return self.name.lower()
+        return self.value
 
 
 @dataclass
@@ -107,7 +105,7 @@ class ParameterInfo:
 class ParameterValidator:
     """Parameter validation."""
 
-    def __init__(self) -> None:
+    def __post_init__(self) -> None:
         """Initialize validator."""
         self._parameter_cache: dict[str, list[ParameterInfo]] = {}
 
@@ -280,31 +278,17 @@ class ParameterValidator:
 
         Raises:
             ParameterStyleMismatchError: When style doesn't match
-            ExtraParameterError: When extra parameters are provided
             MissingParameterError: When required parameters are missing
         """
         expected_input_type = self.determine_parameter_input_type(parameters_info)
 
-        if not parameters_info:  # SQL has no placeholders
-            if provided_params is not None and self._has_actual_params(provided_params):
-                msg = "Parameters provided but SQL contains no parameter placeholders"
-                raise ExtraParameterError(msg, original_sql_for_error)
-            return  # No params in SQL, none provided or empty provided, all good.
-
-        # If SQL expects parameters, but absolutely nothing (None) was provided.
         if provided_params is None and parameters_info:
-            # Original code had an `all_pyformat` leniency here.
-            # Standard DBAPI usage typically requires parameters if the SQL expects them.
-            # Allowing `None` for pyformat here is unusual, as pyformat usually expects an empty dict/tuple.
-            # This check is simplified: if params in SQL, `None` as `provided_params` means missing.
             msg = (
                 f"SQL requires parameters (expected type: "
                 f"{expected_input_type.__name__ if expected_input_type else 'unknown'}), but none were provided."
             )
             raise MissingParameterError(msg, original_sql_for_error)
 
-        # Special case: if SQL has exactly one parameter and user provides a scalar,
-        # allow it regardless of parameter style (common use pattern for DBAPIs)
         if (
             len(parameters_info) == 1
             and provided_params is not None
@@ -313,25 +297,18 @@ class ParameterValidator:
             return
 
         if expected_input_type is dict:
-            # Check if provided_params is a Mapping.
-            # Handles cases where a custom dict-like object is passed.
             if not isinstance(provided_params, Mapping):
-                # Original code had more special cases here.
-                # Allowing a list for named parameters if counts match can be risky
-                # as it relies on implicit ordering that might not align with DB driver expectations.
-                # Sticking to stricter type matching for clarity and safety.
                 msg = (
                     f"SQL expects named parameters (dictionary/mapping), but received {type(provided_params).__name__}"
                 )
                 raise ParameterStyleMismatchError(msg, original_sql_for_error)
             self._validate_named_parameters(parameters_info, provided_params, original_sql_for_error)
         elif expected_input_type is list:
-            # Check if provided_params is a Sequence (but not str/bytes, which are sequences but act as scalars here).
             if not isinstance(provided_params, Sequence) or isinstance(provided_params, (str, bytes)):
                 msg = f"SQL expects positional parameters (list/tuple), but received {type(provided_params).__name__}"
                 raise ParameterStyleMismatchError(msg, original_sql_for_error)
             self._validate_positional_parameters(parameters_info, provided_params, original_sql_for_error)
-        elif expected_input_type is None and parameters_info:  # Should not happen due to first check
+        elif expected_input_type is None and parameters_info:
             logger.error(
                 "Parameter validation encountered an unexpected state: placeholders exist, "
                 "but expected input type could not be determined. SQL: %s",
@@ -359,18 +336,42 @@ class ParameterValidator:
 
         Raises:
             MissingParameterError: When required parameters are missing
+            ExtraParameterError: When extra parameters are provided
         """
         required_names = {p.name for p in parameters_info if p.name is not None}
         provided_names = set(provided_params.keys())
 
-        missing = required_names - provided_names
-        if missing:
-            # Sort for consistent error messages
-            msg = f"Missing required named parameters: {sorted(missing)}"
-            raise MissingParameterError(msg, original_sql)
+        # Check for mixed parameter merging pattern: _arg_N for positional parameters
+        positional_count = sum(1 for p in parameters_info if p.name is None)
+        expected_positional_names = {f"_arg_{p.ordinal}" for p in parameters_info if p.name is None}
 
-        # Note: Extra parameters in provided_params are allowed for flexibility (e.g., providing a full model).
-        # This behavior is maintained.
+        # For mixed parameters, we expect both named and generated positional names
+        if positional_count > 0 and required_names:
+            # Mixed parameter style - accept both named params and _arg_N params
+            all_expected_names = required_names | expected_positional_names
+
+            missing = all_expected_names - provided_names
+            if missing:
+                msg = f"Missing required parameters: {sorted(missing)}"
+                raise MissingParameterError(msg, original_sql)
+
+            extra = provided_names - all_expected_names
+            if extra:
+                msg = f"Extra parameters provided: {sorted(extra)}"
+                raise ExtraParameterError(msg, original_sql)
+        else:
+            # Pure named parameters - original logic
+            missing = required_names - provided_names
+            if missing:
+                # Sort for consistent error messages
+                msg = f"Missing required named parameters: {sorted(missing)}"
+                raise MissingParameterError(msg, original_sql)
+
+            extra = provided_names - required_names
+            if extra:
+                # Sort for consistent error messages
+                msg = f"Extra parameters provided: {sorted(extra)}"
+                raise ExtraParameterError(msg, original_sql)
 
     @staticmethod
     def _validate_positional_parameters(
@@ -379,7 +380,8 @@ class ParameterValidator:
         """Validate positional parameters.
 
         Raises:
-            MissingParameterError: When required parameters are missing or count mismatch.
+            MissingParameterError: When required parameters are missing.
+            ExtraParameterError: When extra parameters are provided.
         """
         # Filter for parameters that are truly positional (name is None)
         # This is important if parameters_info could contain mixed (which determine_parameter_input_type tries to handle)
@@ -387,18 +389,23 @@ class ParameterValidator:
         actual_count = len(provided_params)
 
         if actual_count != expected_positional_params_count:
+            if actual_count > expected_positional_params_count:
+                msg = (
+                    f"SQL requires {expected_positional_params_count} positional parameters "
+                    f"but {actual_count} were provided."
+                )
+                raise ExtraParameterError(msg, original_sql)
+
             msg = (
                 f"SQL requires {expected_positional_params_count} positional parameters "
                 f"but {actual_count} were provided."
             )
-            # Distinguish between too few or too many for more precise error,
-            # but MissingParameterError can cover both if message is clear.
             raise MissingParameterError(msg, original_sql)
 
 
 @dataclass
 class ParameterConverter:
-    """High-performance parameter conversion with caching and validation."""
+    """Parameter parameter conversion with caching and validation."""
 
     def __init__(self) -> None:
         """Initialize converter with validator."""
@@ -433,7 +440,6 @@ class ParameterConverter:
             map_key = f"__param_{i}"
 
             if p_info.name:  # For named parameters (e.g., :name, %(name)s, $name)
-                # unique_placeholder_name += f"_{p_info.name}" # Optionally make unique placeholder more descriptive
                 placeholder_map[map_key] = p_info.name
             else:  # For positional parameters (e.g., ?, %s, $1)
                 placeholder_map[map_key] = p_info.ordinal  # Store 0-based ordinal
@@ -465,7 +471,16 @@ class ParameterConverter:
             Tuple of (transformed_sql, parameter_info_list, merged_parameters, placeholder_map)
         """
         parameters_info = self.validator.extract_parameters(sql)
-        merged_params = self.merge_parameters(parameters, args, kwargs)
+
+        # Check if we have mixed parameter styles and both args and kwargs
+        has_positional = any(p.name is None for p in parameters_info)
+        has_named = any(p.name is not None for p in parameters_info)
+        has_mixed_styles = has_positional and has_named
+
+        if has_mixed_styles and args and kwargs and parameters is None:
+            merged_params = self._merge_mixed_parameters(parameters_info, args, kwargs)
+        else:
+            merged_params = self.merge_parameters(parameters, args, kwargs)  # type: ignore[assignment]
 
         if validate:
             self.validator.validate_parameters(parameters_info, merged_params, sql)
@@ -475,39 +490,64 @@ class ParameterConverter:
         return transformed_sql, parameters_info, merged_params, placeholder_map
 
     @staticmethod
+    def _merge_mixed_parameters(
+        parameters_info: "list[ParameterInfo]",
+        args: "Sequence[Any]",
+        kwargs: "Mapping[str, Any]",
+    ) -> dict[str, Any]:
+        """Merge args and kwargs for mixed parameter styles.
+
+        Args:
+            parameters_info: List of parameter information from SQL
+            args: Positional arguments
+            kwargs: Keyword arguments
+
+        Returns:
+            Dictionary with merged parameters
+        """
+        merged: dict[str, Any] = {}
+
+        # Add named parameters from kwargs
+        merged.update(kwargs)
+
+        # Add positional parameters with generated names
+        positional_count = 0
+        for param_info in parameters_info:
+            if param_info.name is None and positional_count < len(args):  # Positional parameter
+                # Generate a name for the positional parameter using its ordinal
+                param_name = f"_arg_{param_info.ordinal}"
+                merged[param_name] = args[positional_count]
+                positional_count += 1
+
+        return merged
+
+    @staticmethod
     def merge_parameters(
         parameters: "StatementParameterType", args: "Optional[Sequence[Any]]", kwargs: "Optional[Mapping[str, Any]]"
     ) -> "StatementParameterType":
         """Merge parameters from different sources with proper precedence.
 
         Precedence order (highest to lowest):
-        1. kwargs (always wins for matching keys if parameters is a dict, or replaces if not)
-        2. parameters (primary source)
+        1. parameters (primary source - always wins)
+        2. kwargs (secondary source)
         3. args (only used if parameters is None and no kwargs)
 
         Returns:
             Merged parameters as a dictionary or list/tuple, or None.
         """
-        if kwargs:
-            if parameters is None:
-                return dict(kwargs)  # Make a copy
-            if isinstance(parameters, Mapping):  # Mappings are merged
-                # Ensure kwargs is a dict for merging, in case it's a custom Mapping
-                return {**parameters, **dict(kwargs)}
-            # If parameters is not a dict (e.g., list, tuple, scalar) but kwargs are provided,
-            # kwargs take over, and the result becomes a dict.
-            # Validation later will catch if this dict is incompatible with SQL (e.g. SQL expects positional).
+        # If parameters is provided, it takes precedence over everything
+        if parameters is not None:
+            return parameters
+
+        if kwargs is not None:
             return dict(kwargs)  # Make a copy
 
         # No kwargs, consider args if parameters is None
-        if args and parameters is None:
+        if args is not None:
             return list(args)  # Convert tuple of args to list for consistency and mutability if needed later
 
-        # Return original parameters (could be dict, list, tuple, scalar, or None)
-        # If it's a mutable collection, it's returned as is (no copy).
-        # Consider if a copy is needed for list/dict `parameters` when no merge occurs.
-        # For now, maintains original behavior.
-        return parameters
+        # Return None if nothing provided
+        return None
 
 
 _validator = ParameterValidator()

@@ -165,7 +165,7 @@ async def test_provide_connection(mock_psycopg_async_pool: MagicMock, mock_psyco
     mock_pool = MagicMock()
     mock_pool.connection = MagicMock(return_value=async_cm)
     mock_pool.close = AsyncMock()  # Add close method
-    mock_pool._workers = []  # Ensure no workers are running  # noqa: SLF001
+    mock_pool._workers = []  # Ensure no workers are running
 
     config = MockPsycopgAsync(pool_instance=mock_pool)  # pyright: ignore
 
