@@ -21,6 +21,7 @@ __all__ = (
     "SQLInjectionError",
     "SQLParsingError",
     "SQLSpecError",
+    "SQLTransformationError",
     "SQLValidationError",
     "SerializationError",
     "UnknownParameterError",
@@ -141,6 +142,20 @@ class SQLValidationError(SQLSpecError):
         super().__init__(detail=detail_message)
         self.sql = sql
         self.risk_level = risk_level
+
+
+class SQLTransformationError(SQLSpecError):
+    """Base class for SQL transformation errors."""
+
+    sql: Optional[str]
+
+    def __init__(self, message: str, sql: Optional[str] = None) -> None:
+        """Initialize with SQL context and risk level."""
+        detail_message = message
+        if sql:
+            detail_message = f"{message}\\nSQL: {sql}"
+        super().__init__(detail=detail_message)
+        self.sql = sql
 
 
 class SQLInjectionError(SQLValidationError):

@@ -12,7 +12,7 @@ from sqlspec.sql.filters import StatementFilter, apply_filter
 from sqlspec.sql.mixins import ResultConverter, SQLTranslatorMixin
 from sqlspec.sql.parameters import ParameterStyle
 from sqlspec.sql.result import ExecuteResult, SelectResult
-from sqlspec.sql.statement import SQLSanitizer, SQLStatement, SQLValidator, Statement
+from sqlspec.sql.statement import SQLStatement, SQLTransformer, SQLValidator, Statement
 from sqlspec.typing import StatementParameterType
 
 if TYPE_CHECKING:
@@ -75,7 +75,7 @@ class SqliteDriver(
         *filters: "StatementFilter",
         connection: Optional["SqliteConnection"] = None,
         validator: Optional["SQLValidator"] = None,
-        sanitizer: Optional["SQLSanitizer"] = None,
+        sanitizer: Optional["SQLTransformer"] = None,
         **kwargs: Any,
     ) -> "Union[SelectResult[dict[str, Any]], ExecuteResult[dict[str, Any]]]":
         """Execute a SQL statement and return a StatementResult.
@@ -137,7 +137,7 @@ class SqliteDriver(
         *filters: "StatementFilter",
         connection: Optional["SqliteConnection"] = None,
         validator: Optional["SQLValidator"] = None,
-        sanitizer: Optional["SQLSanitizer"] = None,
+        sanitizer: Optional["SQLTransformer"] = None,
         **kwargs: Any,
     ) -> "ExecuteResult[dict[str, Any]]":
         """Execute a SQL statement with multiple parameter sets.
@@ -210,7 +210,7 @@ class SqliteDriver(
         *filters: "StatementFilter",
         connection: Optional["SqliteConnection"] = None,
         validator: Optional["SQLValidator"] = None,
-        sanitizer: Optional["SQLSanitizer"] = None,
+        sanitizer: Optional["SQLTransformer"] = None,
         **kwargs: Any,
     ) -> str:
         """Execute a multi-statement SQL script.

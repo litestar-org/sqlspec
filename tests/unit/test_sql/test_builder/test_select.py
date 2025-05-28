@@ -576,7 +576,7 @@ def test_complex_nested_conditions() -> None:
 def test_unsupported_values_type_where_in() -> None:
     """Test WHERE IN with unsupported values type raises error."""
     with pytest.raises(SQLBuilderError) as exc_info:
-        SelectBuilder().select("*").from_("users").where_in("id", 42)  # pyright: ignore[reportArgumentType]
+        SelectBuilder().select("*").from_("users").where_in("id", 42)  # type: ignore[arg-type]
 
     assert "Unsupported values type for IN clause" in str(exc_info.value)
 

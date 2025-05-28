@@ -378,7 +378,7 @@ def test_convert_parameters_function_basic() -> None:
 def test_convert_parameters_function_with_validation() -> None:
     """Test convert_parameters function with validation enabled."""
     sql = "SELECT * FROM users WHERE id = ?"
-    params = []  # Missing parameter
+    params = []  # type: ignore[var-annotated]
 
     with pytest.raises(MissingParameterError):
         convert_parameters(sql, params, validate=True)

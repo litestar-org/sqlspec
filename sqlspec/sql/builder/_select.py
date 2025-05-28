@@ -251,14 +251,11 @@ class SelectBuilder(QueryBuilder):
         # Prepare the CTE query
         if isinstance(query, SelectBuilder):
             cte_sql = query.build().sql
-            cte_expr = exp.maybe_parse(cte_sql, dialect=self.dialect)
+            cte_expr = exp.maybe_parse(cte_sql, dialect=self.dialect)  # type: ignore[var-annotated]
             # Merge parameters from the CTE query
             self._parameters.update(query.build().parameters)
-        elif isinstance(query, str):
-            cte_expr = exp.maybe_parse(query, dialect=self.dialect)
         else:
-            msg = f"Unsupported query type for CTE: {type(query)}"
-            raise SQLBuilderError(msg)
+            cte_expr = exp.maybe_parse(query, dialect=self.dialect)
 
         if not cte_expr:
             msg = f"Could not parse CTE query: {query}"
@@ -315,7 +312,7 @@ class SelectBuilder(QueryBuilder):
                 expression=exp.Placeholder(this=self._add_parameter(condition[1], name=f"{condition[0]}_eq_val")),
             )
         else:
-            condition_expr = condition
+            condition_expr = condition  # type: ignore[assignment]
         self._expression = self._expression.where(condition_expr, copy=False)
         return self
 
@@ -471,8 +468,8 @@ class SelectBuilder(QueryBuilder):
         right_query = other.build()
 
         # Parse the SQL strings back to expressions
-        left_expr = exp.maybe_parse(left_query.sql, dialect=self.dialect)
-        right_expr = exp.maybe_parse(right_query.sql, dialect=self.dialect)
+        left_expr = exp.maybe_parse(left_query.sql, dialect=self.dialect)  # type: ignore[var-annotated]
+        right_expr = exp.maybe_parse(right_query.sql, dialect=self.dialect)  # type: ignore[var-annotated]
 
         if not left_expr or not right_expr:
             msg = "Could not parse queries for UNION operation"
@@ -508,8 +505,8 @@ class SelectBuilder(QueryBuilder):
         right_query = other.build()
 
         # Parse the SQL strings back to expressions
-        left_expr = exp.maybe_parse(left_query.sql, dialect=self.dialect)
-        right_expr = exp.maybe_parse(right_query.sql, dialect=self.dialect)
+        left_expr = exp.maybe_parse(left_query.sql, dialect=self.dialect)  # type: ignore[var-annotated]
+        right_expr = exp.maybe_parse(right_query.sql, dialect=self.dialect)  # type: ignore[var-annotated]
 
         if not left_expr or not right_expr:
             msg = "Could not parse queries for INTERSECT operation"
@@ -545,8 +542,8 @@ class SelectBuilder(QueryBuilder):
         right_query = other.build()
 
         # Parse the SQL strings back to expressions
-        left_expr = exp.maybe_parse(left_query.sql, dialect=self.dialect)
-        right_expr = exp.maybe_parse(right_query.sql, dialect=self.dialect)
+        left_expr = exp.maybe_parse(left_query.sql, dialect=self.dialect)  # type: ignore[var-annotated]
+        right_expr = exp.maybe_parse(right_query.sql, dialect=self.dialect)  # type: ignore[var-annotated]
 
         if not left_expr or not right_expr:
             msg = "Could not parse queries for EXCEPT operation"
@@ -579,7 +576,7 @@ class SelectBuilder(QueryBuilder):
         """
         if isinstance(subquery, SelectBuilder):
             sub_sql = subquery.build()
-            sub_expr = exp.maybe_parse(sub_sql.sql, dialect=self.dialect)
+            sub_expr = exp.maybe_parse(sub_sql.sql, dialect=self.dialect)  # type: ignore[var-annotated]
             self._parameters.update(sub_sql.parameters)
         else:
             sub_expr = exp.maybe_parse(subquery, dialect=self.dialect)
@@ -605,7 +602,7 @@ class SelectBuilder(QueryBuilder):
         """
         if isinstance(subquery, SelectBuilder):
             sub_sql = subquery.build()
-            sub_expr = exp.maybe_parse(sub_sql.sql, dialect=self.dialect)
+            sub_expr = exp.maybe_parse(sub_sql.sql, dialect=self.dialect)  # type: ignore[var-annotated]
             self._parameters.update(sub_sql.parameters)
         else:
             sub_expr = exp.maybe_parse(subquery, dialect=self.dialect)
@@ -644,23 +641,19 @@ class SelectBuilder(QueryBuilder):
         elif isinstance(values, SelectBuilder):
             # Handle subquery
             sub_sql = values.build()
-            sub_expr = exp.maybe_parse(sub_sql.sql, dialect=self.dialect)
+            sub_expr = exp.maybe_parse(sub_sql.sql, dialect=self.dialect)  # type: ignore[var-annotated]
             if not sub_expr:
                 msg = f"Could not parse subquery for IN clause: {values}"
                 raise SQLBuilderError(msg)
             self._parameters.update(sub_sql.parameters)
             in_expr = exp.In(this=col_expr, expressions=[sub_expr])
-        elif isinstance(values, str):
+        else:
             # Handle SQL string
             sub_expr = exp.maybe_parse(values, dialect=self.dialect)
             if not sub_expr:
                 msg = f"Could not parse SQL for IN clause: {values}"
                 raise SQLBuilderError(msg)
             in_expr = exp.In(this=col_expr, expressions=[sub_expr])
-        else:
-            msg = f"Unsupported values type for IN clause: {type(values)}"
-            raise SQLBuilderError(msg)
-
         return self.where(in_expr)
 
     def where_not_in(
@@ -690,22 +683,19 @@ class SelectBuilder(QueryBuilder):
         elif isinstance(values, SelectBuilder):
             # Handle subquery
             sub_sql = values.build()
-            sub_expr = exp.maybe_parse(sub_sql.sql, dialect=self.dialect)
+            sub_expr = exp.maybe_parse(sub_sql.sql, dialect=self.dialect)  # type: ignore[var-annotated]
             if not sub_expr:
                 msg = f"Could not parse subquery for NOT IN clause: {values}"
                 raise SQLBuilderError(msg)
             self._parameters.update(sub_sql.parameters)
             not_in_expr = exp.Not(this=exp.In(this=col_expr, expressions=[sub_expr]))
-        elif isinstance(values, str):
+        else:
             # Handle SQL string
             sub_expr = exp.maybe_parse(values, dialect=self.dialect)
             if not sub_expr:
                 msg = f"Could not parse SQL for NOT IN clause: {values}"
                 raise SQLBuilderError(msg)
             not_in_expr = exp.Not(this=exp.In(this=col_expr, expressions=[sub_expr]))
-        else:
-            msg = f"Unsupported values type for NOT IN clause: {type(values)}"
-            raise SQLBuilderError(msg)
 
         return self.where(not_in_expr)
 
@@ -780,7 +770,7 @@ class SelectBuilder(QueryBuilder):
         """
         col_expr = exp.column(column) if isinstance(column, str) else column
         not_null_expr = exp.Is(this=col_expr, expression=exp.Null())
-        not_null_expr = exp.Not(this=not_null_expr)
+        not_null_expr = exp.Not(this=not_null_expr)  # type: ignore[assignment]
         return self.where(not_null_expr)
 
     def count_(self, column: Union[str, exp.Expression] = "*", alias: Optional[str] = None) -> "SelectBuilder":
@@ -923,7 +913,7 @@ class SelectBuilder(QueryBuilder):
             elif isinstance(order_by, list):
                 over_args["order"] = [exp.column(col).asc() if isinstance(col, str) else col for col in order_by]  # type: ignore[misc]
             elif isinstance(order_by, exp.Expression):
-                over_args["order"] = [order_by]
+                over_args["order"] = [order_by]  # type: ignore[list-item]
 
         # Handle frame specification
         if frame:

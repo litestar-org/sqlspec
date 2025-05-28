@@ -19,7 +19,7 @@ def test_limit_offset_filter_apply() -> None:
     limit_offset_filter = LimitOffset(limit=10, offset=5)
     stmt = limit_offset_filter.append_to_statement(stmt)
     sql = stmt.get_sql(placeholder_style="qmark")
-    params = stmt.get_parameters_for_style("qmark")
+    params = stmt.get_parameters("qmark")
     assert sql == "SELECT * FROM users LIMIT ? OFFSET ?"
     assert params == [10, 5]
 
@@ -59,7 +59,7 @@ def test_search_filter_apply() -> None:
     search_filter = SearchFilter(field_name="email", value="domain.com", ignore_case=True)
     stmt = search_filter.append_to_statement(stmt)
     sql = stmt.get_sql(placeholder_style="qmark")
-    params = stmt.get_parameters_for_style("qmark")
+    params = stmt.get_parameters("qmark")
     assert sql == "SELECT * FROM customers WHERE email ILIKE ?"
     assert params == ["%domain.com%"]
 
@@ -67,7 +67,7 @@ def test_search_filter_apply() -> None:
     search_filter_multi = SearchFilter(field_name={"message", "source"}, value="error", ignore_case=False)
     stmt_multi_field = search_filter_multi.append_to_statement(stmt_multi_field)
     sql_multi = stmt_multi_field.get_sql(placeholder_style="qmark")
-    params_multi = stmt_multi_field.get_parameters_for_style("qmark")
+    params_multi = stmt_multi_field.get_parameters("qmark")
 
     # The order of OR conditions might vary depending on set iteration order,
     # and parameter names might differ if not explicitly controlled in filter for multiple fields.
@@ -94,7 +94,7 @@ def test_not_in_search_filter_apply() -> None:
     not_in_search_filter = NotInSearchFilter(field_name="username", value="admin", ignore_case=False)
     stmt = not_in_search_filter.append_to_statement(stmt)
     sql = stmt.get_sql(placeholder_style="qmark")
-    params = stmt.get_parameters_for_style("qmark")
+    params = stmt.get_parameters("qmark")
     assert sql == "SELECT * FROM users WHERE NOT username LIKE ?"  # SQLGlot renders NOT without parentheses
     assert params == ["%admin%"]
 
@@ -102,15 +102,15 @@ def test_not_in_search_filter_apply() -> None:
     not_in_search_filter_multi = NotInSearchFilter(field_name={"type", "detail"}, value="debug", ignore_case=True)
     stmt_multi_field = not_in_search_filter_multi.append_to_statement(stmt_multi_field)
     sql_multi = stmt_multi_field.get_sql(placeholder_style="qmark")
-    params_multi = stmt_multi_field.get_parameters_for_style("qmark")
+    params_multi = stmt_multi_field.get_parameters("qmark")
 
     assert "SELECT * FROM events WHERE" in sql_multi
     assert ("NOT type ILIKE ?" in sql_multi and "NOT detail ILIKE ?" in sql_multi) or (
         "NOT detail ILIKE ?" in sql_multi and "NOT type ILIKE ?" in sql_multi
     )  # SQLGlot renders NOT without parentheses
     assert "AND" in sql_multi
-    assert params_multi.count("%debug%") == 2  # pyright: ignore
-    assert len(params_multi) == 2  # pyright: ignore
+    assert params_multi.count("%debug%") == 2  # type: ignore[union-attr]
+    assert len(params_multi) == 2  # type: ignore[union-attr]
 
     stmt_no_value = SQLStatement("SELECT * FROM items")
     not_in_search_filter_no_value = NotInSearchFilter(field_name="description", value="")
@@ -125,7 +125,7 @@ def test_collection_filter_apply() -> None:
     collection_filter = CollectionFilter(field_name="status", values=["pending", "shipped"])
     stmt = collection_filter.append_to_statement(stmt)
     sql = stmt.get_sql(placeholder_style="qmark")
-    params = stmt.get_parameters_for_style("qmark")
+    params = stmt.get_parameters("qmark")
     assert sql == "SELECT * FROM orders WHERE status IN (?, ?)"
     assert params == ["pending", "shipped"]
 
@@ -149,7 +149,7 @@ def test_not_in_collection_filter_apply() -> None:
     not_in_collection_filter = NotInCollectionFilter(field_name="category_id", values=[1, 2, 3])
     stmt = not_in_collection_filter.append_to_statement(stmt)
     sql = stmt.get_sql(placeholder_style="qmark")
-    params = stmt.get_parameters_for_style("qmark")
+    params = stmt.get_parameters("qmark")
     assert sql == "SELECT * FROM products WHERE NOT category_id IN (?, ?, ?)"
     assert params == [1, 2, 3]
 
@@ -175,7 +175,7 @@ def test_before_after_filter_apply() -> None:
     before_after_filter = BeforeAfter(field_name="event_time", before=dt_before, after=dt_after)
     stmt = before_after_filter.append_to_statement(stmt)
     sql = stmt.get_sql(placeholder_style="qmark")
-    params = stmt.get_parameters_for_style("qmark")
+    params = stmt.get_parameters("qmark")
     assert sql == "SELECT * FROM events WHERE event_time < ? AND event_time > ?"
     assert params == [dt_before, dt_after]
 
@@ -183,7 +183,7 @@ def test_before_after_filter_apply() -> None:
     before_filter = BeforeAfter(field_name="event_time", before=dt_before)
     stmt_before_only = before_filter.append_to_statement(stmt_before_only)
     sql_before = stmt_before_only.get_sql(placeholder_style="qmark")
-    params_before = stmt_before_only.get_parameters_for_style("qmark")
+    params_before = stmt_before_only.get_parameters("qmark")
     assert sql_before == "SELECT * FROM events WHERE event_time < ?"
     assert params_before == [dt_before]
 
@@ -191,7 +191,7 @@ def test_before_after_filter_apply() -> None:
     after_filter = BeforeAfter(field_name="event_time", after=dt_after)
     stmt_after_only = after_filter.append_to_statement(stmt_after_only)
     sql_after = stmt_after_only.get_sql(placeholder_style="qmark")
-    params_after = stmt_after_only.get_parameters_for_style("qmark")
+    params_after = stmt_after_only.get_parameters("qmark")
     assert sql_after == "SELECT * FROM events WHERE event_time > ?"
     assert params_after == [dt_after]
 
@@ -205,7 +205,7 @@ def test_on_before_after_filter_apply() -> None:
     on_before_after_filter = OnBeforeAfter(field_name="timestamp", on_or_before=dt_on_before, on_or_after=dt_on_after)
     stmt = on_before_after_filter.append_to_statement(stmt)
     sql = stmt.get_sql(placeholder_style="qmark")
-    params = stmt.get_parameters_for_style("qmark")
+    params = stmt.get_parameters("qmark")
     assert sql == "SELECT * FROM logs WHERE timestamp <= ? AND timestamp >= ?"
     assert params == [dt_on_before, dt_on_after]
 
@@ -213,7 +213,7 @@ def test_on_before_after_filter_apply() -> None:
     on_before_filter = OnBeforeAfter(field_name="timestamp", on_or_before=dt_on_before)
     stmt_on_before_only = on_before_filter.append_to_statement(stmt_on_before_only)
     sql_on_before = stmt_on_before_only.get_sql(placeholder_style="qmark")
-    params_on_before = stmt_on_before_only.get_parameters_for_style("qmark")
+    params_on_before = stmt_on_before_only.get_parameters("qmark")
     assert sql_on_before == "SELECT * FROM logs WHERE timestamp <= ?"
     assert params_on_before == [dt_on_before]
 
@@ -221,6 +221,6 @@ def test_on_before_after_filter_apply() -> None:
     on_after_filter = OnBeforeAfter(field_name="timestamp", on_or_after=dt_on_after)
     stmt_on_after_only = on_after_filter.append_to_statement(stmt_on_after_only)
     sql_on_after = stmt_on_after_only.get_sql(placeholder_style="qmark")
-    params_on_after = stmt_on_after_only.get_parameters_for_style("qmark")
+    params_on_after = stmt_on_after_only.get_parameters("qmark")
     assert sql_on_after == "SELECT * FROM logs WHERE timestamp >= ?"
     assert params_on_after == [dt_on_after]

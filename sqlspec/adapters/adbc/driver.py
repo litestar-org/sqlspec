@@ -11,7 +11,7 @@ from sqlspec.base import SyncDriverAdapterProtocol
 from sqlspec.sql.mixins import ResultConverter, SQLTranslatorMixin
 from sqlspec.sql.parameters import ParameterStyle
 from sqlspec.sql.result import ExecuteResult, SelectResult
-from sqlspec.sql.statement import SQLSanitizer, SQLStatement, SQLValidator, Statement
+from sqlspec.sql.statement import SQLStatement, SQLTransformer, SQLValidator, Statement
 
 if TYPE_CHECKING:
     from sqlspec.sql.filters import StatementFilter
@@ -110,7 +110,7 @@ class AdbcDriver(
         *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         validator: "Optional[SQLValidator]" = None,
-        sanitizer: "Optional[SQLSanitizer]" = None,
+        sanitizer: "Optional[SQLTransformer]" = None,
         **kwargs: "Any",
     ) -> "Union[SelectResult[dict[str, Any]], ExecuteResult[dict[str, Any]]]":
         """Execute a SQL statement and return a StatementResult.
@@ -158,7 +158,7 @@ class AdbcDriver(
         *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         validator: "Optional[SQLValidator]" = None,
-        sanitizer: "Optional[SQLSanitizer]" = None,
+        sanitizer: "Optional[SQLTransformer]" = None,
         **kwargs: "Any",
     ) -> "ExecuteResult[dict[str, Any]]":
         """Execute a SQL statement with multiple parameter sets.
@@ -234,7 +234,7 @@ class AdbcDriver(
         *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         validator: "Optional[SQLValidator]" = None,
-        sanitizer: "Optional[SQLSanitizer]" = None,
+        sanitizer: "Optional[SQLTransformer]" = None,
         **kwargs: "Any",
     ) -> "str":
         """Execute a multi-statement SQL script.
@@ -279,7 +279,7 @@ class AdbcDriver(
         *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
         validator: "Optional[SQLValidator]" = None,
-        sanitizer: "Optional[SQLSanitizer]" = None,
+        sanitizer: "Optional[SQLTransformer]" = None,
         **kwargs: "Any",
     ) -> "ArrowTable":
         """Execute a SELECT statement and return results as an Apache Arrow Table.

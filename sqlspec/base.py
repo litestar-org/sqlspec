@@ -22,7 +22,7 @@ from sqlglot import exp
 
 from sqlspec.exceptions import NotFoundError, SQLValidationError
 from sqlspec.sql.filters import StatementFilter, apply_filter
-from sqlspec.sql.statement import SQLSanitizer, SQLStatement, SQLValidator, Statement, StatementConfig
+from sqlspec.sql.statement import SQLStatement, SQLTransformer, SQLValidator, Statement, StatementConfig
 from sqlspec.typing import ConnectionT, PoolT, StatementParameterType, T
 from sqlspec.utils.sync_tools import ensure_async_
 
@@ -721,7 +721,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         *filters: "StatementFilter",
         connection: Optional["ConnectionT"] = None,
         validator: Optional["SQLValidator"] = None,
-        sanitizer: Optional["SQLSanitizer"] = None,
+        sanitizer: Optional["SQLTransformer"] = None,
         **kwargs: Any,
     ) -> "StatementResultType":
         """Execute a SQL statement and return a StatementResult.
@@ -756,7 +756,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         validator: Optional["SQLValidator"] = None,
-        sanitizer: Optional["SQLSanitizer"] = None,
+        sanitizer: Optional["SQLTransformer"] = None,
         **kwargs: Any,
     ) -> StatementResultType:
         """Execute a SQL statement with multiple parameter sets.
@@ -773,7 +773,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
         *filters: "StatementFilter",
         connection: Optional[ConnectionT] = None,
         validator: Optional["SQLValidator"] = None,
-        sanitizer: Optional["SQLSanitizer"] = None,
+        sanitizer: Optional["SQLTransformer"] = None,
         **kwargs: Any,
     ) -> str:
         """Execute a multi-statement SQL script.
@@ -797,7 +797,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         validator: Optional["SQLValidator"] = None,
-        sanitizer: Optional["SQLSanitizer"] = None,
+        sanitizer: Optional["SQLTransformer"] = None,
         **kwargs: Any,
     ) -> StatementResultType:
         """Execute a SQL statement and return a StatementResult.
@@ -822,7 +822,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         validator: Optional["SQLValidator"] = None,
-        sanitizer: Optional["SQLSanitizer"] = None,
+        sanitizer: Optional["SQLTransformer"] = None,
         **kwargs: Any,
     ) -> StatementResultType:
         """Execute a SQL statement with multiple parameter sets.
@@ -839,7 +839,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         validator: Optional["SQLValidator"] = None,
-        sanitizer: Optional["SQLSanitizer"] = None,
+        sanitizer: Optional["SQLTransformer"] = None,
         **kwargs: Any,
     ) -> str:
         """Execute a multi-statement SQL script.

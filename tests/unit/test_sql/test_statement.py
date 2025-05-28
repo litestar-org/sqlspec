@@ -4,7 +4,6 @@ from unittest.mock import Mock
 import pytest
 import sqlglot
 from sqlglot import exp
-from sqlglot import parse_one
 
 from sqlspec.exceptions import (
     ParameterError,
@@ -13,8 +12,8 @@ from sqlspec.exceptions import (
 )
 from sqlspec.sql.parameters import ParameterStyle
 from sqlspec.sql.statement import (
-    SQLSanitizer,
     SQLStatement,
+    SQLTransformer,
     SQLValidator,
     StatementConfig,
     ValidationResult,
@@ -348,54 +347,54 @@ def test_no_validation_error_if_risk_below_threshold(validator_mock_fixture: Moc
     assert stmt.is_safe is False  # Should still be marked unsafe
 
 
-# Sanitization Tests
+# transformation Tests
 
 
 @pytest.fixture
-def sanitizer_mock_fixture() -> Mock:
-    mock = Mock(spec=SQLSanitizer)
-    # Define a default return value for sanitize to avoid issues if not overridden
-    mock.sanitize.side_effect = lambda sql_input, dialect=None: sql_input
+def transformer_mock_fixture() -> Mock:
+    mock = Mock(spec=SQLTransformer)
+    # Define a default return value for transform to avoid issues if not overridden
+    mock.transform.side_effect = lambda sql_input, dialect=None: sql_input
     return mock
 
 
 @pytest.fixture
-def config_with_sanitizer_fixture(sanitizer_mock_fixture: Mock) -> StatementConfig:
-    return StatementConfig(sanitizer=sanitizer_mock_fixture)
+def config_with_transformer_fixture(transformer_mock_fixture: Mock) -> StatementConfig:
+    return StatementConfig(transformer=transformer_mock_fixture)
 
 
-def test_sanitization_called_on_init(
-    config_with_sanitizer_fixture: StatementConfig, sanitizer_mock_fixture: Mock
+def test_transformation_called_on_init(
+    config_with_transformer_fixture: StatementConfig, transformer_mock_fixture: Mock
 ) -> None:
-    """Test sanitizers are called during initialization."""
+    """Test transformers are called during initialization."""
     original_sql = "SELECT * FROM users -- comment"
-    # The sanitize method of SQLSanitizer is expected to return an exp.Expression
-    sanitized_expression_output = sqlglot.parse_one("SELECT * FROM users")  # Sanitized version as expression
-    sanitizer_mock_fixture.sanitize.return_value = sanitized_expression_output
+    # The transform method of SQLtransformer is expected to return an exp.Expression
+    transformed_expression_output = sqlglot.parse_one("SELECT * FROM users")  # transformed version as expression
+    transformer_mock_fixture.transform.return_value = transformed_expression_output
 
-    _ = SQLStatement(original_sql, statement_config=config_with_sanitizer_fixture)
+    _ = SQLStatement(original_sql, statement_config=config_with_transformer_fixture)
 
-    # SQLStatement calls sanitize with the parsed version of original_sql
-    expected_input_to_sanitize = sqlglot.parse_one(original_sql)
+    # SQLStatement calls transform with the parsed version of original_sql
+    expected_input_to_transform = sqlglot.parse_one(original_sql)
     # Changed dialect=None to positional None
-    sanitizer_mock_fixture.sanitize.assert_called_once_with(expected_input_to_sanitize, None)
+    transformer_mock_fixture.transform.assert_called_once_with(expected_input_to_transform, None)
 
 
-def test_sanitization_modifies_sql_property(sanitizer_mock_fixture: Mock) -> None:
-    """Test that the .sql property reflects sanitized SQL."""
-    original_sql = "SELECT Evil(); /* Bad stuff */"
-    # What the mock sanitize method should return (as an expression)
+def test_transformation_modifies_sql_property(transformer_mock_fixture: Mock) -> None:
+    """Test that the .sql property reflects transformed SQL."""
+    original_sql = "SELECT func(); /* i shouldn't be here stuff */"
+    # What the mock transform method should return (as an expression)
     # sqlglot normalizes function names to uppercase if unquoted.
-    sanitized_sql_expr_returned_by_mock = sqlglot.parse_one("SELECT SAFE()")
-    # What stmt.sql should be after sanitization (string form)
-    expected_final_sql_string = "SELECT SAFE()"
+    transformed_sql_expr_returned_by_mock = sqlglot.parse_one("SELECT func()")
+    # What stmt.sql should be after transformation (string form)
+    expected_final_sql_string = "SELECT FUNC()"
 
-    sanitizer_mock_fixture.sanitize.return_value = sanitized_sql_expr_returned_by_mock
+    transformer_mock_fixture.transform.return_value = transformed_sql_expr_returned_by_mock
     # Ensure relevant flags are true in config
     config = StatementConfig(
-        sanitizer=sanitizer_mock_fixture,
-        enable_parsing=True,  # Default
-        enable_sanitization=True  # Default
+        transformer=transformer_mock_fixture,
+        enable_parsing=True,
+        enable_transformations=True,
     )
 
     stmt = SQLStatement(original_sql, statement_config=config)
@@ -475,7 +474,7 @@ def test_statement_equality() -> None:
     assert stmt1_a != "SELECT * FROM test"  # type: ignore[comparison-overlap]
 
 
-# Helper Functions Tests (is_sql_safe, validate_sql, sanitize_sql)
+# Helper Functions Tests (is_sql_safe, validate_sql, transform_sql)
 
 
 def test_validate_sql_helper_safe_query() -> None:
@@ -492,4 +491,4 @@ def test_validate_sql_helper_unsafe_query() -> None:
     sql = "DELETE FROM products"
     result = validate_sql(sql)
     assert not result.is_safe
-    assert result.risk_level > RiskLevel.SAFE  # type: ignore[operator]
+    assert result.risk_level.value > RiskLevel.SAFE.value
