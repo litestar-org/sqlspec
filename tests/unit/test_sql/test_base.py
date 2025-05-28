@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from typing import Annotated, Any
 
 import pytest
+from sqlglot import exp
 
-from sqlspec.base import NoPoolAsyncConfig, NoPoolSyncConfig, SQLSpec, SyncDatabaseConfig
+from sqlspec.base import CommonDriverAttributes, NoPoolAsyncConfig, NoPoolSyncConfig, SQLSpec, SyncDatabaseConfig
+from sqlspec.sql.statement import SQLStatement
 
 
 class MockConnection:
@@ -179,6 +181,193 @@ def async_non_pool_config() -> MockAsyncNonPoolConfig:
         A MockAsyncNonPoolConfig instance.
     """
     return MockAsyncNonPoolConfig()
+
+
+@pytest.fixture(scope="session")
+def driver_attributes() -> CommonDriverAttributes:
+    """Create a CommonDriverAttributes instance for testing the SQL detection.
+
+    Returns:
+        A CommonDriverAttributes instance.
+    """
+
+    class TestDriverAttributes(CommonDriverAttributes):
+        def __init__(self) -> None:
+            super().__init__()
+            self.dialect = "sqlite"
+
+    return TestDriverAttributes()
+
+
+STATEMENT_RETURNS_ROWS_TEST_CASES = [
+    # Basic cases that should return rows
+    ("SELECT * FROM users", True, "Simple SELECT"),
+    ("select * from users", True, "Lowercase SELECT"),
+    ("  SELECT id FROM users  ", True, "SELECT with whitespace"),
+    # Basic cases that should not return rows
+    ("INSERT INTO users (name) VALUES ('John')", False, "Simple INSERT"),
+    ("UPDATE users SET name = 'Jane' WHERE id = 1", False, "Simple UPDATE"),
+    ("DELETE FROM users WHERE id = 1", False, "Simple DELETE"),
+    # Cases with RETURNING clause (should return rows)
+    ("INSERT INTO users (name) VALUES ('John') RETURNING id", True, "INSERT with RETURNING"),
+    ("UPDATE users SET name = 'Jane' WHERE id = 1 RETURNING *", True, "UPDATE with RETURNING"),
+    ("DELETE FROM users WHERE id = 1 RETURNING name", True, "DELETE with RETURNING"),
+    # WITH statements (CTEs) should return rows
+    ("WITH cte AS (SELECT * FROM users) SELECT * FROM cte", True, "Simple WITH"),
+    (
+        "with recursive t(n) as (values (1) union select n+1 from t where n < 100) select sum(n) from t",
+        True,
+        "Recursive CTE",
+    ),
+    # Cases where old approach fails: comments at the beginning
+    ("-- This is a select query\nSELECT * FROM users", True, "SELECT with comment prefix"),
+    ("/* Multi-line\n   comment */\nSELECT id FROM users", True, "SELECT with multi-line comment"),
+    ("-- Insert comment\nINSERT INTO users (name) VALUES ('test')", False, "INSERT with comment prefix"),
+    # Cases where old approach fails: whitespace and newlines
+    ("\n  \t  SELECT * FROM users", True, "SELECT with leading whitespace"),
+    ("\n\nWITH cte AS (SELECT * FROM users) SELECT * FROM cte", True, "WITH with leading newlines"),
+    # Cases where old approach fails: false positives with RETURNING
+    ("SELECT * FROM table_returning_something", True, "SELECT with 'returning' in table name"),
+    ("INSERT INTO logs (message) VALUES ('RETURNING data')", False, "INSERT with 'RETURNING' in string literal"),
+    # Database-specific query types that return rows
+    ("SHOW TABLES", True, "SHOW statement"),
+    ("DESCRIBE users", True, "DESCRIBE statement"),
+    ("EXPLAIN SELECT * FROM users", True, "EXPLAIN statement"),
+    ("PRAGMA table_info(users)", True, "PRAGMA statement"),
+    # Complex mixed cases
+    (
+        """
+    /* This query selects users */
+    WITH active_users AS (
+        SELECT id, name
+        FROM users
+        WHERE active = true
+    )
+    SELECT * FROM active_users
+    """,
+        True,
+        "Complex commented CTE",
+    ),
+    # Edge case: CTE in a comment (should be INSERT, not SELECT)
+    ("-- WITH cte AS (SELECT 1)\nINSERT INTO users (name) VALUES ('test')", False, "INSERT with CTE in comment"),
+    # Test various statement types
+    ("CREATE TABLE test (id INTEGER)", False, "CREATE statement"),
+    ("DROP TABLE test", False, "DROP statement"),
+    ("ALTER TABLE test ADD COLUMN name TEXT", False, "ALTER statement"),
+    # Test subqueries in non-SELECT statements
+    ("INSERT INTO users (name) SELECT name FROM temp_users", False, "INSERT with subquery"),
+    ("UPDATE users SET name = (SELECT name FROM profiles WHERE id = users.id)", False, "UPDATE with subquery"),
+    # Test complex RETURNING cases
+    (
+        "UPDATE users SET last_login = NOW() WHERE active = true RETURNING id, name",
+        True,
+        "Complex UPDATE with RETURNING",
+    ),
+    ("DELETE FROM sessions WHERE expires < NOW() RETURNING session_id", True, "Complex DELETE with RETURNING"),
+    # Test edge cases with similar keywords
+    ("INSERT INTO returns_table (value) VALUES (1)", False, "INSERT into table with 'returns' in name"),
+    ("SELECT * FROM show_logs", True, "SELECT from table with 'show' in name"),
+]
+
+
+@pytest.mark.parametrize(("sql", "expected_returns_rows", "description"), STATEMENT_RETURNS_ROWS_TEST_CASES)
+def test_returns_rows(
+    driver_attributes: CommonDriverAttributes, sql: str, expected_returns_rows: bool, description: str
+) -> None:
+    """Test the robust SQL statement detection method.
+
+    Args:
+        driver_attributes: The driver attributes instance for testing
+        sql: The SQL statement to test
+        expected_returns_rows: Whether the statement should return rows
+        description: Description of the test case
+    """
+    try:
+        statement = SQLStatement(sql)
+        expression = statement.expression
+        actual_returns_rows = driver_attributes.returns_rows(expression)
+
+        assert actual_returns_rows == expected_returns_rows, (
+            f"{description}: Expected {expected_returns_rows}, got {actual_returns_rows} for SQL: {sql}"
+        )
+    except Exception as e:
+        pytest.fail(f"{description}: Failed to parse SQL '{sql}': {e}")
+
+
+def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAttributes) -> None:
+    """Test that returns_rows handles invalid expressions gracefully."""
+    # Test with None expression
+    result = driver_attributes.returns_rows(None)  # type: ignore[arg-type]
+    assert result is False, "Should return False for None expression"
+
+    try:
+        empty_stmt = SQLStatement("")
+        result = driver_attributes.returns_rows(empty_stmt.expression)
+        # The result doesn't matter as much as not crashing
+        assert isinstance(result, bool), "Should return a boolean value"
+    except Exception:
+        # It's acceptable for empty SQL to fail parsing
+        pass
+
+
+def test_returns_rows_expression_types(driver_attributes: CommonDriverAttributes) -> None:
+    """Test specific sqlglot expression types to ensure comprehensive coverage."""
+    select_expr = exp.Select()
+    assert driver_attributes.returns_rows(select_expr) is True, "Select expression should return rows"
+
+    insert_expr = exp.Insert()
+    assert driver_attributes.returns_rows(insert_expr) is False, "Insert without RETURNING should not return rows"
+
+    # Test INSERT with RETURNING
+    insert_with_returning = exp.Insert()
+    insert_with_returning = insert_with_returning.returning(exp.Returning())
+    assert driver_attributes.returns_rows(insert_with_returning) is True, "Insert with RETURNING should return rows"
+
+    update_expr = exp.Update()
+    assert driver_attributes.returns_rows(update_expr) is False, "Update without RETURNING should not return rows"
+
+    # Test UPDATE with RETURNING
+    update_with_returning = exp.Update()
+    update_with_returning = update_with_returning.returning(exp.Returning())
+    assert driver_attributes.returns_rows(update_with_returning) is True, "Update with RETURNING should return rows"
+
+    delete_expr = exp.Delete()
+    assert driver_attributes.returns_rows(delete_expr) is False, "Delete without RETURNING should not return rows"
+
+    # Test DELETE with RETURNING
+    delete_with_returning = exp.Delete()
+    delete_with_returning = delete_with_returning.returning(exp.Returning())
+    assert driver_attributes.returns_rows(delete_with_returning) is True, "Delete with RETURNING should return rows"
+
+    with_expr = exp.With()
+    assert driver_attributes.returns_rows(with_expr) is True, "WITH expression should return rows"
+
+    show_expr = exp.Show()
+    assert driver_attributes.returns_rows(show_expr) is True, "SHOW expression should return rows"
+
+    describe_expr = exp.Describe()
+    assert driver_attributes.returns_rows(describe_expr) is True, "DESCRIBE expression should return rows"
+
+    # EXPLAIN statements are parsed as exp.Command in sqlglot
+    explain_expr = exp.Command()
+    assert driver_attributes.returns_rows(explain_expr) is True, "EXPLAIN expression should return rows"
+
+    pragma_expr = exp.Pragma()
+    assert driver_attributes.returns_rows(pragma_expr) is True, "PRAGMA expression should return rows"
+
+    # Test expressions that should not return rows
+    create_expr = exp.Create()
+    assert driver_attributes.returns_rows(create_expr) is False, "CREATE expression should not return rows"
+
+    drop_expr = exp.Drop()
+    assert driver_attributes.returns_rows(drop_expr) is False, "DROP expression should not return rows"
+
+    # Test unknown expression type
+    class UnknownExpression(exp.Expression):
+        pass
+
+    unknown_expr = UnknownExpression()
+    assert driver_attributes.returns_rows(unknown_expr) is False, "Unknown expression should not return rows"
 
 
 def test_add_config(sql_spec: SQLSpec, pool_config: MockDatabaseConfig, non_pool_config: MockNonPoolConfig) -> None:

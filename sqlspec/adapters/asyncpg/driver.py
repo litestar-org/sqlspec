@@ -1,6 +1,5 @@
 import logging
 import re
-from re import Match
 from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
 from asyncpg import Connection
@@ -8,9 +7,9 @@ from sqlglot import exp
 from typing_extensions import TypeAlias
 
 from sqlspec.base import AsyncDriverAdapterProtocol
-from sqlspec.filters import StatementFilter
-from sqlspec.mixins import ResultConverter, SQLTranslatorMixin
-from sqlspec.statement import SQLStatement
+from sqlspec.sql.filters import StatementFilter
+from sqlspec.sql.mixins import ResultConverter, SQLTranslatorMixin
+from sqlspec.sql.statement import SQLStatement, Statement
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -19,6 +18,8 @@ if TYPE_CHECKING:
     from asyncpg.connection import Connection
     from asyncpg.pool import PoolConnectionProxy
 
+    from sqlspec.exceptions import RiskLevel
+    from sqlspec.sql.result import StatementResult
     from sqlspec.typing import ModelDTOT, StatementParameterType, T
 
 __all__ = ("AsyncpgConnection", "AsyncpgDriver")
@@ -32,24 +33,6 @@ else:
 
 # Compile the row count regex once for efficiency
 ROWCOUNT_REGEX = re.compile(r"^(?:INSERT|UPDATE|DELETE) \d+ (\d+)$")
-
-# Improved regex to match question mark placeholders only when they are outside string literals and comments
-# This pattern handles:
-# 1. Single quoted strings with escaped quotes
-# 2. Double quoted strings with escaped quotes
-# 3. Single-line comments (-- to end of line)
-# 4. Multi-line comments (/* to */)
-# 5. Only question marks outside of these contexts are considered parameters
-QUESTION_MARK_PATTERN = re.compile(
-    r"""
-    (?:'[^']*(?:''[^']*)*') |           # Skip single-quoted strings (with '' escapes)
-    (?:"[^"]*(?:""[^"]*)*") |           # Skip double-quoted strings (with "" escapes)
-    (?:--.*?(?:\n|$)) |                 # Skip single-line comments
-    (?:/\*(?:[^*]|\*(?!/))*\*/) |       # Skip multi-line comments
-    (\?)                                # Capture only question marks outside of these contexts
-    """,
-    re.VERBOSE | re.DOTALL,
-)
 
 
 class AsyncpgDriver(
@@ -67,24 +50,26 @@ class AsyncpgDriver(
 
     def _process_sql_params(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         **kwargs: Any,
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Process SQL and parameters for AsyncPG using SQLStatement.
+    ) -> "tuple[str, Union[list[Any], dict[str, Any]], SQLStatement]":
+        """Process SQL and parameters for AsyncPG.
 
-        This method applies filters (if provided), processes the SQL through SQLStatement
-        with dialect support, and converts parameters to the format required by AsyncPG.
+        Leverages SQLStatement to parse the SQL, validate parameters, and obtain
+        a sqlglot AST. This method then transforms the AST to use PostgreSQL-style
+        $N placeholders (e.g., $1, $2) as required by asyncpg.
 
         Args:
-            sql: SQL statement.
-            parameters: Query parameters. Can be data or a StatementFilter.
+            sql: SQL statement (string or sqlglot expression).
+            parameters: Query parameters (data or StatementFilter).
             *filters: Statement filters to apply.
-            **kwargs: Additional keyword arguments.
+            **kwargs: Additional keyword arguments for SQLStatement.
 
         Returns:
-            Tuple of processed SQL and parameters.
+            A tuple containing the processed SQL string (with $N placeholders)
+            and an ordered tuple of parameter values for asyncpg.
         """
         data_params_for_statement: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
         combined_filters_list: list[StatementFilter] = list(filters)
@@ -92,87 +77,56 @@ class AsyncpgDriver(
         if parameters is not None:
             if isinstance(parameters, StatementFilter):
                 combined_filters_list.insert(0, parameters)
-                # data_params_for_statement remains None
             else:
-                # If parameters is not a StatementFilter, it's actual data parameters.
                 data_params_for_statement = parameters
 
-        # Handle scalar parameter by converting to a single-item tuple if it's data
-        if data_params_for_statement is not None and not isinstance(data_params_for_statement, (list, tuple, dict)):
-            data_params_for_statement = (data_params_for_statement,)
-
-        # Create a SQLStatement with PostgreSQL dialect
         statement = SQLStatement(sql, data_params_for_statement, kwargs=kwargs, dialect=self.dialect)
 
-        # Apply any filters from the combined list
         for filter_obj in combined_filters_list:
             statement = statement.apply_filter(filter_obj)
 
-        # Process the statement
-        processed_sql, processed_params, parsed_expr = statement.process()
+        # SQLStatement.process() now returns:
+        # 1. final_sql_str: The processed SQL string.
+        # 2. final_ordered_params: list or dict of parameter values, correctly ordered/named.
+        # 3. validation_result: The result of the validation (unused here).
+        final_sql_str, final_params_for_adapter, _ = statement.process()
 
-        if processed_params is None:
-            return processed_sql, ()
+        if not statement.parameter_info_list:  # Use statement.parameter_info_list
+            # No placeholders, so no transformation needed; return SQL as is from the AST.
+            return final_sql_str, final_params_for_adapter or [], statement  # Ensure params is not None
 
-        # Convert question marks to PostgreSQL style $N parameters
-        if isinstance(processed_params, (list, tuple)) and "?" in processed_sql:
-            # Use a counter to generate $1, $2, etc. for each ? in the SQL that's outside strings/comments
-            param_index = 0
+        # Map original placeholder AST nodes to new $N style parameter expressions.
+        placeholder_map: dict[int, exp.Expression] = {
+            id(p_info.expression_node): exp.Parameter(
+                this=exp.Identifier(this=str(i + 1))
+            )  # Changed p_info.node to p_info.expression_node
+            for i, p_info in enumerate(statement.parameter_info_list)  # Use statement.parameter_info_list
+        }
 
-            def replace_question_mark(match: Match[str]) -> str:
-                # Only process the match if it's not in a skipped context (string/comment)
-                if match.group(1):  # This is a question mark outside string/comment
-                    nonlocal param_index
-                    param_index += 1
-                    return f"${param_index}"
-                # Return the entire matched text unchanged for strings/comments
-                return match.group(0)
+        def replace_with_pg_style(node: exp.Expression) -> exp.Expression:
+            """AST transformer: Replaces known placeholder nodes with $N style parameters.
+            This is used to transform the AST to use PostgreSQL style $N placeholders
+            as required by asyncpg.
 
-            processed_sql = QUESTION_MARK_PATTERN.sub(replace_question_mark, processed_sql)
+            Args:
+                node: The AST node to transform.
 
-        # Now handle the asyncpg-specific parameter conversion - asyncpg requires positional parameters
-        if isinstance(processed_params, dict):
-            if parsed_expr is not None:
-                # Find named parameters
-                named_params = []
-                for node in parsed_expr.find_all(exp.Parameter, exp.Placeholder):
-                    if isinstance(node, exp.Parameter) and node.name and node.name in processed_params:
-                        named_params.append(node.name)
-                    elif (
-                        isinstance(node, exp.Placeholder)
-                        and isinstance(node.this, str)
-                        and node.this in processed_params
-                    ):
-                        named_params.append(node.this)
+            Returns:
+                The transformed AST node.
+            """
+            return placeholder_map.get(id(node), node)
 
-                # Convert named parameters to positional
-                if named_params:
-                    # Transform the SQL to use $1, $2, etc.
-                    def replace_named_with_positional(node: exp.Expression) -> exp.Expression:
-                        if isinstance(node, exp.Parameter) and node.name and node.name in processed_params:
-                            idx = named_params.index(node.name) + 1
-                            return exp.Parameter(this=str(idx))
-                        if (
-                            isinstance(node, exp.Placeholder)
-                            and isinstance(node.this, str)
-                            and node.this in processed_params
-                        ):
-                            idx = named_params.index(node.this) + 1
-                            return exp.Parameter(this=str(idx))
-                        return node
+        # Transform the AST. `copy=True` prevents modification of the original SQLStatement's AST.
+        # Ensure we are transforming the expression from the statement object that `process` was called on.
+        transformed_expr = statement.expression.transform(replace_with_pg_style, copy=True)  # Use statement.expression
+        transformed_final_sql = transformed_expr.sql(dialect=self.dialect)
 
-                    return parsed_expr.transform(replace_named_with_positional, copy=True).sql(
-                        dialect=self.dialect
-                    ), tuple(processed_params[name] for name in named_params)
-            return processed_sql, tuple(processed_params.values())
-        if isinstance(processed_params, (list, tuple)):
-            return processed_sql, tuple(processed_params)
-        return processed_sql, (processed_params,)  # type: ignore[unreachable]
+        return transformed_final_sql, final_params_for_adapter or [], statement  # Ensure params is not None
 
     @overload
     async def select(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -182,7 +136,7 @@ class AsyncpgDriver(
     @overload
     async def select(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -191,7 +145,7 @@ class AsyncpgDriver(
     ) -> "Sequence[ModelDTOT]": ...
     async def select(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -212,10 +166,16 @@ class AsyncpgDriver(
             List of row data as either model instances or dictionaries.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        parameters = parameters if parameters is not None else ()
+        # _process_sql_params now returns sql_str, params_for_adapter, statement_obj
+        processed_sql, processed_params_for_adapter, _ = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        # asyncpg expects a tuple for positional parameters
+        db_params = (
+            tuple(processed_params_for_adapter)
+            if isinstance(processed_params_for_adapter, list)
+            else processed_params_for_adapter
+        )
 
-        results = await connection.fetch(sql, *parameters)  # pyright: ignore
+        results = await connection.fetch(processed_sql, *(db_params or ()))  # Ensure db_params is not None
         if not results:
             return []
         return self.to_schema([dict(row.items()) for row in results], schema_type=schema_type)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
@@ -223,7 +183,7 @@ class AsyncpgDriver(
     @overload
     async def select_one(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -233,7 +193,7 @@ class AsyncpgDriver(
     @overload
     async def select_one(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -242,7 +202,7 @@ class AsyncpgDriver(
     ) -> "ModelDTOT": ...
     async def select_one(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -263,16 +223,21 @@ class AsyncpgDriver(
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        parameters = parameters if parameters is not None else ()
-        result = await connection.fetchrow(sql, *parameters)  # pyright: ignore
-        result = self.check_not_found(result)
+        processed_sql, processed_params_for_adapter, _ = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        db_params = (
+            tuple(processed_params_for_adapter)
+            if isinstance(processed_params_for_adapter, list)
+            else processed_params_for_adapter
+        )
+
+        row = await connection.fetchrow(processed_sql, *(db_params or ()))  # Ensure db_params is not None
+        result = self.check_not_found(row)
         return self.to_schema(dict(result.items()), schema_type=schema_type)
 
     @overload
     async def select_one_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -282,7 +247,7 @@ class AsyncpgDriver(
     @overload
     async def select_one_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -291,7 +256,7 @@ class AsyncpgDriver(
     ) -> "Optional[ModelDTOT]": ...
     async def select_one_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -312,17 +277,24 @@ class AsyncpgDriver(
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        parameters = parameters if parameters is not None else ()
-        result = await connection.fetchrow(sql, *parameters)  # pyright: ignore
-        if result is None:
+        processed_sql, processed_params_for_adapter, _ = self._process_sql_params(
+            sql, parameters, *filters, **kwargs
+        )  # Unpack 3 values
+        db_params = (
+            tuple(processed_params_for_adapter)
+            if isinstance(processed_params_for_adapter, list)
+            else processed_params_for_adapter
+        )
+
+        row = await connection.fetchrow(processed_sql, *(db_params or ()))  # Ensure db_params is not None
+        if row is None:
             return None
-        return self.to_schema(dict(result.items()), schema_type=schema_type)
+        return self.to_schema(dict(row.items()), schema_type=schema_type)
 
     @overload
     async def select_value(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -332,7 +304,7 @@ class AsyncpgDriver(
     @overload
     async def select_value(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -341,7 +313,7 @@ class AsyncpgDriver(
     ) -> "T": ...
     async def select_value(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -362,9 +334,16 @@ class AsyncpgDriver(
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        parameters = parameters if parameters is not None else ()
-        result = await connection.fetchval(sql, *parameters)  # pyright: ignore
+        processed_sql, processed_params_for_adapter, _ = self._process_sql_params(
+            sql, parameters, *filters, **kwargs
+        )  # Unpack 3 values
+        db_params = (
+            tuple(processed_params_for_adapter)
+            if isinstance(processed_params_for_adapter, list)
+            else processed_params_for_adapter
+        )
+
+        result = await connection.fetchval(processed_sql, *(db_params or ()))  # Ensure db_params is not None
         result = self.check_not_found(result)
         if schema_type is None:
             return result
@@ -373,7 +352,7 @@ class AsyncpgDriver(
     @overload
     async def select_value_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -383,7 +362,7 @@ class AsyncpgDriver(
     @overload
     async def select_value_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -392,7 +371,7 @@ class AsyncpgDriver(
     ) -> "Optional[T]": ...
     async def select_value_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -413,9 +392,16 @@ class AsyncpgDriver(
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        parameters = parameters if parameters is not None else ()
-        result = await connection.fetchval(sql, *parameters)  # pyright: ignore
+        processed_sql, processed_params_for_adapter, _ = self._process_sql_params(
+            sql, parameters, *filters, **kwargs
+        )  # Unpack 3 values
+        db_params = (
+            tuple(processed_params_for_adapter)
+            if isinstance(processed_params_for_adapter, list)
+            else processed_params_for_adapter
+        )
+
+        result = await connection.fetchval(processed_sql, *(db_params or ()))  # Ensure db_params is not None
         if result is None:
             return None
         if schema_type is None:
@@ -424,10 +410,11 @@ class AsyncpgDriver(
 
     async def insert_update_delete(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
-        connection: Optional["AsyncpgConnection"] = None,
+        connection: "Optional[AsyncpgConnection]" = None,
+        risk_level: Optional["RiskLevel"] = None,  # Ensure risk_level is here as per base
         **kwargs: Any,
     ) -> int:
         """Insert, update, or delete data from the database.
@@ -443,11 +430,16 @@ class AsyncpgDriver(
             Row count affected by the operation.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        parameters = parameters if parameters is not None else ()
-        result = await connection.execute(sql, *parameters)  # pyright: ignore
+        processed_sql, processed_params_for_adapter, _ = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        db_params = (
+            tuple(processed_params_for_adapter)
+            if isinstance(processed_params_for_adapter, list)
+            else processed_params_for_adapter
+        )
+
+        status_str = await connection.execute(processed_sql, *(db_params or ()))  # Ensure db_params is not None
         # asyncpg returns e.g. 'INSERT 0 1', 'UPDATE 0 2', etc.
-        match = ROWCOUNT_REGEX.match(result)
+        match = ROWCOUNT_REGEX.match(status_str)
         if match:
             return int(match.group(1))
         return 0
@@ -455,7 +447,7 @@ class AsyncpgDriver(
     @overload
     async def insert_update_delete_returning(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -465,7 +457,7 @@ class AsyncpgDriver(
     @overload
     async def insert_update_delete_returning(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -474,7 +466,7 @@ class AsyncpgDriver(
     ) -> "ModelDTOT": ...
     async def insert_update_delete_returning(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncpgConnection]" = None,
@@ -495,36 +487,89 @@ class AsyncpgDriver(
             The affected row data as either a model instance or dictionary.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        parameters = parameters if parameters is not None else ()
-        result = await connection.fetchrow(sql, *parameters)  # pyright: ignore
-        if result is None:
+        processed_sql, processed_params_for_adapter, _ = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        db_params = (
+            tuple(processed_params_for_adapter)
+            if isinstance(processed_params_for_adapter, list)
+            else processed_params_for_adapter
+        )
+
+        row = await connection.fetchrow(processed_sql, *(db_params or ()))  # Ensure db_params is not None
+        if row is None:
             return None
 
-        return self.to_schema(dict(result.items()), schema_type=schema_type)
+        return self.to_schema(dict(row.items()), schema_type=schema_type)
+
+    async def execute_many(
+        self,
+        sql: "Statement",
+        parameters: "Sequence[StatementParameterType]",
+        *filters: "StatementFilter",
+        connection: "Optional[AsyncpgConnection]" = None,
+        risk_level: Optional["RiskLevel"] = None,
+        **kwargs: Any,
+    ) -> "StatementResult[Any]":  # Changed ExecuteResult to StatementResult
+        """Execute a SQL command against all parameter sequences or mappings.
+
+        Args:
+            sql: SQL statement.
+            parameters: Sequence of parameter mappings or sequences.
+            *filters: Statement filters to apply.
+            connection: Optional connection to use.
+            risk_level: Optional risk level for the operation.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            None
+        """
+        connection = self._connection(connection)
+        # Process the base SQL and filters once to get the template and the master SQLStatement object
+        # The parameters argument to _process_sql_params is None here because we only want the template.
+        processed_sql_template, _, master_statement_obj = self._process_sql_params(sql, None, *filters, **kwargs)
+
+        if not parameters:
+            parameters = []  # Ensure parameters is a list
+
+        # Process each parameter set using the master_statement_obj to ensure correct ordering for $n placeholders
+        all_db_params = []
+        for param_set in parameters:
+            # Create a temporary statement with the individual param_set to get ordered params
+            # We don't need to re-validate or re-transform the SQL template itself.
+            _, temp_ordered_params, _ = SQLStatement(
+                master_statement_obj.expression, param_set, dialect=self.dialect
+            ).process()
+            all_db_params.append(tuple(temp_ordered_params) if temp_ordered_params is not None else ())
+
+        await connection.executemany(processed_sql_template, all_db_params)
+        # asyncpg's executemany does not directly return total row count for all statements.
+        # It's often used for INSERTs where individual row counts aren't the primary concern for the return.
+        # For simplicity and consistency with other drivers that might not return accurate batch counts,
+        # we'll return a generic ExecuteResult. If specific counts are needed, it might require multiple
+        # execute calls or specific DB features.
+        return ExecuteResult(raw_result=None, rows_affected=len(all_db_params), metadata={"dialect": self.dialect})
 
     async def execute_script(
         self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
+        sql: "Statement",
         connection: "Optional[AsyncpgConnection]" = None,
+        risk_level: Optional["RiskLevel"] = None,
         **kwargs: Any,
-    ) -> str:
+    ) -> "list[StatementResult[Any]]":
         """Execute a script.
 
         Args:
             sql: SQL statement.
-            parameters: Query parameters.
             connection: Optional connection to use.
+            risk_level: Optional risk level for the operation.
             **kwargs: Additional keyword arguments.
 
         Returns:
             Status message for the operation.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        parameters = parameters if parameters is not None else ()
-        return await connection.execute(sql, *parameters)  # pyright: ignore
+        processed_sql, processed_params_for_adapter, _ = self._process_sql_params(sql, **kwargs)
+        processed_params_for_adapter = processed_params_for_adapter if processed_params_for_adapter is not None else ()
+        return await connection.execute(processed_sql, *processed_params_for_adapter)  # pyright: ignore
 
     def _connection(self, connection: "Optional[AsyncpgConnection]" = None) -> "AsyncpgConnection":
         """Return the connection to use. If None, use the default connection."""

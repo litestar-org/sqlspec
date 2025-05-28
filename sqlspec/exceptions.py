@@ -1,18 +1,30 @@
 from collections.abc import Generator
 from contextlib import contextmanager
+from enum import Enum, auto
 from typing import Any, Optional
 
 __all__ = (
+    "ExtraParameterError",
     "ImproperConfigurationError",
     "IntegrityError",
     "MissingDependencyError",
+    "MissingParameterError",
     "MultipleResultsFoundError",
     "NotFoundError",
+    "ParameterError",
     "ParameterStyleMismatchError",
+    "QueryError",
     "RepositoryError",
+    "RiskLevel",
+    "SQLBuilderError",
+    "SQLConversionError",
+    "SQLInjectionError",
     "SQLParsingError",
     "SQLSpecError",
+    "SQLValidationError",
     "SerializationError",
+    "UnknownParameterError",
+    "UnsafeSQLError",
 )
 
 
@@ -78,6 +90,15 @@ class SQLParsingError(SQLSpecError):
         super().__init__(message)
 
 
+class SQLBuilderError(SQLSpecError):
+    """Issues Building or Generating SQL statements."""
+
+    def __init__(self, message: Optional[str] = None) -> None:
+        if message is None:
+            message = "Issues building SQL statement."
+        super().__init__(message)
+
+
 class SQLConversionError(SQLSpecError):
     """Issues converting SQL statements."""
 
@@ -85,6 +106,101 @@ class SQLConversionError(SQLSpecError):
         if message is None:
             message = "Issues converting SQL statement."
         super().__init__(message)
+
+
+# -- SQL Validation Errors --
+class RiskLevel(Enum):
+    """SQL risk assessment levels."""
+
+    SAFE = auto()
+    LOW = auto()
+    MEDIUM = auto()
+    HIGH = auto()
+    CRITICAL = auto()
+
+    def __str__(self) -> str:
+        """String representation.
+
+        Returns:
+            Lowercase name of the style.
+        """
+        return self.name.lower()
+
+
+class SQLValidationError(SQLSpecError):
+    """Base class for SQL validation errors."""
+
+    sql: Optional[str]
+    risk_level: RiskLevel
+
+    def __init__(self, message: str, sql: Optional[str] = None, risk_level: RiskLevel = RiskLevel.MEDIUM) -> None:
+        """Initialize with SQL context and risk level."""
+        detail_message = message
+        if sql:
+            detail_message = f"{message}\\nSQL: {sql}"
+        super().__init__(detail=detail_message)
+        self.sql = sql
+        self.risk_level = risk_level
+
+
+class SQLInjectionError(SQLValidationError):
+    """Raised when potential SQL injection is detected."""
+
+    pattern: Optional[str]
+
+    def __init__(self, message: str, sql: Optional[str] = None, pattern: Optional[str] = None) -> None:
+        """Initialize with injection pattern context."""
+        detail_message = message
+        if pattern:
+            detail_message = f"{message} (Pattern: {pattern})"
+        super().__init__(detail_message, sql, RiskLevel.CRITICAL)
+        self.pattern = pattern
+
+
+class UnsafeSQLError(SQLValidationError):
+    """Raised when unsafe SQL constructs are detected."""
+
+    construct: Optional[str]
+
+    def __init__(self, message: str, sql: Optional[str] = None, construct: Optional[str] = None) -> None:
+        """Initialize with unsafe construct context."""
+        detail_message = message
+        if construct:
+            detail_message = f"{message} (Construct: {construct})"
+        super().__init__(detail_message, sql, RiskLevel.HIGH)
+        self.construct = construct
+
+
+# -- SQL Query Errors --
+class QueryError(SQLSpecError):
+    """Base class for Query errors."""
+
+
+# -- SQL Parameter Errors --
+class ParameterError(SQLSpecError):
+    """Base class for parameter-related errors."""
+
+    sql: Optional[str]
+
+    def __init__(self, message: str, sql: Optional[str] = None) -> None:
+        """Initialize with optional SQL context."""
+        detail_message = message
+        if sql:
+            detail_message = f"{message}\\nSQL: {sql}"
+        super().__init__(detail=detail_message)
+        self.sql = sql
+
+
+class UnknownParameterError(ParameterError):
+    """Raised when encountering unknown parameter syntax."""
+
+
+class MissingParameterError(ParameterError):
+    """Raised when required parameters are missing."""
+
+
+class ExtraParameterError(ParameterError):
+    """Raised when extra parameters are provided."""
 
 
 class ParameterStyleMismatchError(SQLSpecError):
@@ -95,10 +211,21 @@ class ParameterStyleMismatchError(SQLSpecError):
     (named, positional, etc.).
     """
 
-    def __init__(self, message: Optional[str] = None) -> None:
-        if message is None:
-            message = "Parameter style mismatch: dictionary parameters provided but no named placeholders found in SQL."
-        super().__init__(message)
+    sql: Optional[str]
+
+    def __init__(self, message: Optional[str] = None, sql: Optional[str] = None) -> None:
+        final_message = message
+        if final_message is None:
+            final_message = (
+                "Parameter style mismatch: dictionary parameters provided but no named placeholders found in SQL."
+            )
+
+        detail_message = final_message
+        if sql:
+            detail_message = f"{final_message}\nSQL: {sql}"
+
+        super().__init__(detail=detail_message)
+        self.sql = sql
 
 
 class ImproperConfigurationError(SQLSpecError):

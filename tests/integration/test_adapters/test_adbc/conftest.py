@@ -22,7 +22,7 @@ def xfail_if_driver_missing(func: F) -> F:
         except Exception as e:
             if "cannot open shared object file" in str(e):
                 pytest.xfail(f"ADBC driver shared object file not found: {e}")
-            raise e  # Reraise other exceptions
+            raise e
 
     return cast("F", wrapper)
 

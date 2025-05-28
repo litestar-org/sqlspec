@@ -81,7 +81,10 @@ lint = [
   "slotscheck>=0.16.5",
   "types-Pygments",
   "types-colorama",
+  "types-cffi",
+  "types-protobuf",
   "asyncpg-stubs",
+  "pyarrow-stubs",
 ]
 test = [
   "anyio",
@@ -373,6 +376,8 @@ known-first-party = ["sqlspec", "tests"]
   "PT012",
   "INP001",
   "DOC",
+  "ERA001",
+  "SLF001",
   "PLC",
 ]
 "tools/**/*.*" = ["D", "ARG", "EM", "TRY", "G", "FBT", "S603", "F811", "PLW0127", "PLR0911"]

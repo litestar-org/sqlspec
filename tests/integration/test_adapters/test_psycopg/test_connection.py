@@ -23,9 +23,9 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
         assert conn is not None
         # Test basic query
         async with conn.cursor() as cur:
-            await cur.execute("SELECT 1")
+            await cur.execute("SELECT 1 AS id")
             result = await cur.fetchone()
-            assert result == (1,)
+            assert result == {"id": 1}
     await async_config.close_pool()
     # Test connection pool
     pool_config = PsycopgAsyncPoolConfig(
@@ -59,9 +59,9 @@ def test_sync_connection(postgres_service: PostgresService) -> None:
         assert conn is not None
         # Test basic query
         with conn.cursor() as cur:
-            cur.execute("SELECT 1")
+            cur.execute("SELECT 1 as id")
             result = cur.fetchone()
-            assert result == (1,)
+            assert result == {"id": 1}
     sync_config.close_pool()
     # Test connection pool
     pool_config = PsycopgSyncPoolConfig(
@@ -75,7 +75,7 @@ def test_sync_connection(postgres_service: PostgresService) -> None:
         assert conn is not None
         # Test basic query
         with conn.cursor() as cur:
-            cur.execute("SELECT 1")
+            cur.execute("SELECT 1 AS id")
             result = cur.fetchone()
-            assert result == (1,)
+            assert result == {"id": 1}
     another_config.close_pool()

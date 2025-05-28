@@ -103,7 +103,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
     pool_config: Optional[PsqlpyPoolConfig] = field(default=None)
     """Psqlpy Pool configuration"""
-    driver_type: type[PsqlpyDriver] = field(default=PsqlpyDriver, init=False, hash=False)
+    driver_type: type[PsqlpyDriver] = field(default=PsqlpyDriver, init=False, hash=False)  # type: ignore[abstract]
     """Type of the driver object"""
     connection_type: type[PsqlpyConnection] = field(default=PsqlpyConnection, init=False, hash=False)
     """Type of the connection object"""

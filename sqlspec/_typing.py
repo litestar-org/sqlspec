@@ -32,7 +32,6 @@ try:
 except ImportError:
     from dataclasses import dataclass
 
-    @runtime_checkable
     class BaseModel(Protocol):  # type: ignore[no-redef]
         """Placeholder Implementation"""
 
@@ -188,35 +187,37 @@ EmptyType = Union[Literal[EmptyEnum.EMPTY], UnsetType]
 Empty: Final = EmptyEnum.EMPTY
 
 
+@runtime_checkable
+class ArrowTableResult(Protocol):  # type: ignore[no-redef]
+    """This is a typed shim for pyarrow.Table."""
+
+    def to_batches(self, batch_size: int) -> Any: ...
+    def num_rows(self) -> int: ...
+    def num_columns(self) -> int: ...
+    def to_pydict(self) -> dict[str, Any]: ...
+    def to_string(self) -> str: ...
+    def from_arrays(
+        self,
+        arrays: list[Any],
+        names: Optional[list[str]] = None,
+        schema: Optional[Any] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> Any: ...
+    def from_pydict(
+        self,
+        mapping: dict[str, Any],
+        schema: Optional[Any] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> Any: ...
+    def from_batches(self, batches: Iterable[Any], schema: Optional[Any] = None) -> Any: ...
+
+
 try:
     from pyarrow import Table as ArrowTable
 
     PYARROW_INSTALLED = True
 except ImportError:
-
-    @runtime_checkable
-    class ArrowTable(Protocol):  # type: ignore[no-redef]
-        """Placeholder Implementation"""
-
-        def to_batches(self, batch_size: int) -> Any: ...
-        def num_rows(self) -> int: ...
-        def num_columns(self) -> int: ...
-        def to_pydict(self) -> dict[str, Any]: ...
-        def to_string(self) -> str: ...
-        def from_arrays(
-            self,
-            arrays: list[Any],
-            names: Optional[list[str]] = None,
-            schema: Optional[Any] = None,
-            metadata: Optional[Mapping[str, Any]] = None,
-        ) -> Any: ...
-        def from_pydict(
-            self,
-            mapping: dict[str, Any],
-            schema: Optional[Any] = None,
-            metadata: Optional[Mapping[str, Any]] = None,
-        ) -> Any: ...
-        def from_batches(self, batches: Iterable[Any], schema: Optional[Any] = None) -> Any: ...
+    ArrowTable = ArrowTableResult  # type: ignore[no-redef,assignment.misc]
 
     PYARROW_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
@@ -228,6 +229,7 @@ __all__ = (
     "PYDANTIC_INSTALLED",
     "UNSET",
     "ArrowTable",
+    "ArrowTableResult",
     "BaseModel",
     "DTOData",
     "DataclassProtocol",

@@ -1,6 +1,7 @@
-from sqlspec import adapters, base, exceptions, extensions, filters, mixins, typing, utils
+from sqlspec import adapters, base, exceptions, extensions, typing, utils
 from sqlspec.__metadata__ import __version__
 from sqlspec.base import SQLSpec
+from sqlspec.sql import mixins
 
 __all__ = (
     "SQLSpec",
@@ -9,7 +10,6 @@ __all__ = (
     "base",
     "exceptions",
     "extensions",
-    "filters",
     "mixins",
     "typing",
     "utils",

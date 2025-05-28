@@ -1,5 +1,5 @@
+# ruff: noqa: DOC202
 import datetime
-from abc import abstractmethod
 from collections.abc import Sequence
 from enum import Enum
 from functools import partial
@@ -8,7 +8,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    ClassVar,
     Generic,
     Optional,
     Union,
@@ -21,11 +20,11 @@ from sqlglot import parse_one
 from sqlglot.dialects.dialect import DialectType
 
 from sqlspec.exceptions import SQLConversionError, SQLParsingError, SQLSpecError
+from sqlspec.sql.statement import SQLStatement, Statement
 from sqlspec.typing import (
     ConnectionT,
     ModelDTOT,
     ModelT,
-    StatementParameterType,
     convert,
     get_type_adapter,
     is_dataclass,
@@ -34,106 +33,14 @@ from sqlspec.typing import (
 )
 
 if TYPE_CHECKING:
-    from sqlspec.filters import StatementFilter
-    from sqlspec.typing import ArrowTable
+    from sqlspec.sql.result import ArrowResult
 
 __all__ = (
-    "AsyncArrowBulkOperationsMixin",
-    "AsyncParquetExportMixin",
+    "ArrowMixin",
+    "ParquetMixin",
+    "ResultConverter",
     "SQLTranslatorMixin",
-    "SyncArrowBulkOperationsMixin",
-    "SyncParquetExportMixin",
 )
-
-
-class SyncArrowBulkOperationsMixin(Generic[ConnectionT]):
-    """Mixin for sync drivers supporting bulk Apache Arrow operations."""
-
-    __supports_arrow__: "ClassVar[bool]" = True
-
-    @abstractmethod
-    def select_arrow(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        **kwargs: Any,
-    ) -> "ArrowTable":  # pyright: ignore[reportUnknownReturnType]
-        """Execute a SQL query and return results as an Apache Arrow Table.
-
-        Args:
-            sql: The SQL query string.
-            parameters: Parameters for the query.
-            filters: Optional filters to apply to the query.
-            connection: Optional connection override.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            An Apache Arrow Table containing the query results.
-        """
-        raise NotImplementedError
-
-
-class AsyncArrowBulkOperationsMixin(Generic[ConnectionT]):
-    """Mixin for async drivers supporting bulk Apache Arrow operations."""
-
-    __supports_arrow__: "ClassVar[bool]" = True
-
-    @abstractmethod
-    async def select_arrow(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        **kwargs: Any,
-    ) -> "ArrowTable":  # pyright: ignore[reportUnknownReturnType]
-        """Execute a SQL query and return results as an Apache Arrow Table.
-
-        Args:
-            sql: The SQL query string.
-            parameters: Parameters for the query.
-            filters: Optional filters to apply to the query.
-            connection: Optional connection override.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            An Apache Arrow Table containing the query results.
-        """
-        raise NotImplementedError
-
-
-class SyncParquetExportMixin(Generic[ConnectionT]):
-    """Mixin for sync drivers supporting Parquet export."""
-
-    @abstractmethod
-    def select_to_parquet(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        **kwargs: Any,
-    ) -> None:
-        """Export a SQL query to a Parquet file."""
-        raise NotImplementedError
-
-
-class AsyncParquetExportMixin(Generic[ConnectionT]):
-    """Mixin for async drivers supporting Parquet export."""
-
-    @abstractmethod
-    async def select_to_parquet(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        **kwargs: Any,
-    ) -> None:
-        """Export a SQL query to a Parquet file."""
-        raise NotImplementedError
 
 
 class SQLTranslatorMixin(Generic[ConnectionT]):
@@ -143,7 +50,7 @@ class SQLTranslatorMixin(Generic[ConnectionT]):
 
     def convert_to_dialect(
         self,
-        sql: str,
+        sql: "Statement",
         to_dialect: DialectType = None,
         pretty: bool = True,
     ) -> str:
@@ -161,13 +68,19 @@ class SQLTranslatorMixin(Generic[ConnectionT]):
             SQLParsingError: If the SQL query cannot be parsed.
             SQLConversionError: If the SQL query cannot be converted to the target dialect.
         """
-        try:
-            parsed = parse_one(sql, dialect=self.dialect)
-        except Exception as e:
-            error_msg = f"Failed to parse SQL: {e!s}"
-            raise SQLParsingError(error_msg) from e
+        if isinstance(sql, str):
+            try:
+                parsed = parse_one(sql, dialect=self.dialect)
+            except Exception as e:
+                error_msg = f"Failed to parse SQL: {e!s}"
+                raise SQLParsingError(error_msg) from e
+        elif isinstance(sql, SQLStatement):
+            parsed = sql.expression
+        else:
+            parsed = sql
         if to_dialect is None:
             to_dialect = self.dialect
+        parsed = parsed.expression if isinstance(parsed, SQLStatement) else parsed
         try:
             return parsed.sql(dialect=to_dialect, pretty=pretty)
         except Exception as e:
@@ -303,3 +216,55 @@ class ResultConverter:
 
         msg = "`schema_type` should be a valid Dataclass, Pydantic model or Msgspec struct"
         raise SQLSpecError(msg)
+
+
+class ArrowMixin(Generic[ConnectionT]):
+    """Optional mixin for drivers that support Apache Arrow data format.
+
+    Provides methods to select data and return it in Arrow format for high-performance
+    data interchange and analytics workflows.
+    """
+
+    def select_to_arrow(self, statement: "Statement", parameters: "Optional[dict[str, Any]]" = None) -> "ArrowResult":
+        """Execute a SELECT statement and return results in Apache Arrow format.
+
+        Args:
+            statement: The SELECT statement to execute.
+            parameters: Optional parameters for the statement.
+
+        Returns:
+            ArrowResult containing the query results in Arrow format.
+        """
+        msg = "Arrow support not implemented by this driver"
+        raise NotImplementedError(msg)
+
+
+class ParquetMixin(Generic[ConnectionT]):
+    """Optional mixin for drivers that support Parquet file format operations.
+
+    Provides methods to select data and export it directly to Parquet format,
+    or to read from Parquet files into the database.
+    """
+
+    def select_to_parquet(
+        self,
+        statement: "Statement",
+        parameters: "Optional[dict[str, Any]]" = None,
+        file_path: "Optional[Union[str, Path]]" = None,
+    ) -> "Union[bytes, None]":
+        """Execute a SELECT statement and return/save results in Parquet format.
+
+        Args:
+            statement: The SELECT statement to execute.
+            parameters: Optional parameters for the statement.
+            file_path: Optional file path to save Parquet data. If None, returns bytes.
+
+        Returns:
+            Parquet data as bytes if file_path is None, otherwise None after saving.
+
+        Note:
+            This is an optional capability. Drivers that support Parquet should
+            implement this method to provide efficient columnar data export.
+        """
+        msg = "Parquet support not implemented by this driver"
+        raise NotImplementedError(msg)

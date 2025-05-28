@@ -24,7 +24,7 @@ from litestar.di import Provide
 from litestar.params import Dependency, Parameter
 from typing_extensions import NotRequired
 
-from sqlspec.filters import (
+from sqlspec.sql.filters import (
     BeforeAfter,
     CollectionFilter,
     FilterTypes,
@@ -476,7 +476,7 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
         if updated_filter := kwargs.get("updated_filter"):
             filters.append(updated_filter)
         if (
-            (search_filter := cast("Optional[SearchFilter]", kwargs.get("search_filter")))
+            (search_filter := cast("Optional[SearchFilter]", kwargs.get("search_filter")))  # type: ignore[redundant-cast]
             and search_filter is not None  # pyright: ignore[reportUnnecessaryComparison]
             and search_filter.field_name is not None  # pyright: ignore[reportUnnecessaryComparison]
             and search_filter.value is not None  # pyright: ignore[reportUnnecessaryComparison]

@@ -26,8 +26,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
     from collections.abc import Set as AbstractSet
 
-    from sqlspec.filters import StatementFilter
-
 
 PYDANTIC_USE_FAILFAST = False  # leave permanently disabled for now
 
@@ -54,15 +52,20 @@ ModelT = TypeVar("ModelT", bound="Union[dict[str, Any], Struct, BaseModel, Datac
 :class:`dict[str, Any]` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol`
 """
 
-FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
-"""Type variable for filter types.
 
-:class:`~advanced_alchemy.filters.StatementFilter`
-"""
 SupportedSchemaModel: TypeAlias = "Union[Struct, BaseModel, DataclassProtocol]"
 """Type alias for pydantic or msgspec models.
 
 :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol`
+"""
+StatementParameterType: TypeAlias = "Union[Any, dict[str, Any], list[Any], tuple[Any, ...], None]"
+"""Type alias for parameter types.
+
+Represents:
+- :type:`dict[str, Any]`
+- :type:`list[Any]`
+- :type:`tuple[Any, ...]`
+- :type:`None`
 """
 ModelDTOT = TypeVar("ModelDTOT", bound="SupportedSchemaModel")
 """Type variable for model DTOs.
@@ -97,16 +100,6 @@ Represents:
 - :class:`DTOData`[:type:`list[ModelT]`]
 """
 
-StatementParameterType: TypeAlias = "Union[Any, dict[str, Any], list[Any], tuple[Any, ...], None]"
-"""Type alias for parameter types.
-
-Represents:
-- :type:`dict[str, Any]`
-- :type:`list[Any]`
-- :type:`tuple[Any, ...]`
-- :type:`None`
-"""
-
 
 def is_dataclass_instance(obj: Any) -> "TypeGuard[DataclassProtocol]":
     """Check if an object is a dataclass instance.
@@ -117,7 +110,7 @@ def is_dataclass_instance(obj: Any) -> "TypeGuard[DataclassProtocol]":
     Returns:
         True if the object is a dataclass instance.
     """
-    return hasattr(type(obj), "__dataclass_fields__")  # pyright: ignore[reportUnknownArgumentType]
+    return hasattr(obj, "__dataclass_fields__") or hasattr(type(obj), "__dataclass_fields__")  # pyright: ignore[reportUnknownArgumentType]
 
 
 @lru_cache(typed=True)
@@ -528,7 +521,6 @@ __all__ = (
     "Empty",
     "EmptyType",
     "FailFast",
-    "FilterTypeT",
     "ModelDict",
     "ModelDictList",
     "StatementParameterType",

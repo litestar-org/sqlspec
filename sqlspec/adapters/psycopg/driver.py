@@ -1,749 +1,302 @@
 import logging
-import re
+from collections.abc import Sequence
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Generic, Optional, TypeVar, Union, cast
 
+import sqlglot  # Ensure sqlglot itself is imported
 from psycopg import AsyncConnection, Connection
-from psycopg.rows import dict_row
+from psycopg import sql as psycopg_sql
+from psycopg.rows import DictRow, dict_row
 
-from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
-from sqlspec.exceptions import ParameterStyleMismatchError
-from sqlspec.filters import StatementFilter
-from sqlspec.mixins import ResultConverter, SQLTranslatorMixin
-from sqlspec.statement import SQLStatement
-from sqlspec.typing import is_dict
+from sqlspec.base import (
+    AsyncDriverAdapterProtocol,
+    CommonDriverAttributes,
+    StatementResultType,
+    SyncDriverAdapterProtocol,
+)
+from sqlspec.exceptions import SQLParsingError
+from sqlspec.sql.result import ExecuteResult, SelectResult
+from sqlspec.sql.statement import SQLStatement
+from sqlspec.typing import StatementParameterType
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Generator
 
-    from sqlspec.typing import ModelDTOT, StatementParameterType, T
+    from psycopg.sql import LiteralString
+    from sqlglot.expressions import Expression as SQLGlotExpression
+
+    from sqlspec.sql.filters import StatementFilter
+    from sqlspec.sql.statement import Statement
 
 logger = logging.getLogger("sqlspec")
 
 __all__ = ("PsycopgAsyncConnection", "PsycopgAsyncDriver", "PsycopgSyncConnection", "PsycopgSyncDriver")
 
+# Restore these crucial type definitions
+PsycopgSyncConnection = Connection[DictRow]
+PsycopgAsyncConnection = AsyncConnection[DictRow]
+ConnectionT = TypeVar("ConnectionT", bound=Union[Connection[Any], AsyncConnection[Any]])
 
-NAMED_PARAMS_PATTERN = re.compile(r"(?<!:):([a-zA-Z0-9_]+)")
-# Pattern matches %(name)s format while trying to avoid matches in string literals and comments
-PSYCOPG_PARAMS_PATTERN = re.compile(r"(?<!'|\"|\w)%\(([a-zA-Z0-9_]+)\)s(?!'|\")")
-
-PsycopgSyncConnection = Connection
-PsycopgAsyncConnection = AsyncConnection
+# NAMED_PARAM_REGEX is no longer used with the sqlglot dialect output approach.
 
 
-class PsycopgDriverBase:
+class PsycopgDriverBase(CommonDriverAttributes[ConnectionT], Generic[ConnectionT]):
     dialect: str = "postgres"
 
     def _process_sql_params(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         **kwargs: Any,
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Process SQL and parameters using SQLStatement with dialect support.
+    ) -> "tuple[str, Union[list[Any], dict[str, Any]]]":
+        sql_input_for_super: Union[str, SQLGlotExpression]
+        if isinstance(sql, SQLStatement):
+            if not isinstance(sql.expression, sqlglot.Expression):
+                # This should ideally be caught earlier or SQLStatement ensures .expression is always valid post-init
+                msg = f"SQLStatement instance passed to PsycopgDriverBase has an invalid .expression attribute. Type: {type(sql.expression)}"
+                raise SQLParsingError(msg)
+            sql_input_for_super = sql.expression
+        elif isinstance(sql, (str, sqlglot.Expression)):
+            sql_input_for_super = sql
+        else:
+            # This provides more specific type feedback to the user/developer.
+            msg = f"Unexpected type for 'sql' argument: {type(sql)}. Expected str, sqlglot.Expression, or SQLStatement."
+            raise TypeError(msg)
 
-        Args:
-            sql: The SQL statement to process.
-            parameters: The parameters to bind to the statement.
-            *filters: Statement filters to apply.
-            **kwargs: Additional keyword arguments.
+        # super()._process_sql_params() (which calls SQLStatement.process())
+        # should now return SQL string with psycopg-compatible placeholders (%s or %(name)s)
+        # and the corresponding parameters list/dict because SQLStatement now handles this.
+        processed_sql_str, processed_params = super()._process_sql_params(
+            sql_input_for_super, parameters, *filters, **kwargs
+        )
 
-        Raises:
-            ParameterStyleMismatchError: If the parameter style is mismatched.
-
-        Returns:
-            A tuple of (sql, parameters) ready for execution.
-        """
-        data_params_for_statement: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
-        combined_filters_list: list[StatementFilter] = list(filters)
-
-        if parameters is not None:
-            if isinstance(parameters, StatementFilter):
-                combined_filters_list.insert(0, parameters)
-            else:
-                data_params_for_statement = parameters
-        if data_params_for_statement is not None and not isinstance(data_params_for_statement, (list, tuple, dict)):
-            data_params_for_statement = (data_params_for_statement,)
-        statement = SQLStatement(sql, data_params_for_statement, kwargs=kwargs, dialect=self.dialect)
-
-        # Apply all statement filters
-        for filter_obj in combined_filters_list:
-            statement = statement.apply_filter(filter_obj)
-
-        processed_sql, processed_params, _ = statement.process()
-
-        if is_dict(processed_params):
-            named_params = NAMED_PARAMS_PATTERN.findall(processed_sql)
-
-            if not named_params:
-                if PSYCOPG_PARAMS_PATTERN.search(processed_sql):
-                    return processed_sql, processed_params
-
-                if processed_params:
-                    msg = "psycopg: Dictionary parameters provided, but no named placeholders found in SQL."
-                    raise ParameterStyleMismatchError(msg)
-                return processed_sql, None
-
-            # Convert named parameters to psycopg's preferred format
-            return NAMED_PARAMS_PATTERN.sub("%s", processed_sql), tuple(processed_params[name] for name in named_params)
-
-        # For sequence parameters, ensure they're a tuple
-        if isinstance(processed_params, (list, tuple)):
-            return processed_sql, tuple(processed_params)
-
-        # For scalar parameter or None
-        if processed_params is not None:
-            return processed_sql, (processed_params,)
-
-        return processed_sql, None
+        # No further transformation of placeholders should be needed here for psycopg.
+        logger.debug(f"Psycopg SQL (from SQLStatement): {processed_sql_str}, Params: {processed_params}")
+        return processed_sql_str, processed_params
 
 
 class PsycopgSyncDriver(
-    PsycopgDriverBase,
-    SQLTranslatorMixin["PsycopgSyncConnection"],
-    SyncDriverAdapterProtocol["PsycopgSyncConnection"],
-    ResultConverter,
+    PsycopgDriverBase[PsycopgSyncConnection],
+    SyncDriverAdapterProtocol[PsycopgSyncConnection],
 ):
     """Psycopg Sync Driver Adapter."""
 
-    connection: "PsycopgSyncConnection"
+    connection: PsycopgSyncConnection
 
-    def __init__(self, connection: "PsycopgSyncConnection") -> None:
+    def __init__(self, connection: PsycopgSyncConnection, **kwargs: Any) -> None:
+        super().__init__(connection=connection)
         self.connection = connection
 
     @staticmethod
     @contextmanager
-    def _with_cursor(connection: "PsycopgSyncConnection") -> "Generator[Any, None, None]":
+    def _with_cursor(connection: PsycopgSyncConnection) -> "Generator[Any, None, None]":
         cursor = connection.cursor(row_factory=dict_row)
         try:
             yield cursor
         finally:
             cursor.close()
 
-    # --- Public API Methods --- #
-    @overload
-    def select(
+    def execute(
         self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
+        sql: "Statement",
+        parameters: Optional[StatementParameterType] = None,
         *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: None = None,
+        connection: Optional[PsycopgSyncConnection] = None,
         **kwargs: Any,
-    ) -> "Sequence[dict[str, Any]]": ...
-    @overload
-    def select(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Sequence[ModelDTOT]": ...
-    def select(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        **kwargs: Any,
-    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
-        """Fetch data from the database.
+    ) -> StatementResultType:
+        conn: PsycopgSyncConnection = self._connection(connection)
+        pyformat_sql, psycopg_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
-        Returns:
-            List of row data as either model instances or dictionaries.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
-            results = cursor.fetchall()
-            if not results:
-                return []
+        cursor = conn.cursor(row_factory=dict_row)
+        try:
+            logger.debug("Executing SQL (Psycopg Sync): %s with params: %s", pyformat_sql, psycopg_params)
+            cursor.execute(psycopg_sql.SQL(pyformat_sql), psycopg_params)  # type: ignore[arg-type]
 
-            return self.to_schema(cast("Sequence[dict[str, Any]]", results), schema_type=schema_type)
+            if cursor.description:
+                fetched_data: list[dict[str, Any]] = cursor.fetchall()
+                column_names = [col.name for col in cursor.description]
+                return SelectResult(
+                    raw_result=fetched_data,
+                    rows=fetched_data,
+                    column_names=column_names,
+                    rows_affected=cursor.rowcount if cursor.rowcount != -1 else len(fetched_data),
+                    metadata={"dialect": self.dialect, "status_message": cursor.statusmessage},
+                )
+            return ExecuteResult(
+                raw_result=None,
+                rows_affected=cursor.rowcount,
+                metadata={"dialect": self.dialect, "status_message": cursor.statusmessage},
+            )
+        finally:
+            cursor.close()
 
-    @overload
-    def select_one(
+    def execute_many(
         self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
+        sql: "Statement",
+        parameters: Optional[Sequence[StatementParameterType]] = None,
         *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: None = None,
+        connection: Optional[PsycopgSyncConnection] = None,
         **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-    @overload
-    def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-    def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Union[ModelDTOT, dict[str, Any]]":
-        """Fetch one row from the database.
+    ) -> StatementResultType:
+        conn: PsycopgSyncConnection = self._connection(connection)
 
-        Returns:
-            The first row of the query results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
-            result = cursor.fetchone()
-            result = self.check_not_found(result)
-            return self.to_schema(cast("dict[str, Any]", result), schema_type=schema_type)
+        if not parameters:
+            logger.debug("execute_many called with no parameters for SQL: %s", sql)
+            pyformat_sql_template, _ = self._process_sql_params(sql, None, *filters, **kwargs)
+            logger.debug("Validated empty-parameter SQL for execute_many (Psycopg Sync): %s", pyformat_sql_template)
+            return ExecuteResult(raw_result=None, rows_affected=0, metadata={"dialect": self.dialect})
 
-    @overload
-    def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[dict[str, Any]]": ...
-    @overload
-    def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Optional[ModelDTOT]": ...
-    def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
-        """Fetch one row from the database.
+        pyformat_sql_template, _ = self._process_sql_params(sql, parameters[0], *filters, **kwargs)
+        adapted_parameters_sequence: list[Union[list[Any], dict[str, Any]]] = []
+        for param_set in parameters:
+            _, adapted_params = self._process_sql_params(sql, param_set, *filters, **kwargs)
+            adapted_parameters_sequence.append(adapted_params)
+        affected_rows: int = -1
+        status_message: Optional[str] = None
+        cursor = conn.cursor()
+        try:
+            cursor.executemany(psycopg_sql.SQL(pyformat_sql_template), adapted_parameters_sequence)  # type: ignore[arg-type]
+            affected_rows = cursor.rowcount
+            status_message = cursor.statusmessage
+        finally:
+            cursor.close()
 
-        Returns:
-            The first row of the query results, or None if no results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
-            result = cursor.fetchone()
-            if result is None:
-                return None
-            return self.to_schema(cast("dict[str, Any]", result), schema_type=schema_type)
-
-    @overload
-    def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Any": ...
-    @overload
-    def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "T": ...
-    def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: "Optional[type[T]]" = None,
-        **kwargs: Any,
-    ) -> "Union[T, Any]":
-        """Fetch a single value from the database.
-
-        Returns:
-            The first value from the first row of results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
-            result = cursor.fetchone()
-            result = self.check_not_found(result)
-
-            value = next(iter(result.values()))  # Get the first value from the row
-            if schema_type is None:
-                return value
-            return schema_type(value)  # type: ignore[call-arg]
-
-    @overload
-    def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[Any]": ...
-    @overload
-    def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "Optional[T]": ...
-    def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: "Optional[type[T]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[T, Any]]":
-        """Fetch a single value from the database.
-
-        Returns:
-            The first value from the first row of results, or None if no results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
-            result = cursor.fetchone()
-            if result is None:
-                return None
-
-            value = next(iter(result.values()))  # Get the first value from the row
-            if schema_type is None:
-                return value
-            return schema_type(value)  # type: ignore[call-arg]
-
-    def insert_update_delete(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        **kwargs: Any,
-    ) -> int:
-        """Insert, update, or delete data from the database.
-
-        Returns:
-            Row count affected by the operation.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
-            return getattr(cursor, "rowcount", -1)  # pyright: ignore[reportUnknownMemberType]
-
-    @overload
-    def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-    @overload
-    def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-    def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgSyncConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Union[ModelDTOT, dict[str, Any]]":
-        """Insert, update, or delete data with RETURNING clause.
-
-        Returns:
-            The returned row data, as either a model instance or dictionary.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
-            result = cursor.fetchone()
-            result = self.check_not_found(result)
-            return self.to_schema(cast("dict[str, Any]", result), schema_type=schema_type)
+        return ExecuteResult(
+            raw_result=None,
+            rows_affected=affected_rows,
+            metadata={"dialect": self.dialect, "status_message": status_message},
+        )
 
     def execute_script(
         self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        connection: "Optional[PsycopgSyncConnection]" = None,
+        sql: "Statement",
+        parameters: Optional[StatementParameterType] = None,
+        connection: Optional[PsycopgSyncConnection] = None,
         **kwargs: Any,
     ) -> str:
-        """Execute a script.
+        conn: PsycopgSyncConnection = self._connection(connection)
+        pyformat_sql, psycopg_params = self._process_sql_params(sql, parameters, **kwargs)
 
-        Returns:
-            Status message for the operation.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
-            return str(cursor.statusmessage) if cursor.statusmessage is not None else "DONE"
+        logger.debug("Executing script (Psycopg Sync): %s with params: %s", pyformat_sql, psycopg_params)
+
+        status_message_agg: list[str] = []
+        cursor = conn.cursor(row_factory=dict_row)
+        try:
+            cursor.execute(psycopg_sql.SQL(cast("LiteralString", pyformat_sql)), psycopg_params)
+            current_status = cursor.statusmessage
+            while current_status:
+                status_message_agg.append(current_status)
+                current_status = cursor.statusmessage if cursor.nextset() else None
+        finally:
+            cursor.close()
+
+        return "; ".join(s for s in status_message_agg if s) if status_message_agg else "DONE"
 
 
 class PsycopgAsyncDriver(
-    PsycopgDriverBase,
-    SQLTranslatorMixin["PsycopgAsyncConnection"],
-    AsyncDriverAdapterProtocol["PsycopgAsyncConnection"],
-    ResultConverter,
+    PsycopgDriverBase[PsycopgAsyncConnection],
+    AsyncDriverAdapterProtocol[PsycopgAsyncConnection],
 ):
     """Psycopg Async Driver Adapter."""
 
-    connection: "PsycopgAsyncConnection"
+    connection: PsycopgAsyncConnection
 
-    def __init__(self, connection: "PsycopgAsyncConnection") -> None:
+    def __init__(self, connection: PsycopgAsyncConnection) -> None:
+        super().__init__(connection=connection)
         self.connection = connection
 
     @staticmethod
     @asynccontextmanager
-    async def _with_cursor(connection: "PsycopgAsyncConnection") -> "AsyncGenerator[Any, None]":
+    async def _with_cursor(connection: PsycopgAsyncConnection) -> "AsyncGenerator[Any, None]":
         cursor = connection.cursor(row_factory=dict_row)
         try:
             yield cursor
         finally:
             await cursor.close()
 
-    # --- Public API Methods --- #
-    @overload
-    async def select(
+    async def execute(
         self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
+        sql: "Statement",
+        parameters: Optional[StatementParameterType] = None,
         *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        schema_type: None = None,
+        connection: Optional[PsycopgAsyncConnection] = None,
         **kwargs: Any,
-    ) -> "Sequence[dict[str, Any]]": ...
-    @overload
-    async def select(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Sequence[ModelDTOT]": ...
-    async def select(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        **kwargs: Any,
-    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
-        """Fetch data from the database.
-
-        Returns:
-            List of row data as either model instances or dictionaries.
-        """
+    ) -> StatementResultType:
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        sql, binds = self._process_sql_params(sql, parameters, *filters, **kwargs)
+
         async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
-            results = await cursor.fetchall()
-            if not results:
-                return []
+            await cursor.execute(sql, binds)  # type: ignore[arg-type]
 
-            return self.to_schema(cast("Sequence[dict[str, Any]]", results), schema_type=schema_type)
+            if cursor.description:
+                fetched_data: list[dict[str, Any]] = await cursor.fetchall()
+                column_names = [col.name for col in cursor.description]
+                return SelectResult(
+                    raw_result=fetched_data,
+                    rows=fetched_data,
+                    column_names=column_names,
+                    rows_affected=cursor.rowcount if cursor.rowcount != -1 else len(fetched_data),
+                    metadata={"dialect": self.dialect, "status_message": cursor.statusmessage},
+                )
+            return ExecuteResult(
+                raw_result=None,
+                rows_affected=cursor.rowcount,
+                metadata={"dialect": self.dialect, "status_message": cursor.statusmessage},
+            )
 
-    @overload
-    async def select_one(
+    async def execute_many(
         self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
+        sql: "Statement",
+        parameters: Optional[Sequence[StatementParameterType]] = None,
         *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        schema_type: None = None,
+        connection: Optional[PsycopgAsyncConnection] = None,
         **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-    @overload
-    async def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-    async def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Union[ModelDTOT, dict[str, Any]]":
-        """Fetch one row from the database.
+    ) -> StatementResultType:
+        conn: PsycopgAsyncConnection = self._connection(connection)
 
-        Returns:
-            The first row of the query results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
-            result = await cursor.fetchone()
-            result = self.check_not_found(result)
-            return self.to_schema(cast("dict[str, Any]", result), schema_type=schema_type)
+        if not parameters:
+            logger.debug("execute_many called with no parameters for SQL: %s", sql)
+            pyformat_sql_template, _ = self._process_sql_params(sql, None, *filters, **kwargs)
+            logger.debug("Validated empty-parameter SQL for execute_many (Psycopg Async): %s", pyformat_sql_template)
+            return ExecuteResult(raw_result=None, rows_affected=0, metadata={"dialect": self.dialect})
 
-    @overload
-    async def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[dict[str, Any]]": ...
-    @overload
-    async def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Optional[ModelDTOT]": ...
-    async def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
-        """Fetch one row from the database.
+        pyformat_sql_template, _ = self._process_sql_params(sql, parameters[0], *filters, **kwargs)
 
-        Returns:
-            The first row of the query results, or None if no results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
-            result = await cursor.fetchone()
-            if result is None:
-                return None
-            return self.to_schema(cast("dict[str, Any]", result), schema_type=schema_type)
+        adapted_parameters_sequence: list[Union[list[Any], dict[str, Any]]] = []
+        for param_set in parameters:
+            _, adapted_params = self._process_sql_params(sql, param_set, *filters, **kwargs)
+            adapted_parameters_sequence.append(adapted_params)
+        affected_rows: int = -1
+        status_message: Optional[str] = None
+        async with self._with_cursor(conn) as cursor:
+            await cursor.executemany(psycopg_sql.SQL(pyformat_sql_template), adapted_parameters_sequence)  # type: ignore[arg-type]
+            affected_rows = cursor.rowcount
+            status_message = cursor.statusmessage
 
-    @overload
-    async def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Any": ...
-    @overload
-    async def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "T": ...
-    async def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        schema_type: "Optional[type[T]]" = None,
-        **kwargs: Any,
-    ) -> "Union[T, Any]":
-        """Fetch a single value from the database.
-
-        Returns:
-            The first value from the first row of results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
-            result = await cursor.fetchone()
-            result = self.check_not_found(result)
-
-            value = next(iter(result.values()))  # Get the first value from the row
-            if schema_type is None:
-                return value
-            return schema_type(value)  # type: ignore[call-arg]
-
-    @overload
-    async def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[Any]": ...
-    @overload
-    async def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "Optional[T]": ...
-    async def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        schema_type: "Optional[type[T]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[T, Any]]":
-        """Fetch a single value from the database.
-
-        Returns:
-            The first value from the first row of results, or None if no results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
-            result = await cursor.fetchone()
-            if result is None:
-                return None
-
-            value = next(iter(result.values()))  # Get the first value from the row
-            if schema_type is None:
-                return value
-            return schema_type(value)  # type: ignore[call-arg]
-
-    async def insert_update_delete(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        **kwargs: Any,
-    ) -> int:
-        """Insert, update, or delete data from the database.
-
-        Returns:
-            Row count affected by the operation.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
-            return getattr(cursor, "rowcount", -1)  # pyright: ignore[reportUnknownMemberType]
-
-    @overload
-    async def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-    @overload
-    async def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-    async def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsycopgAsyncConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Union[ModelDTOT, dict[str, Any]]":
-        """Insert, update, or delete data with RETURNING clause.
-
-        Returns:
-            The returned row data, as either a model instance or dictionary.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
-            result = await cursor.fetchone()
-            result = self.check_not_found(result)
-            return self.to_schema(cast("dict[str, Any]", result), schema_type=schema_type)
+        return ExecuteResult(
+            raw_result=None,
+            rows_affected=affected_rows,
+            metadata={"dialect": self.dialect, "status_message": status_message},
+        )
 
     async def execute_script(
         self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        connection: "Optional[PsycopgAsyncConnection]" = None,
+        sql: "Statement",
+        parameters: Optional[StatementParameterType] = None,
+        connection: Optional[PsycopgAsyncConnection] = None,
         **kwargs: Any,
     ) -> str:
-        """Execute a script.
+        conn: PsycopgAsyncConnection = self._connection(connection)
+        pyformat_sql, psycopg_params = self._process_sql_params(sql, parameters, **kwargs)
 
-        Returns:
-            Status message for the operation.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
-            return str(cursor.statusmessage) if cursor.statusmessage is not None else "DONE"
+        logger.debug("Executing script (Psycopg Async): %s with params: %s", pyformat_sql, psycopg_params)
+        status_message_agg: list[str] = []
+        async with self._with_cursor(conn) as cursor:
+            await cursor.execute(psycopg_sql.SQL(pyformat_sql), psycopg_params)  # type: ignore[arg-type]
+            current_status = cursor.statusmessage
+            while current_status:
+                status_message_agg.append(current_status)
+                break
+
+        return "; ".join(s for s in status_message_agg if s) if status_message_agg else "DONE"

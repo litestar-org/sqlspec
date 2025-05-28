@@ -1,25 +1,32 @@
 # type: ignore
 import logging
-import re
+
+# import re # No longer needed
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
 from asyncmy import Connection
+from sqlglot import exp  # Add exp import
 
 from sqlspec.base import AsyncDriverAdapterProtocol
-from sqlspec.exceptions import ParameterStyleMismatchError
-from sqlspec.filters import StatementFilter
+from sqlspec.exceptions import SQLParsingError
+
+# from sqlspec.exceptions import ParameterStyleMismatchError # Might still be raised by SQLStatement
 from sqlspec.mixins import ResultConverter, SQLTranslatorMixin
-from sqlspec.statement import SQLStatement
-from sqlspec.typing import is_dict
+from sqlspec.sql import (
+    Query,  # Add Query and ParameterStyle
+    SQLStatement,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Sequence
 
     from asyncmy.cursors import Cursor
 
-    from sqlspec.typing import ModelDTOT, StatementParameterType, T
+    from sqlspec.filters import StatementFilter
+    from sqlspec.typing import ModelDTOT, Statement, StatementParameterType, T
+    # from sqlspec.typing import Statement as SQLStatementTyping # Remove alias if present, ensure direct import
 
 __all__ = ("AsyncmyDriver",)
 
@@ -27,8 +34,7 @@ AsyncmyConnection = Connection
 
 logger = logging.getLogger("sqlspec")
 
-# Pattern to identify MySQL-style placeholders (%s) for proper conversion
-MYSQL_PLACEHOLDER_PATTERN = re.compile(r"(?<!%)%s")
+# REMOVED: MYSQL_PLACEHOLDER_PATTERN = re.compile(r"(?<!%)%s")
 
 
 class AsyncmyDriver(
@@ -55,98 +61,115 @@ class AsyncmyDriver(
 
     def _process_sql_params(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         **kwargs: Any,
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Process SQL and parameters using SQLStatement with dialect support.
+    ) -> "tuple[str, Union[list[Any], dict[str, Any]]]":  # Conform to base return type
+        """Process SQL and parameters for asyncmy (MySQL/MariaDB).
+
+        Leverages SQLStatement or Query to parse/process SQL and parameters.
+        The AST is then rendered to MySQL-compatible SQL (using
+        `%(name)s` for named params, `%s` for positional), which asyncmy expects.
+        The appropriate parameter collection (list or dict) is returned.
 
         Args:
-            sql: The SQL statement to process.
-            parameters: The parameters to bind to the statement. Can be data or a StatementFilter.
-            *filters: Statement filters to apply.
-            **kwargs: Additional keyword arguments.
+            sql: The SQL statement, sqlglot Expression, or Query object to process.
+            parameters: The parameters to bind to the statement (for raw Statement).
+            *filters: Statement filters (logged as not applied for raw Statement).
+            **kwargs: Additional keyword arguments for SQLStatement.
 
         Raises:
-            ParameterStyleMismatchError: If the parameter style is not supported.
+            SQLParsingError: If SQL parsing fails.
 
         Returns:
-            A tuple of (sql, parameters) ready for execution.
+            A tuple of (sql_string, parameters_for_asyncmy) ready for execution.
         """
-        # Convert filters tuple to a list to allow modification
-        current_filters: list[StatementFilter] = list(filters)
-        actual_parameters: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
+        final_sql_str: str
+        raw_params_for_adapter: Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]
+        active_parameters_exist = False  # Flag to help with logging
 
-        if parameters is not None:
-            if isinstance(parameters, StatementFilter):
-                current_filters.insert(0, parameters)
-                # actual_parameters remains None
+        if isinstance(sql, Query):
+            temp_sql, temp_params_from_query, _ = sql.process()
+            # For asyncmy, the SQL from Query.process() needs to be in mysql (pyformat-like) style.
+            # We re-parse with SQLStatement to ensure correct dialect output and param extraction.
+            stmt_for_mysql = SQLStatement(temp_sql, temp_params_from_query, dialect=self.dialect)
+
+            if not stmt_for_mysql._parsed_expression:
+                msg = f"Asyncmy: Failed to parse SQL from Query.process() output: {temp_sql}"
+                raise SQLParsingError(msg)
+            final_sql_str = stmt_for_mysql._parsed_expression.sql(dialect=self.dialect)  # MySQL dialect for pyformat
+
+            active_parameters_exist = bool(stmt_for_mysql.parameter_info)
+            if not active_parameters_exist:
+                raw_params_for_adapter = None
+            elif isinstance(stmt_for_mysql.merged_parameters, dict):
+                raw_params_for_adapter = stmt_for_mysql.merged_parameters
+            elif isinstance(stmt_for_mysql.merged_parameters, (list, tuple)):
+                raw_params_for_adapter = tuple(stmt_for_mysql.merged_parameters)  # Keep as tuple for now
+            elif stmt_for_mysql.merged_parameters is not None:  # Scalar
+                raw_params_for_adapter = (stmt_for_mysql.merged_parameters,)
             else:
-                actual_parameters = parameters  # type: ignore[assignment]
+                raw_params_for_adapter = None
 
-        # Handle MySQL-specific placeholders (%s) which SQLGlot doesn't parse well
-        # If %s placeholders are present, handle them directly
-        mysql_placeholders_count = len(MYSQL_PLACEHOLDER_PATTERN.findall(sql))
+        else:  # Handle raw Statement
+            if filters:
+                logger.warning(
+                    "Filters are provided but `sql` is a raw Statement; filters will not be applied by AsyncmyDriver._process_sql_params."
+                )
 
-        if mysql_placeholders_count > 0:
-            # For MySQL format placeholders, minimal processing is needed
-            if actual_parameters is None:
-                if mysql_placeholders_count > 0:
-                    msg = f"asyncmy: SQL statement contains {mysql_placeholders_count} format placeholders ('%s'), but no parameters were provided. SQL: {sql}"
-                    raise ParameterStyleMismatchError(msg)
-                return sql, None
+            statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
+            if not statement._parsed_expression:
+                raw_sql_fallback = str(sql) if not isinstance(sql, exp.Expression) else sql.sql(dialect=self.dialect)
+                msg = f"Asyncmy: SQLStatement failed to parse SQL: {raw_sql_fallback}"
+                raise SQLParsingError(msg)
 
-            # Convert dict to tuple if needed
-            if is_dict(actual_parameters):
-                # MySQL's %s placeholders require positional params
-                msg = "asyncmy: Dictionary parameters provided with '%s' placeholders. MySQL format placeholders require tuple/list parameters."
-                raise ParameterStyleMismatchError(msg)
+            final_sql_str = statement._parsed_expression.sql(dialect=self.dialect)  # MySQL dialect for pyformat
+            active_parameters_exist = bool(statement.parameter_info)
 
-            # Convert to tuple (handles both scalar and sequence cases)
-            if not isinstance(actual_parameters, (list, tuple)):
-                # Scalar parameter case
-                return sql, (actual_parameters,)
+            if not active_parameters_exist:
+                raw_params_for_adapter = None
+            elif isinstance(statement.merged_parameters, dict):
+                raw_params_for_adapter = statement.merged_parameters
+            elif isinstance(statement.merged_parameters, (list, tuple)):
+                raw_params_for_adapter = tuple(statement.merged_parameters)  # Keep as tuple
+            elif statement.merged_parameters is not None:  # Scalar
+                # SQLStatement with convert_parameters should handle scalars appropriately based on context
+                # Forcing to tuple for safety if it reaches here as scalar and style is not clear
+                raw_params_for_adapter = (statement.merged_parameters,)
+            else:
+                raw_params_for_adapter = None
 
-            # Sequence parameter case - ensure appropriate length
-            if len(actual_parameters) != mysql_placeholders_count:  # type: ignore[arg-type]
-                msg = f"asyncmy: Parameter count mismatch. SQL expects {mysql_placeholders_count} '%s' placeholders, but {len(actual_parameters)} parameters were provided. SQL: {sql}"  # type: ignore[arg-type]
-                raise ParameterStyleMismatchError(msg)
+        # Conform to Union[list[Any], dict[str, Any]] for return type
+        final_params_for_adapter: Union[list[Any], dict[str, Any]]
+        if raw_params_for_adapter is None:
+            final_params_for_adapter = []
+        elif isinstance(raw_params_for_adapter, dict):
+            final_params_for_adapter = raw_params_for_adapter
+        elif isinstance(raw_params_for_adapter, tuple):  # Convert tuple to list
+            final_params_for_adapter = list(raw_params_for_adapter)
+        elif isinstance(raw_params_for_adapter, list):
+            final_params_for_adapter = raw_params_for_adapter
+        else:  # Should not happen
+            logger.warning(
+                f"Asyncmy: Unexpected type for raw_params_for_adapter: {type(raw_params_for_adapter)}. Defaulting to empty list."
+            )
+            final_params_for_adapter = []
 
-            return sql, tuple(actual_parameters)  # type: ignore[arg-type]
+        # Logging
+        if not final_params_for_adapter and active_parameters_exist:
+            style_hint = "named (%(name)s)" if isinstance(raw_params_for_adapter, dict) else "positional (%%s)"
+            logger.warning(
+                f"asyncmy: SQL may expect {style_hint} parameters, but an empty collection is being passed. SQL: {final_sql_str}"
+            )
 
-        # Create a SQLStatement with MySQL dialect
-        statement = SQLStatement(sql, actual_parameters, kwargs=kwargs, dialect=self.dialect)
-
-        # Apply any filters
-        for filter_obj in current_filters:  # Use the modified list of filters
-            statement = statement.apply_filter(filter_obj)
-
-        # Process the statement for execution
-        processed_sql, processed_params, _ = statement.process()
-
-        # Convert parameters to the format expected by MySQL
-        if processed_params is None:
-            return processed_sql, None
-
-        # For MySQL, ensure parameters are in the right format
-        if is_dict(processed_params):
-            # Dictionary parameters are not well supported by asyncmy
-            msg = "asyncmy: Dictionary parameters are not supported for MySQL placeholders. Use sequence parameters."
-            raise ParameterStyleMismatchError(msg)
-
-        # For sequence parameters, ensure they're a tuple
-        if isinstance(processed_params, (list, tuple)):
-            return processed_sql, tuple(processed_params)
-
-        # For scalar parameter, wrap in a tuple
-        return processed_sql, (processed_params,)
+        return final_sql_str, final_params_for_adapter
 
     # --- Public API Methods --- #
     @overload
     async def select(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -156,7 +179,7 @@ class AsyncmyDriver(
     @overload
     async def select(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -165,7 +188,7 @@ class AsyncmyDriver(
     ) -> "Sequence[ModelDTOT]": ...
     async def select(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -178,9 +201,9 @@ class AsyncmyDriver(
             List of row data as either model instances or dictionaries.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        final_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
+            await cursor.execute(final_sql, processed_params)
             results = await cursor.fetchall()
             if not results:
                 return []
@@ -190,7 +213,7 @@ class AsyncmyDriver(
     @overload
     async def select_one(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -200,7 +223,7 @@ class AsyncmyDriver(
     @overload
     async def select_one(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -209,7 +232,7 @@ class AsyncmyDriver(
     ) -> "ModelDTOT": ...
     async def select_one(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -222,9 +245,9 @@ class AsyncmyDriver(
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        final_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
+            await cursor.execute(final_sql, processed_params)
             result = await cursor.fetchone()
             result = self.check_not_found(result)
             column_names = [c[0] for c in cursor.description or []]
@@ -233,7 +256,7 @@ class AsyncmyDriver(
     @overload
     async def select_one_or_none(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -243,7 +266,7 @@ class AsyncmyDriver(
     @overload
     async def select_one_or_none(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -252,7 +275,7 @@ class AsyncmyDriver(
     ) -> "Optional[ModelDTOT]": ...
     async def select_one_or_none(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -265,9 +288,9 @@ class AsyncmyDriver(
             The first row of the query results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        final_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
+            await cursor.execute(final_sql, processed_params)
             result = await cursor.fetchone()
             if result is None:
                 return None
@@ -277,7 +300,7 @@ class AsyncmyDriver(
     @overload
     async def select_value(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -287,7 +310,7 @@ class AsyncmyDriver(
     @overload
     async def select_value(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -296,7 +319,7 @@ class AsyncmyDriver(
     ) -> "T": ...
     async def select_value(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -309,9 +332,9 @@ class AsyncmyDriver(
             The first value from the first row of results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        final_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
+            await cursor.execute(final_sql, processed_params)
             result = await cursor.fetchone()
             result = self.check_not_found(result)
             value = result[0]
@@ -322,7 +345,7 @@ class AsyncmyDriver(
     @overload
     async def select_value_or_none(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -332,7 +355,7 @@ class AsyncmyDriver(
     @overload
     async def select_value_or_none(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -341,7 +364,7 @@ class AsyncmyDriver(
     ) -> "Optional[T]": ...
     async def select_value_or_none(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -354,9 +377,9 @@ class AsyncmyDriver(
             The first value from the first row of results, or None if no results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        final_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
+            await cursor.execute(final_sql, processed_params)
             result = await cursor.fetchone()
             if result is None:
                 return None
@@ -367,7 +390,7 @@ class AsyncmyDriver(
 
     async def insert_update_delete(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -379,15 +402,15 @@ class AsyncmyDriver(
             Row count affected by the operation.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        final_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
         async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
+            await cursor.execute(final_sql, processed_params)
             return cursor.rowcount
 
     @overload
     async def insert_update_delete_returning(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -397,7 +420,7 @@ class AsyncmyDriver(
     @overload
     async def insert_update_delete_returning(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -406,7 +429,7 @@ class AsyncmyDriver(
     ) -> "ModelDTOT": ...
     async def insert_update_delete_returning(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AsyncmyConnection]" = None,
@@ -419,10 +442,10 @@ class AsyncmyDriver(
             The first row of results.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        final_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
         async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
+            await cursor.execute(final_sql, processed_params)
             result = await cursor.fetchone()
             if result is None:
                 return None
@@ -434,7 +457,7 @@ class AsyncmyDriver(
 
     async def execute_script(
         self,
-        sql: str,
+        sql: "Union[Statement, Query]",  # Allow Query type
         parameters: "Optional[StatementParameterType]" = None,
         connection: "Optional[AsyncmyConnection]" = None,
         **kwargs: Any,
@@ -445,9 +468,11 @@ class AsyncmyDriver(
             Status message for the operation.
         """
         connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
+        final_sql, processed_params = self._process_sql_params(sql, parameters, **kwargs)
         async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)
+            await cursor.execute(
+                final_sql, processed_params
+            )  # asyncmy execute can handle multi-statement scripts with parameters for the first
             return f"Script executed successfully. Rows affected: {cursor.rowcount}"
 
     def _connection(self, connection: "Optional[AsyncmyConnection]" = None) -> "AsyncmyConnection":

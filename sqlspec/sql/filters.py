@@ -4,12 +4,15 @@ from abc import ABC, abstractmethod
 from collections import abc
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Generic, Literal, Optional, Protocol, Union, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Generic, Literal, Optional, Protocol, Union, runtime_checkable
 
-from sqlglot import exp
+from sqlglot import Expression, exp
 from typing_extensions import TypeAlias, TypeVar
 
-from sqlspec.statement import SQLStatement
+if TYPE_CHECKING:
+    from sqlglot.expressions import Condition
+
+    from sqlspec.sql.statement import SQLStatement
 
 __all__ = (
     "BeforeAfter",
@@ -28,6 +31,11 @@ __all__ = (
 )
 
 T = TypeVar("T")
+FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
+"""Type variable for filter types.
+
+:class:`~advanced_alchemy.filters.StatementFilter`
+"""
 
 
 @runtime_checkable
@@ -35,14 +43,14 @@ class StatementFilter(Protocol):
     """Protocol for filters that can be appended to a statement."""
 
     @abstractmethod
-    def append_to_statement(self, statement: SQLStatement) -> SQLStatement:
+    def append_to_statement(self, query: "SQLStatement") -> "SQLStatement":
         """Append the filter to the statement.
 
         Args:
-            statement: The SQL statement to modify.
+            query: The SQL query object to modify.
 
         Returns:
-            The modified statement.
+            The modified query object.
         """
         raise NotImplementedError
 
@@ -58,26 +66,27 @@ class BeforeAfter(StatementFilter):
     after: Optional[datetime] = None
     """Filter results where field later than this."""
 
-    def append_to_statement(self, statement: SQLStatement) -> SQLStatement:
+    def append_to_statement(self, query: "SQLStatement") -> "SQLStatement":
         conditions = []
-        params: dict[str, Any] = {}
         col_expr = exp.column(self.field_name)
 
         if self.before:
-            param_name = statement.generate_param_name(f"{self.field_name}_before")
+            param_name = query.add_parameter(
+                self.before, name=query.get_unique_parameter_name(f"{self.field_name}_before")
+            )
             conditions.append(exp.LT(this=col_expr, expression=exp.Placeholder(this=param_name)))
-            params[param_name] = self.before
         if self.after:
-            param_name = statement.generate_param_name(f"{self.field_name}_after")
-            conditions.append(exp.GT(this=col_expr, expression=exp.Placeholder(this=param_name)))  # type: ignore[arg-type]
-            params[param_name] = self.after
+            param_name = query.add_parameter(
+                self.after, name=query.get_unique_parameter_name(f"{self.field_name}_after")
+            )
+            conditions.append(exp.GT(this=col_expr, expression=exp.Placeholder(this=param_name)))
 
         if conditions:
             final_condition = conditions[0]
             for cond in conditions[1:]:
-                final_condition = exp.And(this=final_condition, expression=cond)  # type: ignore[assignment]
-            statement.add_condition(final_condition, params)
-        return statement
+                final_condition = exp.And(this=final_condition, expression=cond)
+            query.where(final_condition)
+        return query
 
 
 @dataclass
@@ -91,33 +100,34 @@ class OnBeforeAfter(StatementFilter):
     on_or_after: Optional[datetime] = None
     """Filter results where field on or later than this."""
 
-    def append_to_statement(self, statement: SQLStatement) -> SQLStatement:
-        conditions = []
-        params: dict[str, Any] = {}
+    def append_to_statement(self, query: "SQLStatement") -> "SQLStatement":
+        conditions: list[exp.Expression] = []
         col_expr = exp.column(self.field_name)
 
         if self.on_or_before:
-            param_name = statement.generate_param_name(f"{self.field_name}_on_or_before")
+            param_name = query.add_parameter(
+                self.on_or_before, name=query.get_unique_parameter_name(f"{self.field_name}_on_or_before")
+            )
             conditions.append(exp.LTE(this=col_expr, expression=exp.Placeholder(this=param_name)))
-            params[param_name] = self.on_or_before
         if self.on_or_after:
-            param_name = statement.generate_param_name(f"{self.field_name}_on_or_after")
-            conditions.append(exp.GTE(this=col_expr, expression=exp.Placeholder(this=param_name)))  # type: ignore[arg-type]
-            params[param_name] = self.on_or_after
+            param_name = query.add_parameter(
+                self.on_or_after, name=query.get_unique_parameter_name(f"{self.field_name}_on_or_after")
+            )
+            conditions.append(exp.GTE(this=col_expr, expression=exp.Placeholder(this=param_name)))
 
         if conditions:
             final_condition = conditions[0]
             for cond in conditions[1:]:
-                final_condition = exp.And(this=final_condition, expression=cond)  # type: ignore[assignment]
-            statement.add_condition(final_condition, params)
-        return statement
+                final_condition = exp.And(this=final_condition, expression=cond)
+            query.where(final_condition)
+        return query
 
 
 class InAnyFilter(StatementFilter, ABC, Generic[T]):
     """Subclass for methods that have a `prefer_any` attribute."""
 
     @abstractmethod
-    def append_to_statement(self, statement: SQLStatement) -> SQLStatement:
+    def append_to_statement(self, query: "SQLStatement") -> "SQLStatement":
         raise NotImplementedError
 
 
@@ -132,26 +142,25 @@ class CollectionFilter(InAnyFilter[T]):
 
     An empty list will return an empty result set, however, if ``None``, the filter is not applied to the query, and all rows are returned. """
 
-    def append_to_statement(self, statement: SQLStatement) -> SQLStatement:
+    def append_to_statement(self, query: "SQLStatement") -> "SQLStatement":
         if self.values is None:
-            return statement
+            return query
 
         if not self.values:  # Empty collection
-            # Add a condition that is always false
-            statement.add_condition(exp.false())
-            return statement
+            query.where(exp.false())  # Ensures no rows are returned for an empty IN clause
+            return query
 
         placeholder_expressions: list[exp.Placeholder] = []
-        current_params: dict[str, Any] = {}
 
         for i, value_item in enumerate(self.values):
-            param_key = statement.generate_param_name(f"{self.field_name}_in_{i}")
+            param_key = query.add_parameter(
+                value_item, name=query.get_unique_parameter_name(f"{self.field_name}_in_{i}")
+            )
             placeholder_expressions.append(exp.Placeholder(this=param_key))
-            current_params[param_key] = value_item
 
         in_condition = exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions)
-        statement.add_condition(in_condition, current_params)
-        return statement
+        query.where(in_condition)
+        return query
 
 
 @dataclass
@@ -165,29 +174,29 @@ class NotInCollectionFilter(InAnyFilter[T]):
 
     An empty list or ``None`` will return all rows."""
 
-    def append_to_statement(self, statement: SQLStatement) -> SQLStatement:
-        if self.values is None or not self.values:  # Empty list or None, no filter applied
-            return statement
+    def append_to_statement(self, query: "SQLStatement") -> "SQLStatement":
+        if self.values is None or not self.values:
+            return query  # No filter applied if values is None or empty
 
         placeholder_expressions: list[exp.Placeholder] = []
-        current_params: dict[str, Any] = {}
 
         for i, value_item in enumerate(self.values):
-            param_key = statement.generate_param_name(f"{self.field_name}_notin_{i}")
+            param_key = query.add_parameter(
+                value_item, name=query.get_unique_parameter_name(f"{self.field_name}_notin_{i}")
+            )
             placeholder_expressions.append(exp.Placeholder(this=param_key))
-            current_params[param_key] = value_item
 
         in_expr = exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions)
         not_in_condition = exp.Not(this=in_expr)
-        statement.add_condition(not_in_condition, current_params)
-        return statement
+        query.where(not_in_condition)
+        return query
 
 
 class PaginationFilter(StatementFilter, ABC):
     """Subclass for methods that function as a pagination type."""
 
     @abstractmethod
-    def append_to_statement(self, statement: SQLStatement) -> SQLStatement:
+    def append_to_statement(self, query: "SQLStatement") -> "SQLStatement":
         raise NotImplementedError
 
 
@@ -200,15 +209,10 @@ class LimitOffset(PaginationFilter):
     offset: int
     """Value for ``OFFSET`` clause of query."""
 
-    def append_to_statement(self, statement: SQLStatement) -> SQLStatement:
-        # Generate parameter names for limit and offset
-        limit_param_name = statement.generate_param_name("limit_val")
-        offset_param_name = statement.generate_param_name("offset_val")
-
-        statement.add_limit(self.limit, param_name=limit_param_name)
-        statement.add_offset(self.offset, param_name=offset_param_name)
-
-        return statement
+    def append_to_statement(self, query: "SQLStatement") -> "SQLStatement":
+        query.limit(self.limit, use_parameter=True)
+        query.offset(self.offset, use_parameter=True)
+        return query
 
 
 @dataclass
@@ -220,15 +224,16 @@ class OrderBy(StatementFilter):
     sort_order: Literal["asc", "desc"] = "asc"
     """Sort ascending or descending"""
 
-    def append_to_statement(self, statement: SQLStatement) -> SQLStatement:
-        # Basic validation for sort_order, though Literal helps at type checking time
+    def append_to_statement(self, query: "SQLStatement") -> "SQLStatement":
         normalized_sort_order = self.sort_order.lower()
         if normalized_sort_order not in {"asc", "desc"}:
             normalized_sort_order = "asc"
 
-        statement.add_order_by(self.field_name, direction=cast("Literal['asc', 'desc']", normalized_sort_order))
-
-        return statement
+        if normalized_sort_order == "desc":
+            query.order_by(exp.column(self.field_name).desc())
+        else:
+            query.order_by(exp.column(self.field_name).asc())
+        return query
 
 
 @dataclass
@@ -242,80 +247,79 @@ class SearchFilter(StatementFilter):
     ignore_case: Optional[bool] = False
     """Should the search be case insensitive."""
 
-    def append_to_statement(self, statement: SQLStatement) -> SQLStatement:
+    def append_to_statement(self, query: "SQLStatement") -> "SQLStatement":
         if not self.value:
-            return statement
+            return query
 
-        search_val_param_name = statement.generate_param_name("search_val")
+        search_value_with_wildcards = f"%{self.value}%"
+        search_val_param_name = query.add_parameter(
+            search_value_with_wildcards, name=query.get_unique_parameter_name("search_val")
+        )
 
-        # The pattern %value% needs to be handled carefully.
-        params = {search_val_param_name: f"%{self.value}%"}
         pattern_expr = exp.Placeholder(this=search_val_param_name)
-
         like_op = exp.ILike if self.ignore_case else exp.Like
 
         if isinstance(self.field_name, str):
             condition = like_op(this=exp.column(self.field_name), expression=pattern_expr)
-            statement.add_condition(condition, params)
+            query.where(condition)
         elif isinstance(self.field_name, set) and self.field_name:
             field_conditions = [like_op(this=exp.column(field), expression=pattern_expr) for field in self.field_name]
             if not field_conditions:
-                return statement
+                return query
 
-            final_condition = field_conditions[0]
+            final_condition: Condition = field_conditions[0]
             for cond in field_conditions[1:]:
-                final_condition = exp.Or(this=final_condition, expression=cond)  # type: ignore[assignment]
-            statement.add_condition(final_condition, params)
+                final_condition = exp.Or(this=final_condition, expression=cond)
+            query.where(final_condition)
 
-        return statement
+        return query
 
 
 @dataclass
-class NotInSearchFilter(SearchFilter):  # Inherits field_name, value, ignore_case
+class NotInSearchFilter(SearchFilter):
     """Data required to construct a ``WHERE field_name NOT LIKE '%' || :value || '%'`` clause."""
 
-    def append_to_statement(self, statement: SQLStatement) -> SQLStatement:
+    def append_to_statement(self, query: "SQLStatement") -> "SQLStatement":
         if not self.value:
-            return statement
+            return query
 
-        search_val_param_name = statement.generate_param_name("not_search_val")
+        search_value_with_wildcards = f"%{self.value}%"
+        search_val_param_name = query.add_parameter(
+            search_value_with_wildcards, name=query.get_unique_parameter_name("not_search_val")
+        )
 
-        params = {search_val_param_name: f"%{self.value}%"}
         pattern_expr = exp.Placeholder(this=search_val_param_name)
-
         like_op = exp.ILike if self.ignore_case else exp.Like
 
         if isinstance(self.field_name, str):
             condition = exp.Not(this=like_op(this=exp.column(self.field_name), expression=pattern_expr))
-            statement.add_condition(condition, params)
+            query.where(condition)
         elif isinstance(self.field_name, set) and self.field_name:
-            field_conditions = [
+            field_conditions: list[Expression] = [
                 exp.Not(this=like_op(this=exp.column(field), expression=pattern_expr)) for field in self.field_name
             ]
             if not field_conditions:
-                return statement
+                return query
 
-            # Combine with AND: (field1 NOT LIKE pattern) AND (field2 NOT LIKE pattern) ...
             final_condition = field_conditions[0]
             for cond in field_conditions[1:]:
-                final_condition = exp.And(this=final_condition, expression=cond)  # type: ignore[assignment]
-            statement.add_condition(final_condition, params)
+                final_condition = exp.And(this=final_condition, expression=cond)
+            query.where(final_condition)
 
-        return statement
+        return query
 
 
-# Function to be imported in SQLStatement module
-def apply_filter(statement: SQLStatement, filter_obj: StatementFilter) -> SQLStatement:
-    """Apply a statement filter to a SQL statement.
+def apply_filter(query: "SQLStatement", filter_obj: StatementFilter) -> "SQLStatement":
+    """Apply a statement filter to a SQL query object.
 
     Args:
-        statement: The SQL statement to modify.
+        query: The SQL query object to modify.
         filter_obj: The filter to apply.
 
     Returns:
-        The modified statement.
+        The modified query object.
     """
-    return filter_obj.append_to_statement(statement)
+    return filter_obj.append_to_statement(query)
 
 
 FilterTypes: TypeAlias = Union[

@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
+from sqlglot import exp
 
 from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
 from sqlspec.filters import StatementFilter
@@ -12,8 +13,8 @@ from sqlspec.mixins import (
     SQLTranslatorMixin,
     SyncArrowBulkOperationsMixin,
 )
-from sqlspec.statement import SQLStatement
-from sqlspec.typing import ArrowTable, StatementParameterType, T
+from sqlspec.sql.statement import SQLStatement
+from sqlspec.typing import ArrowTable, Statement, StatementParameterType, T
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator, Mapping, Sequence
@@ -35,21 +36,26 @@ class OracleDriverBase:
 
     def _process_sql_params(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         **kwargs: Any,
     ) -> "tuple[str, Optional[Union[tuple[Any, ...], dict[str, Any]]]]":
-        """Process SQL and parameters using SQLStatement with dialect support.
+        """Process SQL and parameters for oracledb.
+
+        Leverages SQLStatement to parse SQL, validate parameters, and obtain a
+        sqlglot AST. If original parameters were a dictionary, :name style is used.
+        Otherwise, the AST is transformed to use Oracle positional placeholders
+        (e.g., :1, :2), and an ordered tuple of parameters is returned.
 
         Args:
-            sql: The SQL statement to process.
-            parameters: The parameters to bind to the statement.
+            sql: The SQL statement or sqlglot Expression to process.
+            parameters: The parameters to bind. Can be data or a StatementFilter.
             *filters: Statement filters to apply.
-            **kwargs: Additional keyword arguments.
+            **kwargs: Additional keyword arguments for SQLStatement.
 
         Returns:
-            A tuple of (sql, parameters) ready for execution.
+            A tuple of (sql_string, parameters_for_oracledb).
         """
         data_params_for_statement: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
         combined_filters_list: list[StatementFilter] = list(filters)
@@ -59,24 +65,56 @@ class OracleDriverBase:
                 combined_filters_list.insert(0, parameters)
             else:
                 data_params_for_statement = parameters
-        if data_params_for_statement is not None and not isinstance(data_params_for_statement, (list, tuple, dict)):
-            data_params_for_statement = (data_params_for_statement,)
-
-        if isinstance(data_params_for_statement, dict) and not data_params_for_statement and not kwargs:
-            return sql, None
 
         statement = SQLStatement(sql, data_params_for_statement, kwargs=kwargs, dialect=self.dialect)
+
         for filter_obj in combined_filters_list:
             statement = statement.apply_filter(filter_obj)
 
-        processed_sql, processed_params, _ = statement.process()
-        if processed_params is None:
-            return processed_sql, None
-        if isinstance(processed_params, dict):
-            return processed_sql, processed_params
-        if isinstance(processed_params, (list, tuple)):
-            return processed_sql, tuple(processed_params)
-        return processed_sql, (processed_params,)  # type: ignore[unreachable]
+        parsed_expr, final_ordered_params, placeholder_nodes_in_order = statement.process()
+
+        params_for_oracledb: Optional[Union[tuple[Any, ...], dict[str, Any]]] = None
+        final_sql: str
+
+        if not placeholder_nodes_in_order:
+            final_sql = parsed_expr.sql(dialect=self.dialect)
+            params_for_oracledb = None
+        elif isinstance(statement._merged_parameters, dict):  # noqa: SLF001
+            # Original params were a dict, use :name style (sqlglot default for Oracle with named nodes)
+            final_sql = parsed_expr.sql(dialect=self.dialect)
+            params_for_oracledb = statement._merged_parameters  # noqa: SLF001
+        else:
+            # Original params were a sequence/scalar, transform to :N style for Oracle
+            placeholder_map: dict[int, exp.Expression] = {
+                # Oracle uses :1, :2 for positional. sqlglot.exp.Placeholder(this=str(idx))
+                # should render correctly for the 'oracle' dialect.
+                id(p_node): exp.Placeholder(this=str(i + 1))
+                for i, p_node in enumerate(placeholder_nodes_in_order)
+            }
+
+            def replace_with_oracle_positional(node: exp.Expression) -> exp.Expression:
+                return placeholder_map.get(id(node), node)
+
+            transformed_expr = parsed_expr.transform(replace_with_oracle_positional, copy=True)
+            final_sql = transformed_expr.sql(dialect=self.dialect)
+            params_for_oracledb = final_ordered_params
+
+        # Safeguards
+        if params_for_oracledb is None and placeholder_nodes_in_order:
+            logger.warning("oracledb: SQL expects parameters, but they resolved to None. SQL: %s", final_sql)
+            params_for_oracledb = ()
+        elif isinstance(params_for_oracledb, dict) and not params_for_oracledb and placeholder_nodes_in_order:
+            logger.warning(
+                "oracledb: SQL may expect named parameters (:name), but an empty dictionary is being passed. SQL: %s",
+                final_sql,
+            )
+        elif isinstance(params_for_oracledb, tuple) and not params_for_oracledb and placeholder_nodes_in_order:
+            logger.warning(
+                "oracledb: SQL may expect positional parameters (:N), but an empty sequence is being passed. SQL: %s",
+                final_sql,
+            )
+
+        return final_sql, params_for_oracledb
 
 
 class OracleSyncDriver(
@@ -106,7 +144,7 @@ class OracleSyncDriver(
     @overload
     def select(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -116,7 +154,7 @@ class OracleSyncDriver(
     @overload
     def select(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -125,7 +163,7 @@ class OracleSyncDriver(
     ) -> "Sequence[ModelDTOT]": ...
     def select(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -160,7 +198,7 @@ class OracleSyncDriver(
     @overload
     def select_one(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -170,7 +208,7 @@ class OracleSyncDriver(
     @overload
     def select_one(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -179,7 +217,7 @@ class OracleSyncDriver(
     ) -> "ModelDTOT": ...
     def select_one(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -215,7 +253,7 @@ class OracleSyncDriver(
     @overload
     def select_one_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -225,7 +263,7 @@ class OracleSyncDriver(
     @overload
     def select_one_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -234,7 +272,7 @@ class OracleSyncDriver(
     ) -> "Optional[ModelDTOT]": ...
     def select_one_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -271,7 +309,7 @@ class OracleSyncDriver(
     @overload
     def select_value(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -281,7 +319,7 @@ class OracleSyncDriver(
     @overload
     def select_value(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -290,7 +328,7 @@ class OracleSyncDriver(
     ) -> "T": ...
     def select_value(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -325,7 +363,7 @@ class OracleSyncDriver(
     @overload
     def select_value_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -335,7 +373,7 @@ class OracleSyncDriver(
     @overload
     def select_value_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -344,7 +382,7 @@ class OracleSyncDriver(
     ) -> "Optional[T]": ...
     def select_value_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -379,7 +417,7 @@ class OracleSyncDriver(
 
     def insert_update_delete(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -407,7 +445,7 @@ class OracleSyncDriver(
     @overload
     def insert_update_delete_returning(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -417,7 +455,7 @@ class OracleSyncDriver(
     @overload
     def insert_update_delete_returning(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -426,7 +464,7 @@ class OracleSyncDriver(
     ) -> "ModelDTOT": ...
     def insert_update_delete_returning(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -458,7 +496,7 @@ class OracleSyncDriver(
 
     def execute_script(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         connection: "Optional[OracleSyncConnection]" = None,
         **kwargs: Any,
@@ -483,7 +521,7 @@ class OracleSyncDriver(
 
     def select_arrow(  # pyright: ignore[reportUnknownParameterType]
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleSyncConnection]" = None,
@@ -539,7 +577,7 @@ class OracleAsyncDriver(
     @overload
     async def select(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -549,7 +587,7 @@ class OracleAsyncDriver(
     @overload
     async def select(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -558,7 +596,7 @@ class OracleAsyncDriver(
     ) -> "Sequence[ModelDTOT]": ...
     async def select(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -594,7 +632,7 @@ class OracleAsyncDriver(
     @overload
     async def select_one(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -604,7 +642,7 @@ class OracleAsyncDriver(
     @overload
     async def select_one(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -613,7 +651,7 @@ class OracleAsyncDriver(
     ) -> "ModelDTOT": ...
     async def select_one(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -647,7 +685,7 @@ class OracleAsyncDriver(
     @overload
     async def select_one_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -657,7 +695,7 @@ class OracleAsyncDriver(
     @overload
     async def select_one_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -666,7 +704,7 @@ class OracleAsyncDriver(
     ) -> "Optional[ModelDTOT]": ...
     async def select_one_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -700,7 +738,7 @@ class OracleAsyncDriver(
     @overload
     async def select_value(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -710,7 +748,7 @@ class OracleAsyncDriver(
     @overload
     async def select_value(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -719,7 +757,7 @@ class OracleAsyncDriver(
     ) -> "T": ...
     async def select_value(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -754,7 +792,7 @@ class OracleAsyncDriver(
     @overload
     async def select_value_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -764,7 +802,7 @@ class OracleAsyncDriver(
     @overload
     async def select_value_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -773,7 +811,7 @@ class OracleAsyncDriver(
     ) -> "Optional[T]": ...
     async def select_value_or_none(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -808,7 +846,7 @@ class OracleAsyncDriver(
 
     async def insert_update_delete(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -836,7 +874,7 @@ class OracleAsyncDriver(
     @overload
     async def insert_update_delete_returning(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -846,7 +884,7 @@ class OracleAsyncDriver(
     @overload
     async def insert_update_delete_returning(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -855,7 +893,7 @@ class OracleAsyncDriver(
     ) -> "ModelDTOT": ...
     async def insert_update_delete_returning(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,
@@ -893,7 +931,7 @@ class OracleAsyncDriver(
 
     async def execute_script(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         connection: "Optional[OracleAsyncConnection]" = None,
         **kwargs: Any,
@@ -916,9 +954,9 @@ class OracleAsyncDriver(
             await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
             return str(cursor.rowcount)  # pyright: ignore[reportUnknownMemberType]
 
-    async def select_arrow(
+    async def select_arrow(  # pyright: ignore[reportUnknownParameterType]
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[OracleAsyncConnection]" = None,

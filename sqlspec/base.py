@@ -1,7 +1,7 @@
 # ruff: noqa: PLR6301
 import atexit
 import contextlib
-import re
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass, field
@@ -18,15 +18,21 @@ from typing import (
     overload,
 )
 
-from sqlspec.exceptions import NotFoundError
-from sqlspec.statement import SQLStatement
-from sqlspec.typing import ConnectionT, ModelDTOT, PoolT, StatementParameterType, T
+from sqlglot import exp
+
+from sqlspec.exceptions import NotFoundError, SQLValidationError
+from sqlspec.sql.filters import StatementFilter, apply_filter
+from sqlspec.sql.statement import SQLSanitizer, SQLStatement, SQLValidator, Statement
+from sqlspec.typing import ConnectionT, PoolT, StatementParameterType, T
 from sqlspec.utils.sync_tools import ensure_async_
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
-    from sqlspec.filters import StatementFilter
+    from sqlspec.sql.parameters import ParameterStyle
+    from sqlspec.sql.result import StatementResult
+
+StatementResultType = Union["StatementResult[dict[str, Any]]", "StatementResult[Any]"]
 
 
 __all__ = (
@@ -38,7 +44,6 @@ __all__ = (
     "NoPoolAsyncConfig",
     "NoPoolSyncConfig",
     "SQLSpec",
-    "SQLStatement",
     "SyncDatabaseConfig",
     "SyncDriverAdapterProtocol",
 )
@@ -50,16 +55,8 @@ ConfigT = TypeVar(
     bound="Union[Union[AsyncDatabaseConfig[Any, Any, Any], NoPoolAsyncConfig[Any, Any]], SyncDatabaseConfig[Any, Any, Any], NoPoolSyncConfig[Any, Any]]",
 )
 DriverT = TypeVar("DriverT", bound="Union[SyncDriverAdapterProtocol[Any], AsyncDriverAdapterProtocol[Any]]")
-# Regex to find :param or %(param)s style placeholders, skipping those inside quotes
-PARAM_REGEX = re.compile(
-    r"""
-    (?P<dquote>"([^"]|\\")*") | # Double-quoted strings
-    (?P<squote>'([^']|\\')*') | # Single-quoted strings
-    : (?P<var_name_colon>[a-zA-Z_][a-zA-Z0-9_]*) | # :var_name
-    % \( (?P<var_name_perc>[a-zA-Z_][a-zA-Z0-9_]*) \) s # %(var_name)s
-    """,
-    re.VERBOSE,
-)
+
+logger = logging.getLogger("sqlspec")
 
 
 @dataclass
@@ -259,6 +256,8 @@ class SQLSpec:
         name: Union[
             "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
             "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",  # pyright: ignore[reportInvalidTypeVarUse]
+            "NoPoolSyncConfig[ConnectionT, DriverT]",
+            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
     ) -> "ConnectionT": ...
 
@@ -268,6 +267,8 @@ class SQLSpec:
         name: Union[
             "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
             "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",  # pyright: ignore[reportInvalidTypeVarUse]
+            "NoPoolAsyncConfig[ConnectionT, DriverT]",
+            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
     ) -> "Awaitable[ConnectionT]": ...
 
@@ -278,6 +279,10 @@ class SQLSpec:
             "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
             "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
             "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+            "NoPoolSyncConfig[ConnectionT, DriverT]",
+            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
+            "NoPoolAsyncConfig[ConnectionT, DriverT]",
+            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
     ) -> "Union[ConnectionT, Awaitable[ConnectionT]]":
         """Create and return a new database connection from the specified configuration.
@@ -288,7 +293,10 @@ class SQLSpec:
         Returns:
             Either a connection instance or an awaitable that resolves to a connection instance.
         """
-        config = self.get_config(name)
+        if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
+            config = name
+        else:
+            config = self.get_config(name)
         return config.create_connection()
 
     @overload
@@ -297,6 +305,8 @@ class SQLSpec:
         name: Union[
             "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
             "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+            "NoPoolSyncConfig[ConnectionT, DriverT]",
+            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
     ) -> "DriverT": ...
 
@@ -306,6 +316,8 @@ class SQLSpec:
         name: Union[
             "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
             "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+            "NoPoolAsyncConfig[ConnectionT, DriverT]",
+            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
     ) -> "Awaitable[DriverT]": ...
 
@@ -316,6 +328,10 @@ class SQLSpec:
             "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
             "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
             "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+            "NoPoolSyncConfig[ConnectionT, DriverT]",
+            "NoPoolAsyncConfig[ConnectionT, DriverT]",
+            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
+            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
     ) -> "Union[DriverT, Awaitable[DriverT]]":
         """Create and return a new database session from the specified configuration.
@@ -326,7 +342,10 @@ class SQLSpec:
         Returns:
             Either a driver instance or an awaitable that resolves to a driver instance.
         """
-        config = self.get_config(name)
+        if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
+            config = name
+        else:
+            config = self.get_config(name)
         connection = self.get_connection(name)
         if isinstance(connection, Awaitable):
 
@@ -342,6 +361,8 @@ class SQLSpec:
         name: Union[
             "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
             "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+            "NoPoolSyncConfig[ConnectionT, DriverT]",
+            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
         *args: Any,
         **kwargs: Any,
@@ -353,6 +374,8 @@ class SQLSpec:
         name: Union[
             "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
             "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+            "NoPoolAsyncConfig[ConnectionT, DriverT]",
+            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
         *args: Any,
         **kwargs: Any,
@@ -365,6 +388,10 @@ class SQLSpec:
             "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
             "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
             "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+            "NoPoolSyncConfig[ConnectionT, DriverT]",
+            "NoPoolAsyncConfig[ConnectionT, DriverT]",
+            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
+            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
         *args: Any,
         **kwargs: Any,
@@ -379,7 +406,10 @@ class SQLSpec:
         Returns:
             Either a synchronous or asynchronous context manager that provides a database connection.
         """
-        config = self.get_config(name)
+        if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
+            config = name
+        else:
+            config = self.get_config(name)
         return config.provide_connection(*args, **kwargs)
 
     @overload
@@ -388,6 +418,8 @@ class SQLSpec:
         name: Union[
             "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
             "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+            "NoPoolSyncConfig[ConnectionT, DriverT]",
+            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
         *args: Any,
         **kwargs: Any,
@@ -399,6 +431,8 @@ class SQLSpec:
         name: Union[
             "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
             "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+            "NoPoolAsyncConfig[ConnectionT, DriverT]",
+            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
         *args: Any,
         **kwargs: Any,
@@ -411,6 +445,10 @@ class SQLSpec:
             "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
             "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
             "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+            "NoPoolSyncConfig[ConnectionT, DriverT]",
+            "NoPoolAsyncConfig[ConnectionT, DriverT]",
+            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
+            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
         *args: Any,
         **kwargs: Any,
@@ -425,19 +463,27 @@ class SQLSpec:
         Returns:
             Either a synchronous or asynchronous context manager that provides a database session.
         """
-        config = self.get_config(name)
+        if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
+            config = name
+        else:
+            config = self.get_config(name)
         return config.provide_session(*args, **kwargs)
 
     @overload
     def get_pool(
-        self, name: "type[Union[NoPoolSyncConfig[ConnectionT, DriverT], NoPoolAsyncConfig[ConnectionT, DriverT]]]"
+        self,
+        name: "Union[type[Union[NoPoolSyncConfig[ConnectionT, DriverT], NoPoolAsyncConfig[ConnectionT, DriverT]]], NoPoolSyncConfig[ConnectionT, DriverT], NoPoolAsyncConfig[ConnectionT, DriverT]]",
     ) -> "None": ...  # pyright: ignore[reportInvalidTypeVarUse]
-
     @overload
-    def get_pool(self, name: "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]") -> "type[PoolT]": ...  # pyright: ignore[reportInvalidTypeVarUse]
-
+    def get_pool(
+        self,
+        name: "Union[type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]], SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+    ) -> "type[PoolT]": ...  # pyright: ignore[reportInvalidTypeVarUse]
     @overload
-    def get_pool(self, name: "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]") -> "Awaitable[type[PoolT]]": ...  # pyright: ignore[reportInvalidTypeVarUse]
+    def get_pool(
+        self,
+        name: "Union[type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]],AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+    ) -> "Awaitable[type[PoolT]]": ...  # pyright: ignore[reportInvalidTypeVarUse]
 
     def get_pool(
         self,
@@ -446,6 +492,10 @@ class SQLSpec:
             "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
             "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
             "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+            "NoPoolSyncConfig[ConnectionT, DriverT]",
+            "NoPoolAsyncConfig[ConnectionT, DriverT]",
+            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
+            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
     ) -> "Union[type[PoolT], Awaitable[type[PoolT]], None]":
         """Create and return a connection pool from the specified configuration.
@@ -457,7 +507,11 @@ class SQLSpec:
             Either a pool instance, an awaitable that resolves to a pool instance, or None
             if the configuration does not support connection pooling.
         """
-        config = self.get_config(name)
+        config = (
+            name
+            if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig))
+            else self.get_config(name)
+        )
         if config.support_connection_pooling:
             return cast("Union[type[PoolT], Awaitable[type[PoolT]]]", config.create_pool())
         return None
@@ -468,6 +522,8 @@ class SQLSpec:
         name: Union[
             "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
             "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+            "NoPoolSyncConfig[ConnectionT, DriverT]",
+            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
     ) -> "None": ...
 
@@ -477,6 +533,8 @@ class SQLSpec:
         name: Union[
             "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
             "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+            "NoPoolAsyncConfig[ConnectionT, DriverT]",
+            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
     ) -> "Awaitable[None]": ...
 
@@ -487,6 +545,10 @@ class SQLSpec:
             "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
             "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
             "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
+            "NoPoolSyncConfig[ConnectionT, DriverT]",
+            "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
+            "NoPoolAsyncConfig[ConnectionT, DriverT]",
+            "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
     ) -> "Optional[Awaitable[None]]":
         """Close the connection pool for the specified configuration.
@@ -497,7 +559,10 @@ class SQLSpec:
         Returns:
             An awaitable if the configuration is async, otherwise None.
         """
-        config = self.get_config(name)
+        if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
+            config = name
+        else:
+            config = self.get_config(name)
         if config.support_connection_pooling:
             return config.close_pool()
         return None
@@ -508,16 +573,42 @@ class CommonDriverAttributes(Generic[ConnectionT]):
 
     dialect: str
     """The SQL dialect supported by the underlying database driver (e.g., 'postgres', 'mysql')."""
-    connection: ConnectionT
+    parameter_style: "ParameterStyle"
+    """The parameter style used by the driver (e.g., 'qmark', 'numeric', 'named')."""
+    connection: "ConnectionT"
     """The connection to the underlying database."""
-    __supports_arrow__: ClassVar[bool] = False
+    __supports_arrow__: "ClassVar[bool]" = False
     """Indicates if the driver supports Apache Arrow operations."""
+
+    @abstractmethod
+    def _get_placeholder_style(self) -> "ParameterStyle":
+        """Return the paramstyle expected by the driver (e.g., 'qmark', 'numeric', 'named')."""
+        raise NotImplementedError
 
     def _connection(self, connection: "Optional[ConnectionT]" = None) -> "ConnectionT":
         return connection if connection is not None else self.connection
 
     @staticmethod
-    def check_not_found(item_or_none: Optional[T] = None) -> T:
+    def returns_rows(expression: "exp.Expression") -> bool:
+        """Determine if a SQL expression is expected to return rows.
+
+        Args:
+            expression: The parsed sqlglot expression to analyze
+
+        Returns:
+            True if the statement returns rows, False otherwise
+        """
+        # Check for statements that return rows
+        if isinstance(expression, (exp.Select, exp.Show, exp.Describe, exp.Pragma, exp.With)):
+            return True
+        if isinstance(expression, exp.Command):
+            return True
+        if isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
+            return bool(expression.find(exp.Returning))
+        return False
+
+    @staticmethod
+    def check_not_found(item_or_none: "Optional[T]" = None) -> "T":
         """Raise :exc:`sqlspec.exceptions.NotFoundError` if ``item_or_none`` is ``None``.
 
         Args:
@@ -536,32 +627,83 @@ class CommonDriverAttributes(Generic[ConnectionT]):
 
     def _process_sql_params(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
+        validator: Optional["SQLValidator"] = None,
+        sanitizer: Optional["SQLSanitizer"] = None,
         **kwargs: Any,
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]]":
-        """Process SQL query and parameters using SQLStatement for validation and formatting.
+    ) -> "tuple[str, Union[dict[str, Any], list[Any]], SQLStatement]":
+        """Process SQL query and parameters using the Query object for validation and formatting.
 
         Args:
-            sql: The SQL query string.
+            sql: The SQL query string or sqlglot Expression.
             parameters: Parameters for the query.
             *filters: Statement filters to apply.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+            validator: Optional SQLValidator instance. If provided, its `min_risk_to_raise` attribute determines if validation issues cause an exception.
+            sanitizer: Optional SQLSanitizer instance.
+            **kwargs: Additional keyword arguments to merge with parameters for the Query object.
+
+        Raises:
+            SQLValidationError: If the SQL statement is not safe according to the validator's min_risk_to_raise.
 
         Returns:
-            A tuple containing the processed SQL query and parameters.
+            A tuple containing the processed SQL query string, a dictionary or list of parameters
+            suitable for the adapter, and the SQLStatement object containing the parsed expression.
         """
-        # Instantiate SQLStatement with parameters and kwargs for internal merging
-        stmt = SQLStatement(sql=sql, parameters=parameters, kwargs=kwargs or None)
+        processed_parameters = parameters
+        if kwargs:
+            if processed_parameters is None:
+                processed_parameters = kwargs
+            elif isinstance(processed_parameters, dict):
+                processed_parameters = {**processed_parameters, **kwargs}
 
-        # Apply all statement filters
+        stmt = (
+            SQLStatement(
+                sql=sql,
+                parameters=processed_parameters,
+                dialect=getattr(self, "dialect", None),
+                validator=validator,
+                sanitizer=sanitizer,
+            )
+            if not isinstance(sql, SQLStatement)
+            else sql
+        )
+        # If an existing SQLStatement is passed, and new validator/sanitizer are provided,
+        # the new ones take precedence as SQLStatement is re-created effectively if not an instance.
+        # If it is an instance, the existing validator/sanitizer on the instance will be used
+        # by its properties like .expression unless we explicitly re-set them or re-create.
+        # Current SQLStatement.__init__ defaults to new SQLValidator()/SQLSanitizer() if None is passed.
+        # So, if validator/sanitizer are passed here, they are used in construction.
+        # If sql is already an SQLStatement, its existing validator/sanitizer are used unless overridden.
+        # This part seems fine for now, the passed validator/sanitizer will be used for the new stmt.
+
+        # Apply filters
         for filter_obj in filters:
-            stmt = stmt.apply_filter(filter_obj)
+            stmt = apply_filter(stmt, filter_obj)
 
-        # Process uses the merged parameters internally
-        processed = stmt.process()
-        return processed[0], processed[1]  # Return only the SQL and parameters, discard the third element
+        # Perform validation using the statement's configured validator.
+        # The SQLStatement's .expression property itself applies sanitization upon first access.
+        # The SQLStatement's .validator.validate() then checks this (potentially sanitized) expression.
+        validation_result = stmt.validator.validate(stmt.expression, stmt._dialect)  # type: ignore[attr-defined]
+
+        # Use the validator's configured min_risk_to_raise to determine if an exception should be thrown
+        if (
+            not validation_result.is_safe
+            and stmt.validator.min_risk_to_raise is not None
+            and validation_result.risk_level.value >= stmt.validator.min_risk_to_raise.value
+        ):  # type: ignore[attr-defined]
+            # Construct a comprehensive error message
+            error_msg = f"SQL validation failed with risk level {validation_result.risk_level}:\n"
+            error_msg += "Issues:\n" + "\n".join([f"- {issue}" for issue in validation_result.issues])
+            if validation_result.warnings:
+                error_msg += "\nWarnings:\n" + "\n".join([f"- {warn}" for warn in validation_result.warnings])
+            raise SQLValidationError(error_msg, stmt.get_sql(), validation_result.risk_level)  # type: ignore[attr-defined]
+
+        placeholder_style = self._get_placeholder_style()
+        rendered_sql = stmt.get_sql(placeholder_style=placeholder_style)
+        rendered_params = stmt.get_ordered_parameters(placeholder_style=placeholder_style)
+        return rendered_sql, rendered_params, stmt
 
 
 class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generic[ConnectionT]):
@@ -570,234 +712,74 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     def __init__(self, connection: "ConnectionT", **kwargs: Any) -> None:
         self.connection = connection
 
-    @overload
     @abstractmethod
-    def select(
+    def execute(
         self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
+        sql: "Statement",
+        parameters: Optional["StatementParameterType"] = None,
+        *filters: "StatementFilter",
+        connection: Optional["ConnectionT"] = None,
+        validator: Optional["SQLValidator"] = None,
+        sanitizer: Optional["SQLSanitizer"] = None,
+        **kwargs: Any,
+    ) -> "StatementResultType":
+        """Execute a SQL statement and return a StatementResult.
+
+        This is the unified method for all SQL operations (SELECT, INSERT, UPDATE, DELETE).
+        Use the StatementResult methods to extract the data you need:
+        - result.all() for all rows
+        - result.one() for exactly one row
+        - result.one_or_none() for zero or one row
+        - result.scalar() for a single value
+        - result.affected_rows for INSERT/UPDATE/DELETE count
+
+        For Arrow operations, drivers may return ArrowResult containing Apache Arrow tables.
+
+        Example usage:
+            # Regular operation returning SelectResult
+            result = driver.execute("SELECT * FROM users WHERE id = ?", [1])
+            user = result.one()
+
+            # Arrow operation (if supported by driver)
+            result = driver.execute("SELECT * FROM large_table", format="arrow")
+            if isinstance(result, ArrowResult):
+                df = result.to_pandas()
+        """
+        ...
+
+    @abstractmethod
+    def execute_many(
+        self,
+        sql: "Statement",
+        parameters: "Optional[Sequence[StatementParameterType]]" = None,
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
-        schema_type: None = None,
+        validator: Optional["SQLValidator"] = None,
+        sanitizer: Optional["SQLSanitizer"] = None,
         **kwargs: Any,
-    ) -> "Sequence[dict[str, Any]]": ...
+    ) -> StatementResultType:
+        """Execute a SQL statement with multiple parameter sets.
 
-    @overload
-    @abstractmethod
-    def select(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Sequence[ModelDTOT]": ...
-
-    @abstractmethod
-    def select(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: Optional[type[ModelDTOT]] = None,
-        **kwargs: Any,
-    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]": ...
-
-    @overload
-    @abstractmethod
-    def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-
-    @overload
-    @abstractmethod
-    def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-
-    @abstractmethod
-    def select_one(
-        self,
-        sql: str,
-        parameters: Optional[StatementParameterType] = None,
-        *filters: "StatementFilter",
-        connection: Optional[ConnectionT] = None,
-        schema_type: Optional[type[ModelDTOT]] = None,
-        **kwargs: Any,
-    ) -> "Union[ModelDTOT, dict[str, Any]]": ...
-
-    @overload
-    @abstractmethod
-    def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[dict[str, Any]]": ...
-
-    @overload
-    @abstractmethod
-    def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Optional[ModelDTOT]": ...
-
-    @abstractmethod
-    def select_one_or_none(
-        self,
-        sql: str,
-        parameters: Optional[StatementParameterType] = None,
-        *filters: "StatementFilter",
-        connection: Optional[ConnectionT] = None,
-        schema_type: Optional[type[ModelDTOT]] = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]": ...
-
-    @overload
-    @abstractmethod
-    def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Any": ...
-
-    @overload
-    @abstractmethod
-    def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "T": ...
-
-    @abstractmethod
-    def select_value(
-        self,
-        sql: str,
-        parameters: Optional[StatementParameterType] = None,
-        *filters: "StatementFilter",
-        connection: Optional[ConnectionT] = None,
-        schema_type: Optional[type[T]] = None,
-        **kwargs: Any,
-    ) -> "Union[T, Any]": ...
-
-    @overload
-    @abstractmethod
-    def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[Any]": ...
-
-    @overload
-    @abstractmethod
-    def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "Optional[T]": ...
-
-    @abstractmethod
-    def select_value_or_none(
-        self,
-        sql: str,
-        parameters: Optional[StatementParameterType] = None,
-        *filters: "StatementFilter",
-        connection: Optional[ConnectionT] = None,
-        schema_type: Optional[type[T]] = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[T, Any]]": ...
-
-    @abstractmethod
-    def insert_update_delete(
-        self,
-        sql: str,
-        parameters: Optional[StatementParameterType] = None,
-        *filters: "StatementFilter",
-        connection: Optional[ConnectionT] = None,
-        **kwargs: Any,
-    ) -> int: ...
-
-    @overload
-    @abstractmethod
-    def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-
-    @overload
-    @abstractmethod
-    def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-
-    @abstractmethod
-    def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: Optional[StatementParameterType] = None,
-        *filters: "StatementFilter",
-        connection: Optional[ConnectionT] = None,
-        schema_type: Optional[type[ModelDTOT]] = None,
-        **kwargs: Any,
-    ) -> "Union[ModelDTOT, dict[str, Any]]": ...
+        Useful for batch INSERT, UPDATE, or DELETE operations.
+        """
+        ...
 
     @abstractmethod
     def execute_script(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: Optional[StatementParameterType] = None,
+        *filters: "StatementFilter",
         connection: Optional[ConnectionT] = None,
+        validator: Optional["SQLValidator"] = None,
+        sanitizer: Optional["SQLSanitizer"] = None,
         **kwargs: Any,
-    ) -> str: ...
+    ) -> str:
+        """Execute a multi-statement SQL script.
+
+        Returns a string with execution results/output.
+        """
+        ...
 
 
 class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generic[ConnectionT]):
@@ -806,234 +788,64 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     def __init__(self, connection: "ConnectionT") -> None:
         self.connection = connection
 
-    @overload
     @abstractmethod
-    async def select(
+    async def execute(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
-        schema_type: None = None,
+        validator: Optional["SQLValidator"] = None,
+        sanitizer: Optional["SQLSanitizer"] = None,
         **kwargs: Any,
-    ) -> "Sequence[dict[str, Any]]": ...
+    ) -> StatementResultType:
+        """Execute a SQL statement and return a StatementResult.
 
-    @overload
-    @abstractmethod
-    async def select(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Sequence[ModelDTOT]": ...
+        This is the unified method for all SQL operations (SELECT, INSERT, UPDATE, DELETE).
+        Use the StatementResult methods to extract the data you need:
+        - result.all() for all rows
+        - result.one() for exactly one row
+        - result.one_or_none() for zero or one row
+        - result.scalar() for a single value
+        - result.affected_rows for INSERT/UPDATE/DELETE count
 
-    @abstractmethod
-    async def select(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]": ...
-
-    @overload
-    @abstractmethod
-    async def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-
-    @overload
-    @abstractmethod
-    async def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
+        For Arrow operations, drivers may return ArrowResult containing Apache Arrow tables.
+        """
+        ...
 
     @abstractmethod
-    async def select_one(
+    async def execute_many(
         self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
+        sql: "Statement",
+        parameters: Optional[Sequence[StatementParameterType]] = None,
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
+        validator: Optional["SQLValidator"] = None,
+        sanitizer: Optional["SQLSanitizer"] = None,
         **kwargs: Any,
-    ) -> "Union[ModelDTOT, dict[str, Any]]": ...
+    ) -> StatementResultType:
+        """Execute a SQL statement with multiple parameter sets.
 
-    @overload
-    @abstractmethod
-    async def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[dict[str, Any]]": ...
-
-    @overload
-    @abstractmethod
-    async def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Optional[ModelDTOT]": ...
-
-    @abstractmethod
-    async def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]": ...
-
-    @overload
-    @abstractmethod
-    async def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Any": ...
-
-    @overload
-    @abstractmethod
-    async def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "T": ...
-
-    @abstractmethod
-    async def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "Optional[type[T]]" = None,
-        **kwargs: Any,
-    ) -> "Union[T, Any]": ...
-
-    @overload
-    @abstractmethod
-    async def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[Any]": ...
-
-    @overload
-    @abstractmethod
-    async def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "Optional[T]": ...
-
-    @abstractmethod
-    async def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "Optional[type[T]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[T, Any]]": ...
-
-    @abstractmethod
-    async def insert_update_delete(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        **kwargs: Any,
-    ) -> int: ...
-
-    @overload
-    @abstractmethod
-    async def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-
-    @overload
-    @abstractmethod
-    async def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-
-    @abstractmethod
-    async def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Union[ModelDTOT, dict[str, Any]]": ...
+        Useful for batch INSERT, UPDATE, or DELETE operations.
+        """
+        ...
 
     @abstractmethod
     async def execute_script(
         self,
-        sql: str,
+        sql: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
+        *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
+        validator: Optional["SQLValidator"] = None,
+        sanitizer: Optional["SQLSanitizer"] = None,
         **kwargs: Any,
-    ) -> str: ...
+    ) -> str:
+        """Execute a multi-statement SQL script.
+
+        Returns a string with execution results/output.
+        """
+        ...
 
 
 DriverAdapterProtocol = Union[SyncDriverAdapterProtocol[ConnectionT], AsyncDriverAdapterProtocol[ConnectionT]]
