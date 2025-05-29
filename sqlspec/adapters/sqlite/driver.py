@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 import contextlib
 import logging
 import sqlite3
@@ -56,7 +57,7 @@ class SqliteDriver(
         """Initialize the SQLite driver adapter."""
         super().__init__(connection, statement_config=statement_config)
 
-    def _get_placeholder_style(self) -> ParameterStyle:  # noqa: PLR6301
+    def _get_placeholder_style(self) -> ParameterStyle:
         """Return the placeholder style for SQLite."""
         return ParameterStyle.QMARK
 

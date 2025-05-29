@@ -1,7 +1,8 @@
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
+from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from sqlspec.adapters.psycopg.config._common import PsycopgGenericPoolConfig
@@ -40,9 +41,9 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     """Psycopg Pool configuration"""
     pool_instance: "Optional[AsyncConnectionPool]" = None
     """Optional pool to use"""
-    connection_type: "type[PsycopgAsyncConnection]" = field(init=False, default_factory=lambda: PsycopgAsyncConnection)  # type: ignore[assignment]
+    connection_type: "type[PsycopgAsyncConnection]" = field(init=False, default_factory=lambda: PsycopgAsyncConnection)
     """Type of the connection object"""
-    driver_type: "type[PsycopgAsyncDriver]" = field(init=False, default_factory=lambda: PsycopgAsyncDriver)  # type: ignore[type-abstract,unused-ignore]
+    driver_type: "type[PsycopgAsyncDriver]" = field(init=False, default_factory=lambda: PsycopgAsyncDriver)
     """Type of the driver object"""
 
     @property
@@ -103,7 +104,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """
         try:
             pool = await self.provide_pool()
-            return await pool.getconn()
+            conn = await pool.getconn()
+            return cast("PsycopgAsyncConnection", conn)
         except Exception as e:
             msg = f"Could not configure the Psycopg connection. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e
@@ -126,6 +128,11 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             raise ImproperConfigurationError(msg)
 
         pool_config = self.pool_config_dict
+
+        def configure_connection(conn: Any) -> None:
+            conn.row_factory = dict_row
+
+        pool_config.setdefault("configure", configure_connection)
         self.pool_instance = AsyncConnectionPool(open=False, **pool_config)
         if self.pool_instance is None:  # pyright: ignore[reportUnnecessaryComparison]
             msg = "Could not configure the 'pool_instance'. Please check your configuration."  # type: ignore[unreachable]
@@ -150,7 +157,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """
         pool = await self.provide_pool(*args, **kwargs)
         async with pool, pool.connection() as connection:
-            yield connection
+            yield cast("PsycopgAsyncConnection", connection)
 
     @asynccontextmanager
     async def provide_session(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[PsycopgAsyncDriver, None]":

@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
@@ -50,7 +51,7 @@ class AiosqliteDriver(
         """Initialize the aiosqlite driver adapter."""
         super().__init__(connection, statement_config=statement_config)
 
-    def _get_placeholder_style(self) -> ParameterStyle:  # noqa: PLR6301
+    def _get_placeholder_style(self) -> ParameterStyle:
         """Return the placeholder style for SQLite (qmark: ?)."""
         return ParameterStyle.QMARK
 

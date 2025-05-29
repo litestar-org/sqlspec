@@ -1,7 +1,8 @@
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
+from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 from sqlspec.adapters.psycopg.config._common import PsycopgGenericPoolConfig
@@ -39,9 +40,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     """Psycopg Pool configuration"""
     pool_instance: "Optional[ConnectionPool]" = None
     """Optional pool to use"""
-    connection_type: "type[PsycopgSyncConnection]" = field(init=False, default_factory=lambda: PsycopgSyncConnection)  # type: ignore[assignment]
+    connection_type: "type[PsycopgSyncConnection]" = field(init=False, default_factory=lambda: PsycopgSyncConnection)
     """Type of the connection object"""
-    driver_type: "type[PsycopgSyncDriver]" = field(init=False, default_factory=lambda: PsycopgSyncDriver)  # type: ignore[type-abstract,unused-ignore]
+    driver_type: "type[PsycopgSyncDriver]" = field(init=False, default_factory=lambda: PsycopgSyncDriver)
     """Type of the driver object"""
 
     @property
@@ -102,7 +103,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         """
         try:
             pool = self.provide_pool()
-            return pool.getconn()
+            conn = pool.getconn()
+            return cast("PsycopgSyncConnection", conn)
         except Exception as e:
             msg = f"Could not configure the Psycopg connection. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e
@@ -125,6 +127,11 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             raise ImproperConfigurationError(msg)
 
         pool_config = self.pool_config_dict
+
+        def configure_connection(conn: Any) -> None:
+            conn.row_factory = dict_row
+
+        pool_config.setdefault("configure", configure_connection)
         self.pool_instance = ConnectionPool(open=False, **pool_config)
         if self.pool_instance is None:  # pyright: ignore[reportUnnecessaryComparison]
             msg = "Could not configure the 'pool_instance'. Please check your configuration."  # type: ignore[unreachable]
@@ -149,7 +156,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         """
         pool = self.provide_pool(*args, **kwargs)
         with pool, pool.connection() as connection:
-            yield connection
+            yield cast("PsycopgSyncConnection", connection)
 
     @contextmanager
     def provide_session(self, *args: "Any", **kwargs: "Any") -> "Generator[PsycopgSyncDriver, None, None]":

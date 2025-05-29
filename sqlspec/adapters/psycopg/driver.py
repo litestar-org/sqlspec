@@ -30,7 +30,7 @@ __all__ = ("PsycopgAsyncConnection", "PsycopgAsyncDriver", "PsycopgSyncConnectio
 
 PsycopgSyncConnection = Connection[DictRow]
 PsycopgAsyncConnection = AsyncConnection[DictRow]
-ConnectionT = TypeVar("ConnectionT", bound=Union[Connection[Any], AsyncConnection[Any]])
+ConnectionT = TypeVar("ConnectionT", bound="Union[Connection[Any], AsyncConnection[Any]]")
 
 
 class PsycopgDriverBase(CommonDriverAttributes[ConnectionT], Generic[ConnectionT]):
@@ -303,7 +303,6 @@ class PsycopgSyncDriver(
             return current_status or "SCRIPT EXECUTED"
 
     def _connection(self, connection: Optional[PsycopgSyncConnection] = None) -> PsycopgSyncConnection:
-        """Get the connection to use for the operation."""
         return connection or self.connection
 
 
@@ -340,7 +339,6 @@ class PsycopgAsyncDriver(
     @staticmethod
     @asynccontextmanager
     async def _get_cursor(connection: PsycopgAsyncConnection) -> "AsyncGenerator[Any, None]":
-        """Get an async cursor for the connection."""
         cursor = connection.cursor(row_factory=dict_row)
         try:
             yield cursor
@@ -568,5 +566,4 @@ class PsycopgAsyncDriver(
             return current_status or "SCRIPT EXECUTED"
 
     def _connection(self, connection: Optional[PsycopgAsyncConnection] = None) -> PsycopgAsyncConnection:
-        """Get the connection to use for the operation."""
         return connection or self.connection

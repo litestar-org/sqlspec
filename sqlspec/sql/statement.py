@@ -32,7 +32,6 @@ from sqlspec.exceptions import (
 )
 from sqlspec.sql.filters import StatementFilter, apply_filter
 from sqlspec.sql.parameters import ParameterConverter, ParameterStyle, ParameterValidator
-from sqlspec.sql.preprocessors import ValidationResult
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -41,7 +40,7 @@ if TYPE_CHECKING:
     from sqlglot.expressions import Condition
 
     from sqlspec.sql.parameters import ParameterInfo
-    from sqlspec.sql.preprocessors import SQLTransformer, SQLValidator
+    from sqlspec.sql.preprocessors import SQLTransformer, SQLValidator, ValidationResult
     from sqlspec.typing import StatementParameterType
 
 __all__ = (
@@ -485,6 +484,8 @@ class SQLStatement:
         """
         if not self._statement_config.enable_validation:
             if self._validation_result is None:
+                from sqlspec.sql.preprocessors import ValidationResult
+
                 self._validation_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
             return self._validation_result
         if self._validation_result is None:
@@ -503,10 +504,6 @@ class SQLStatement:
             if self._validation_result.warnings:
                 error_msg += "\nWarnings:\n" + "\n".join([f"- {warn}" for warn in self._validation_result.warnings])
             raise SQLValidationError(error_msg, self.to_sql(), self._validation_result.risk_level)
-
-        if self._validation_result is None:
-            logger.warning("Validation result is unexpectedly None after validation process with validation enabled.")
-            return ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
 
         return self._validation_result
 

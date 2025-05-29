@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 import logging
 from collections.abc import Iterable, Sequence
 from contextlib import asynccontextmanager, contextmanager
@@ -33,7 +34,7 @@ __all__ = ("OracleAsyncConnection", "OracleAsyncDriver", "OracleSyncConnection",
 
 OracleSyncConnection = Connection
 OracleAsyncConnection = AsyncConnection
-ConnectionT = TypeVar("ConnectionT", bound=Union[Connection, AsyncConnection])
+ConnectionT = TypeVar("ConnectionT", bound="Union[Connection, AsyncConnection]")
 
 logger = logging.getLogger("sqlspec")
 
@@ -79,8 +80,7 @@ class OracleSyncDriver(
         super().__init__(connection=connection, statement_config=statement_config)
 
     @contextmanager
-    def _get_cursor(self, connection: Optional[OracleSyncConnection] = None) -> "Generator[Cursor, None, None]":
-        """Get a cursor for the connection."""
+    def _get_cursor(self, connection: "Optional[OracleSyncConnection]" = None) -> "Generator[Cursor, None, None]":
         conn_to_use = connection or self.connection
         cursor: Cursor = conn_to_use.cursor()
         try:
@@ -382,7 +382,6 @@ class OracleSyncDriver(
             return ArrowResult(raw_result=arrow_table)
 
     def _connection(self, connection: Optional[OracleSyncConnection] = None) -> OracleSyncConnection:
-        """Get the connection to use for the operation."""
         return connection or self.connection
 
 
@@ -420,7 +419,6 @@ class OracleAsyncDriver(
     async def _get_cursor(
         self, connection: Optional[OracleAsyncConnection] = None
     ) -> "AsyncGenerator[AsyncCursor, None]":
-        """Get an async cursor for the connection."""
         conn_to_use = connection or self.connection
         cursor: AsyncCursor = conn_to_use.cursor()
         try:
@@ -721,5 +719,4 @@ class OracleAsyncDriver(
             return ArrowResult(raw_result=arrow_table)
 
     def _connection(self, connection: Optional[OracleAsyncConnection] = None) -> OracleAsyncConnection:
-        """Get the connection to use for the operation."""
         return connection or self.connection

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from psycopg import Connection
+from psycopg.rows import DictRow
 from psycopg_pool import ConnectionPool
 
 from sqlspec.adapters.psycopg.config import PsycopgSyncConfig, PsycopgSyncPoolConfig
@@ -20,9 +21,9 @@ if TYPE_CHECKING:
 class MockPsycopgSync(PsycopgSyncConfig):
     """Mock implementation of PsycopgSync for testing."""
 
-    def create_connection(*args: Any, **kwargs: Any) -> Connection:
+    def create_connection(*args: Any, **kwargs: Any) -> Connection[DictRow]:
         """Mock create_connection method."""
-        return MagicMock(spec=Connection)
+        return MagicMock(spec=Connection[DictRow])
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
@@ -90,7 +91,7 @@ def test_with_all_values() -> None:
         max_idle=300.0,
         reconnect_timeout=5.0,
         num_workers=2,
-        configure=configure_connection,
+        configure=configure_connection,  # type: ignore
     )
 
     assert config.conninfo == "postgresql://user:pass@localhost:5432/db"

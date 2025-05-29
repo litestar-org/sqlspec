@@ -15,7 +15,7 @@ If placeholder_style is not specified, the method falls back to dialect-based lo
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
 import sqlglot
 from sqlglot import exp
@@ -26,13 +26,14 @@ from sqlspec.exceptions import (
     SQLInjectionError,
     SQLValidationError,
 )
-from sqlspec.sql.statement import SQLStatement
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.sql.statement import Statement
+    from sqlspec.sql.statement import SQLStatement
 
+# Define a type for SQL input
+Statement = Union[str, exp.Expression, "SQLStatement"]
 
 logger = logging.getLogger("sqlspec")
 
@@ -40,37 +41,9 @@ __all__ = (
     "SQLPreprocessor",
     "SQLTransformer",
     "SQLValidator",
+    "ValidationResult",
     "validate_sql",
 )
-
-
-class UsesExpression:
-    @staticmethod
-    def get_expression(statement: "Statement", dialect: "DialectType" = None) -> exp.Expression:
-        """Convert SQL input to expression.
-
-        Returns:
-            The parsed SQL expression.
-
-        Raises:
-            SQLValidationError: If SQL cannot be parsed.
-        """
-        if isinstance(statement, exp.Expression):
-            return statement
-        if isinstance(statement, SQLStatement):
-            expr = statement.expression
-            if expr is not None:
-                return expr
-            return sqlglot.parse_one(statement.sql, read=dialect)
-
-        if not statement or not statement.strip():
-            return exp.Select()
-
-        try:
-            return sqlglot.parse_one(statement, read=dialect)
-        except SQLGlotParseError as e:
-            msg = f"SQL parsing failed: {e}"
-            raise SQLValidationError(msg, statement, RiskLevel.HIGH) from e
 
 
 class ValidationResult:
@@ -100,6 +73,38 @@ class ValidationResult:
 
     def __bool__(self) -> bool:
         return self.is_safe
+
+
+class UsesExpression:
+    @staticmethod
+    def get_expression(statement: "Statement", dialect: "DialectType" = None) -> exp.Expression:
+        """Convert SQL input to expression.
+
+        Returns:
+            The parsed SQL expression.
+
+        Raises:
+            SQLValidationError: If SQL cannot be parsed.
+        """
+        if isinstance(statement, exp.Expression):
+            return statement
+
+        from sqlspec.sql.statement import SQLStatement
+
+        if isinstance(statement, SQLStatement):
+            expr = statement.expression
+            if expr is not None:
+                return expr
+            return sqlglot.parse_one(statement.sql, read=dialect)
+
+        if not statement or not statement.strip():
+            return exp.Select()
+
+        try:
+            return sqlglot.parse_one(statement, read=dialect)
+        except SQLGlotParseError as e:
+            msg = f"SQL parsing failed: {e}"
+            raise SQLValidationError(msg, statement, RiskLevel.HIGH) from e
 
 
 class SQLPreprocessor(UsesExpression):
@@ -360,6 +365,8 @@ def validate_sql(statement: "Statement", dialect: "DialectType" = None, strict: 
     Returns:
         ValidationResult with detailed information
     """
+    from sqlspec.sql.statement import SQLStatement
+
     if isinstance(statement, SQLStatement):
         config = statement.config
         if statement.config.strict_mode != strict:
