@@ -1,3 +1,4 @@
+# ruff: noqa: BLE001
 import datetime
 import logging
 from collections.abc import Iterable, Iterator, Sequence

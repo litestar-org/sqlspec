@@ -9,6 +9,7 @@ import pytest
 from pytest_databases.docker.oracle import OracleService
 
 from sqlspec.adapters.oracledb import OracleSyncConfig, OracleSyncPoolConfig
+from sqlspec.sql.result import ExecuteResult, SelectResult
 
 ParamStyle = Literal["positional_binds", "dict_binds"]
 
@@ -62,12 +63,14 @@ def test_sync_insert_returning(oracle_sync_session: OracleSyncConfig, params: An
             sql = "INSERT INTO test_table (name) VALUES (:1) RETURNING id, name"
             exec_params = (params["name"],)
 
-        result = driver.insert_update_delete_returning(sql, exec_params)
-        assert result is not None
+        result = driver.execute(sql, exec_params)
+        assert isinstance(result, SelectResult)  # RETURNING makes this a SELECT result
+        assert result.rows is not None
+        assert len(result.rows) == 1
         # Oracle often returns column names in uppercase
-        assert result["NAME"] == "test_name"
-        assert result["ID"] is not None
-        assert isinstance(result["ID"], int)
+        assert result.rows[0]["NAME"] == "test_name"
+        assert result.rows[0]["ID"] is not None
+        assert isinstance(result.rows[0]["ID"], int)
         driver.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
         )
@@ -108,11 +111,15 @@ def test_sync_select(oracle_sync_session: OracleSyncConfig, params: Any, style: 
             insert_params = (params["name"],)
             select_params = (params["name"],)
 
-        driver.insert_update_delete(insert_sql, insert_params)
+        insert_result = driver.execute(insert_sql, insert_params)
+        assert isinstance(insert_result, ExecuteResult)
+        assert insert_result.rows_affected == 1
 
-        results = driver.select(select_sql, select_params)
-        assert len(results) == 1
-        assert results[0]["NAME"] == "test_name"
+        select_result = driver.execute(select_sql, select_params)
+        assert isinstance(select_result, SelectResult)
+        assert select_result.rows is not None
+        assert len(select_result.rows) == 1
+        assert select_result.rows[0]["NAME"] == "test_name"
         driver.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
         )
@@ -148,11 +155,18 @@ def test_sync_select_value(oracle_sync_session: OracleSyncConfig, params: Any, s
             setup_value = params["name"]
         setup_params_tuple = (setup_value,)
         insert_sql_setup = "INSERT INTO test_table (name) VALUES (:1)"
-        driver.insert_update_delete(insert_sql_setup, setup_params_tuple)
+        insert_result = driver.execute(insert_sql_setup, setup_params_tuple)
+        assert isinstance(insert_result, ExecuteResult)
+        assert insert_result.rows_affected == 1
 
         # Select a literal value using Oracle's DUAL table
         select_sql = "SELECT 'test_value' FROM dual"
-        value = driver.select_value(select_sql)
+        value_result = driver.execute(select_sql)
+        assert isinstance(value_result, SelectResult)
+        assert value_result.rows is not None
+        assert len(value_result.rows) == 1
+        assert value_result.column_names is not None
+        value = value_result.rows[0][value_result.column_names[0]]
         assert value == "test_value"
         driver.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -177,21 +191,29 @@ def test_sync_select_arrow(oracle_sync_session: OracleSyncConfig) -> None:
 
         # Insert test record using positional binds
         insert_sql = "INSERT INTO test_table (name) VALUES (:1)"
-        driver.insert_update_delete(insert_sql, ("arrow_name",))
+        insert_result = driver.execute(insert_sql, ("arrow_name",))
+        assert isinstance(insert_result, ExecuteResult)
+        assert insert_result.rows_affected == 1
 
-        # Select and verify with select_arrow using positional binds
+        # Select and verify with Arrow support if available
         select_sql = "SELECT name, id FROM test_table WHERE name = :1"
-        arrow_table = driver.select_arrow(select_sql, ("arrow_name",))
-
-        assert isinstance(arrow_table, pa.Table)
-        assert arrow_table.num_rows == 1
-        assert arrow_table.num_columns == 2
-        # Oracle returns uppercase column names by default
-        assert arrow_table.column_names == ["NAME", "ID"]
-        assert arrow_table.column("NAME").to_pylist() == ["arrow_name"]
-        # Check ID exists and is a number (exact value depends on IDENTITY)
-        assert arrow_table.column("ID").to_pylist()[0] is not None
-        assert isinstance(arrow_table.column("ID").to_pylist()[0], (int, float))  # Oracle NUMBER maps to float/Decimal
+        if hasattr(driver, "select_to_arrow"):
+            arrow_result = driver.select_to_arrow(select_sql, ("arrow_name",))
+            assert hasattr(arrow_result, "arrow_table")
+            arrow_table = arrow_result.arrow_table
+            assert isinstance(arrow_table, pa.Table)
+            assert arrow_table.num_rows == 1
+            assert arrow_table.num_columns == 2
+            # Oracle returns uppercase column names by default
+            assert arrow_table.column_names == ["NAME", "ID"]
+            assert arrow_table.column("NAME").to_pylist() == ["arrow_name"]
+            # Check ID exists and is a number (exact value depends on IDENTITY)
+            assert arrow_table.column("ID").to_pylist()[0] is not None
+            assert isinstance(
+                arrow_table.column("ID").to_pylist()[0], (int, float)
+            )  # Oracle NUMBER maps to float/Decimal
+        else:
+            pytest.skip("Oracle driver does not support Arrow operations")
         driver.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
         )

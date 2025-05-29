@@ -347,7 +347,7 @@ def test_convert_parameters_without_validation() -> None:
     converter = ParameterConverter()
 
     sql = "SELECT * FROM users WHERE id = ?"
-    params = {}  # Missing parameter, but validation disabled
+    params: dict[str, Any] = {}  # Missing parameter, but validation disabled
 
     # Should not raise when validation is disabled
     _, param_info, merged_params, _ = converter.convert_parameters(sql, params, validate=False)

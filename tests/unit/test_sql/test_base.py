@@ -185,14 +185,14 @@ def async_non_pool_config() -> MockAsyncNonPoolConfig:
 
 
 @pytest.fixture(scope="session")
-def driver_attributes() -> CommonDriverAttributes:
+def driver_attributes() -> CommonDriverAttributes[Any]:
     """Create a CommonDriverAttributes instance for testing the SQL detection.
 
     Returns:
         A CommonDriverAttributes instance.
     """
 
-    class TestDriverAttributes(CommonDriverAttributes):
+    class TestDriverAttributes(CommonDriverAttributes[Any]):
         def __init__(self) -> None:
             super().__init__()
             self.dialect = "sqlite"
@@ -276,7 +276,7 @@ STATEMENT_RETURNS_ROWS_TEST_CASES = [
 
 @pytest.mark.parametrize(("sql", "expected_returns_rows", "description"), STATEMENT_RETURNS_ROWS_TEST_CASES)
 def test_returns_rows(
-    driver_attributes: CommonDriverAttributes, sql: str, expected_returns_rows: bool, description: str
+    driver_attributes: CommonDriverAttributes[Any], sql: str, expected_returns_rows: bool, description: str
 ) -> None:
     """Test the robust SQL statement detection method.
 
@@ -298,7 +298,7 @@ def test_returns_rows(
         pytest.fail(f"{description}: Failed to parse SQL '{sql}': {e}")
 
 
-def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAttributes) -> None:
+def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAttributes) -> None:  # pyright: ignore
     """Test that returns_rows handles invalid expressions gracefully."""
     # Test with None expression
     result = driver_attributes.returns_rows(None)  # type: ignore[arg-type]
@@ -314,7 +314,7 @@ def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAtt
         pass
 
 
-def test_returns_rows_expression_types(driver_attributes: CommonDriverAttributes) -> None:
+def test_returns_rows_expression_types(driver_attributes: CommonDriverAttributes) -> None:  # pyright: ignore
     """Test specific sqlglot expression types to ensure comprehensive coverage."""
     select_expr = exp.Select()
     assert driver_attributes.returns_rows(select_expr) is True, "Select expression should return rows"

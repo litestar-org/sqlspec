@@ -12,8 +12,7 @@ from sqlglot import exp
 from sqlglot.dialects.dialect import DialectType
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.sql.preprocessors import validate_sql
-from sqlspec.sql.statement import ValidationResult
+from sqlspec.sql.preprocessors import ValidationResult, validate_sql
 
 __all__ = (
     "QueryBuilder",

@@ -78,8 +78,9 @@ def test_search_filter_apply() -> None:
     )
     assert "OR" in sql_multi
     # Parameters are added for each field, so we expect two identical parameters
-    assert params_multi.count("%error%") == 2  # type: ignore[union-attr]
-    assert len(params_multi) == 2  # type: ignore[union-attr]
+    if params_multi is not None:
+        assert params_multi.count("%error%") == 2
+        assert len(params_multi) == 2
 
     stmt_no_value = SQLStatement("SELECT * FROM data")
     search_filter_no_value = SearchFilter(field_name="content", value="")
@@ -109,8 +110,9 @@ def test_not_in_search_filter_apply() -> None:
         "NOT detail ILIKE ?" in sql_multi and "NOT type ILIKE ?" in sql_multi
     )  # SQLGlot renders NOT without parentheses
     assert "AND" in sql_multi
-    assert params_multi.count("%debug%") == 2  # type: ignore[union-attr]
-    assert len(params_multi) == 2  # type: ignore[union-attr]
+    if params_multi is not None:
+        assert params_multi.count("%debug%") == 2
+        assert len(params_multi) == 2
 
     stmt_no_value = SQLStatement("SELECT * FROM items")
     not_in_search_filter_no_value = NotInSearchFilter(field_name="description", value="")

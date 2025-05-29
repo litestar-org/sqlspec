@@ -3,6 +3,7 @@
 import pytest
 
 from sqlspec.adapters.duckdb.config import DuckDBConfig
+from sqlspec.sql.result import SelectResult
 
 
 @pytest.mark.xdist_group("duckdb")
@@ -25,4 +26,10 @@ def test_connection() -> None:
     with config.provide_session() as session:
         assert session is not None
         # Test basic query through session
-        result = session.select_value("SELECT 1", {})
+        select_result = session.execute("SELECT 1")
+        assert isinstance(select_result, SelectResult)
+        assert select_result.rows is not None
+        assert len(select_result.rows) == 1
+        assert select_result.column_names is not None
+        result = select_result.rows[0][select_result.column_names[0]]
+        assert result == 1

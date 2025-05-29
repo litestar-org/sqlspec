@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig, PsqlpyPoolConfig
+from sqlspec.sql.result import SelectResult
 
 if TYPE_CHECKING:
     from pytest_databases.docker.postgres import PostgresService
@@ -59,7 +60,12 @@ async def test_provide_session_context_manager(psqlpy_config: PsqlpyConfig) -> N
         assert driver is not None
         assert driver.connection is not None
         # Test a simple query within the session
-        val = await driver.select_value("SELECT 'test'")
+        result = await driver.execute("SELECT 'test'")
+        assert isinstance(result, SelectResult)
+        assert result.rows is not None
+        assert len(result.rows) == 1
+        assert result.column_names is not None
+        val = result.rows[0][result.column_names[0]]
         assert val == "test"
 
     # After exiting context, connection should be released/closed (handled by config)

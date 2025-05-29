@@ -11,13 +11,11 @@ from sqlspec.exceptions import (
     SQLValidationError,
 )
 from sqlspec.sql.parameters import ParameterStyle
+from sqlspec.sql.preprocessors import SQLTransformer, SQLValidator, validate_sql
 from sqlspec.sql.statement import (
     SQLStatement,
-    SQLTransformer,
-    SQLValidator,
     StatementConfig,
     ValidationResult,
-    validate_sql,
 )
 
 # Basic Initialization Tests
@@ -354,7 +352,7 @@ def test_no_validation_error_if_risk_below_threshold(validator_mock_fixture: Moc
 def transformer_mock_fixture() -> Mock:
     mock = Mock(spec=SQLTransformer)
     # Define a default return value for transform to avoid issues if not overridden
-    mock.transform.side_effect = lambda sql_input, dialect=None: sql_input
+    mock.transform.side_effect = lambda sql_input, dialect=None: sql_input  # pyright: ignore
     return mock
 
 

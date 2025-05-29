@@ -818,7 +818,7 @@ class SQLStatement:
 
             new_expr = new_expr.where(condition_expression)  # type: ignore[attr-defined] # sqlglot's where appends
 
-        return self.copy(statement=new_expr)
+        return self.copy(statement=new_expr, parameters=self._merged_parameters)
 
     def limit(self, limit_value: int, use_parameter: bool = False) -> "SQLStatement":
         """Applies a LIMIT clause and returns a new SQLStatement.
@@ -836,7 +836,8 @@ class SQLStatement:
             new_stmt = self.add_named_parameter(param_name, limit_value)
             expr_with_param = new_stmt._get_current_expression_for_modification()
             expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
-            return new_stmt.copy(statement=expr_with_param)
+            # Preserve parameters from new_stmt by copying its internal state
+            return new_stmt.copy(statement=expr_with_param, parameters=new_stmt._merged_parameters)
 
         new_expr = new_expr.limit(limit_value)  # type: ignore[attr-defined]
         return self.copy(statement=new_expr)
@@ -857,7 +858,8 @@ class SQLStatement:
             new_stmt = self.add_named_parameter(param_name, offset_value)
             expr_with_param = new_stmt._get_current_expression_for_modification()
             expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
-            return new_stmt.copy(statement=expr_with_param)
+            # Preserve parameters from new_stmt by copying its internal state
+            return new_stmt.copy(statement=expr_with_param, parameters=new_stmt._merged_parameters)
 
         new_expr = new_expr.offset(offset_value)  # type: ignore[attr-defined]
         return self.copy(statement=new_expr)
@@ -988,11 +990,9 @@ class SQLStatement:
         else:
             hashable_params = (self._merged_parameters,)
 
-        return hash(
-            (
-                str(self._sql),
-                hashable_params,
-                self._dialect,
-                self._statement_config,
-            )
-        )
+        return hash((
+            str(self._sql),
+            hashable_params,
+            self._dialect,
+            self._statement_config,
+        ))

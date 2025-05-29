@@ -577,7 +577,7 @@ class CommonDriverAttributes(Generic[ConnectionT]):
     """The parameter style used by the driver (e.g., 'qmark', 'numeric', 'named')."""
     connection: "ConnectionT"
     """The connection to the underlying database."""
-    statement_config: "StatementConfig" = field(default_factory=StatementConfig)
+    statement_config: "StatementConfig"
     """Configuration for SQL statements, including validation and sanitization settings."""
 
     __supports_arrow__: "ClassVar[bool]" = False
@@ -635,7 +635,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
 
     def __init__(self, connection: "ConnectionT", statement_config: "Optional[StatementConfig]" = None) -> None:
         self.connection = connection
-        self.statement_config = statement_config if statement_config is not None else self.statement_config
+        self.statement_config = statement_config if statement_config is not None else StatementConfig()
 
     @abstractmethod
     def execute(
@@ -709,7 +709,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
 
     def __init__(self, connection: "ConnectionT", statement_config: Optional[StatementConfig] = None) -> None:
         self.connection = connection
-        self.statement_config = statement_config if statement_config is not None else self.statement_config
+        self.statement_config = statement_config if statement_config is not None else StatementConfig()
 
     @abstractmethod
     async def execute(

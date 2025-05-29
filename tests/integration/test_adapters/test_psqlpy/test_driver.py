@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import pytest
 
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig, PsqlpyPoolConfig
+from sqlspec.sql.result import ExecuteResult, SelectResult
 
 if TYPE_CHECKING:
     from pytest_databases.docker.postgres import PostgresService
@@ -66,10 +67,12 @@ async def test_insert_returning_param_styles(psqlpy_config: PsqlpyConfig, params
         sql = "INSERT INTO test_table (name) VALUES (:name) RETURNING *"
 
     async with psqlpy_config.provide_session() as driver:
-        result = await driver.insert_update_delete_returning(sql, params)
-        assert result is not None
-        assert result["name"] == "test_name"
-        assert result["id"] is not None
+        result = await driver.execute(sql, params)
+        assert isinstance(result, SelectResult)  # RETURNING makes this a SELECT result
+        assert result.rows is not None
+        assert len(result.rows) == 1
+        assert result.rows[0]["name"] == "test_name"
+        assert result.rows[0]["id"] is not None
 
 
 @pytest.mark.parametrize(
@@ -84,7 +87,9 @@ async def test_select_param_styles(psqlpy_config: PsqlpyConfig, params: Any, sty
     # Insert test data first (using tuple style for simplicity here)
     insert_sql = "INSERT INTO test_table (name) VALUES (?)"
     async with psqlpy_config.provide_session() as driver:
-        await driver.insert_update_delete(insert_sql, ("test_name",))
+        insert_result = await driver.execute(insert_sql, ("test_name",))
+        assert isinstance(insert_result, ExecuteResult)
+        assert insert_result.rows_affected == 1
 
         # Prepare select SQL based on style
         if style == "tuple_binds":
@@ -92,9 +97,11 @@ async def test_select_param_styles(psqlpy_config: PsqlpyConfig, params: Any, sty
         else:  # dict_binds
             select_sql = "SELECT id, name FROM test_table WHERE name = :name"
 
-        results = await driver.select(select_sql, params)
-        assert len(results) == 1
-        assert results[0]["name"] == "test_name"
+        select_result = await driver.execute(select_sql, params)
+        assert isinstance(select_result, SelectResult)
+        assert select_result.rows is not None
+        assert len(select_result.rows) == 1
+        assert select_result.rows[0]["name"] == "test_name"
 
 
 # --- Test Core Driver Methods --- #
@@ -105,76 +112,101 @@ async def test_insert_update_delete(psqlpy_config: PsqlpyConfig) -> None:
     async with psqlpy_config.provide_session() as driver:
         # Insert
         insert_sql = "INSERT INTO test_table (name) VALUES (?)"
-        row_count = await driver.insert_update_delete(insert_sql, ("initial_name",))
-        assert row_count == 1
+        insert_result = await driver.execute(insert_sql, ("initial_name",))
+        assert isinstance(insert_result, ExecuteResult)
+        assert insert_result.rows_affected == 1
 
         # Verify Insert
         select_sql = "SELECT name FROM test_table WHERE name = ?"
-        result = await driver.select_one(select_sql, ("initial_name",))
-        assert result["name"] == "initial_name"
+        select_result = await driver.execute(select_sql, ("initial_name",))
+        assert isinstance(select_result, SelectResult)
+        assert select_result.rows is not None
+        assert len(select_result.rows) == 1
+        assert select_result.rows[0]["name"] == "initial_name"
 
         # Update
         update_sql = "UPDATE test_table SET name = ? WHERE name = ?"
-        row_count = await driver.insert_update_delete(update_sql, ("updated_name", "initial_name"))
-        assert row_count == 1
+        update_result = await driver.execute(update_sql, ("updated_name", "initial_name"))
+        assert isinstance(update_result, ExecuteResult)
+        assert update_result.rows_affected == 1
 
         # Verify Update
-        result_or_none = await driver.select_one_or_none(select_sql, ("updated_name",))
-        assert result_or_none is not None
-        assert result_or_none["name"] == "updated_name"
-        result_or_none = await driver.select_one_or_none(select_sql, "initial_name")
-        assert result_or_none is None
+        updated_result = await driver.execute(select_sql, ("updated_name",))
+        assert isinstance(updated_result, SelectResult)
+        assert updated_result.rows is not None
+        assert len(updated_result.rows) == 1
+        assert updated_result.rows[0]["name"] == "updated_name"
+
+        # Verify old name no longer exists
+        old_result = await driver.execute(select_sql, ("initial_name",))
+        assert isinstance(old_result, SelectResult)
+        assert old_result.rows is not None
+        assert len(old_result.rows) == 0
 
         # Delete
         delete_sql = "DELETE FROM test_table WHERE name = ?"
-        row_count = await driver.insert_update_delete(delete_sql, ("updated_name",))
-        assert row_count == 1
+        delete_result = await driver.execute(delete_sql, ("updated_name",))
+        assert isinstance(delete_result, ExecuteResult)
+        assert delete_result.rows_affected == 1
 
         # Verify Delete
-        result_or_none = await driver.select_one_or_none(select_sql, ("updated_name",))
-        assert result_or_none is None
+        final_result = await driver.execute(select_sql, ("updated_name",))
+        assert isinstance(final_result, SelectResult)
+        assert final_result.rows is not None
+        assert len(final_result.rows) == 0
 
 
 async def test_select_methods(psqlpy_config: PsqlpyConfig) -> None:
-    """Test various select methods (select, select_one, select_one_or_none, select_value)."""
+    """Test various select methods and result handling."""
     async with psqlpy_config.provide_session() as driver:
-        # Insert multiple records
-        await driver.insert_update_delete("INSERT INTO test_table (name) VALUES (?), (?)", ("name1", "name2"))
+        # Insert multiple records using execute_many
+        insert_sql = "INSERT INTO test_table (name) VALUES (?)"
+        params_list = [("name1",), ("name2",)]
+        many_result = await driver.execute_many(insert_sql, params_list)
+        assert isinstance(many_result, ExecuteResult)
+        assert many_result.rows_affected == 2
 
         # Test select (multiple results)
-        results = await driver.select("SELECT name FROM test_table ORDER BY name")
-        assert len(results) == 2
-        assert results[0]["name"] == "name1"
-        assert results[1]["name"] == "name2"
+        select_result = await driver.execute("SELECT name FROM test_table ORDER BY name")
+        assert isinstance(select_result, SelectResult)
+        assert select_result.rows is not None
+        assert len(select_result.rows) == 2
+        assert select_result.rows[0]["name"] == "name1"
+        assert select_result.rows[1]["name"] == "name2"
 
-        # Test select_one
-        result_one = await driver.select_one("SELECT name FROM test_table WHERE name = ?", ("name1",))
-        assert result_one["name"] == "name1"
+        # Test select one (using get_first helper)
+        single_result = await driver.execute("SELECT name FROM test_table WHERE name = ?", ("name1",))
+        assert isinstance(single_result, SelectResult)
+        assert single_result.rows is not None
+        assert len(single_result.rows) == 1
+        first_row = single_result.get_first()
+        assert first_row is not None
+        assert first_row["name"] == "name1"
 
-        # Test select_one_or_none (found)
-        result_one_none = await driver.select_one_or_none("SELECT name FROM test_table WHERE name = ?", ("name2",))
-        assert result_one_none is not None
-        assert result_one_none["name"] == "name2"
+        # Test select one or none (found)
+        found_result = await driver.execute("SELECT name FROM test_table WHERE name = ?", ("name2",))
+        assert isinstance(found_result, SelectResult)
+        assert found_result.rows is not None
+        assert len(found_result.rows) == 1
+        found_first = found_result.get_first()
+        assert found_first is not None
+        assert found_first["name"] == "name2"
 
-        # Test select_one_or_none (not found)
-        result_one_none_missing = await driver.select_one_or_none(
-            "SELECT name FROM test_table WHERE name = ?", ("missing",)
-        )
-        assert result_one_none_missing is None
+        # Test select one or none (not found)
+        missing_result = await driver.execute("SELECT name FROM test_table WHERE name = ?", ("missing",))
+        assert isinstance(missing_result, SelectResult)
+        assert missing_result.rows is not None
+        assert len(missing_result.rows) == 0
+        assert missing_result.get_first() is None
 
-        # Test select_value
-        value = await driver.select_value("SELECT id FROM test_table WHERE name = ?", ("name1",))
+        # Test select value
+        value_result = await driver.execute("SELECT id FROM test_table WHERE name = ?", ("name1",))
+        assert isinstance(value_result, SelectResult)
+        assert value_result.rows is not None
+        assert len(value_result.rows) == 1
+        assert value_result.column_names is not None
+        value = value_result.rows[0][value_result.column_names[0]]
         assert isinstance(value, int)
-
-        # Test select_value_or_none (found)
-        value_or_none = await driver.select_value_or_none("SELECT id FROM test_table WHERE name = ?", ("name2",))
-        assert isinstance(value_or_none, int)
-
-        # Test select_value_or_none (not found)
-        value_or_none_missing = await driver.select_value_or_none(
-            "SELECT id FROM test_table WHERE name = ?", ("missing",)
-        )
-        assert value_or_none_missing is None
 
 
 async def test_execute_script(psqlpy_config: PsqlpyConfig) -> None:
@@ -190,72 +222,110 @@ async def test_execute_script(psqlpy_config: PsqlpyConfig) -> None:
 async def test_multiple_positional_parameters(psqlpy_config: PsqlpyConfig) -> None:
     """Test handling multiple positional parameters in a single SQL statement."""
     async with psqlpy_config.provide_session() as driver:
-        # Insert multiple records
-        await driver.insert_update_delete("INSERT INTO test_table (name) VALUES (?), (?)", ("param1", "param2"))
+        # Insert multiple records using execute_many
+        insert_sql = "INSERT INTO test_table (name) VALUES (?)"
+        params_list = [("param1",), ("param2",)]
+        many_result = await driver.execute_many(insert_sql, params_list)
+        assert isinstance(many_result, ExecuteResult)
+        assert many_result.rows_affected == 2
 
         # Query with multiple parameters
-        results = await driver.select("SELECT * FROM test_table WHERE name = ? OR name = ?", ("param1", "param2"))
-        assert len(results) == 2
+        select_result = await driver.execute(
+            "SELECT * FROM test_table WHERE name = ? OR name = ?", ("param1", "param2")
+        )
+        assert isinstance(select_result, SelectResult)
+        assert select_result.rows is not None
+        assert len(select_result.rows) == 2
 
         # Test with IN clause
-        results = await driver.select("SELECT * FROM test_table WHERE name IN (?, ?)", ("param1", "param2"))
-        assert len(results) == 2
+        in_result = await driver.execute("SELECT * FROM test_table WHERE name IN (?, ?)", ("param1", "param2"))
+        assert isinstance(in_result, SelectResult)
+        assert in_result.rows is not None
+        assert len(in_result.rows) == 2
 
         # Test with a mixture of parameter styles
-        results = await driver.select("SELECT * FROM test_table WHERE name = ? AND id > ?", ("param1", 0))
-        assert len(results) == 1
+        mixed_result = await driver.execute("SELECT * FROM test_table WHERE name = ? AND id > ?", ("param1", 0))
+        assert isinstance(mixed_result, SelectResult)
+        assert mixed_result.rows is not None
+        assert len(mixed_result.rows) == 1
 
 
 async def test_scalar_parameter_handling(psqlpy_config: PsqlpyConfig) -> None:
     """Test handling of scalar parameters in various contexts."""
     async with psqlpy_config.provide_session() as driver:
         # Insert a record
-        await driver.insert_update_delete("INSERT INTO test_table (name) VALUES (?)", "single_param")
+        insert_result = await driver.execute("INSERT INTO test_table (name) VALUES (?)", "single_param")
+        assert isinstance(insert_result, ExecuteResult)
+        assert insert_result.rows_affected == 1
 
         # Verify the record exists with scalar parameter
-        result1 = await driver.select_one("SELECT * FROM test_table WHERE name = ?", "single_param")
-        assert result1["name"] == "single_param"
+        select_result = await driver.execute("SELECT * FROM test_table WHERE name = ?", "single_param")
+        assert isinstance(select_result, SelectResult)
+        assert select_result.rows is not None
+        assert len(select_result.rows) == 1
+        assert select_result.rows[0]["name"] == "single_param"
 
         # Test select_value with scalar parameter
-        value = await driver.select_value("SELECT id FROM test_table WHERE name = ?", "single_param")
+        value_result = await driver.execute("SELECT id FROM test_table WHERE name = ?", "single_param")
+        assert isinstance(value_result, SelectResult)
+        assert value_result.rows is not None
+        assert len(value_result.rows) == 1
+        assert value_result.column_names is not None
+        value = value_result.rows[0][value_result.column_names[0]]
         assert isinstance(value, int)
 
         # Test select_one_or_none with scalar parameter that doesn't exist
-        result2 = await driver.select_one_or_none("SELECT * FROM test_table WHERE name = ?", "non_existent_param")  #
-        assert result2 is None
+        missing_result = await driver.execute("SELECT * FROM test_table WHERE name = ?", "non_existent_param")
+        assert isinstance(missing_result, SelectResult)
+        assert missing_result.rows is not None
+        assert len(missing_result.rows) == 0
 
 
 async def test_question_mark_in_edge_cases(psqlpy_config: PsqlpyConfig) -> None:
     """Test that question marks in comments, strings, and other contexts aren't mistaken for parameters."""
     async with psqlpy_config.provide_session() as driver:
         # Insert a record
-        await driver.insert_update_delete("INSERT INTO test_table (name) VALUES (?)", "edge_case_test")
+        insert_result = await driver.execute("INSERT INTO test_table (name) VALUES (?)", "edge_case_test")
+        assert isinstance(insert_result, ExecuteResult)
+        assert insert_result.rows_affected == 1
 
         # Test question mark in a string literal - should not be treated as a parameter
-        result = await driver.select_one("SELECT * FROM test_table WHERE name = ? AND '?' = '?'", "edge_case_test")
-        assert result["name"] == "edge_case_test"
+        result = await driver.execute("SELECT * FROM test_table WHERE name = ? AND '?' = '?'", "edge_case_test")
+        assert isinstance(result, SelectResult)
+        assert result.rows is not None
+        assert len(result.rows) == 1
+        assert result.rows[0]["name"] == "edge_case_test"
 
         # Test question mark in a comment - should not be treated as a parameter
-        result = await driver.select_one(
+        result = await driver.execute(
             "SELECT * FROM test_table WHERE name = ? -- Does this work with a ? in a comment?", "edge_case_test"
         )
-        assert result["name"] == "edge_case_test"
+        assert isinstance(result, SelectResult)
+        assert result.rows is not None
+        assert len(result.rows) == 1
+        assert result.rows[0]["name"] == "edge_case_test"
 
         # Test question mark in a block comment - should not be treated as a parameter
-        result = await driver.select_one(
+        result = await driver.execute(
             "SELECT * FROM test_table WHERE name = ? /* Does this work with a ? in a block comment? */",
             "edge_case_test",
         )
-        assert result["name"] == "edge_case_test"
+        assert isinstance(result, SelectResult)
+        assert result.rows is not None
+        assert len(result.rows) == 1
+        assert result.rows[0]["name"] == "edge_case_test"
 
         # Test with mixed parameter styles and multiple question marks
-        result = await driver.select_one(
+        result = await driver.execute(
             "SELECT * FROM test_table WHERE name = ? AND '?' = '?' -- Another ? here", "edge_case_test"
         )
-        assert result["name"] == "edge_case_test"
+        assert isinstance(result, SelectResult)
+        assert result.rows is not None
+        assert len(result.rows) == 1
+        assert result.rows[0]["name"] == "edge_case_test"
 
         # Test a complex query with multiple question marks in different contexts
-        result = await driver.select_one(
+        result = await driver.execute(
             """
             SELECT * FROM test_table
             WHERE name = ? -- A ? in a comment
@@ -265,19 +335,24 @@ async def test_question_mark_in_edge_cases(psqlpy_config: PsqlpyConfig) -> None:
             """,
             "edge_case_test",
         )
-        assert result["name"] == "edge_case_test"
+        assert isinstance(result, SelectResult)
+        assert result.rows is not None
+        assert len(result.rows) == 1
+        assert result.rows[0]["name"] == "edge_case_test"
 
 
 async def test_regex_parameter_binding_complex_case(psqlpy_config: PsqlpyConfig) -> None:
     """Test handling of complex SQL with question mark parameters in various positions."""
     async with psqlpy_config.provide_session() as driver:
-        # Insert test records
-        await driver.insert_update_delete(
-            "INSERT INTO test_table (name) VALUES (?), (?), (?)", ("complex1", "complex2", "complex3")
-        )
+        # Insert test records using execute_many
+        insert_sql = "INSERT INTO test_table (name) VALUES (?)"
+        params_list = [("complex1",), ("complex2",), ("complex3",)]
+        many_result = await driver.execute_many(insert_sql, params_list)
+        assert isinstance(many_result, ExecuteResult)
+        assert many_result.rows_affected == 3
 
         # Complex query with parameters at various positions
-        results = await driver.select(
+        select_result = await driver.execute(
             """
             SELECT t1.*
             FROM test_table t1
@@ -292,18 +367,20 @@ async def test_regex_parameter_binding_complex_case(psqlpy_config: PsqlpyConfig)
             """,
             ("complex1", "complex2", "complex3"),
         )
+        assert isinstance(select_result, SelectResult)
+        assert select_result.rows is not None
 
         # With a self-join where id <> id, each of the 3 rows joins with the other 2,
         # resulting in 6 total rows (3 names * 2 matches each)
-        assert len(results) == 6
+        assert len(select_result.rows) == 6
 
         # Verify that all three names are present in results
-        names = {row["name"] for row in results}
+        names = {row["name"] for row in select_result.rows}
         assert names == {"complex1", "complex2", "complex3"}
 
         # Verify that question marks escaped in strings don't count as parameters
         # This passes 2 parameters and has one ? in a string literal
-        result = await driver.select_one(
+        subquery_result = await driver.execute(
             """
             SELECT * FROM test_table
             WHERE name = ? AND id IN (
@@ -312,4 +389,64 @@ async def test_regex_parameter_binding_complex_case(psqlpy_config: PsqlpyConfig)
             """,
             ("complex1", "complex1"),
         )
-        assert result["name"] == "complex1"
+        assert isinstance(subquery_result, SelectResult)
+        assert subquery_result.rows is not None
+        assert len(subquery_result.rows) == 1
+        assert subquery_result.rows[0]["name"] == "complex1"
+
+
+async def test_execute_many_insert(psqlpy_config: PsqlpyConfig) -> None:
+    """Test execute_many functionality for batch inserts."""
+    async with psqlpy_config.provide_session() as driver:
+        insert_sql = "INSERT INTO test_table (name) VALUES (?)"
+        params_list = [("many_name1",), ("many_name2",), ("many_name3",)]
+
+        result = await driver.execute_many(insert_sql, params_list)
+        assert isinstance(result, ExecuteResult)
+        assert result.rows_affected == len(params_list)
+
+        # Verify all records were inserted
+        select_result = await driver.execute("SELECT COUNT(*) as count FROM test_table")
+        assert isinstance(select_result, SelectResult)
+        assert select_result.rows is not None
+        assert select_result.rows[0]["count"] == len(params_list)
+
+
+async def test_update_operation(psqlpy_config: PsqlpyConfig) -> None:
+    """Test UPDATE operations."""
+    async with psqlpy_config.provide_session() as driver:
+        # Insert a record first
+        insert_result = await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("original_name",))
+        assert isinstance(insert_result, ExecuteResult)
+        assert insert_result.rows_affected == 1
+
+        # Update the record
+        update_result = await driver.execute("UPDATE test_table SET name = ? WHERE id = ?", ("updated_name", 1))
+        assert isinstance(update_result, ExecuteResult)
+        assert update_result.rows_affected == 1
+
+        # Verify the update
+        select_result = await driver.execute("SELECT name FROM test_table WHERE id = ?", (1,))
+        assert isinstance(select_result, SelectResult)
+        assert select_result.rows is not None
+        assert select_result.rows[0]["name"] == "updated_name"
+
+
+async def test_delete_operation(psqlpy_config: PsqlpyConfig) -> None:
+    """Test DELETE operations."""
+    async with psqlpy_config.provide_session() as driver:
+        # Insert a record first
+        insert_result = await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("to_delete",))
+        assert isinstance(insert_result, ExecuteResult)
+        assert insert_result.rows_affected == 1
+
+        # Delete the record
+        delete_result = await driver.execute("DELETE FROM test_table WHERE id = ?", (1,))
+        assert isinstance(delete_result, ExecuteResult)
+        assert delete_result.rows_affected == 1
+
+        # Verify the deletion
+        select_result = await driver.execute("SELECT COUNT(*) as count FROM test_table")
+        assert isinstance(select_result, SelectResult)
+        assert select_result.rows is not None
+        assert select_result.rows[0]["count"] == 0
