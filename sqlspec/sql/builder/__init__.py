@@ -16,7 +16,6 @@ from sqlspec.sql.builder._insert import InsertBuilder
 from sqlspec.sql.builder._merge import MergeBuilder
 from sqlspec.sql.builder._select import SelectBuilder
 from sqlspec.sql.builder._update import UpdateBuilder
-from sqlspec.sql.statement import ValidationResult, validate_sql
 
 __all__ = (
     "DeleteBuilder",
@@ -27,13 +26,6 @@ __all__ = (
     "SafeQuery",
     "SelectBuilder",
     "UpdateBuilder",
-    "ValidationResult",
-    "delete",
-    "insert",
-    "merge",
-    "select",
-    "update",
-    "validate_sql",
 )
 
 

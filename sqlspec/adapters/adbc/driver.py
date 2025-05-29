@@ -1,21 +1,21 @@
 import contextlib
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
 from adbc_driver_manager.dbapi import Connection, Cursor
-from sqlglot import exp
 
 from sqlspec.base import SyncDriverAdapterProtocol
-from sqlspec.sql.mixins import ResultConverter, SQLTranslatorMixin
+from sqlspec.sql.mixins import ResultConverter, SQLTranslatorMixin, SyncArrowMixin
 from sqlspec.sql.parameters import ParameterStyle
-from sqlspec.sql.result import ExecuteResult, SelectResult
-from sqlspec.sql.statement import SQLStatement, SQLTransformer, SQLValidator, Statement
+from sqlspec.sql.result import ArrowResult, ExecuteResult, SelectResult
+from sqlspec.sql.statement import SQLStatement, Statement, StatementConfig
 
 if TYPE_CHECKING:
     from sqlspec.sql.filters import StatementFilter
-    from sqlspec.typing import ArrowTable, StatementParameterType
+    from sqlspec.typing import StatementParameterType
 
 __all__ = ("AdbcConnection", "AdbcDriver")
 
@@ -27,6 +27,7 @@ AdbcConnection = Connection
 class AdbcDriver(
     SQLTranslatorMixin["AdbcConnection"],
     SyncDriverAdapterProtocol["AdbcConnection"],
+    SyncArrowMixin["AdbcConnection"],
     ResultConverter,
 ):
     """ADBC Sync Driver Adapter.
@@ -37,15 +38,21 @@ class AdbcDriver(
     - execute_script() - Multi-statement scripts
 
     It also provides optional Arrow support via select_to_arrow().
+
+    Enhanced Features:
+    - Full SQLStatement integration with filters and validation
+    - Automatic SQL dialect detection and placeholder style conversion
+    - Comprehensive parameter validation and security checks
+    - Support for filter composition (pagination, search, etc.)
     """
 
     connection: AdbcConnection
     __supports_arrow__: ClassVar[bool] = True
     dialect: str = "adbc"
 
-    def __init__(self, connection: "AdbcConnection") -> None:
+    def __init__(self, connection: "AdbcConnection", statement_config: "Optional[StatementConfig]" = None) -> None:
         """Initialize the ADBC driver adapter."""
-        super().__init__(connection)
+        super().__init__(connection, statement_config=statement_config)
         self.dialect = self._get_dialect(connection)
 
     @staticmethod
@@ -58,22 +65,27 @@ class AdbcDriver(
         Returns:
             The database dialect.
         """
-        driver_info = connection.adbc_get_info()
-        vendor_name = driver_info.get("vendor_name", "").lower()
+        try:
+            driver_info = connection.adbc_get_info()
+            vendor_name = driver_info.get("vendor_name", "").lower()
+            driver_name = driver_info.get("driver_name", "").lower()
 
-        if "postgres" in vendor_name:
-            return "postgres"
-        if "bigquery" in vendor_name:
-            return "bigquery"
-        if "sqlite" in vendor_name:
-            return "sqlite"
-        if "duckdb" in vendor_name:
-            return "duckdb"
-        if "mysql" in vendor_name:
-            return "mysql"
-        if "snowflake" in vendor_name:
-            return "snowflake"
-
+            if "postgres" in vendor_name or "postgresql" in driver_name:
+                return "postgres"
+            if "bigquery" in vendor_name or "bigquery" in driver_name:
+                return "bigquery"
+            if "sqlite" in vendor_name or "sqlite" in driver_name:
+                return "sqlite"
+            if "duckdb" in vendor_name or "duckdb" in driver_name:
+                return "duckdb"
+            if "mysql" in vendor_name or "mysql" in driver_name:
+                return "mysql"
+            if "snowflake" in vendor_name or "snowflake" in driver_name:
+                return "snowflake"
+            if "flight" in driver_name or "flightsql" in driver_name:
+                return "sqlite"
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not reliably determine ADBC dialect from driver info. Defaulting to 'postgres'.")
         return "postgres"
 
     def _get_placeholder_style(self) -> ParameterStyle:
@@ -88,6 +100,8 @@ class AdbcDriver(
             return ParameterStyle.QMARK
         if self.dialect == "bigquery":
             return ParameterStyle.NAMED_AT
+        if self.dialect == "snowflake":
+            return ParameterStyle.QMARK
         return ParameterStyle.QMARK
 
     @staticmethod
@@ -105,12 +119,11 @@ class AdbcDriver(
 
     def execute(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
-        validator: "Optional[SQLValidator]" = None,
-        sanitizer: "Optional[SQLTransformer]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: "Any",
     ) -> "Union[SelectResult[dict[str, Any]], ExecuteResult[dict[str, Any]]]":
         """Execute a SQL statement and return a StatementResult.
@@ -119,24 +132,49 @@ class AdbcDriver(
         Use the StatementResult methods to extract the data you need.
 
         Args:
-            sql: The SQL statement to execute.
+            statement: The SQL statement to execute.
             parameters: Parameters for the statement.
-            *filters: Statement filters to apply.
+            *filters: Statement filters to apply (e.g., pagination, search filters).
             connection: Optional connection override.
-            validator: Optional validator for the statement.
-            sanitizer: Optional sanitizer for the statement.
+            statement_config: Optional statement configuration.
             **kwargs: Additional keyword arguments.
 
         Returns:
             A StatementResult containing the operation results.
-        """
-        connection = self._connection(connection)
-        final_sql, ordered_params, query_obj = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
-        with self._with_cursor(connection) as cursor:
+        Example:
+            >>> from sqlspec.sql.filters import LimitOffset, SearchFilter
+            >>> # Basic query
+            >>> result = driver.execute(
+            ...     "SELECT * FROM users WHERE id = ?", [123]
+            ... )
+            >>> # Query with filters
+            >>> result = driver.execute(
+            ...     "SELECT * FROM users",
+            ...     LimitOffset(limit=10, offset=0),
+            ...     SearchFilter(field_name="name", value="John"),
+            ... )
+        """
+        conn = self._connection(connection)
+        config = statement_config or self.statement_config
+        stmt = SQLStatement(statement, parameters, *filters, dialect=self.dialect, statement_config=config, **kwargs)
+
+        stmt.validate()
+        placeholder_style = self._get_placeholder_style()
+        final_sql = stmt.to_sql(placeholder_style=placeholder_style)
+        ordered_params = stmt.get_parameters(style=placeholder_style)
+
+        if ordered_params is not None and not isinstance(ordered_params, list):
+            ordered_params = (
+                list(ordered_params)
+                if isinstance(ordered_params, Iterable) and not isinstance(ordered_params, (str, bytes))
+                else [ordered_params]
+            )
+
+        with self._with_cursor(conn) as cursor:
             cursor.execute(final_sql, ordered_params)
 
-            if self.returns_rows(query_obj.expression):
+            if self.returns_rows(stmt.expression):
                 results = cursor.fetchall()
                 column_names = [column[0] for column in cursor.description or []]
                 rows = [dict(zip(column_names, row)) for row in results]
@@ -144,21 +182,23 @@ class AdbcDriver(
                 return SelectResult(rows=rows, column_names=column_names, raw_result=raw_select_result_data)
 
             rowcount = getattr(cursor, "rowcount", -1)
+            operation_type = "UNKNOWN"
+            if stmt.expression and hasattr(stmt.expression, "key"):
+                operation_type = str(stmt.expression.key).upper()
 
             return ExecuteResult(
                 raw_result=cast("dict[str, Any]", {}),
                 rows_affected=rowcount,
-                operation_type=cast("str", query_obj.operation_type),
+                operation_type=operation_type,
             )
 
     def execute_many(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: "Optional[Sequence[StatementParameterType]]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
-        validator: "Optional[SQLValidator]" = None,
-        sanitizer: "Optional[SQLTransformer]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: "Any",
     ) -> "ExecuteResult[dict[str, Any]]":
         """Execute a SQL statement with multiple parameter sets.
@@ -166,75 +206,97 @@ class AdbcDriver(
         Useful for batch INSERT, UPDATE, or DELETE operations.
 
         Args:
-            sql: The SQL statement to execute.
+            statement: The SQL statement to execute.
             parameters: Sequence of parameter sets.
             *filters: Statement filters to apply.
             connection: Optional connection override.
-            validator: Optional validator for the statement.
-            sanitizer: Optional sanitizer for the statement.
+            statement_config: Optional statement configuration.
             **kwargs: Additional keyword arguments.
 
         Returns:
             An ExecuteResult containing the batch operation results.
-        """
-        connection = self._connection(connection)
 
-        sql_template_str, _, query_obj = super()._process_sql_params(
-            sql, None, *filters, validator=validator, sanitizer=sanitizer, **kwargs
+        Example:
+            >>> # Batch insert with validation
+            >>> driver.execute_many(
+            ...     "INSERT INTO users (name, email) VALUES (?, ?)",
+            ...     [
+            ...         ["John", "john@example.com"],
+            ...         ["Jane", "jane@example.com"],
+            ...     ],
+            ... )
+        """
+        conn = self._connection(connection)
+        config = statement_config or self.statement_config
+
+        # Create template statement with filters for validation
+        template_stmt = SQLStatement(
+            statement,
+            None,  # No parameters for template
+            *filters,
+            dialect=self.dialect,
+            statement_config=config,
+            **kwargs,
         )
 
+        # Validate template and get final SQL
+        template_stmt.validate()
+        placeholder_style = self._get_placeholder_style()
+        final_sql = template_stmt.to_sql(placeholder_style=placeholder_style)
+
+        # Process parameter sets
+        processed_params_list: list[list[Any]] = []
         param_sequence = parameters if parameters is not None else []
 
-        processed_params_list: list[list[Any]] = []
         if param_sequence:
-            placeholder_style_for_ordering = self._get_placeholder_style()
-            for param_set in param_sequence:
-                if isinstance(param_set, (list, tuple)):
-                    processed_params_list.append(list(param_set))
-                elif isinstance(param_set, dict):
-                    temp_stmt = SQLStatement(
-                        query_obj.expression,
-                        parameters=param_set,
-                        dialect=query_obj._dialect,
-                        validator=validator,
-                        sanitizer=sanitizer,
-                    )
-                    _, ordered_single_params = temp_stmt.get_ordered_parameters(
-                        placeholder_style=placeholder_style_for_ordering
-                    )
-                    processed_params_list.append(list(ordered_single_params))
-                else:
-                    processed_params_list.append([param_set])
+            # Create a building config that skips validation for individual parameter sets
+            building_config = replace(config, enable_validation=False)
 
-        with self._with_cursor(connection) as cursor:
-            if not processed_params_list:
-                total_affected = 0
-            else:
-                cursor.executemany(sql_template_str, processed_params_list)
+            for param_set in param_sequence:
+                item_stmt = SQLStatement(
+                    template_stmt.sql,  # Use processed SQL from template
+                    param_set,
+                    dialect=self.dialect,
+                    statement_config=building_config,
+                )
+                ordered_params_for_item = item_stmt.get_parameters(style=placeholder_style)
+
+                if isinstance(ordered_params_for_item, list):
+                    processed_params_list.append(ordered_params_for_item)
+                elif ordered_params_for_item is None:
+                    processed_params_list.append([])
+                # Convert to list
+                elif isinstance(ordered_params_for_item, Iterable) and not isinstance(
+                    ordered_params_for_item, (str, bytes)
+                ):
+                    processed_params_list.append(list(ordered_params_for_item))
+                else:
+                    processed_params_list.append([ordered_params_for_item])
+
+        with self._with_cursor(conn) as cursor:
+            if param_sequence:
+                cursor.executemany(final_sql, processed_params_list)
                 total_affected = getattr(cursor, "rowcount", -1)
                 if total_affected == -1 and processed_params_list:
                     total_affected = len(processed_params_list)
+            else:
+                total_affected = 0
 
-            operation_type_val = "EXECUTE"
-            if isinstance(query_obj.expression, exp.Insert):
-                operation_type_val = "INSERT"
-            elif isinstance(query_obj.expression, exp.Update):
-                operation_type_val = "UPDATE"
-            elif isinstance(query_obj.expression, exp.Delete):
-                operation_type_val = "DELETE"
+            operation_type = "EXECUTE"
+            if template_stmt.expression and hasattr(template_stmt.expression, "key"):
+                operation_type = str(template_stmt.expression.key).upper()
 
             return ExecuteResult(
-                raw_result=cast("dict[str, Any]", {}), rows_affected=total_affected, operation_type=operation_type_val
+                raw_result=cast("dict[str, Any]", {}), rows_affected=total_affected, operation_type=operation_type
             )
 
     def execute_script(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
-        validator: "Optional[SQLValidator]" = None,
-        sanitizer: "Optional[SQLTransformer]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: "Any",
     ) -> "str":
         """Execute a multi-statement SQL script.
@@ -244,64 +306,96 @@ class AdbcDriver(
         multiple statements that don't support parameterization.
 
         Args:
-            sql: The SQL script to execute.
+            statement: The SQL script to execute.
             parameters: Parameters for the script.
             *filters: Statement filters to apply.
             connection: Optional connection override.
-            validator: Optional validator for the script.
-            sanitizer: Optional sanitizer for the script.
+            statement_config: Optional statement configuration.
             **kwargs: Additional keyword arguments.
 
         Returns:
             A string with execution results/output.
         """
-        connection = self._connection(connection)
+        conn = self._connection(connection)
+        config = statement_config or self.statement_config
 
-        # For script execution, use static parameter style to embed parameters as literals
-        query_obj = SQLStatement(
-            sql,
-            parameters=parameters,
-            kwargs=kwargs or None,
-            dialect=self.dialect if not isinstance(sql, SQLStatement) else sql.dialect or self.dialect,
-        )
+        merged_params = parameters
+        if kwargs:
+            if merged_params is None:
+                merged_params = kwargs
+            elif isinstance(merged_params, dict):
+                merged_params = {**merged_params, **kwargs}
 
-        # Get SQL with static parameter rendering (no placeholders)
-        final_sql = query_obj.get_sql(placeholder_style="static")
+        stmt = SQLStatement(statement, merged_params, *filters, dialect=self.dialect, statement_config=config)
+        stmt.validate()
+        final_sql = stmt.to_sql(placeholder_style=ParameterStyle.STATIC, dialect=self.dialect)
 
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(final_sql)  # No parameters needed since they're embedded as literals
-            return getattr(cursor, "statusmessage", "DONE")
+        with self._with_cursor(conn) as cursor:
+            cursor.execute(final_sql)
+            return getattr(cursor, "statusmessage", "SCRIPT EXECUTED")
 
-    def select_to_arrow(  # pyright: ignore[reportUnknownParameterType]
+    def select_to_arrow(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[AdbcConnection]" = None,
-        validator: "Optional[SQLValidator]" = None,
-        sanitizer: "Optional[SQLTransformer]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: "Any",
-    ) -> "ArrowTable":
+    ) -> "ArrowResult":
         """Execute a SELECT statement and return results as an Apache Arrow Table.
 
         This is an optional method that provides high-performance data access
         for analytics workloads.
 
         Args:
-            sql: The SQL query to execute.
+            statement: The SQL query to execute.
             parameters: Parameters for the query.
             *filters: Statement filters to apply.
             connection: Optional connection override.
-            validator: Optional validator for the statement.
-            sanitizer: Optional sanitizer for the statement.
+            statement_config: Optional statement configuration.
             **kwargs: Additional keyword arguments.
+
+        Raises:
+            TypeError: If the SQL statement is not a valid query.
 
         Returns:
             An Arrow Table containing the query results.
-        """
-        connection = self._connection(connection)
-        final_sql, ordered_params, _ = self._process_sql_params(sql, parameters, *filters, **kwargs)
 
-        with self._with_cursor(connection) as cursor:
+        Example:
+            >>> from sqlspec.sql.filters import LimitOffset
+            >>> # Get Arrow table with pagination
+            >>> arrow_result = driver.select_to_arrow(
+            ...     "SELECT * FROM large_table WHERE category = ?",
+            ...     ["electronics"],
+            ...     LimitOffset(limit=1000, offset=0),
+            ... )
+            >>> table = arrow_result.raw_result  # Apache Arrow Table
+        """
+        conn = self._connection(connection)
+        config = statement_config or self.statement_config
+
+        stmt = SQLStatement(statement, parameters, *filters, dialect=self.dialect, statement_config=config, **kwargs)
+
+        stmt.validate()
+        if not self.returns_rows(stmt.expression):
+            op_type = "UNKNOWN"
+            if stmt.expression and hasattr(stmt.expression, "key"):
+                op_type = str(stmt.expression.key).upper()
+            msg = f"Cannot fetch Arrow table for a non-query statement. Command type: {op_type}"
+            raise TypeError(msg)
+
+        placeholder_style = self._get_placeholder_style()
+        final_sql = stmt.to_sql(placeholder_style=placeholder_style)
+        ordered_params = stmt.get_parameters(style=placeholder_style)
+
+        if ordered_params is not None and not isinstance(ordered_params, list):
+            ordered_params = (
+                list(ordered_params)
+                if isinstance(ordered_params, Iterable) and not isinstance(ordered_params, (str, bytes))
+                else [ordered_params]
+            )
+
+        with self._with_cursor(conn) as cursor:
             cursor.execute(final_sql, ordered_params)
-            return cursor.fetch_arrow_table()
+            return ArrowResult(raw_result=cursor.fetch_arrow_table())

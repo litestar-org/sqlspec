@@ -20,15 +20,15 @@ from typing import (
 
 from sqlglot import exp
 
-from sqlspec.exceptions import NotFoundError, SQLValidationError
-from sqlspec.sql.filters import StatementFilter, apply_filter
-from sqlspec.sql.statement import SQLStatement, Statement, StatementConfig
+from sqlspec.exceptions import NotFoundError
+from sqlspec.sql.statement import Statement, StatementConfig
 from sqlspec.typing import ConnectionT, PoolT, StatementParameterType, T
 from sqlspec.utils.sync_tools import ensure_async_
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
+    from sqlspec.sql.filters import StatementFilter
     from sqlspec.sql.parameters import ParameterStyle
     from sqlspec.sql.result import StatementResult
 
@@ -629,86 +629,6 @@ class CommonDriverAttributes(Generic[ConnectionT]):
             raise NotFoundError(msg)
         return item_or_none
 
-    def _process_sql_params(
-        self,
-        sql: "Statement",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        statement_config: Optional["StatementConfig"] = None,
-        **kwargs: Any,
-    ) -> "tuple[str, Union[dict[str, Any], list[Any]], SQLStatement]":
-        """Process SQL query and parameters using the Query object for validation and formatting.
-
-        Args:
-            sql: The SQL query string or sqlglot Expression.
-            parameters: Parameters for the query.
-            *filters: Statement filters to apply.
-            statement_config: Optional SQLStatementConfig instance. If provided, its attributes determine the processing behavior.
-            **kwargs: Additional keyword arguments to merge with parameters for the Query object.
-
-        Raises:
-            SQLValidationError: If the SQL statement is not safe according to the validator's min_risk_to_raise.
-
-        Returns:
-            A tuple containing the processed SQL query string, a dictionary or list of parameters
-            suitable for the adapter, and the SQLStatement object containing the parsed expression.
-        """
-        processed_parameters = parameters
-        if kwargs:
-            if processed_parameters is None:
-                processed_parameters = kwargs
-            elif isinstance(processed_parameters, dict):
-                processed_parameters = {**processed_parameters, **kwargs}
-
-        stmt = (
-            SQLStatement(
-                sql=sql,
-                parameters=processed_parameters,
-                dialect=getattr(self, "dialect", None),
-                statement_config=statement_config or StatementConfig(),
-            )
-            if not isinstance(sql, SQLStatement)
-            else sql
-        )
-        for filter_obj in filters:
-            stmt = apply_filter(stmt, filter_obj)
-        validation_result = stmt.validate()
-
-        if (
-            validation_result is not None
-            and not validation_result.is_safe
-            and stmt.config.validator.min_risk_to_raise is not None
-            and validation_result.risk_level is not None
-            and validation_result.risk_level.value >= stmt.config.validator.min_risk_to_raise.value
-        ):
-            error_msg = f"SQL validation failed with risk level {validation_result.risk_level}:\n"
-            error_msg += "Issues:\n" + "\n".join([f"- {issue}" for issue in validation_result.issues or []])
-            if validation_result.warnings:
-                error_msg += "\nWarnings:\n" + "\n".join([f"- {warn}" for warn in validation_result.warnings])
-            raise SQLValidationError(error_msg, stmt.get_sql(), validation_result.risk_level)
-
-        placeholder_style = self._get_placeholder_style()
-        rendered_sql = stmt.get_sql(placeholder_style=placeholder_style)
-        rendered_params = stmt.get_parameters(style=placeholder_style)
-
-        if isinstance(rendered_params, (list, dict)):
-            return rendered_sql, rendered_params, stmt
-        if rendered_params is None:
-            from sqlspec.sql.parameters import ParameterStyle
-
-            return (
-                rendered_sql,
-                (
-                    []
-                    if placeholder_style
-                    in {ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.PYFORMAT_POSITIONAL}
-                    else {}
-                ),
-                stmt,
-            )
-
-        return rendered_sql, [rendered_params], stmt
-
 
 class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generic[ConnectionT]):
     connection: "ConnectionT"
@@ -720,7 +640,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def execute(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: Optional["StatementParameterType"] = None,
         *filters: "StatementFilter",
         connection: Optional["ConnectionT"] = None,
@@ -754,7 +674,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def execute_many(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: "Optional[Sequence[StatementParameterType]]" = None,
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
@@ -770,7 +690,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generi
     @abstractmethod
     def execute_script(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: Optional[StatementParameterType] = None,
         *filters: "StatementFilter",
         connection: Optional[ConnectionT] = None,
@@ -794,7 +714,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def execute(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
@@ -818,7 +738,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def execute_many(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: Optional[Sequence[StatementParameterType]] = None,
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
@@ -834,7 +754,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Gener
     @abstractmethod
     async def execute_script(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: "Optional[StatementParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,

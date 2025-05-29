@@ -219,7 +219,7 @@ def stmt_named_fixture() -> SQLStatement:
 
 def test_get_sql_default_format(stmt_qmark_fixture: SQLStatement) -> None:
     """Test get_sql() returns original SQL if no transformation needed."""
-    assert stmt_qmark_fixture.get_sql() == "SELECT * FROM users WHERE id = ?"
+    assert stmt_qmark_fixture.to_sql() == "SELECT * FROM users WHERE id = ?"
 
 
 @pytest.mark.parametrize(
@@ -253,7 +253,7 @@ def test_get_sql_static_style() -> None:
     """Test get_sql() with static style (parameters substituted)."""
     sql = "SELECT * FROM users WHERE id = ? AND name = ? AND active = ? AND percentage = ?"
     stmt = SQLStatement(sql, args=[123, "John's Cafe", True, 0.75])
-    result_sql = stmt.get_sql(placeholder_style=ParameterStyle.STATIC)
+    result_sql = stmt.to_sql(placeholder_style=ParameterStyle.STATIC)
 
     assert "123" in result_sql
     assert "'John''s Cafe'" in result_sql  # Standard SQL escaping for single quote
@@ -265,10 +265,10 @@ def test_get_sql_static_style() -> None:
 
 def test_get_sql_with_statement_separator(stmt_qmark_fixture: SQLStatement) -> None:
     """Test get_sql() with statement separator."""
-    result_sql_with_sep = stmt_qmark_fixture.get_sql(include_statement_separator=True)
+    result_sql_with_sep = stmt_qmark_fixture.to_sql(include_statement_separator=True)
     assert result_sql_with_sep.endswith(";")
 
-    result_sql_no_sep = stmt_qmark_fixture.get_sql(include_statement_separator=False)
+    result_sql_no_sep = stmt_qmark_fixture.to_sql(include_statement_separator=False)
     assert not result_sql_no_sep.endswith(";")
 
 
@@ -413,7 +413,7 @@ def test_get_sql_target_dialect_conversion() -> None:
     # Transpile to PostgreSQL, where <=> is IS NOT DISTINCT FROM
     # sqlglot normalizes identifiers (removes backticks if not needed for postgres)
     # and changes the operator.
-    result_postgres = stmt_mysql_parsed.get_sql(placeholder_style=ParameterStyle.NAMED_COLON, dialect="postgres")
+    result_postgres = stmt_mysql_parsed.to_sql(placeholder_style=ParameterStyle.NAMED_COLON, dialect="postgres")
 
     # Check for key elements of PostgreSQL syntax
     assert "IS NOT DISTINCT FROM" in result_postgres.upper()
@@ -426,7 +426,7 @@ def test_get_sql_target_dialect_conversion() -> None:
 
 def test_statement_str_representation(stmt_qmark_fixture: SQLStatement) -> None:
     """Test __str__ representation of SQLStatement."""
-    assert str(stmt_qmark_fixture) == stmt_qmark_fixture.get_sql()
+    assert str(stmt_qmark_fixture) == stmt_qmark_fixture.to_sql()
 
 
 def test_statement_repr_representation() -> None:

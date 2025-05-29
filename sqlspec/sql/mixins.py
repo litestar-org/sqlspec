@@ -20,11 +20,12 @@ from sqlglot import exp, parse_one
 from sqlglot.dialects.dialect import DialectType
 
 from sqlspec.exceptions import SQLConversionError, SQLSpecError
-from sqlspec.sql.statement import SQLStatement, Statement
+from sqlspec.sql.statement import SQLStatement, Statement, StatementConfig
 from sqlspec.typing import (
     ConnectionT,
     ModelDTOT,
     ModelT,
+    StatementParameterType,
     convert,
     get_type_adapter,
     is_dataclass,
@@ -33,13 +34,17 @@ from sqlspec.typing import (
 )
 
 if TYPE_CHECKING:
+    from sqlspec.sql.filters import StatementFilter
     from sqlspec.sql.result import ArrowResult
 
 __all__ = (
-    "ArrowMixin",
-    "ParquetMixin",
+    "AsyncArrowMixin",
+    "AsyncParquetMixin",
     "ResultConverter",
     "SQLTranslatorMixin",
+    "SyncArrowMixin",
+    "SyncArrowMixin",
+    "SyncParquetMixin",
 )
 
 
@@ -50,14 +55,14 @@ class SQLTranslatorMixin(Generic[ConnectionT]):
 
     def convert_to_dialect(
         self,
-        sql: "Statement",
+        statement: "Statement",
         to_dialect: DialectType = None,
         pretty: bool = True,
     ) -> str:
         """Convert a SQL query to a different dialect.
 
         Args:
-            sql: The SQL query string to convert.
+            statement: The SQL query string to convert.
             to_dialect: The target dialect to convert to.
             pretty: Whether to pretty-print the SQL query.
 
@@ -68,15 +73,15 @@ class SQLTranslatorMixin(Generic[ConnectionT]):
             The converted SQL query string.
         """
         parsed_expression: exp.Expression
-        if sql is not None and isinstance(sql, SQLStatement):
-            if sql.expression is None:
+        if statement is not None and isinstance(statement, SQLStatement):
+            if statement.expression is None:
                 msg = "Statement could not be parsed"
                 raise SQLConversionError(msg)
-            parsed_expression = sql.expression
-        elif isinstance(sql, exp.Expression):
-            parsed_expression = sql
+            parsed_expression = statement.expression
+        elif isinstance(statement, exp.Expression):
+            parsed_expression = statement
         else:
-            parsed_expression = parse_one(sql, dialect=self.dialect)
+            parsed_expression = parse_one(statement, dialect=self.dialect)
 
         target_dialect = to_dialect if to_dialect is not None else self.dialect
 
@@ -217,19 +222,31 @@ class ResultConverter:
         raise SQLSpecError(msg)
 
 
-class ArrowMixin(Generic[ConnectionT]):
-    """Optional mixin for drivers that support Apache Arrow data format.
+class SyncArrowMixin(Generic[ConnectionT]):
+    """Optional mixin for sync drivers that support Apache Arrow data format.
 
     Provides methods to select data and return it in Arrow format for high-performance
     data interchange and analytics workflows.
     """
 
-    def select_to_arrow(self, statement: "Statement", parameters: "Optional[dict[str, Any]]" = None) -> "ArrowResult":
+    def select_to_arrow(
+        self,
+        statement: "Statement",
+        parameters: "Optional[StatementParameterType]" = None,
+        *filters: "StatementFilter",
+        connection: "Optional[ConnectionT]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: "Any",
+    ) -> "ArrowResult":
         """Execute a SELECT statement and return results in Apache Arrow format.
 
         Args:
             statement: The SELECT statement to execute.
             parameters: Optional parameters for the statement.
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional keyword arguments.
 
         Returns:
             ArrowResult containing the query results in Arrow format.
@@ -238,25 +255,101 @@ class ArrowMixin(Generic[ConnectionT]):
         raise NotImplementedError(msg)
 
 
-class ParquetMixin(Generic[ConnectionT]):
+class AsyncArrowMixin(Generic[ConnectionT]):
+    """Optional mixin for async drivers that support Apache Arrow data format.
+
+    Provides methods to select data and return it in Arrow format for high-performance
+    data interchange and analytics workflows.
+    """
+
+    async def select_to_arrow(
+        self,
+        statement: "Statement",
+        parameters: "Optional[StatementParameterType]" = None,
+        *filters: "StatementFilter",
+        connection: "Optional[ConnectionT]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: "Any",
+    ) -> "ArrowResult":
+        """Execute a SELECT statement and return results in Apache Arrow format.
+
+        Args:
+            statement: The SELECT statement to execute.
+            parameters: Optional parameters for the statement.
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            ArrowResult containing the query results in Arrow format.
+        """
+        msg = "Arrow support not implemented by this driver"
+        raise NotImplementedError(msg)
+
+
+class SyncParquetMixin(Generic[ConnectionT]):
     """Optional mixin for drivers that support Parquet file format operations.
 
     Provides methods to select data and export it directly to Parquet format,
     or to read from Parquet files into the database.
     """
 
-    def select_to_parquet(
+    def to_parquet(
         self,
         statement: "Statement",
-        parameters: "Optional[dict[str, Any]]" = None,
-        file_path: "Optional[Union[str, Path]]" = None,
+        parameters: "Optional[StatementParameterType]" = None,
+        *filters: "StatementFilter",
+        connection: "Optional[ConnectionT]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: "Any",
     ) -> "Union[bytes, None]":
         """Execute a SELECT statement and return/save results in Parquet format.
 
         Args:
             statement: The SELECT statement to execute.
             parameters: Optional parameters for the statement.
-            file_path: Optional file path to save Parquet data. If None, returns bytes.
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            Parquet data as bytes if file_path is None, otherwise None after saving.
+
+        Note:
+            This is an optional capability. Drivers that support Parquet should
+            implement this method to provide efficient columnar data export.
+        """
+        msg = "Parquet support not implemented by this driver"
+        raise NotImplementedError(msg)
+
+
+class AsyncParquetMixin(Generic[ConnectionT]):
+    """Optional mixin for drivers that support Parquet file format operations.
+
+    Provides methods to select data and export it directly to Parquet format,
+    or to read from Parquet files into the database.
+    """
+
+    async def to_parquet(
+        self,
+        statement: "Statement",
+        parameters: "Optional[StatementParameterType]" = None,
+        *filters: "StatementFilter",
+        connection: "Optional[ConnectionT]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: "Any",
+    ) -> "Union[bytes, None]":
+        """Execute a SELECT statement and return/save results in Parquet format.
+
+        Args:
+            statement: The SELECT statement to execute.
+            parameters: Optional parameters for the statement.
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional keyword arguments.
 
         Returns:
             Parquet data as bytes if file_path is None, otherwise None after saving.

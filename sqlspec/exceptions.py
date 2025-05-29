@@ -113,6 +113,7 @@ class SQLConversionError(SQLSpecError):
 class RiskLevel(Enum):
     """SQL risk assessment levels."""
 
+    SKIP = auto()
     SAFE = auto()
     LOW = auto()
     MEDIUM = auto()

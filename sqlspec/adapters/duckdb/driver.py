@@ -1,21 +1,21 @@
 import logging
+from collections.abc import Generator, Iterable, Sequence
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
 from duckdb import DuckDBPyConnection
-from sqlglot import exp
 
 from sqlspec.base import SyncDriverAdapterProtocol
-from sqlspec.exceptions import SQLParsingError
-from sqlspec.mixins import ResultConverter, SQLTranslatorMixin, SyncArrowBulkOperationsMixin
-from sqlspec.sql import ParameterStyle, Query, SQLStatement
-from sqlspec.typing import ArrowTable
+from sqlspec.exceptions import SQLConversionError
+from sqlspec.sql.mixins import ResultConverter, SQLTranslatorMixin, SyncArrowMixin
+from sqlspec.sql.parameters import ParameterStyle
+from sqlspec.sql.result import ArrowResult, ExecuteResult, SelectResult
+from sqlspec.sql.statement import SQLStatement, Statement, StatementConfig
+from sqlspec.typing import StatementParameterType
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Sequence
-
-    from sqlspec.filters import StatementFilter
-    from sqlspec.typing import ArrowTable, ModelDTOT, Statement, StatementParameterType, T
+    from sqlspec.sql.filters import StatementFilter
 
 __all__ = ("DuckDBConnection", "DuckDBDriver")
 
@@ -25,487 +25,332 @@ DuckDBConnection = DuckDBPyConnection
 
 
 class DuckDBDriver(
-    SyncArrowBulkOperationsMixin["DuckDBConnection"],
+    SyncArrowMixin["DuckDBConnection"],
     SQLTranslatorMixin["DuckDBConnection"],
     SyncDriverAdapterProtocol["DuckDBConnection"],
     ResultConverter,
 ):
-    """DuckDB Sync Driver Adapter."""
+    """DuckDB Sync Driver Adapter.
+
+    This driver implements the new unified SQLSpec protocol with the core 3 methods:
+    - execute() - Universal method for all SQL operations
+    - execute_many() - Batch operations
+    - execute_script() - Multi-statement scripts
+
+    Enhanced Features:
+    - Full SQLStatement integration with filters and validation
+    - DuckDB-specific parameter style handling (qmark: ?)
+    - Comprehensive parameter validation and security checks
+    - Support for filter composition (pagination, search, etc.)
+    - Native Arrow support for high-performance analytics
+    """
 
     connection: "DuckDBConnection"
+    __supports_arrow__: ClassVar[bool] = True  # DuckDB has excellent Arrow support
     use_cursor: bool = True
     dialect: str = "duckdb"
 
-    def __init__(self, connection: "DuckDBConnection", use_cursor: bool = True) -> None:
-        self.connection = connection
-        self.use_cursor = use_cursor
-
-    def _cursor(self, connection: "DuckDBConnection") -> "DuckDBConnection":
-        if self.use_cursor:
-            return connection.cursor()
-        return connection
+    def __init__(
+        self,
+        connection: "DuckDBConnection",
+        statement_config: Optional[StatementConfig] = None,
+        use_cursor: bool = True,
+    ) -> None:
+        """Initialize the DuckDB driver adapter."""
+        super().__init__(connection, statement_config=statement_config)
 
     @contextmanager
-    def _with_cursor(self, connection: "DuckDBConnection") -> "Generator[DuckDBConnection, None, None]":
-        if self.use_cursor:
-            cursor = self._cursor(connection)
-            try:
-                yield cursor
-            finally:
-                cursor.close()
-        else:
-            yield connection
+    def _get_cursor(self, connection: Optional[DuckDBConnection] = None) -> Generator[DuckDBPyConnection, None, None]:
+        """Get a cursor for the connection."""
+        conn_to_use = connection or self.connection
+        cursor = conn_to_use.cursor()
+        try:
+            yield cursor
+        finally:
+            cursor.close()
 
-    def _process_sql_params(
+    def _get_placeholder_style(self) -> ParameterStyle:
+        """Return the placeholder style for DuckDB (qmark: ?)."""
+        return ParameterStyle.QMARK
+
+    def execute(
         self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
+        statement: "Statement",
+        parameters: Optional[StatementParameterType] = None,
         *filters: "StatementFilter",
+        connection: Optional[DuckDBConnection] = None,
+        statement_config: Optional[StatementConfig] = None,
         **kwargs: Any,
-    ) -> "tuple[str, list[Any]]":
-        """Process SQL and parameters for DuckDB.
+    ) -> "Union[SelectResult[dict[str, Any]], ExecuteResult[dict[str, Any]]]":
+        """Execute a SQL statement and return a StatementResult.
 
-        Leverages SQLStatement or Query to parse/process SQL. The AST is then
-        transformed to use 'qmark' placeholders, and an ordered list of parameters
-        is returned, as expected by DuckDB's Python API.
+        This is the unified method for all SQL operations (SELECT, INSERT, UPDATE, DELETE).
+        Use the StatementResult methods to extract the data you need.
 
         Args:
-            sql: SQL statement (string, sqlglot expression, or Query object).
-            parameters: Query parameters (for raw Statement).
-            *filters: Statement filters (logged as not applied for raw Statement).
-            **kwargs: Additional keyword arguments for SQLStatement.
+            statement: The SQL statement to execute.
+            parameters: Parameters for the statement.
+            *filters: Statement filters to apply (e.g., pagination, search filters).
+            connection: Optional connection override.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional keyword arguments.
 
         Returns:
-            A tuple containing the processed SQL string (with '?' placeholders)
-            and an ordered list of parameter values for DuckDB.
+            A StatementResult containing the operation results.
+
+        Example:
+            >>> from sqlspec.sql.filters import LimitOffset, SearchFilter
+            >>> # Basic query
+            >>> result = driver.execute(
+            ...     "SELECT * FROM users WHERE id = ?", [123]
+            ... )
+            >>> # Query with filters
+            >>> result = driver.execute(
+            ...     "SELECT * FROM users",
+            ...     LimitOffset(limit=10, offset=0),
+            ...     SearchFilter(field_name="name", value="John"),
+            ... )
         """
-        processed_sql_str: str
-        ordered_params_tuple: Optional[tuple[Any, ...]] = None
+        conn = self._connection(connection)
+        config = statement_config or self.statement_config
 
-        if isinstance(sql, Query):
-            temp_sql, temp_params_from_query, _ = sql.process()
-            # We still need to convert temp_sql to qmark and get ordered params
-            # The temp_params_from_query (dict or list) will be passed to SQLStatement
-            stmt_for_qmark = SQLStatement(temp_sql, temp_params_from_query, dialect=self.dialect)
+        stmt = SQLStatement(statement, parameters, *filters, dialect=self.dialect, statement_config=config, **kwargs)
+        stmt.validate()
 
-            if not stmt_for_qmark._parsed_expression:
-                msg = f"DuckDB: Failed to parse SQL from Query.process() output: {temp_sql}"
-                raise SQLParsingError(msg)
+        final_sql = stmt.to_sql(placeholder_style=self._get_placeholder_style())
+        ordered_params = stmt.get_parameters(style=self._get_placeholder_style())
 
-            parsed_expr_to_transform = stmt_for_qmark._parsed_expression
-            # SQLStatement.merged_parameters should reflect temp_params_from_query accurately
-            # SQLStatement.parameter_info should give us the placeholders in order from temp_sql
-            ordered_params_tuple = self._get_ordered_params_from_statement(stmt_for_qmark)
-            placeholder_nodes_in_order = stmt_for_qmark.parameter_info  # these are ParameterInfo objects
+        # Convert parameters to list format for DuckDB using simplified logic
+        if ordered_params is not None and not isinstance(ordered_params, list):
+            if isinstance(ordered_params, Iterable) and not isinstance(ordered_params, (str, bytes)):
+                ordered_params = list(ordered_params)
+            else:
+                ordered_params = [ordered_params]
 
-        else:  # Handle raw Statement
-            if filters:
-                logger.warning(
-                    "Filters are provided but `sql` is a raw Statement; filters will not be applied by DuckDBDriver._process_sql_params."
+        with self._get_cursor(conn) as cursor:
+            cursor.execute(final_sql, ordered_params or [])
+            if self.returns_rows(stmt.expression):
+                raw_data_tuples = cursor.fetchall()
+                if not raw_data_tuples:
+                    return SelectResult(raw_result=cast("dict[str, Any]", {}), rows=[], column_names=[])
+                column_names = [col[0] for col in cursor.description or []]
+                rows = [dict(zip(column_names, row)) for row in raw_data_tuples]
+                return SelectResult(
+                    raw_result=rows[0] if rows else cast("dict[str, Any]", {}),
+                    rows=rows,
+                    column_names=column_names,
                 )
 
-            statement = SQLStatement(sql, parameters, kwargs=kwargs, dialect=self.dialect)
-            if not statement._parsed_expression:
-                raw_sql_fallback = str(sql) if not isinstance(sql, exp.Expression) else sql.sql(dialect=self.dialect)
-                msg = f"DuckDB: SQLStatement failed to parse SQL: {raw_sql_fallback}"
-                raise SQLParsingError(msg)
+            rows_affected = cursor.rowcount if cursor.rowcount is not None else -1
+            operation_type = "UNKNOWN"
+            if stmt.expression and hasattr(stmt.expression, "key"):
+                operation_type = str(stmt.expression.key).upper()
 
-            parsed_expr_to_transform = statement._parsed_expression
-            ordered_params_tuple = self._get_ordered_params_from_statement(statement)
-            placeholder_nodes_in_order = statement.parameter_info
+            return ExecuteResult(
+                raw_result=cast("dict[str, Any]", {}),
+                rows_affected=rows_affected,
+                operation_type=operation_type,
+            )
 
-        # Transform to qmark SQL
-        if not placeholder_nodes_in_order:  # No params, no transformation needed
-            processed_sql_str = parsed_expr_to_transform.sql(dialect=self.dialect)
-        else:
-            # Create a map from original placeholder AST node IDs to qmark placeholders
-            # We need the actual placeholder *expressions* from the parsed_expr_to_transform
-            # that correspond to parameter_info entries.
-            # This part is tricky as parameter_info are descriptors, not the live AST nodes.
-            # Simpler: sqlglot can often convert to qmark style directly in .sql()
-            # by using a dialect that defaults to qmark or by specific transform.
-            # DuckDB dialect in sqlglot might already do this or accept named params that map to qmark internally.
-            # Let's try a specific transform to qmark if placeholders exist.
+    def execute_many(
+        self,
+        statement: "Statement",
+        parameters: Optional[Sequence[StatementParameterType]] = None,
+        *filters: "StatementFilter",
+        connection: Optional[DuckDBConnection] = None,
+        statement_config: Optional[StatementConfig] = None,
+        **kwargs: Any,
+    ) -> "ExecuteResult[dict[str, Any]]":
+        """Execute a SQL statement with multiple parameter sets.
 
-            # Find all placeholders in the expression to be transformed
-            # These are the actual sqlglot placeholder nodes
-            ast_placeholders = list(parsed_expr_to_transform.find_all(exp.Placeholder))
+        Useful for batch INSERT, UPDATE, or DELETE operations.
 
-            if ast_placeholders:  # Only transform if there are placeholders in the AST
-                placeholder_map: dict[int, exp.Expression] = {
-                    id(p_node): exp.Placeholder() for p_node in ast_placeholders
-                }
+        Args:
+            statement: The SQL statement to execute.
+            parameters: Sequence of parameter sets.
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional keyword arguments.
 
-                def replace_with_qmark(node: exp.Expression) -> exp.Expression:
-                    return placeholder_map.get(id(node), node)
+        Returns:
+            An ExecuteResult containing the batch operation results.
 
-                transformed_expr = parsed_expr_to_transform.transform(replace_with_qmark, copy=True)
-                processed_sql_str = transformed_expr.sql(dialect=self.dialect)
-            else:  # No AST placeholders found, though parameter_info might exist (e.g. from original string parsing)
-                # This implies a mismatch or that params are not used in the final expression.
-                processed_sql_str = parsed_expr_to_transform.sql(dialect=self.dialect)
-                if placeholder_nodes_in_order:  # ParamInfo existed, but no placeholders in final AST for qmark.
-                    logger.warning(
-                        "DuckDB: ParameterInfo existed but no placeholders found in the final AST to convert to qmark. SQL may not be as expected."
-                    )
+        Example:
+            >>> # Batch insert with validation
+            >>> driver.execute_many(
+            ...     "INSERT INTO users (name, email) VALUES (?, ?)",
+            ...     [
+            ...         ["John", "john@example.com"],
+            ...         ["Jane", "jane@example.com"],
+            ...     ],
+            ... )
+        """
+        conn = self._connection(connection)
+        config = statement_config or self.statement_config
 
-        final_params_list = list(ordered_params_tuple) if ordered_params_tuple is not None else []
-        return processed_sql_str, final_params_list
+        # Create template statement with filters for validation
+        template_stmt = SQLStatement(
+            statement,
+            None,  # No parameters for template
+            *filters,
+            dialect=self.dialect,
+            statement_config=config,
+            **kwargs,
+        )
 
-    def _get_ordered_params_from_statement(self, statement: SQLStatement) -> Optional[tuple[Any, ...]]:
-        """Helper to extract ordered parameters from a SQLStatement object for DuckDB."""
-        if not statement.parameter_info:  # No parameters described
-            return None
+        template_stmt.validate()
+        final_sql = template_stmt.to_sql(placeholder_style=self._get_placeholder_style())
 
-        # DuckDB uses positional parameters. SQLStatement.merged_parameters might be a dict
-        # if named parameters were provided. We need to order them according to parameter_info.
+        # Process parameter sets
+        processed_params_list: list[list[Any]] = []
+        param_sequence = parameters if parameters is not None else []
 
-        if statement.parameter_style == ParameterStyle.NAMED_COLON and isinstance(statement.merged_parameters, dict):
-            ordered_values = []
-            for p_info in statement.parameter_info:
-                if p_info.name in statement.merged_parameters:
-                    ordered_values.append(statement.merged_parameters[p_info.name])
+        if param_sequence:
+            # Create a building config that skips validation for individual parameter sets
+            building_config = replace(config or StatementConfig(), enable_validation=False)
+
+            for param_set in param_sequence:
+                item_stmt = SQLStatement(
+                    template_stmt.sql,  # Use processed SQL from template
+                    param_set,
+                    dialect=self.dialect,
+                    statement_config=building_config,
+                )
+                ordered_params_for_item = item_stmt.get_parameters(style=self._get_placeholder_style())
+
+                if isinstance(ordered_params_for_item, list):
+                    processed_params_list.append(ordered_params_for_item)
+                elif ordered_params_for_item is None:
+                    processed_params_list.append([])
+                elif isinstance(ordered_params_for_item, Iterable) and not isinstance(
+                    ordered_params_for_item, (str, bytes)
+                ):
+                    processed_params_list.append(list(ordered_params_for_item))
                 else:
-                    # This implies a named placeholder in SQL (from ParameterInfo) was not in the provided dict.
-                    # SQLStatement's convert_parameters with validate=True should catch this.
-                    msg = f"DuckDB: Missing parameter value for named placeholder '{p_info.name}'."
-                    raise ValueError(msg)
-            return tuple(ordered_values)
+                    processed_params_list.append([ordered_params_for_item])
 
-        if isinstance(statement.merged_parameters, (list, tuple)):
-            return tuple(statement.merged_parameters)
+        if not param_sequence:
+            return ExecuteResult(raw_result=cast("dict[str, Any]", {}), rows_affected=0, operation_type="EXECUTE")
 
-        if statement.merged_parameters is not None:  # Scalar
-            if len(statement.parameter_info) == 1:
-                return (statement.merged_parameters,)
-            msg = "DuckDB: Scalar parameter provided for query with multiple placeholders."
-            raise ValueError(msg)
+        with self._get_cursor(conn) as cursor:
+            cursor.executemany(final_sql, processed_params_list)
+            rows_affected = cursor.rowcount if cursor.rowcount is not None else -1
+            if rows_affected == -1 and processed_params_list:
+                rows_affected = len(processed_params_list)
 
-        # If merged_parameters is None but parameter_info exists, it means params were expected but not given.
-        # SQLStatement validation should ideally catch this. If we reach here, means it wasn't caught or not validated.
-        if statement.parameter_info:
-            msg = "DuckDB: Query expects parameters, but none were resolved from SQLStatement."
-            raise ValueError(msg)
+        operation_type = "EXECUTE"
+        if template_stmt.expression and hasattr(template_stmt.expression, "key"):
+            operation_type = str(template_stmt.expression.key).upper()
 
-        return None  # No parameters found or expected
-
-    # --- Public API Methods --- #
-    @overload
-    def select(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Sequence[dict[str, Any]]": ...
-    @overload
-    def select(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Sequence[ModelDTOT]": ...
-    def select(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Sequence[Union[dict[str, Any], ModelDTOT]]":
-        """Fetch data from the database.
-
-        Returns:
-            List of row data as either model instances or dictionaries.
-        """
-        connection = self._connection(connection)
-        processed_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(processed_sql, processed_params)
-            results = cursor.fetchall()
-            if not results:
-                return []
-            column_names = [column[0] for column in cursor.description or []]
-            return self.to_schema([dict(zip(column_names, row)) for row in results], schema_type=schema_type)
-
-    @overload
-    def select_one(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-    @overload
-    def select_one(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-    def select_one(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Union[dict[str, Any], ModelDTOT]":
-        """Fetch one row from the database.
-
-        Returns:
-            The first row of the query results.
-        """
-        connection = self._connection(connection)
-        processed_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(processed_sql, processed_params)
-            result = cursor.fetchone()
-            result = self.check_not_found(result)
-            column_names = [column[0] for column in cursor.description or []]
-            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
-
-    @overload
-    def select_one_or_none(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[dict[str, Any]]": ...
-    @overload
-    def select_one_or_none(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Optional[ModelDTOT]": ...
-    def select_one_or_none(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
-        """Fetch one row from the database.
-
-        Returns:
-            The first row of the query results, or None if no results.
-        """
-        connection = self._connection(connection)
-        processed_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(processed_sql, processed_params)
-            result = cursor.fetchone()
-            if result is None:
-                return None
-            column_names = [column[0] for column in cursor.description or []]
-            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
-
-    @overload
-    def select_value(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Any": ...
-    @overload
-    def select_value(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "T": ...
-    def select_value(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: "Optional[type[T]]" = None,
-        **kwargs: Any,
-    ) -> "Union[T, Any]":
-        """Fetch a single value from the database.
-
-        Returns:
-            The first value from the first row of results.
-        """
-        connection = self._connection(connection)
-        processed_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(processed_sql, processed_params)
-            result = cursor.fetchone()
-            result = self.check_not_found(result)
-            result_value = result[0]
-            if schema_type is None:
-                return result_value
-            return schema_type(result_value)  # type: ignore[call-arg]
-
-    @overload
-    def select_value_or_none(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[Any]": ...
-    @overload
-    def select_value_or_none(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "Optional[T]": ...
-    def select_value_or_none(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: "Optional[type[T]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[T, Any]]":
-        connection = self._connection(connection)
-        processed_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(processed_sql, processed_params)
-            result = cursor.fetchone()
-            if result is None:
-                return None
-            if schema_type is None:
-                return result[0]
-            return schema_type(result[0])  # type: ignore[call-arg]
-
-    def insert_update_delete(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        **kwargs: Any,
-    ) -> int:
-        connection = self._connection(connection)
-        processed_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(processed_sql, processed_params)
-            return getattr(cursor, "rowcount", -1)
-
-    @overload
-    def insert_update_delete_returning(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-    @overload
-    def insert_update_delete_returning(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-    def insert_update_delete_returning(
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Union[ModelDTOT, dict[str, Any]]":
-        connection = self._connection(connection)
-        processed_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(processed_sql, processed_params)
-            result = cursor.fetchall()
-            result = self.check_not_found(result)
-            column_names = [col[0] for col in cursor.description or []]
-            return self.to_schema(dict(zip(column_names, result[0])), schema_type=schema_type)
+        return ExecuteResult(
+            raw_result=cast("dict[str, Any]", {}),
+            rows_affected=rows_affected,
+            operation_type=operation_type,
+        )
 
     def execute_script(
         self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        connection: "Optional[DuckDBConnection]" = None,
+        statement: "Statement",
+        parameters: Optional[StatementParameterType] = None,
+        *filters: "StatementFilter",
+        connection: Optional[DuckDBConnection] = None,
+        statement_config: Optional[StatementConfig] = None,
         **kwargs: Any,
     ) -> str:
-        connection = self._connection(connection)
-        processed_sql, processed_params = self._process_sql_params(sql, parameters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(processed_sql, processed_params)
-            return cast("str", getattr(cursor, "statusmessage", "DONE"))
+        """Execute a multi-statement SQL script.
 
-    # --- Arrow Bulk Operations ---
-
-    def select_arrow(  # pyright: ignore[reportUnknownParameterType]
-        self,
-        sql: "Union[Statement, Query]",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[DuckDBConnection]" = None,
-        **kwargs: Any,
-    ) -> "ArrowTable":
-        """Execute a SQL query and return results as an Apache Arrow Table.
+        For script execution, parameters are rendered as static literals directly
+        in the SQL rather than using placeholders, since scripts may contain
+        multiple statements that don't support parameterization.
 
         Args:
-            sql: The SQL query string.
-            parameters: Parameters for the query.
-            *filters: Optional filters to apply to the SQL statement.
+            statement: The SQL script to execute.
+            parameters: Parameters for the script.
+            *filters: Statement filters to apply.
             connection: Optional connection override.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional keyword arguments.
 
         Returns:
-            An Apache Arrow Table containing the query results.
+            A string with execution results/output.
         """
-        connection = self._connection(connection)
-        processed_sql, processed_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(processed_sql, processed_params)
-            return cast("ArrowTable", cursor.fetch_arrow_table())
+        conn = self._connection(connection)
+        config = statement_config or self.statement_config
 
-    def _connection(self, connection: "Optional[DuckDBConnection]" = None) -> "DuckDBConnection":
-        """Get the connection to use for the operation.
+        merged_params = parameters
+        if kwargs:
+            if merged_params is None:
+                merged_params = kwargs
+            elif isinstance(merged_params, dict):
+                merged_params = {**merged_params, **kwargs}
+
+        stmt = SQLStatement(statement, merged_params, *filters, dialect=self.dialect, statement_config=config)
+        stmt.validate()
+        final_sql = stmt.to_sql(placeholder_style=ParameterStyle.STATIC)
+
+        with self._get_cursor(conn) as cursor:
+            cursor.execute(final_sql)
+            return "SCRIPT EXECUTED"
+
+    def select_to_arrow(
+        self,
+        statement: "Statement",
+        parameters: Optional[StatementParameterType] = None,
+        *filters: "StatementFilter",
+        connection: Optional[DuckDBConnection] = None,
+        statement_config: Optional[StatementConfig] = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Execute a SELECT statement and return results as an Apache Arrow Table.
+
+        This method leverages DuckDB's excellent Arrow integration for high-performance
+        analytics workloads.
 
         Args:
-            connection: Optional connection to use.
+            statement: The SQL query to execute.
+            parameters: Parameters for the query.
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional keyword arguments.
+
+        Raises:
+            TypeError: If the SQL statement is not a valid query.
 
         Returns:
-            The connection to use.
+            An Arrow Table containing the query results.
         """
+        conn = self._connection(connection)
+        config = statement_config or self.statement_config
+
+        stmt = SQLStatement(statement, parameters, *filters, dialect=self.dialect, statement_config=config, **kwargs)
+        stmt.validate()
+
+        if not self.returns_rows(stmt.expression):
+            op_type = "UNKNOWN"
+            if stmt.expression and hasattr(stmt.expression, "key"):
+                op_type = str(stmt.expression.key).upper()
+            msg = f"Cannot fetch Arrow table for a non-query statement. Command type: {op_type}"
+            raise TypeError(msg)
+
+        final_sql = stmt.to_sql(placeholder_style=self._get_placeholder_style())
+        ordered_params = stmt.get_parameters(style=self._get_placeholder_style())
+
+        # Convert parameters to list format for DuckDB using simplified logic
+        if ordered_params is not None and not isinstance(ordered_params, list):
+            if isinstance(ordered_params, Iterable) and not isinstance(ordered_params, (str, bytes)):
+                ordered_params = list(ordered_params)
+            else:
+                ordered_params = [ordered_params]
+
+        with self._get_cursor(conn) as cursor:
+            relation = cursor.execute(final_sql, ordered_params or [])
+            if relation is None:
+                msg = "DuckDB execute returned None for a query expected to return rows for Arrow."
+                raise SQLConversionError(msg)
+            return ArrowResult(raw_result=relation.arrow())
+
+    def _connection(self, connection: Optional[DuckDBConnection] = None) -> DuckDBConnection:
+        """Get the connection to use for the operation."""
         return connection or self.connection

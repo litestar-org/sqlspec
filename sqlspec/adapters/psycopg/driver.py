@@ -1,96 +1,81 @@
+# ruff: noqa: PLR6301
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, Generic, Optional, TypeVar, Union, cast
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional, TypeVar, Union, cast
 
-import sqlglot  # Ensure sqlglot itself is imported
 from psycopg import AsyncConnection, Connection
-from psycopg import sql as psycopg_sql
 from psycopg.rows import DictRow, dict_row
 
 from sqlspec.base import (
     AsyncDriverAdapterProtocol,
     CommonDriverAttributes,
-    StatementResultType,
     SyncDriverAdapterProtocol,
 )
-from sqlspec.exceptions import SQLParsingError
+from sqlspec.sql.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin, SyncArrowMixin
+from sqlspec.sql.parameters import ParameterStyle
 from sqlspec.sql.result import ExecuteResult, SelectResult
-from sqlspec.sql.statement import SQLStatement
+from sqlspec.sql.statement import SQLStatement, Statement, StatementConfig
 from sqlspec.typing import StatementParameterType
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
-    from psycopg.sql import LiteralString
-    from sqlglot.expressions import Expression as SQLGlotExpression
-
     from sqlspec.sql.filters import StatementFilter
-    from sqlspec.sql.statement import Statement
 
 logger = logging.getLogger("sqlspec")
 
 __all__ = ("PsycopgAsyncConnection", "PsycopgAsyncDriver", "PsycopgSyncConnection", "PsycopgSyncDriver")
 
-# Restore these crucial type definitions
 PsycopgSyncConnection = Connection[DictRow]
 PsycopgAsyncConnection = AsyncConnection[DictRow]
 ConnectionT = TypeVar("ConnectionT", bound=Union[Connection[Any], AsyncConnection[Any]])
 
-# NAMED_PARAM_REGEX is no longer used with the sqlglot dialect output approach.
-
 
 class PsycopgDriverBase(CommonDriverAttributes[ConnectionT], Generic[ConnectionT]):
+    """Base class for Psycopg drivers with shared functionality."""
+
     dialect: str = "postgres"
 
-    def _process_sql_params(
-        self,
-        sql: "Statement",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        **kwargs: Any,
-    ) -> "tuple[str, Union[list[Any], dict[str, Any]]]":
-        sql_input_for_super: Union[str, SQLGlotExpression]
-        if isinstance(sql, SQLStatement):
-            if not isinstance(sql.expression, sqlglot.Expression):
-                # This should ideally be caught earlier or SQLStatement ensures .expression is always valid post-init
-                msg = f"SQLStatement instance passed to PsycopgDriverBase has an invalid .expression attribute. Type: {type(sql.expression)}"
-                raise SQLParsingError(msg)
-            sql_input_for_super = sql.expression
-        elif isinstance(sql, (str, sqlglot.Expression)):
-            sql_input_for_super = sql
-        else:
-            # This provides more specific type feedback to the user/developer.
-            msg = f"Unexpected type for 'sql' argument: {type(sql)}. Expected str, sqlglot.Expression, or SQLStatement."
-            raise TypeError(msg)
-
-        # super()._process_sql_params() (which calls SQLStatement.process())
-        # should now return SQL string with psycopg-compatible placeholders (%s or %(name)s)
-        # and the corresponding parameters list/dict because SQLStatement now handles this.
-        processed_sql_str, processed_params = super()._process_sql_params(
-            sql_input_for_super, parameters, *filters, **kwargs
-        )
-
-        # No further transformation of placeholders should be needed here for psycopg.
-        logger.debug(f"Psycopg SQL (from SQLStatement): {processed_sql_str}, Params: {processed_params}")
-        return processed_sql_str, processed_params
+    def _get_placeholder_style(self) -> ParameterStyle:
+        """Return the placeholder style for Psycopg (pyformat named: %(name)s)."""
+        return ParameterStyle.PYFORMAT_NAMED
 
 
 class PsycopgSyncDriver(
     PsycopgDriverBase[PsycopgSyncConnection],
+    SQLTranslatorMixin["PsycopgSyncConnection"],
     SyncDriverAdapterProtocol[PsycopgSyncConnection],
+    SyncArrowMixin["PsycopgSyncConnection"],
+    ResultConverter,
 ):
-    """Psycopg Sync Driver Adapter."""
+    """Psycopg Sync Driver Adapter.
+
+    This driver implements the new unified SQLSpec protocol with the core 3 methods:
+    - execute() - Universal method for all SQL operations
+    - execute_many() - Batch operations
+    - execute_script() - Multi-statement scripts
+
+    Enhanced Features:
+    - Full SQLStatement integration with filters and validation
+    - PostgreSQL-specific parameter style handling (%(name)s)
+    - Comprehensive parameter validation and security checks
+    - Support for filter composition (pagination, search, etc.)
+    - Uses modern psycopg 3 with enhanced security
+    """
 
     connection: PsycopgSyncConnection
+    __supports_arrow__: ClassVar[bool] = False  # Psycopg doesn't support Arrow natively
 
-    def __init__(self, connection: PsycopgSyncConnection, **kwargs: Any) -> None:
-        super().__init__(connection=connection)
+    def __init__(self, connection: PsycopgSyncConnection, statement_config: Optional[StatementConfig] = None) -> None:
+        """Initialize the Psycopg sync driver adapter."""
+        super().__init__(connection=connection, statement_config=statement_config)
         self.connection = connection
 
     @staticmethod
     @contextmanager
-    def _with_cursor(connection: PsycopgSyncConnection) -> "Generator[Any, None, None]":
+    def _get_cursor(connection: PsycopgSyncConnection) -> "Generator[Any, None, None]":
         cursor = connection.cursor(row_factory=dict_row)
         try:
             yield cursor
@@ -99,116 +84,263 @@ class PsycopgSyncDriver(
 
     def execute(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: Optional[StatementParameterType] = None,
         *filters: "StatementFilter",
         connection: Optional[PsycopgSyncConnection] = None,
+        statement_config: Optional[StatementConfig] = None,
         **kwargs: Any,
-    ) -> StatementResultType:
+    ) -> "Union[SelectResult[dict[str, Any]], ExecuteResult[dict[str, Any]]]":
+        """Execute a SQL statement and return a StatementResult.
+
+        This is the unified method for all SQL operations (SELECT, INSERT, UPDATE, DELETE).
+        Use the StatementResult methods to extract the data you need.
+
+        Args:
+            statement: The SQL statement to execute.
+            parameters: Parameters for the statement.
+            *filters: Statement filters to apply (e.g., pagination, search filters).
+            connection: Optional connection override.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            A StatementResult containing the operation results.
+
+        Example:
+            >>> from sqlspec.sql.filters import LimitOffset, SearchFilter
+            >>> # Basic query
+            >>> result = driver.execute(
+            ...     "SELECT * FROM users WHERE id = %(id)s", {"id": 123}
+            ... )
+            >>> # Query with filters
+            >>> result = driver.execute(
+            ...     "SELECT * FROM users",
+            ...     LimitOffset(limit=10, offset=0),
+            ...     SearchFilter(field_name="name", value="John"),
+            ... )
+        """
         conn: PsycopgSyncConnection = self._connection(connection)
-        pyformat_sql, psycopg_params = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        config = statement_config or self.statement_config
 
-        cursor = conn.cursor(row_factory=dict_row)
-        try:
-            logger.debug("Executing SQL (Psycopg Sync): %s with params: %s", pyformat_sql, psycopg_params)
-            cursor.execute(psycopg_sql.SQL(pyformat_sql), psycopg_params)  # type: ignore[arg-type]
+        stmt = SQLStatement(statement, parameters, *filters, dialect=self.dialect, statement_config=config, **kwargs)
+        stmt.validate()
 
-            if cursor.description:
+        final_sql = stmt.to_sql(placeholder_style=self._get_placeholder_style())
+        ordered_params = stmt.get_parameters(style=self._get_placeholder_style())
+
+        # Convert parameters to dict format for psycopg using simplified logic
+        psycopg_params_dict: dict[str, Any] = {}
+        if ordered_params is not None:
+            if isinstance(ordered_params, dict):
+                psycopg_params_dict = ordered_params
+            elif isinstance(ordered_params, Iterable) and not isinstance(ordered_params, (str, bytes)):
+                # For non-dict iterables, create indexed parameters
+                psycopg_params_dict = {f"param_{i}": v for i, v in enumerate(ordered_params)}
+            else:
+                psycopg_params_dict = {"param_0": ordered_params}
+
+        with self._get_cursor(conn) as cursor:
+            logger.debug("Executing SQL (Psycopg Sync): %s with params: %s", final_sql, psycopg_params_dict)
+            cursor.execute(final_sql, psycopg_params_dict)
+
+            if self.returns_rows(stmt.expression):
                 fetched_data: list[dict[str, Any]] = cursor.fetchall()
-                column_names = [col.name for col in cursor.description]
+                column_names = [col.name for col in cursor.description or []]
+                raw_result_data = fetched_data[0] if fetched_data else cast("dict[str, Any]", {})
                 return SelectResult(
-                    raw_result=fetched_data,
+                    raw_result=raw_result_data,
                     rows=fetched_data,
                     column_names=column_names,
-                    rows_affected=cursor.rowcount if cursor.rowcount != -1 else len(fetched_data),
-                    metadata={"dialect": self.dialect, "status_message": cursor.statusmessage},
                 )
+
+            operation_type = "UNKNOWN"
+            if stmt.expression and hasattr(stmt.expression, "key"):
+                operation_type = str(stmt.expression.key).upper()
+
             return ExecuteResult(
-                raw_result=None,
-                rows_affected=cursor.rowcount,
-                metadata={"dialect": self.dialect, "status_message": cursor.statusmessage},
+                raw_result=cast("dict[str, Any]", {}),
+                rows_affected=cursor.rowcount if cursor.rowcount is not None else -1,
+                operation_type=operation_type,
             )
-        finally:
-            cursor.close()
 
     def execute_many(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: Optional[Sequence[StatementParameterType]] = None,
         *filters: "StatementFilter",
         connection: Optional[PsycopgSyncConnection] = None,
+        statement_config: Optional[StatementConfig] = None,
         **kwargs: Any,
-    ) -> StatementResultType:
+    ) -> "ExecuteResult[dict[str, Any]]":
+        """Execute a SQL statement with multiple parameter sets.
+
+        Useful for batch INSERT, UPDATE, or DELETE operations.
+
+        Args:
+            statement: The SQL statement to execute.
+            parameters: Sequence of parameter sets.
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            An ExecuteResult containing the batch operation results.
+
+        Example:
+            >>> # Batch insert with validation
+            >>> driver.execute_many(
+            ...     "INSERT INTO users (name, email) VALUES (%(name)s, %(email)s)",
+            ...     [
+            ...         {"name": "John", "email": "john@example.com"},
+            ...         {"name": "Jane", "email": "jane@example.com"},
+            ...     ],
+            ... )
+        """
         conn: PsycopgSyncConnection = self._connection(connection)
+        config = statement_config or self.statement_config
 
-        if not parameters:
-            logger.debug("execute_many called with no parameters for SQL: %s", sql)
-            pyformat_sql_template, _ = self._process_sql_params(sql, None, *filters, **kwargs)
-            logger.debug("Validated empty-parameter SQL for execute_many (Psycopg Sync): %s", pyformat_sql_template)
-            return ExecuteResult(raw_result=None, rows_affected=0, metadata={"dialect": self.dialect})
+        # Create template statement with filters for validation
+        template_stmt = SQLStatement(
+            statement,
+            None,  # No parameters for template
+            *filters,
+            dialect=self.dialect,
+            statement_config=config,
+            **kwargs,
+        )
 
-        pyformat_sql_template, _ = self._process_sql_params(sql, parameters[0], *filters, **kwargs)
-        adapted_parameters_sequence: list[Union[list[Any], dict[str, Any]]] = []
-        for param_set in parameters:
-            _, adapted_params = self._process_sql_params(sql, param_set, *filters, **kwargs)
-            adapted_parameters_sequence.append(adapted_params)
-        affected_rows: int = -1
-        status_message: Optional[str] = None
-        cursor = conn.cursor()
-        try:
-            cursor.executemany(psycopg_sql.SQL(pyformat_sql_template), adapted_parameters_sequence)  # type: ignore[arg-type]
-            affected_rows = cursor.rowcount
-            status_message = cursor.statusmessage
-        finally:
-            cursor.close()
+        template_stmt.validate()
+        final_sql = template_stmt.to_sql(placeholder_style=self._get_placeholder_style())
+
+        # Process parameter sets
+        adapted_parameters_sequence: list[dict[str, Any]] = []
+        param_sequence = parameters if parameters is not None else []
+
+        if param_sequence:
+            # Create a building config that skips validation for individual parameter sets
+            building_config = replace(config or StatementConfig(), enable_validation=False)
+
+            for param_set in param_sequence:
+                item_stmt = SQLStatement(
+                    template_stmt.sql,  # Use processed SQL from template
+                    param_set,
+                    dialect=self.dialect,
+                    statement_config=building_config,
+                )
+                item_params_dict = item_stmt.get_parameters(style=self._get_placeholder_style())
+
+                if isinstance(item_params_dict, dict):
+                    adapted_parameters_sequence.append(item_params_dict)
+                elif item_params_dict is None:
+                    adapted_parameters_sequence.append({})
+                else:
+                    logger.warning("execute_many expected dict for PYFORMAT_NAMED, got %s", type(item_params_dict))
+                    adapted_parameters_sequence.append({})
+
+        if not param_sequence:
+            return ExecuteResult(raw_result=cast("dict[str, Any]", {}), rows_affected=0, operation_type="EXECUTE")
+
+        with self._get_cursor(conn) as cursor:
+            cursor.executemany(final_sql, adapted_parameters_sequence)
+            affected_rows = cursor.rowcount if cursor.rowcount is not None else -1
+
+        operation_type = "EXECUTE"
+        if template_stmt.expression and hasattr(template_stmt.expression, "key"):
+            operation_type = str(template_stmt.expression.key).upper()
 
         return ExecuteResult(
-            raw_result=None,
+            raw_result=cast("dict[str, Any]", {}),
             rows_affected=affected_rows,
-            metadata={"dialect": self.dialect, "status_message": status_message},
+            operation_type=operation_type,
         )
 
     def execute_script(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: Optional[StatementParameterType] = None,
+        *filters: "StatementFilter",
         connection: Optional[PsycopgSyncConnection] = None,
+        statement_config: Optional[StatementConfig] = None,
         **kwargs: Any,
     ) -> str:
+        """Execute a multi-statement SQL script.
+
+        For script execution, parameters are rendered as static literals directly
+        in the SQL rather than using placeholders, since scripts may contain
+        multiple statements that don't support parameterization.
+
+        Args:
+            statement: The SQL script to execute.
+            parameters: Parameters for the script.
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            A string with execution results/output.
+        """
         conn: PsycopgSyncConnection = self._connection(connection)
-        pyformat_sql, psycopg_params = self._process_sql_params(sql, parameters, **kwargs)
+        config = statement_config or self.statement_config
 
-        logger.debug("Executing script (Psycopg Sync): %s with params: %s", pyformat_sql, psycopg_params)
+        merged_params = parameters
+        if kwargs:
+            if merged_params is None:
+                merged_params = kwargs
+            elif isinstance(merged_params, dict):
+                merged_params = {**merged_params, **kwargs}
 
-        status_message_agg: list[str] = []
-        cursor = conn.cursor(row_factory=dict_row)
-        try:
-            cursor.execute(psycopg_sql.SQL(cast("LiteralString", pyformat_sql)), psycopg_params)
+        stmt = SQLStatement(statement, merged_params, *filters, dialect=self.dialect, statement_config=config)
+        stmt.validate()
+        final_sql = stmt.to_sql(placeholder_style=ParameterStyle.STATIC)
+
+        logger.debug("Executing script (Psycopg Sync): %s", final_sql)
+        with self._get_cursor(conn) as cursor:
+            cursor.execute(final_sql)
             current_status = cursor.statusmessage
-            while current_status:
-                status_message_agg.append(current_status)
-                current_status = cursor.statusmessage if cursor.nextset() else None
-        finally:
-            cursor.close()
+            return current_status or "SCRIPT EXECUTED"
 
-        return "; ".join(s for s in status_message_agg if s) if status_message_agg else "DONE"
+    def _connection(self, connection: Optional[PsycopgSyncConnection] = None) -> PsycopgSyncConnection:
+        """Get the connection to use for the operation."""
+        return connection or self.connection
 
 
 class PsycopgAsyncDriver(
     PsycopgDriverBase[PsycopgAsyncConnection],
+    SQLTranslatorMixin["PsycopgAsyncConnection"],
     AsyncDriverAdapterProtocol[PsycopgAsyncConnection],
+    AsyncArrowMixin["PsycopgAsyncConnection"],
+    ResultConverter,
 ):
-    """Psycopg Async Driver Adapter."""
+    """Psycopg Async Driver Adapter.
+
+    This driver implements the new unified SQLSpec protocol with the core 3 methods:
+    - execute() - Universal method for all SQL operations
+    - execute_many() - Batch operations
+    - execute_script() - Multi-statement scripts
+
+    Enhanced Features:
+    - Full SQLStatement integration with filters and validation
+    - PostgreSQL-specific parameter style handling (%(name)s)
+    - Comprehensive parameter validation and security checks
+    - Support for filter composition (pagination, search, etc.)
+    - Uses modern psycopg 3 with enhanced security
+    """
 
     connection: PsycopgAsyncConnection
+    __supports_arrow__: ClassVar[bool] = False  # Psycopg doesn't support Arrow natively
 
-    def __init__(self, connection: PsycopgAsyncConnection) -> None:
-        super().__init__(connection=connection)
+    def __init__(self, connection: PsycopgAsyncConnection, statement_config: Optional[StatementConfig] = None) -> None:
+        """Initialize the Psycopg async driver adapter."""
+        super().__init__(connection=connection, statement_config=statement_config)
         self.connection = connection
 
     @staticmethod
     @asynccontextmanager
-    async def _with_cursor(connection: PsycopgAsyncConnection) -> "AsyncGenerator[Any, None]":
+    async def _get_cursor(connection: PsycopgAsyncConnection) -> "AsyncGenerator[Any, None]":
+        """Get an async cursor for the connection."""
         cursor = connection.cursor(row_factory=dict_row)
         try:
             yield cursor
@@ -217,86 +349,224 @@ class PsycopgAsyncDriver(
 
     async def execute(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: Optional[StatementParameterType] = None,
         *filters: "StatementFilter",
         connection: Optional[PsycopgAsyncConnection] = None,
+        statement_config: Optional[StatementConfig] = None,
         **kwargs: Any,
-    ) -> StatementResultType:
-        connection = self._connection(connection)
-        sql, binds = self._process_sql_params(sql, parameters, *filters, **kwargs)
+    ) -> "Union[SelectResult[dict[str, Any]], ExecuteResult[dict[str, Any]]]":
+        """Execute a SQL statement and return a StatementResult.
 
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, binds)  # type: ignore[arg-type]
+        This is the unified method for all SQL operations (SELECT, INSERT, UPDATE, DELETE).
+        Use the StatementResult methods to extract the data you need.
 
-            if cursor.description:
+        Args:
+            statement: The SQL statement to execute.
+            parameters: Parameters for the statement.
+            *filters: Statement filters to apply (e.g., pagination, search filters).
+            connection: Optional connection override.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            A StatementResult containing the operation results.
+
+        Example:
+            >>> from sqlspec.sql.filters import LimitOffset, SearchFilter
+            >>> # Basic query
+            >>> result = await driver.execute(
+            ...     "SELECT * FROM users WHERE id = %(id)s", {"id": 123}
+            ... )
+            >>> # Query with filters
+            >>> result = await driver.execute(
+            ...     "SELECT * FROM users",
+            ...     LimitOffset(limit=10, offset=0),
+            ...     SearchFilter(field_name="name", value="John"),
+            ... )
+        """
+        conn = self._connection(connection)
+        config = statement_config or self.statement_config
+
+        stmt = SQLStatement(statement, parameters, *filters, dialect=self.dialect, statement_config=config, **kwargs)
+        stmt.validate()
+
+        final_sql = stmt.to_sql(placeholder_style=self._get_placeholder_style())
+        ordered_params = stmt.get_parameters(style=self._get_placeholder_style())
+
+        # Convert parameters to dict format for psycopg using simplified logic
+        psycopg_params_dict: dict[str, Any] = {}
+        if ordered_params is not None:
+            if isinstance(ordered_params, dict):
+                psycopg_params_dict = ordered_params
+            elif isinstance(ordered_params, Iterable) and not isinstance(ordered_params, (str, bytes)):
+                # For non-dict iterables, create indexed parameters
+                psycopg_params_dict = {f"param_{i}": v for i, v in enumerate(ordered_params)}
+            else:
+                psycopg_params_dict = {"param_0": ordered_params}
+
+        async with self._get_cursor(conn) as cursor:
+            logger.debug("Executing SQL (Psycopg Async): %s with params: %s", final_sql, psycopg_params_dict)
+            await cursor.execute(final_sql, psycopg_params_dict)
+
+            if self.returns_rows(stmt.expression):
                 fetched_data: list[dict[str, Any]] = await cursor.fetchall()
-                column_names = [col.name for col in cursor.description]
+                column_names = [col.name for col in cursor.description or []]
+                raw_result_data = fetched_data[0] if fetched_data else cast("dict[str, Any]", {})
                 return SelectResult(
-                    raw_result=fetched_data,
+                    raw_result=raw_result_data,
                     rows=fetched_data,
                     column_names=column_names,
-                    rows_affected=cursor.rowcount if cursor.rowcount != -1 else len(fetched_data),
-                    metadata={"dialect": self.dialect, "status_message": cursor.statusmessage},
                 )
+
+            operation_type = "UNKNOWN"
+            if stmt.expression and hasattr(stmt.expression, "key"):
+                operation_type = str(stmt.expression.key).upper()
+
             return ExecuteResult(
-                raw_result=None,
-                rows_affected=cursor.rowcount,
-                metadata={"dialect": self.dialect, "status_message": cursor.statusmessage},
+                raw_result=cast("dict[str, Any]", {}),
+                rows_affected=cursor.rowcount if cursor.rowcount is not None else -1,
+                operation_type=operation_type,
             )
 
     async def execute_many(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: Optional[Sequence[StatementParameterType]] = None,
         *filters: "StatementFilter",
         connection: Optional[PsycopgAsyncConnection] = None,
+        statement_config: Optional[StatementConfig] = None,
         **kwargs: Any,
-    ) -> StatementResultType:
+    ) -> "ExecuteResult[dict[str, Any]]":
+        """Execute a SQL statement with multiple parameter sets.
+
+        Useful for batch INSERT, UPDATE, or DELETE operations.
+
+        Args:
+            statement: The SQL statement to execute.
+            parameters: Sequence of parameter sets.
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            An ExecuteResult containing the batch operation results.
+
+        Example:
+            >>> # Batch insert with validation
+            >>> await driver.execute_many(
+            ...     "INSERT INTO users (name, email) VALUES (%(name)s, %(email)s)",
+            ...     [
+            ...         {"name": "John", "email": "john@example.com"},
+            ...         {"name": "Jane", "email": "jane@example.com"},
+            ...     ],
+            ... )
+        """
         conn: PsycopgAsyncConnection = self._connection(connection)
+        config = statement_config or self.statement_config
 
-        if not parameters:
-            logger.debug("execute_many called with no parameters for SQL: %s", sql)
-            pyformat_sql_template, _ = self._process_sql_params(sql, None, *filters, **kwargs)
-            logger.debug("Validated empty-parameter SQL for execute_many (Psycopg Async): %s", pyformat_sql_template)
-            return ExecuteResult(raw_result=None, rows_affected=0, metadata={"dialect": self.dialect})
+        # Create template statement with filters for validation
+        template_stmt = SQLStatement(
+            statement,
+            None,  # No parameters for template
+            *filters,
+            dialect=self.dialect,
+            statement_config=config,
+            **kwargs,
+        )
 
-        pyformat_sql_template, _ = self._process_sql_params(sql, parameters[0], *filters, **kwargs)
+        template_stmt.validate()
+        final_sql = template_stmt.to_sql(placeholder_style=self._get_placeholder_style())
 
-        adapted_parameters_sequence: list[Union[list[Any], dict[str, Any]]] = []
-        for param_set in parameters:
-            _, adapted_params = self._process_sql_params(sql, param_set, *filters, **kwargs)
-            adapted_parameters_sequence.append(adapted_params)
-        affected_rows: int = -1
-        status_message: Optional[str] = None
-        async with self._with_cursor(conn) as cursor:
-            await cursor.executemany(psycopg_sql.SQL(pyformat_sql_template), adapted_parameters_sequence)  # type: ignore[arg-type]
-            affected_rows = cursor.rowcount
-            status_message = cursor.statusmessage
+        # Process parameter sets
+        adapted_parameters_sequence: list[dict[str, Any]] = []
+        param_sequence = parameters if parameters is not None else []
+
+        if param_sequence:
+            # Create a building config that skips validation for individual parameter sets
+            building_config = replace(config or StatementConfig(), enable_validation=False)
+
+            for param_set in param_sequence:
+                item_stmt = SQLStatement(
+                    template_stmt.sql,  # Use processed SQL from template
+                    param_set,
+                    dialect=self.dialect,
+                    statement_config=building_config,
+                )
+                item_params_dict = item_stmt.get_parameters(style=self._get_placeholder_style())
+
+                if isinstance(item_params_dict, dict):
+                    adapted_parameters_sequence.append(item_params_dict)
+                elif item_params_dict is None:
+                    adapted_parameters_sequence.append({})
+                else:
+                    logger.warning("execute_many expected dict for PYFORMAT_NAMED, got %s", type(item_params_dict))
+                    adapted_parameters_sequence.append({})
+
+        if not param_sequence:
+            return ExecuteResult(raw_result=cast("dict[str, Any]", {}), rows_affected=0, operation_type="EXECUTE")
+
+        async with self._get_cursor(conn) as cursor:
+            await cursor.executemany(final_sql, adapted_parameters_sequence)
+            affected_rows = cursor.rowcount if cursor.rowcount is not None else -1
+
+        operation_type = "EXECUTE"
+        if template_stmt.expression and hasattr(template_stmt.expression, "key"):
+            operation_type = str(template_stmt.expression.key).upper()
 
         return ExecuteResult(
-            raw_result=None,
+            raw_result=cast("dict[str, Any]", {}),
             rows_affected=affected_rows,
-            metadata={"dialect": self.dialect, "status_message": status_message},
+            operation_type=operation_type,
         )
 
     async def execute_script(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: Optional[StatementParameterType] = None,
+        *filters: "StatementFilter",
         connection: Optional[PsycopgAsyncConnection] = None,
+        statement_config: Optional[StatementConfig] = None,
         **kwargs: Any,
     ) -> str:
+        """Execute a multi-statement SQL script.
+
+        For script execution, parameters are rendered as static literals directly
+        in the SQL rather than using placeholders, since scripts may contain
+        multiple statements that don't support parameterization.
+
+        Args:
+            statement: The SQL script to execute.
+            parameters: Parameters for the script.
+            *filters: Statement filters to apply.
+            connection: Optional connection override.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            A string with execution results/output.
+        """
         conn: PsycopgAsyncConnection = self._connection(connection)
-        pyformat_sql, psycopg_params = self._process_sql_params(sql, parameters, **kwargs)
+        config = statement_config or self.statement_config
 
-        logger.debug("Executing script (Psycopg Async): %s with params: %s", pyformat_sql, psycopg_params)
-        status_message_agg: list[str] = []
-        async with self._with_cursor(conn) as cursor:
-            await cursor.execute(psycopg_sql.SQL(pyformat_sql), psycopg_params)  # type: ignore[arg-type]
+        merged_params = parameters
+        if kwargs:
+            if merged_params is None:
+                merged_params = kwargs
+            elif isinstance(merged_params, dict):
+                merged_params = {**merged_params, **kwargs}
+
+        stmt = SQLStatement(statement, merged_params, *filters, dialect=self.dialect, statement_config=config)
+        stmt.validate()
+        final_sql = stmt.to_sql(placeholder_style=ParameterStyle.STATIC)
+
+        logger.debug("Executing script (Psycopg Async): %s", final_sql)
+        async with self._get_cursor(conn) as cursor:
+            await cursor.execute(final_sql)
             current_status = cursor.statusmessage
-            while current_status:
-                status_message_agg.append(current_status)
-                break
+            return current_status or "SCRIPT EXECUTED"
 
-        return "; ".join(s for s in status_message_agg if s) if status_message_agg else "DONE"
+    def _connection(self, connection: Optional[PsycopgAsyncConnection] = None) -> PsycopgAsyncConnection:
+        """Get the connection to use for the operation."""
+        return connection or self.connection

@@ -1,12 +1,11 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, Union
 
 from sqlspec.base import GenericPoolConfig
 from sqlspec.typing import Empty
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from typing import Any
 
     from psycopg import AsyncConnection, Connection
     from psycopg_pool import AsyncConnectionPool, ConnectionPool
@@ -17,7 +16,7 @@ if TYPE_CHECKING:
 __all__ = ("PsycopgGenericPoolConfig",)
 
 
-ConnectionT = TypeVar("ConnectionT", bound="Union[Connection, AsyncConnection]")
+ConnectionT = TypeVar("ConnectionT", bound="Union[Connection[Any], AsyncConnection[Any]]")
 PoolT = TypeVar("PoolT", bound="Union[ConnectionPool, AsyncConnectionPool]")
 
 

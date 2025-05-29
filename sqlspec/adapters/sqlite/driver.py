@@ -1,18 +1,21 @@
 import contextlib
 import logging
 import sqlite3
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
-from sqlglot import exp
-
 from sqlspec.base import SyncDriverAdapterProtocol
-from sqlspec.sql.filters import StatementFilter, apply_filter
+from sqlspec.sql.filters import StatementFilter
 from sqlspec.sql.mixins import ResultConverter, SQLTranslatorMixin
 from sqlspec.sql.parameters import ParameterStyle
 from sqlspec.sql.result import ExecuteResult, SelectResult
-from sqlspec.sql.statement import SQLStatement, SQLTransformer, SQLValidator, Statement
+from sqlspec.sql.statement import (
+    SQLStatement,
+    Statement,
+    StatementConfig,
+)
 from sqlspec.typing import StatementParameterType
 
 if TYPE_CHECKING:
@@ -36,17 +39,24 @@ class SqliteDriver(
     - execute() - Universal method for all SQL operations
     - execute_many() - Batch operations
     - execute_script() - Multi-statement scripts
+
+    Enhanced Features:
+    - Full SQLStatement integration with filters and validation
+    - SQLite-specific parameter style handling (qmark: ?)
+    - Comprehensive parameter validation and security checks
+    - Support for filter composition (pagination, search, etc.)
     """
 
     connection: SqliteConnection
     __supports_arrow__: ClassVar[bool] = False
     dialect: str = "sqlite"
+    statement_config: Optional[StatementConfig]
 
-    def __init__(self, connection: "SqliteConnection") -> None:
+    def __init__(self, connection: "SqliteConnection", statement_config: Optional[StatementConfig] = None) -> None:
         """Initialize the SQLite driver adapter."""
-        super().__init__(connection)
+        super().__init__(connection, statement_config=statement_config)
 
-    def _get_placeholder_style(self) -> ParameterStyle:
+    def _get_placeholder_style(self) -> ParameterStyle:  # noqa: PLR6301
         """Return the placeholder style for SQLite."""
         return ParameterStyle.QMARK
 
@@ -70,12 +80,11 @@ class SqliteDriver(
 
     def execute(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: Optional[StatementParameterType] = None,
         *filters: "StatementFilter",
         connection: Optional["SqliteConnection"] = None,
-        validator: Optional["SQLValidator"] = None,
-        sanitizer: Optional["SQLTransformer"] = None,
+        statement_config: Optional[StatementConfig] = None,
         **kwargs: Any,
     ) -> "Union[SelectResult[dict[str, Any]], ExecuteResult[dict[str, Any]]]":
         """Execute a SQL statement and return a StatementResult.
@@ -84,29 +93,52 @@ class SqliteDriver(
         Use the StatementResult methods to extract the data you need.
 
         Args:
-            sql: The SQL statement to execute.
+            statement: The SQL statement to execute.
             parameters: Parameters for the statement.
             *filters: Statement filters to apply.
             connection: Optional connection override.
-            validator: Optional validator for the statement.
-            sanitizer: Optional sanitizer for the statement.
+            statement_config: Optional statement configuration.
             **kwargs: Additional keyword arguments.
 
         Returns:
             A StatementResult containing the operation results.
+
+        Example:
+            >>> from sqlspec.sql.filters import LimitOffset, SearchFilter
+            >>> # Basic query
+            >>> result = driver.execute(
+            ...     "SELECT * FROM users WHERE id = ?", [123]
+            ... )
+            >>> # Query with filters
+            >>> result = driver.execute(
+            ...     "SELECT * FROM users",
+            ...     LimitOffset(limit=10, offset=0),
+            ...     SearchFilter(field_name="name", value="John"),
+            ... )
         """
         conn = self._connection(connection)
+        config = statement_config or self.statement_config
 
-        final_sql, ordered_params, query_obj = super()._process_sql_params(
-            sql, parameters, *filters, validator=validator, sanitizer=sanitizer, **kwargs
-        )
+        stmt = SQLStatement(statement, parameters, *filters, dialect=self.dialect, statement_config=config, **kwargs)
+        stmt.validate()
 
-        db_params: tuple[Any, ...] = tuple(ordered_params)
+        final_sql = stmt.to_sql(placeholder_style=self._get_placeholder_style())
+        ordered_params = stmt.get_parameters(style=self._get_placeholder_style())
+
+        # Convert parameters to tuple format for SQLite using simplified logic
+        db_params: tuple[Any, ...] = ()
+        if ordered_params is not None:
+            if isinstance(ordered_params, list) or (
+                isinstance(ordered_params, Iterable) and not isinstance(ordered_params, (str, bytes))
+            ):
+                db_params = tuple(ordered_params)
+            else:
+                db_params = (ordered_params,)
 
         with self._with_cursor(conn) as cursor:
             cursor.execute(final_sql, db_params)
 
-            if self.returns_rows(query_obj.expression):
+            if self.returns_rows(stmt.expression):
                 raw_data_tuples = cursor.fetchall()
                 column_names = [col[0] for col in cursor.description or []]
                 rows = [dict(zip(column_names, row)) for row in raw_data_tuples]
@@ -114,30 +146,25 @@ class SqliteDriver(
                 return SelectResult(rows=rows, column_names=column_names, raw_result=raw_result_data)
 
             rowcount = getattr(cursor, "rowcount", -1)
-            operation_type_val = "EXECUTE"
 
-            if isinstance(query_obj.expression, exp.Insert):
-                operation_type_val = "INSERT"
-            elif isinstance(query_obj.expression, exp.Update):
-                operation_type_val = "UPDATE"
-            elif isinstance(query_obj.expression, exp.Delete):
-                operation_type_val = "DELETE"
+            operation_type = "UNKNOWN"
+            if stmt.expression and hasattr(stmt.expression, "key"):
+                operation_type = str(stmt.expression.key).upper()
 
             return ExecuteResult(
                 raw_result=cast("dict[str, Any]", {}),
                 rows_affected=rowcount,
-                operation_type=operation_type_val,
+                operation_type=operation_type,
                 last_inserted_id=getattr(cursor, "lastrowid", None),
             )
 
     def execute_many(
         self,
-        sql: "Statement",
+        statement: "Statement",
         parameters: Optional[Sequence[StatementParameterType]] = None,
         *filters: "StatementFilter",
         connection: Optional["SqliteConnection"] = None,
-        validator: Optional["SQLValidator"] = None,
-        sanitizer: Optional["SQLTransformer"] = None,
+        statement_config: Optional[StatementConfig] = None,
         **kwargs: Any,
     ) -> "ExecuteResult[dict[str, Any]]":
         """Execute a SQL statement with multiple parameter sets.
@@ -145,72 +172,94 @@ class SqliteDriver(
         Useful for batch INSERT, UPDATE, or DELETE operations.
 
         Args:
-            sql: The SQL statement to execute.
+            statement: The SQL statement to execute.
             parameters: Sequence of parameter sets.
             *filters: Statement filters to apply.
             connection: Optional connection override.
-            validator: Optional validator for the statement.
-            sanitizer: Optional sanitizer for the statement.
+            statement_config: Optional statement configuration.
             **kwargs: Additional keyword arguments.
 
         Returns:
             An ExecuteResult containing the batch operation results.
+
+        Example:
+            >>> # Batch insert with validation
+            >>> driver.execute_many(
+            ...     "INSERT INTO users (name, email) VALUES (?, ?)",
+            ...     [
+            ...         ["John", "john@example.com"],
+            ...         ["Jane", "jane@example.com"],
+            ...     ],
+            ... )
         """
         conn = self._connection(connection)
+        config = statement_config or self.statement_config
 
-        sql_template_str, _, query_obj = super()._process_sql_params(
-            sql, None, *filters, validator=validator, sanitizer=sanitizer, **kwargs
+        # Create template statement with filters for validation
+        template_stmt = SQLStatement(
+            statement,
+            None,  # No parameters for template
+            *filters,
+            dialect=self.dialect,
+            statement_config=config,
+            **kwargs,
         )
 
+        template_stmt.validate()
+        final_sql = template_stmt.to_sql(placeholder_style=self._get_placeholder_style())
+
+        # Process parameter sets
+        processed_params_list: list[tuple[Any, ...]] = []
         param_sequence = parameters if parameters is not None else []
 
-        processed_params_list: list[tuple[Any, ...]] = []
         if param_sequence:
+            # Create a building config that skips validation for individual parameter sets
+            building_config = replace(config or StatementConfig(), enable_validation=False)
+
             for param_set in param_sequence:
-                if isinstance(param_set, (list, tuple)):
-                    processed_params_list.append(tuple(param_set))
-                elif isinstance(param_set, dict):
-                    temp_stmt = SQLStatement(
-                        query_obj.expression,
-                        parameters=param_set,
-                        dialect=self.dialect,
-                        validator=validator,
-                        sanitizer=sanitizer,
-                    )
-                    _, ordered_single_params = temp_stmt.get_ordered_parameters(placeholder_style=ParameterStyle.QMARK)
-                    processed_params_list.append(tuple(ordered_single_params))
+                item_stmt = SQLStatement(
+                    template_stmt.sql,  # Use processed SQL from template
+                    param_set,
+                    dialect=self.dialect,
+                    statement_config=building_config,
+                )
+                ordered_params_for_item = item_stmt.get_parameters(style=self._get_placeholder_style())
+
+                if isinstance(ordered_params_for_item, list):
+                    processed_params_list.append(tuple(ordered_params_for_item))
+                elif ordered_params_for_item is None:
+                    processed_params_list.append(())
+                elif isinstance(ordered_params_for_item, Iterable) and not isinstance(
+                    ordered_params_for_item, (str, bytes)
+                ):
+                    processed_params_list.append(tuple(ordered_params_for_item))
                 else:
-                    processed_params_list.append((param_set,))
+                    processed_params_list.append((ordered_params_for_item,))
 
         with self._with_cursor(conn) as cursor:
-            if not processed_params_list:
+            if not param_sequence:
                 total_affected = 0
             else:
-                cursor.executemany(sql_template_str, processed_params_list)
+                cursor.executemany(final_sql, processed_params_list)
                 total_affected = getattr(cursor, "rowcount", -1)
                 if total_affected == -1 and processed_params_list:
                     total_affected = len(processed_params_list)
 
-            operation_type_val = "EXECUTE"
-            if isinstance(query_obj.expression, exp.Insert):
-                operation_type_val = "INSERT"
-            elif isinstance(query_obj.expression, exp.Update):
-                operation_type_val = "UPDATE"
-            elif isinstance(query_obj.expression, exp.Delete):
-                operation_type_val = "DELETE"
+            operation_type = "EXECUTE"
+            if template_stmt.expression and hasattr(template_stmt.expression, "key"):
+                operation_type = str(template_stmt.expression.key).upper()
 
             return ExecuteResult(
-                raw_result=cast("dict[str, Any]", {}), rows_affected=total_affected, operation_type=operation_type_val
+                raw_result=cast("dict[str, Any]", {}), rows_affected=total_affected, operation_type=operation_type
             )
 
     def execute_script(
         self,
-        sql: "Statement",
-        parameters: Optional["StatementParameterType"] = None,
+        statement: "Statement",
+        parameters: Optional[StatementParameterType] = None,
         *filters: "StatementFilter",
         connection: Optional["SqliteConnection"] = None,
-        validator: Optional["SQLValidator"] = None,
-        sanitizer: Optional["SQLTransformer"] = None,
+        statement_config: Optional[StatementConfig] = None,
         **kwargs: Any,
     ) -> str:
         """Execute a multi-statement SQL script.
@@ -220,49 +269,33 @@ class SqliteDriver(
         doesn't support parameter binding.
 
         Args:
-            sql: The SQL script to execute.
+            statement: The SQL script to execute.
             parameters: Parameters for the script.
             *filters: Statement filters to apply.
             connection: Optional connection override.
-            validator: Optional validator for the script.
-            sanitizer: Optional sanitizer for the script.
+            statement_config: Optional statement configuration.
             **kwargs: Additional keyword arguments.
 
         Returns:
             A string with execution results/output.
         """
         conn = self._connection(connection)
+        config = statement_config or self.statement_config
 
-        stmt = SQLStatement(
-            sql,
-            parameters=parameters,
-            dialect=self.dialect,
-            validator=validator,
-            sanitizer=sanitizer,
-        )
+        merged_params = parameters
+        if kwargs:
+            if merged_params is None:
+                merged_params = kwargs
+            elif isinstance(merged_params, dict):
+                merged_params = {**merged_params, **kwargs}
 
-        # Apply filters
-        for filter_obj in filters:
-            stmt = apply_filter(stmt, filter_obj)
-
-        validation_result = stmt.validator.validate(stmt.expression, stmt._dialect)
-        if (
-            not validation_result.is_safe
-            and stmt.validator.min_risk_to_raise is not None
-            and validation_result.risk_level.value >= stmt.validator.min_risk_to_raise.value
-        ):
-            error_msg = f"SQL script validation failed with risk level {validation_result.risk_level}:\n"
-            error_msg += "Issues:\n" + "\n".join([f"- {issue}" for issue in validation_result.issues])
-            if validation_result.warnings:
-                error_msg += "\nWarnings:\n" + "\n".join([f"- {warn}" for warn in validation_result.warnings])
-            from sqlspec.exceptions import SQLValidationError
-
-            raise SQLValidationError(
-                error_msg, stmt.get_sql(placeholder_style=ParameterStyle.STATIC), validation_result.risk_level
-            )
-
-        final_sql = stmt.get_sql(placeholder_style=ParameterStyle.STATIC)
+        stmt = SQLStatement(statement, merged_params, *filters, dialect=self.dialect, statement_config=config)
+        stmt.validate()
+        final_sql = stmt.to_sql(placeholder_style=ParameterStyle.STATIC)
 
         with self._with_cursor(conn) as cursor:
             cursor.executescript(final_sql)
-            return "DONE"
+            return "SCRIPT EXECUTED"
+
+    def _connection(self, connection: Optional["SqliteConnection"] = None) -> "SqliteConnection":
+        return connection or self.connection
