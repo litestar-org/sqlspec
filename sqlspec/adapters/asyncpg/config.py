@@ -213,8 +213,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """Create and return an AsyncPG connection from the pool."""
         try:
             pool = await self.create_pool()
-            conn = await pool.acquire()
-            return conn
+            return await pool.acquire()
         except Exception as e:
             msg = f"Could not acquire asyncpg connection from pool. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e

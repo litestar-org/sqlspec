@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 
     from sqlspec.statement.sql import SQLConfig
 
+__all__ = ("InjectionValidator",)
+
 
 class InjectionValidator(SQLValidation):
     """Validates against common SQL injection patterns."""

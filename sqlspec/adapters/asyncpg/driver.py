@@ -8,12 +8,13 @@ from asyncpg import Record
 from typing_extensions import TypeAlias
 
 from sqlspec.config import InstrumentationConfig
-from sqlspec.driver import AsyncDriverAdapterProtocol
+from sqlspec.driver import AsyncDriverAdapterProtocol, CommonDriverAttributes
 from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ExecuteResult, SelectResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, SQLParameterType
+from sqlspec.utils.telemetry import instrument_async
 
 if TYPE_CHECKING:
     from asyncpg.pool import PoolConnectionProxy
@@ -64,13 +65,17 @@ class AsyncpgDriver(
     ) -> None:
         """Initialize the AsyncPG driver adapter."""
         super().__init__(
-            connection=connection, config=config, instrumentation_config=instrumentation_config, default_row_type=Record
+            connection=connection,
+            config=config,
+            instrumentation_config=instrumentation_config,
+            default_row_type=DictRow,
         )
 
     def _get_placeholder_style(self) -> ParameterStyle:
         """Return the placeholder style for PostgreSQL ($1, $2, etc.)."""
-        return ParameterStyle.NUMERIC_DOLLAR
+        return ParameterStyle.NUMERIC
 
+    @instrument_async(operation_type="database")
     async def _execute_impl(
         self,
         statement: SQL,
@@ -108,7 +113,7 @@ class AsyncpgDriver(
         else:  # Single execute
             # Get parameters as a flat list/tuple for *args unpacking
             # The `parameters` arg to _execute_impl is the SQLParameterType for the single call
-            ordered_params = statement.get_parameters(style=self._get_placeholder_style(), parameters=parameters)
+            ordered_params = statement.get_parameters(style=self._get_placeholder_style())
             if isinstance(ordered_params, (list, tuple)):
                 args_for_driver.extend(ordered_params)
             elif ordered_params is not None:
@@ -131,12 +136,13 @@ class AsyncpgDriver(
         # The protocol execute method will decide based on statement.returns_rows
         # whether to call _wrap_select_result or _wrap_execute_result.
         # This _execute_impl should provide the raw data needed by those wrappers.
-        if CommonDriverAdapterProtocol.returns_rows(statement.expression):  # Use the helper from base
+        if CommonDriverAttributes.returns_rows(statement.expression):  # Use the helper from base
             records: list[Record] = await conn.fetch(final_sql, *args_for_driver)
             return records  # List of asyncpg.Record objects
         status_str: str = await conn.execute(final_sql, *args_for_driver)
         return status_str  # Status string like 'INSERT 0 1'
 
+    @instrument_async(operation_type="database")
     async def _wrap_select_result(
         self,
         statement: SQL,
@@ -147,7 +153,7 @@ class AsyncpgDriver(
         records = cast("list[Record]", raw_driver_result)
 
         if not records:
-            return SelectResult(rows=[], column_names=[], raw_result=records, statement=statement)
+            return SelectResult(rows=[], column_names=[], raw_result=records)
 
         # Assuming Record objects are dict-like (they are mapping-like)
         column_names = list(records[0].keys())
@@ -159,16 +165,15 @@ class AsyncpgDriver(
                 rows=converted_rows,  # type: ignore[arg-type]
                 column_names=column_names,
                 raw_result=records,
-                statement=statement,
             )
 
         return SelectResult(
             rows=rows_as_dicts,
             column_names=column_names,
             raw_result=records,
-            statement=statement,
         )
 
+    @instrument_async(operation_type="database")
     async def _wrap_execute_result(
         self,
         statement: SQL,
@@ -194,7 +199,6 @@ class AsyncpgDriver(
             operation_type=operation_type,
             # last_inserted_id is not directly available in asyncpg status string
             # For RETURNING clauses, data would come via _wrap_select_result
-            statement=statement,
         )
 
     def _connection(self, connection: "Optional[AsyncpgConnection]" = None) -> "AsyncpgConnection":

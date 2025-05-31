@@ -1,4 +1,4 @@
-# ruff: noqa: PLR0904, SLF001, ARG004, S608
+# ruff: noqa: PLR0904, SLF001, S608
 """Unified SQL factory for creating SQL builders and column expressions with a clean API.
 
 This module provides the `sql` factory object for easy SQL construction:
@@ -6,12 +6,10 @@ This module provides the `sql` factory object for easy SQL construction:
 """
 
 import logging
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from sqlglot import exp
 from sqlglot.dialects.dialect import DialectType
-from sqlglot.errors import ParseError as SQLGlotParseError
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder import (
@@ -25,133 +23,6 @@ if TYPE_CHECKING:
 __all__ = ("sql",)
 
 logger = logging.getLogger("sqlspec")
-
-
-@dataclass
-class StatementAnalysis:
-    """Analysis result for parsed SQL statements."""
-
-    statement_type: str
-    """Type of SQL statement (Insert, Select, Update, Delete, etc.)"""
-    expression: exp.Expression
-    """Parsed SQLGlot expression"""
-    table_name: Optional[str] = None
-    """Primary table name if detected"""
-    columns: list[str] = field(default_factory=list)
-    """Column names if detected"""
-    has_returning: bool = False
-    """Whether statement has RETURNING clause"""
-    is_from_select: bool = False
-    """Whether this is an INSERT FROM SELECT pattern"""
-    parameters: dict[str, Any] = field(default_factory=dict)
-    """Extracted parameters from the SQL"""
-
-
-class SQLAnalyzer:
-    """Efficient SQL statement analyzer using SQLGlot's AST capabilities."""
-
-    # Cache for parsed expressions to avoid re-parsing
-    _parse_cache: dict[tuple[str, Optional[str]], exp.Expression] = {}
-
-    @classmethod
-    def analyze_statement(cls, sql_string: str, dialect: Optional[DialectType] = None) -> StatementAnalysis:
-        """Analyze SQL string and extract components efficiently.
-
-        Args:
-            sql_string: The SQL string to analyze
-            dialect: SQL dialect for parsing
-
-        Returns:
-            StatementAnalysis with extracted components
-        """
-        # Use cache key for performance
-        cache_key = (sql_string.strip(), str(dialect) if dialect else None)
-
-        if cache_key in cls._parse_cache:
-            expr = cls._parse_cache[cache_key]
-        else:
-            try:
-                # Use maybe_parse for graceful fallback
-                expr = exp.maybe_parse(sql_string, dialect=dialect)
-                if expr is None:
-                    # Fallback to parse_one for better error messages
-                    import sqlglot
-
-                    expr = sqlglot.parse_one(sql_string, read=dialect)
-
-                # Cache the parsed expression
-                if len(cls._parse_cache) < 1000:  # Prevent unbounded cache growth
-                    cls._parse_cache[cache_key] = expr
-
-            except (SQLGlotParseError, Exception) as e:
-                logger.warning("Failed to parse SQL statement: %s", e)
-                # Return minimal analysis for unparseable SQL
-                return StatementAnalysis(
-                    statement_type="Unknown",
-                    expression=exp.Anonymous(this="UNKNOWN"),
-                )
-
-        return StatementAnalysis(
-            statement_type=type(expr).__name__,
-            expression=expr,
-            table_name=cls._extract_table_name(expr),
-            columns=cls._extract_columns(expr),
-            has_returning=bool(expr.find(exp.Returning)),
-            is_from_select=cls._is_insert_from_select(expr),
-            parameters=cls._extract_parameters(expr),
-        )
-
-    @staticmethod
-    def _extract_table_name(expr: exp.Expression) -> Optional[str]:
-        if isinstance(expr, exp.Insert):
-            if expr.this and hasattr(expr.this, "this"):
-                # Handle schema.table cases
-                table = expr.this
-                if isinstance(table, exp.Table):
-                    return table.name
-                if hasattr(table, "name"):
-                    return str(table.name)
-        elif isinstance(expr, (exp.Update, exp.Delete)):
-            if expr.this:
-                return str(expr.this.name) if hasattr(expr.this, "name") else str(expr.this)
-        elif isinstance(expr, exp.Select) and (from_clause := expr.find(exp.From)) and from_clause.this:
-            return str(from_clause.this.name) if hasattr(from_clause.this, "name") else str(from_clause.this)
-        return None
-
-    @staticmethod
-    def _extract_columns(expr: exp.Expression) -> list[str]:
-        columns = []
-
-        if isinstance(expr, exp.Insert):
-            if expr.this and hasattr(expr.this, "expressions"):
-                columns.extend(str(col_expr.name) for col_expr in expr.this.expressions if hasattr(col_expr, "name"))
-        elif isinstance(expr, exp.Select):
-            # Extract selected columns
-            for projection in expr.expressions:
-                if isinstance(projection, exp.Column):
-                    columns.append(str(projection.name))
-                elif hasattr(projection, "alias") and projection.alias:
-                    columns.append(str(projection.alias))
-                elif hasattr(projection, "name"):
-                    columns.append(str(projection.name))
-
-        return columns
-
-    @staticmethod
-    def _is_insert_from_select(expr: exp.Expression) -> bool:
-        if not isinstance(expr, exp.Insert):
-            return False
-
-        return bool(expr.expression and isinstance(expr.expression, exp.Select))
-
-    @staticmethod
-    def _extract_parameters(expr: exp.Expression) -> dict[str, Any]:
-        return {}
-
-    @classmethod
-    def clear_cache(cls) -> None:
-        """Clear the parse cache (useful for testing or memory management)."""
-        cls._parse_cache.clear()
 
 
 class SQLFactory:
@@ -378,7 +249,10 @@ class SQLFactory:
     def _populate_insert_from_sql(self, builder: "InsertBuilder", sql_string: str) -> "InsertBuilder":
         """Populate InsertBuilder from raw SQL string."""
         try:
-            analysis = SQLAnalyzer.analyze_statement(sql_string, self.dialect)
+            from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
+
+            analyzer = StatementAnalyzer()
+            analysis = analyzer.analyze_statement(sql_string, self.dialect)
 
             if analysis.statement_type == "Insert":
                 # Standard INSERT statement
@@ -412,7 +286,10 @@ class SQLFactory:
 
     def _populate_select_from_sql(self, builder: "SelectBuilder", sql_string: str) -> "SelectBuilder":
         try:
-            analysis = SQLAnalyzer.analyze_statement(sql_string, self.dialect)
+            from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
+
+            analyzer = StatementAnalyzer()
+            analysis = analyzer.analyze_statement(sql_string, self.dialect)
 
             if analysis.statement_type == "Select":
                 # Set the internal expression to the parsed one, ensuring it's a Select type
@@ -430,7 +307,10 @@ class SQLFactory:
 
     def _populate_update_from_sql(self, builder: "UpdateBuilder", sql_string: str) -> "UpdateBuilder":
         try:
-            analysis = SQLAnalyzer.analyze_statement(sql_string, self.dialect)
+            from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
+
+            analyzer = StatementAnalyzer()
+            analysis = analyzer.analyze_statement(sql_string, self.dialect)
 
             if analysis.statement_type == "Update":
                 if analysis.table_name:
@@ -451,7 +331,10 @@ class SQLFactory:
 
     def _populate_delete_from_sql(self, builder: "DeleteBuilder", sql_string: str) -> "DeleteBuilder":
         try:
-            analysis = SQLAnalyzer.analyze_statement(sql_string, self.dialect)
+            from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
+
+            analyzer = StatementAnalyzer()
+            analysis = analyzer.analyze_statement(sql_string, self.dialect)
 
             if analysis.statement_type == "Delete":
                 # Set the internal expression to the parsed one, ensuring it's a Delete type
@@ -469,7 +352,10 @@ class SQLFactory:
 
     def _populate_merge_from_sql(self, builder: "MergeBuilder", sql_string: str) -> "MergeBuilder":
         try:
-            analysis = SQLAnalyzer.analyze_statement(sql_string, self.dialect)
+            from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
+
+            analyzer = StatementAnalyzer()
+            analysis = analyzer.analyze_statement(sql_string, self.dialect)
 
             if analysis.statement_type == "Merge":
                 if analysis.table_name:
@@ -1112,5 +998,4 @@ class CaseExpressionBuilder:
         return exp.Case(ifs=self._conditions, default=self._default)
 
 
-# Create the main unified instance
 sql = SQLFactory()

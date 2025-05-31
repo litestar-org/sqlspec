@@ -10,6 +10,8 @@ from sqlspec.statement.pipelines.base import SQLValidation, ValidationResult
 if TYPE_CHECKING:
     from sqlspec.statement.sql import SQLConfig
 
+__all__ = ("SuspiciousKeywords",)
+
 
 class SuspiciousKeywords(SQLValidation):
     """Validates against the use of suspicious keywords that might indicate security issues."""

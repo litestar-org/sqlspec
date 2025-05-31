@@ -13,7 +13,6 @@ from typing import (
 )
 
 from sqlspec.typing import ConnectionT, Counter, Gauge, PoolT  # pyright: ignore
-from sqlspec.utils.telemetry import instrument_async, instrument_sync
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -145,6 +144,46 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """Return whether the configuration supports connection pooling."""
         return self.__supports_connection_pooling__
 
+    def instrument_sync_operation(
+        self,
+        operation_name: str,
+        operation_type: str,
+        custom_tags_from_decorator: dict[str, Any],
+        func_to_execute: Any,
+        original_self: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Sync instrumentation for config operations (simplified version for configs)."""
+        if self.instrumentation.log_queries:
+            logger.info("Config operation: %s", operation_name, extra={"operation_type": operation_type})
+        try:
+            return func_to_execute(original_self, *args, **kwargs)
+        except Exception as e:
+            if self.instrumentation.log_queries:
+                logger.exception("Config operation failed: %s", operation_name, extra={"error_type": type(e).__name__})
+            raise
+
+    async def instrument_async_operation(
+        self,
+        operation_name: str,
+        operation_type: str,
+        custom_tags_from_decorator: dict[str, Any],
+        func_to_execute: Any,
+        original_self: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Async instrumentation for config operations (simplified version for configs)."""
+        if self.instrumentation.log_queries:
+            logger.info("Config operation: %s", operation_name, extra={"operation_type": operation_type})
+        try:
+            return await func_to_execute(original_self, *args, **kwargs)
+        except Exception as e:
+            if self.instrumentation.log_queries:
+                logger.exception("Config operation failed: %s", operation_name, extra={"error_type": type(e).__name__})
+            raise
+
 
 class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for a sync database configurations that do not implement a pool."""
@@ -154,17 +193,14 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     pool_instance: None = None
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
 
-    @instrument_sync(operation_type="connection")
     def create_connection(self) -> ConnectionT:
         """Create connection with instrumentation."""
         raise NotImplementedError
 
-    @instrument_sync(operation_type="connection_context")
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[ConnectionT]":
         """Provide connection with instrumentation."""
         raise NotImplementedError
 
-    @instrument_sync(operation_type="session_context")
     def provide_session(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[DriverT]":
         """Provide session with instrumentation."""
         raise NotImplementedError
@@ -187,17 +223,14 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     pool_instance: None = None
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
 
-    @instrument_async(operation_type="connection")
     async def create_connection(self) -> ConnectionT:
         """Create connection with instrumentation."""
         raise NotImplementedError
 
-    @instrument_sync(operation_type="connection_context")
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[ConnectionT]":
         """Provide connection with instrumentation."""
         raise NotImplementedError
 
-    @instrument_sync(operation_type="session_context")
     def provide_session(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[DriverT]":
         """Provide session with instrumentation."""
         raise NotImplementedError
@@ -225,13 +258,15 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     __supports_connection_pooling__ = True
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
 
-    @instrument_sync(operation_type="pool_lifecycle")
     def create_pool(self) -> PoolT:
         """Create pool with instrumentation.
 
         Returns:
             The created pool.
         """
+        if self.instrumentation.log_pool_operations:
+            logger.info("Creating database connection pool", extra={"adapter": self.__class__.__name__})
+
         if self._pool_metrics and isinstance(self._pool_metrics.get("pool_operations"), Counter):
             self._pool_metrics["pool_operations"].labels(adapter=self.__class__.__name__, operation="create").inc()
 
@@ -242,30 +277,37 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
             self._pool_metrics["pool_connections"].labels(adapter=self.__class__.__name__, status="total").set(
                 pool_size
             )
+
+        if self.instrumentation.log_pool_operations:
+            logger.info("Database connection pool created successfully", extra={"adapter": self.__class__.__name__})
+
         return pool
 
-    @instrument_sync(operation_type="pool_lifecycle")
     def close_pool(self) -> None:
         """Close pool with instrumentation."""
+        if self.instrumentation.log_pool_operations:
+            logger.info("Closing database connection pool", extra={"adapter": self.__class__.__name__})
+
         if self._pool_metrics and isinstance(self._pool_metrics.get("pool_operations"), Counter):
             self._pool_metrics["pool_operations"].labels(adapter=self.__class__.__name__, operation="destroy").inc()
 
             if isinstance(self._pool_metrics.get("pool_connections"), Gauge):
                 for status in ["total", "active", "idle"]:
                     self._pool_metrics["pool_connections"].labels(adapter=self.__class__.__name__, status=status).set(0)
+
         self._close_pool_impl()
 
-    @instrument_sync(operation_type="connection")
+        if self.instrumentation.log_pool_operations:
+            logger.info("Database connection pool closed successfully", extra={"adapter": self.__class__.__name__})
+
     def create_connection(self) -> ConnectionT:
         """Create connection with instrumentation."""
         raise NotImplementedError
 
-    @instrument_sync(operation_type="connection_context")
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[ConnectionT]":
         """Provide connection with instrumentation."""
         raise NotImplementedError
 
-    @instrument_sync(operation_type="session_context")
     def provide_session(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[DriverT]":
         """Provide session with instrumentation."""
         raise NotImplementedError
@@ -289,13 +331,15 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     __supports_connection_pooling__ = True
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
 
-    @instrument_async(operation_type="pool_lifecycle")
     async def create_pool(self) -> PoolT:
         """Create pool with instrumentation.
 
         Returns:
             The created pool.
         """
+        if self.instrumentation.log_pool_operations:
+            logger.info("Creating async database connection pool", extra={"adapter": self.__class__.__name__})
+
         if self._pool_metrics and isinstance(self._pool_metrics.get("pool_operations"), Counter):
             self._pool_metrics["pool_operations"].labels(adapter=self.__class__.__name__, operation="create").inc()
 
@@ -306,30 +350,41 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
             self._pool_metrics["pool_connections"].labels(adapter=self.__class__.__name__, status="total").set(
                 pool_size
             )
+
+        if self.instrumentation.log_pool_operations:
+            logger.info(
+                "Async database connection pool created successfully", extra={"adapter": self.__class__.__name__}
+            )
+
         return pool
 
-    @instrument_async(operation_type="pool_lifecycle")
     async def close_pool(self) -> None:
         """Close pool with instrumentation."""
+        if self.instrumentation.log_pool_operations:
+            logger.info("Closing async database connection pool", extra={"adapter": self.__class__.__name__})
+
         if self._pool_metrics and isinstance(self._pool_metrics.get("pool_operations"), Counter):
             self._pool_metrics["pool_operations"].labels(adapter=self.__class__.__name__, operation="destroy").inc()
             if isinstance(self._pool_metrics.get("pool_connections"), Gauge):
                 for status in ["total", "active", "idle"]:
                     self._pool_metrics["pool_connections"].labels(adapter=self.__class__.__name__, status=status).set(0)
+
         await self._close_pool_impl()
 
-    @instrument_async(operation_type="connection")
+        if self.instrumentation.log_pool_operations:
+            logger.info(
+                "Async database connection pool closed successfully", extra={"adapter": self.__class__.__name__}
+            )
+
     async def create_connection(self) -> ConnectionT:
         """Create connection with instrumentation."""
         raise NotImplementedError
 
-    @instrument_sync(operation_type="connection_context")
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[ConnectionT]":
         """Provide connection with instrumentation."""
         raise NotImplementedError
 
-    @instrument_sync(operation_type="session_context")
-    def provide_session(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[DriverT]":
+    def provide_session(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[DriverT]":
         """Provide session with instrumentation."""
         raise NotImplementedError
 

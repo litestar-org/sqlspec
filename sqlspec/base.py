@@ -48,23 +48,33 @@ class SQLSpec:
 
     def _cleanup_pools(self) -> None:
         """Clean up all registered connection pools."""
-        for config in self._configs.values():
+        logger.info("Cleaning up all registered database connection pools")
+        cleaned_count = 0
+
+        for config_type, config in self._configs.items():
             if config.__supports_connection_pooling__:
-                if config.is_async:
-                    close_pool_awaitable = config.close_pool()
-                    if close_pool_awaitable is not None:
-                        try:
-                            loop = asyncio.get_running_loop()
-                            if loop.is_running():
-                                _task = asyncio.ensure_future(close_pool_awaitable, loop=loop)  # noqa: RUF006
-                                # Don't wait for task completion since we're cleaning up
-                            else:
+                try:
+                    if config.is_async:
+                        close_pool_awaitable = config.close_pool()
+                        if close_pool_awaitable is not None:
+                            try:
+                                loop = asyncio.get_running_loop()
+                                if loop.is_running():
+                                    _task = asyncio.ensure_future(close_pool_awaitable, loop=loop)  # noqa: RUF006
+                                    # Don't wait for task completion since we're cleaning up
+                                else:
+                                    asyncio.run(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
+                            except RuntimeError:  # No running event loop
                                 asyncio.run(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
-                        except RuntimeError:  # No running event loop
-                            asyncio.run(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
-                else:
-                    config.close_pool()
+                    else:
+                        config.close_pool()
+                    cleaned_count += 1
+                    logger.debug("Cleaned up pool for config: %s", config_type.__name__)
+                except Exception as e:
+                    logger.warning("Failed to clean up pool for config %s: %s", config_type.__name__, e)
+
         self._configs.clear()
+        logger.info("Pool cleanup completed. Cleaned %d pools", cleaned_count)
 
     @overload
     def add_config(self, config: "SyncConfigT") -> "Annotated[type[SyncConfigT], int]":  # pyright: ignore[reportInvalidTypeVarUse]
@@ -89,7 +99,19 @@ class SQLSpec:
         config_type = type(config)
         if config_type in self._configs:
             logger.warning("Configuration for %s already exists. Overwriting.", config_type.__name__)
+
         self._configs[config_type] = config
+        logger.info(
+            "Added configuration: %s (async: %s, pooling: %s)",
+            config_type.__name__,
+            config.is_async,
+            config.support_connection_pooling,
+            extra={
+                "config_type": config_type.__name__,
+                "is_async": config.is_async,
+                "supports_pooling": config.support_connection_pooling,
+            },
+        )
         return config_type
 
     @overload
@@ -115,8 +137,11 @@ class SQLSpec:
         """
         config = self._configs.get(name)
         if not config:
+            logger.error("No configuration found for %s", name)
             msg = f"No configuration found for {name}"
             raise KeyError(msg)
+
+        logger.debug("Retrieved configuration: %s", name.__name__ if hasattr(name, "__name__") else name)
         return config
 
     @overload
@@ -164,8 +189,12 @@ class SQLSpec:
         """
         if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
             config = name
+            config_name = config.__class__.__name__
         else:
             config = self.get_config(name)
+            config_name = name.__name__ if hasattr(name, "__name__") else str(name)
+
+        logger.debug("Getting connection for config: %s", config_name, extra={"config_type": config_name})
         return config.create_connection()
 
     @overload
@@ -213,8 +242,12 @@ class SQLSpec:
         """
         if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
             config = name
+            config_name = config.__class__.__name__
         else:
             config = self.get_config(name)
+            config_name = name.__name__ if hasattr(name, "__name__") else str(name)
+
+        logger.debug("Getting session for config: %s", config_name, extra={"config_type": config_name})
 
         connection_obj = self.get_connection(name)
 
@@ -222,7 +255,7 @@ class SQLSpec:
 
             async def _create_driver_async() -> "DriverT":
                 resolved_connection = await connection_obj
-                return cast(  # pyright: ignore
+                driver = cast(  # pyright: ignore
                     "DriverT",
                     config.driver_type(
                         connection=resolved_connection,
@@ -230,14 +263,18 @@ class SQLSpec:
                         default_row_type=getattr(config, "default_row_type", None),
                     ),
                 )
+                logger.debug("Created async driver session for config: %s", config_name)
+                return driver
 
             return _create_driver_async()
 
-        return config.driver_type(
+        driver = config.driver_type(
             connection=connection_obj,
             instrumentation_config=config.instrumentation,
             default_row_type=getattr(config, "default_row_type", None),
         )
+        logger.debug("Created sync driver session for config: %s", config_name)
+        return driver
 
     @overload
     def provide_connection(
@@ -293,9 +330,12 @@ class SQLSpec:
         """
         if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
             config = name
+            config_name = config.__class__.__name__
         else:
             config = self.get_config(name)
+            config_name = name.__name__ if hasattr(name, "__name__") else str(name)
 
+        logger.debug("Providing connection context for config: %s", config_name, extra={"config_type": config_name})
         return config.provide_connection(*args, **kwargs)
 
     @overload
@@ -351,8 +391,12 @@ class SQLSpec:
         """
         if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
             config = name
+            config_name = config.__class__.__name__
         else:
             config = self.get_config(name)
+            config_name = name.__name__ if hasattr(name, "__name__") else str(name)
+
+        logger.debug("Providing session context for config: %s", config_name, extra={"config_type": config_name})
         return config.provide_session(*args, **kwargs)
 
     @overload
@@ -397,8 +441,13 @@ class SQLSpec:
             if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig))
             else self.get_config(name)
         )
+        config_name = config.__class__.__name__
+
         if config.support_connection_pooling:
+            logger.debug("Getting pool for config: %s", config_name, extra={"config_type": config_name})
             return cast("Union[type[PoolT], Awaitable[type[PoolT]]]", config.create_pool())
+
+        logger.debug("Config %s does not support connection pooling", config_name)
         return None
 
     @overload
@@ -446,8 +495,14 @@ class SQLSpec:
         """
         if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
             config = name
+            config_name = config.__class__.__name__
         else:
             config = self.get_config(name)
+            config_name = name.__name__ if hasattr(name, "__name__") else str(name)
+
         if config.support_connection_pooling:
+            logger.debug("Closing pool for config: %s", config_name, extra={"config_type": config_name})
             return config.close_pool()
+
+        logger.debug("Config %s does not support connection pooling - nothing to close", config_name)
         return None

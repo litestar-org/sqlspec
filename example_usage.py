@@ -21,6 +21,8 @@ from sqlspec.typing import DictRow
 if TYPE_CHECKING:
     from sqlspec.statement.result import SelectResult
 
+__all__ = ("main",)
+
 
 async def main() -> None:
     """Demonstrate the improved adapter architecture."""

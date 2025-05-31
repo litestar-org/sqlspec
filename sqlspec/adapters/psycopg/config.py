@@ -1,6 +1,7 @@
 """Psycopg database configuration using TypedDict for better maintainability."""
 
 import contextlib
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict
@@ -24,6 +25,7 @@ from sqlspec.typing import Empty
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
+logger = logging.getLogger("sqlspec.adapters.psycopg")
 
 __all__ = (
     "PsycopgAsyncConfig",
@@ -223,12 +225,33 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
     def _create_pool_impl(self) -> ConnectionPool:
         """Create the actual connection pool."""
-        return ConnectionPool(**self.connection_config_dict)
+        if self.instrumentation.log_pool_operations:
+            logger.info("Creating Psycopg connection pool", extra={"adapter": "psycopg"})
+
+        try:
+            pool = ConnectionPool(**self.connection_config_dict)
+            if self.instrumentation.log_pool_operations:
+                logger.info("Psycopg connection pool created successfully", extra={"adapter": "psycopg"})
+        except Exception as e:
+            logger.exception("Failed to create Psycopg connection pool", extra={"adapter": "psycopg", "error": str(e)})
+            raise
+        return pool
 
     def _close_pool_impl(self) -> None:
         """Close the actual connection pool."""
-        if self.pool_instance:
+        if not self.pool_instance:
+            return
+
+        if self.instrumentation.log_pool_operations:
+            logger.info("Closing Psycopg connection pool", extra={"adapter": "psycopg"})
+
+        try:
             self.pool_instance.close()
+            if self.instrumentation.log_pool_operations:
+                logger.info("Psycopg connection pool closed successfully", extra={"adapter": "psycopg"})
+        except Exception as e:
+            logger.exception("Failed to close Psycopg connection pool", extra={"adapter": "psycopg", "error": str(e)})
+            raise
 
     def create_connection(self) -> PsycopgSyncConnection:
         """Create a single connection (not from pool).
@@ -349,14 +372,38 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
     async def _create_pool_impl(self) -> AsyncConnectionPool:
         """Create the actual async connection pool."""
-        pool = AsyncConnectionPool(**self.connection_config_dict)
-        await pool.open()
+        if self.instrumentation.log_pool_operations:
+            logger.info("Creating async Psycopg connection pool", extra={"adapter": "psycopg"})
+
+        try:
+            pool = AsyncConnectionPool(**self.connection_config_dict)
+            await pool.open()
+            if self.instrumentation.log_pool_operations:
+                logger.info("Async Psycopg connection pool created successfully", extra={"adapter": "psycopg"})
+        except Exception as e:
+            logger.exception(
+                "Failed to create async Psycopg connection pool", extra={"adapter": "psycopg", "error": str(e)}
+            )
+            raise
         return pool
 
     async def _close_pool_impl(self) -> None:
         """Close the actual async connection pool."""
-        if self.pool_instance:
+        if not self.pool_instance:
+            return
+
+        if self.instrumentation.log_pool_operations:
+            logger.info("Closing async Psycopg connection pool", extra={"adapter": "psycopg"})
+
+        try:
             await self.pool_instance.close()
+            if self.instrumentation.log_pool_operations:
+                logger.info("Async Psycopg connection pool closed successfully", extra={"adapter": "psycopg"})
+        except Exception as e:
+            logger.exception(
+                "Failed to close async Psycopg connection pool", extra={"adapter": "psycopg", "error": str(e)}
+            )
+            raise
 
     async def create_connection(self) -> PsycopgAsyncConnection:
         """Create a single async connection (not from pool).

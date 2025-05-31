@@ -3785,6 +3785,8 @@ name = "sqlspec"
 version = "0.11.1"
 source = { editable = "." }
 dependencies = [
+    { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "click", version = "8.2.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "eval-type-backport", marker = "python_full_version < '3.10'" },
     { name = "sqlglot" },
     { name = "typing-extensions" },
@@ -3812,6 +3814,9 @@ asyncpg = [
 ]
 bigquery = [
     { name = "google-cloud-bigquery" },
+]
+cli = [
+    { name = "rich-click" },
 ]
 duckdb = [
     { name = "duckdb" },
@@ -3988,6 +3993,7 @@ requires-dist = [
     { name = "aiosqlite", marker = "extra == 'aiosqlite'" },
     { name = "asyncmy", marker = "extra == 'asyncmy'" },
     { name = "asyncpg", marker = "extra == 'asyncpg'" },
+    { name = "click" },
     { name = "duckdb", marker = "extra == 'duckdb'" },
     { name = "eval-type-backport", marker = "python_full_version < '3.10'" },
     { name = "fastapi", marker = "extra == 'fastapi'" },
@@ -4011,12 +4017,13 @@ requires-dist = [
     { name = "pydantic-extra-types", marker = "extra == 'pydantic'" },
     { name = "pymssql", marker = "extra == 'pymssql'" },
     { name = "pymysql", marker = "extra == 'pymysql'" },
+    { name = "rich-click", marker = "extra == 'cli'" },
     { name = "sqlglot" },
     { name = "sqlglot", extras = ["rs"], marker = "extra == 'performance'" },
     { name = "typing-extensions" },
     { name = "uuid-utils", marker = "extra == 'uuid'", specifier = ">=0.6.1" },
 ]
-provides-extras = ["adbc", "aioodbc", "aiosql", "aiosqlite", "asyncmy", "asyncpg", "bigquery", "duckdb", "fastapi", "flask", "litestar", "msgspec", "nanoid", "opentelemetry", "oracledb", "orjson", "performance", "polars", "prometheus", "psqlpy", "psycopg", "pydantic", "pymssql", "pymysql", "spanner", "uuid"]
+provides-extras = ["adbc", "aioodbc", "aiosql", "aiosqlite", "asyncmy", "asyncpg", "bigquery", "cli", "duckdb", "fastapi", "flask", "litestar", "msgspec", "nanoid", "opentelemetry", "oracledb", "orjson", "performance", "polars", "prometheus", "psqlpy", "psycopg", "pydantic", "pymssql", "pymysql", "spanner", "uuid"]
 
 [package.metadata.requires-dev]
 build = [{ name = "bump-my-version" }]

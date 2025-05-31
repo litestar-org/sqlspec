@@ -20,6 +20,7 @@ from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, SQLParameterType
 from sqlspec.utils.sync_tools import ensure_async_
+from sqlspec.utils.telemetry import instrument_async, instrument_sync
 
 if TYPE_CHECKING:
     from sqlspec.statement.filters import StatementFilter
@@ -68,6 +69,7 @@ class OracleSyncDriver(
         finally:
             cursor.close()
 
+    @instrument_sync(operation_type="database")
     def _execute_impl(
         self,
         statement: SQL,
@@ -124,6 +126,7 @@ class OracleSyncDriver(
                 cursor.execute(final_sql, final_driver_params or {})
             return cursor
 
+    @instrument_sync(operation_type="database")
     def _wrap_select_result(
         self,
         statement: SQL,
@@ -146,6 +149,7 @@ class OracleSyncDriver(
             rows=rows_as_dicts, column_names=column_names, raw_result=fetched_tuples, statement=statement
         )
 
+    @instrument_sync(operation_type="database")
     def _wrap_execute_result(
         self,
         statement: SQL,
@@ -257,6 +261,7 @@ class OracleAsyncDriver(
         finally:
             await ensure_async_(cursor.close)()
 
+    @instrument_async(operation_type="database")
     async def _execute_impl(
         self,
         statement: SQL,
@@ -310,6 +315,7 @@ class OracleAsyncDriver(
                 await cursor.execute(final_sql, final_driver_params or {})
             return cursor
 
+    @instrument_async(operation_type="database")
     async def _wrap_select_result(
         self,
         statement: SQL,
@@ -332,6 +338,7 @@ class OracleAsyncDriver(
             rows=rows_as_dicts, column_names=column_names, raw_result=fetched_tuples, statement=statement
         )
 
+    @instrument_async(operation_type="database")
     async def _wrap_execute_result(
         self,
         statement: SQL,

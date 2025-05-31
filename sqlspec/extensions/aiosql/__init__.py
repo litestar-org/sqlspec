@@ -10,9 +10,15 @@ from sqlspec.extensions.aiosql.adapter import (
     AiosqlService,
     AiosqlSyncAdapter,
 )
+from sqlspec.extensions.aiosql.loader import (
+    AiosqlLoader,
+    AiosqlQuery,
+)
 
 __all__ = (
     "AiosqlAsyncAdapter",
+    "AiosqlLoader",
+    "AiosqlQuery",
     "AiosqlService",
     "AiosqlSyncAdapter",
 )

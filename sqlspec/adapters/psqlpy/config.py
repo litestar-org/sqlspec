@@ -1,250 +1,305 @@
-"""Configuration for the psqlpy PostgreSQL adapter."""
+"""Psqlpy database configuration using TypedDict for better maintainability."""
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict
 
 from psqlpy import Connection, ConnectionPool
+from typing_extensions import NotRequired
 
 from sqlspec.adapters.psqlpy.driver import PsqlpyConnection, PsqlpyDriver
-from sqlspec.config import AsyncDatabaseConfig, GenericPoolConfig
-from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
+from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig
+from sqlspec.statement.sql import SQLConfig
+from sqlspec.typing import DictRow as SQLSpecDictRow
+from sqlspec.typing import Empty
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable
+    from collections.abc import Callable
 
 
 __all__ = (
-    "PsqlpyConfig",
+    "PsqlpyAsyncConfig",
+    "PsqlpyConnectionConfig",
     "PsqlpyPoolConfig",
 )
 
 
-@dataclass
-class PsqlpyPoolConfig(GenericPoolConfig):
-    """Configuration for psqlpy connection pool.
+class PsqlpyConnectionConfig(TypedDict, total=False):
+    """Psqlpy connection configuration as TypedDict.
 
-    Ref: https://psqlpy-python.github.io/components/connection_pool.html#all-available-connectionpool-parameters
+    Basic connection parameters for psqlpy Connection.
     """
 
-    dsn: Optional[Union[str, EmptyType]] = Empty
-    """DSN of the PostgreSQL."""
-    # Required connection parameters
-    username: Optional[Union[str, EmptyType]] = Empty
+    dsn: NotRequired[str]
+    """DSN of the PostgreSQL database."""
+
+    username: NotRequired[str]
     """Username of the user in the PostgreSQL."""
-    password: Optional[Union[str, EmptyType]] = Empty
+
+    password: NotRequired[str]
     """Password of the user in the PostgreSQL."""
-    db_name: Optional[Union[str, EmptyType]] = Empty
+
+    db_name: NotRequired[str]
     """Name of the database in PostgreSQL."""
 
-    # Single or Multi-host parameters (mutually exclusive)
-    host: Optional[Union[str, EmptyType]] = Empty
+    host: NotRequired[str]
     """Host of the PostgreSQL (use for single host)."""
-    port: Optional[Union[int, EmptyType]] = Empty
+
+    port: NotRequired[int]
     """Port of the PostgreSQL (use for single host)."""
-    hosts: Optional[Union[list[str], EmptyType]] = Empty
-    """List of hosts of the PostgreSQL (use for multiple hosts)."""
-    ports: Optional[Union[list[int], EmptyType]] = Empty
-    """List of ports of the PostgreSQL (use for multiple hosts)."""
 
-    # Pool size
-    max_db_pool_size: int = 10
-    """Maximum size of the connection pool. Defaults to 10."""
-
-    # Optional timeouts
-    connect_timeout_sec: Optional[Union[int, EmptyType]] = Empty
+    connect_timeout_sec: NotRequired[int]
     """The time limit in seconds applied to each socket-level connection attempt."""
-    connect_timeout_nanosec: Optional[Union[int, EmptyType]] = Empty
-    """Nanoseconds for connection timeout, can be used only with `connect_timeout_sec`."""
-    tcp_user_timeout_sec: Optional[Union[int, EmptyType]] = Empty
-    """The time limit that transmitted data may remain unacknowledged before a connection is forcibly closed."""
-    tcp_user_timeout_nanosec: Optional[Union[int, EmptyType]] = Empty
-    """Nanoseconds for tcp_user_timeout, can be used only with `tcp_user_timeout_sec`."""
 
-    # Optional keepalives
-    keepalives: bool = True
+    connect_timeout_nanosec: NotRequired[int]
+    """Nanoseconds for connection timeout, can be used only with connect_timeout_sec."""
+
+    tcp_user_timeout_sec: NotRequired[int]
+    """The time limit that transmitted data may remain unacknowledged before a connection is forcibly closed."""
+
+    tcp_user_timeout_nanosec: NotRequired[int]
+    """Nanoseconds for tcp_user_timeout, can be used only with tcp_user_timeout_sec."""
+
+    keepalives: NotRequired[bool]
     """Controls the use of TCP keepalive. Defaults to True (on)."""
-    keepalives_idle_sec: Optional[Union[int, EmptyType]] = Empty
+
+    keepalives_idle_sec: NotRequired[int]
     """The number of seconds of inactivity after which a keepalive message is sent to the server."""
-    keepalives_idle_nanosec: Optional[Union[int, EmptyType]] = Empty
+
+    keepalives_idle_nanosec: NotRequired[int]
     """Nanoseconds for keepalives_idle_sec."""
-    keepalives_interval_sec: Optional[Union[int, EmptyType]] = Empty
+
+    keepalives_interval_sec: NotRequired[int]
     """The time interval between TCP keepalive probes."""
-    keepalives_interval_nanosec: Optional[Union[int, EmptyType]] = Empty
+
+    keepalives_interval_nanosec: NotRequired[int]
     """Nanoseconds for keepalives_interval_sec."""
-    keepalives_retries: Optional[Union[int, EmptyType]] = Empty
+
+    keepalives_retries: NotRequired[int]
     """The maximum number of TCP keepalive probes that will be sent before dropping a connection."""
 
-    # Other optional parameters
-    load_balance_hosts: Optional[Union[str, EmptyType]] = Empty
-    """Controls the order in which the client tries to connect to the available hosts and addresses ('disable' or 'random')."""
-    conn_recycling_method: Optional[Union[str, EmptyType]] = Empty
-    """How a connection is recycled."""
-    ssl_mode: Optional[Union[str, EmptyType]] = Empty
+    ssl_mode: NotRequired[str]
     """SSL mode."""
-    ca_file: Optional[Union[str, EmptyType]] = Empty
+
+    ca_file: NotRequired[str]
     """Path to ca_file for SSL."""
-    target_session_attrs: Optional[Union[str, EmptyType]] = Empty
+
+    target_session_attrs: NotRequired[str]
     """Specifies requirements of the session (e.g., 'read-write')."""
-    options: Optional[Union[str, EmptyType]] = Empty
+
+    options: NotRequired[str]
     """Command line options used to configure the server."""
-    application_name: Optional[Union[str, EmptyType]] = Empty
+
+    application_name: NotRequired[str]
     """Sets the application_name parameter on the server."""
 
 
-@dataclass
-class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
-    """Configuration for psqlpy database connections, managing a connection pool.
+class PsqlpyPoolConfig(TypedDict, total=False):
+    """Psqlpy pool configuration as TypedDict.
 
-    This configuration class wraps `PsqlpyPoolConfig` and manages the lifecycle
-    of a `psqlpy.ConnectionPool`.
+    All parameters for psqlpy ConnectionPool.
+    Inherits connection parameters and adds pool-specific settings.
     """
 
-    pool_config: Optional[PsqlpyPoolConfig] = field(default=None)
-    """Psqlpy Pool configuration"""
-    driver_type: type[PsqlpyDriver] = field(default=PsqlpyDriver, init=False, hash=False)  # type: ignore[abstract]
-    """Type of the driver object"""
-    connection_type: type[PsqlpyConnection] = field(default=PsqlpyConnection, init=False, hash=False)
-    """Type of the connection object"""
-    pool_instance: Optional[ConnectionPool] = field(default=None, hash=False)
-    """The connection pool instance. If set, this will be used instead of creating a new pool."""
+    # Connection parameters (inherit from connection config)
+    dsn: NotRequired[str]
+    """DSN of the PostgreSQL database."""
+
+    username: NotRequired[str]
+    """Username of the user in the PostgreSQL."""
+
+    password: NotRequired[str]
+    """Password of the user in the PostgreSQL."""
+
+    db_name: NotRequired[str]
+    """Name of the database in PostgreSQL."""
+
+    host: NotRequired[str]
+    """Host of the PostgreSQL (use for single host)."""
+
+    port: NotRequired[int]
+    """Port of the PostgreSQL (use for single host)."""
+
+    hosts: NotRequired[list[str]]
+    """List of hosts of the PostgreSQL (use for multiple hosts)."""
+
+    ports: NotRequired[list[int]]
+    """List of ports of the PostgreSQL (use for multiple hosts)."""
+
+    connect_timeout_sec: NotRequired[int]
+    """The time limit in seconds applied to each socket-level connection attempt."""
+
+    connect_timeout_nanosec: NotRequired[int]
+    """Nanoseconds for connection timeout, can be used only with connect_timeout_sec."""
+
+    tcp_user_timeout_sec: NotRequired[int]
+    """The time limit that transmitted data may remain unacknowledged before a connection is forcibly closed."""
+
+    tcp_user_timeout_nanosec: NotRequired[int]
+    """Nanoseconds for tcp_user_timeout, can be used only with tcp_user_timeout_sec."""
+
+    keepalives: NotRequired[bool]
+    """Controls the use of TCP keepalive. Defaults to True (on)."""
+
+    keepalives_idle_sec: NotRequired[int]
+    """The number of seconds of inactivity after which a keepalive message is sent to the server."""
+
+    keepalives_idle_nanosec: NotRequired[int]
+    """Nanoseconds for keepalives_idle_sec."""
+
+    keepalives_interval_sec: NotRequired[int]
+    """The time interval between TCP keepalive probes."""
+
+    keepalives_interval_nanosec: NotRequired[int]
+    """Nanoseconds for keepalives_interval_sec."""
+
+    keepalives_retries: NotRequired[int]
+    """The maximum number of TCP keepalive probes that will be sent before dropping a connection."""
+
+    ssl_mode: NotRequired[str]
+    """SSL mode."""
+
+    ca_file: NotRequired[str]
+    """Path to ca_file for SSL."""
+
+    target_session_attrs: NotRequired[str]
+    """Specifies requirements of the session (e.g., 'read-write')."""
+
+    options: NotRequired[str]
+    """Command line options used to configure the server."""
+
+    application_name: NotRequired[str]
+    """Sets the application_name parameter on the server."""
+
+    load_balance_hosts: NotRequired[str]
+    """Controls the order in which the client tries to connect to the available hosts and addresses ('disable' or 'random')."""
+
+    conn_recycling_method: NotRequired[str]
+    """How a connection is recycled."""
+
+    # Pool-specific parameters
+    max_db_pool_size: NotRequired[int]
+    """Maximum size of the connection pool. Defaults to 10."""
+
+    configure: NotRequired["Callable[[Connection], None]"]
+    """Callback to configure new connections."""
+
+
+class PsqlpyAsyncConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
+    """Configuration for Psqlpy asynchronous database connections using TypedDict."""
+
+    __is_async__: ClassVar[bool] = True
+    __supports_connection_pooling__: ClassVar[bool] = True
+
+    def __init__(
+        self,
+        pool_config: PsqlpyPoolConfig,
+        connection_config: Optional[PsqlpyConnectionConfig] = None,
+        statement_config: Optional[SQLConfig] = None,
+        instrumentation: Optional[InstrumentationConfig] = None,
+        default_row_type: type[SQLSpecDictRow] = SQLSpecDictRow,  # type: ignore[assignment]
+    ) -> None:
+        """Initialize Psqlpy asynchronous configuration.
+
+        Args:
+            pool_config: Psqlpy pool parameters
+            connection_config: Basic connection parameters (optional, can be included in pool_config)
+            statement_config: Default SQL statement configuration
+            instrumentation: Instrumentation configuration
+            default_row_type: Default row type for results
+        """
+        self.pool_config = pool_config
+        self.connection_config = connection_config or {}
+        self.statement_config = statement_config or SQLConfig()
+        self.default_row_type = default_row_type
+
+        super().__init__(
+            instrumentation=instrumentation or InstrumentationConfig(),
+        )
 
     @property
-    def connection_config_dict(self) -> "dict[str, Any]":
-        """Return the minimal connection configuration as a dict for standalone use.
-
-        Returns:
-            A string keyed dict of config kwargs for a psqlpy.Connection.
-
-        Raises:
-            ImproperConfigurationError: If essential connection parameters are missing.
-        """
-        if self.pool_config:
-            # Exclude pool-specific keys and internal metadata
-            pool_specific_keys = {
-                "max_db_pool_size",
-                "load_balance_hosts",
-                "conn_recycling_method",
-                "pool_instance",
-                "connection_type",
-                "driver_type",
-            }
-            return dataclass_to_dict(
-                self.pool_config,
-                exclude_empty=True,
-                convert_nested=False,
-                exclude_none=True,
-                exclude=pool_specific_keys,
-            )
-        msg = "You must provide a 'pool_config' for this adapter."
-        raise ImproperConfigurationError(msg)
+    def connection_type(self) -> type[PsqlpyConnection]:  # type: ignore[override]
+        """Return the connection type."""
+        return Connection  # type: ignore[return-value]
 
     @property
-    def pool_config_dict(self) -> "dict[str, Any]":
-        """Return the pool configuration as a dict.
+    def driver_type(self) -> type[PsqlpyDriver]:  # type: ignore[override]
+        """Return the driver type."""
+        return PsqlpyDriver
 
-        Raises:
-            ImproperConfigurationError: If no pool_config is provided but a pool_instance
+    @property
+    def connection_config_dict(self) -> dict[str, Any]:
+        """Return the connection configuration as a dict."""
+        # Merge connection_config into pool_config, with pool_config taking precedence
+        merged_config = {**self.connection_config, **self.pool_config}
+        return {k: v for k, v in merged_config.items() if v is not Empty}
 
-        Returns:
-            A string keyed dict of config kwargs for creating a psqlpy pool.
-        """
-        if self.pool_config:
-            # Extract the config from the pool_config
-            return dataclass_to_dict(
-                self.pool_config,
-                exclude_empty=True,
-                convert_nested=False,
-                exclude_none=True,
-                exclude={"pool_instance", "connection_type", "driver_type"},
-            )
+    async def _create_pool_impl(self) -> ConnectionPool:
+        """Create the actual async connection pool."""
+        return ConnectionPool(**self.connection_config_dict)
 
-        msg = "'pool_config' methods can not be used when a 'pool_instance' is provided."
-        raise ImproperConfigurationError(msg)
-
-    async def create_pool(self) -> "ConnectionPool":
-        """Return a pool. If none exists yet, create one.
-
-        Ensures that the pool is initialized and returns the instance.
-
-        Returns:
-            The pool instance used by the plugin.
-
-        Raises:
-            ImproperConfigurationError: If the pool could not be configured.
-        """
-        if self.pool_instance is not None:
-            return self.pool_instance
-
-        if self.pool_config is None:
-            msg = "One of 'pool_config' or 'pool_instance' must be provided."
-            raise ImproperConfigurationError(msg)
-
-        # pool_config is guaranteed to exist due to __post_init__
-        try:
-            # psqlpy ConnectionPool doesn't have an explicit async connect/startup method
-            # It creates connections on demand.
-            self.pool_instance = ConnectionPool(**self.pool_config_dict)
-        except Exception as e:
-            msg = f"Could not configure the 'pool_instance'. Error: {e!s}. Please check your configuration."
-            raise ImproperConfigurationError(msg) from e
-
-        return self.pool_instance
-
-    def provide_pool(self, *args: "Any", **kwargs: "Any") -> "Awaitable[ConnectionPool]":
-        """Create or return the pool instance.
-
-        Returns:
-            An awaitable resolving to the Pool instance.
-        """
-
-        async def _create() -> "ConnectionPool":
-            return await self.create_pool()
-
-        return _create()
-
-    def create_connection(self) -> "Awaitable[PsqlpyConnection]":
-        """Create and return a new, standalone psqlpy connection using the configured parameters.
-
-        Returns:
-            An awaitable that resolves to a new Connection instance.
-        """
-
-        async def _create() -> "Connection":
-            try:
-                async with self.provide_connection() as conn:
-                    return conn
-            except Exception as e:
-                msg = f"Could not configure the psqlpy connection. Error: {e!s}"
-                raise ImproperConfigurationError(msg) from e
-
-        return _create()
-
-    @asynccontextmanager
-    async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[PsqlpyConnection, None]":
-        """Acquire a connection from the pool.
-
-        Yields:
-            A connection instance managed by the pool.
-        """
-        db_pool = await self.provide_pool(*args, **kwargs)
-        async with db_pool.acquire() as conn:
-            yield conn
-
-    def close_pool(self) -> None:
-        """Close the connection pool."""
-        if self.pool_instance is not None:
-            # psqlpy pool close is synchronous
+    async def _close_pool_impl(self) -> None:
+        """Close the actual async connection pool."""
+        if self.pool_instance:
             self.pool_instance.close()
-            self.pool_instance = None
+
+    async def create_connection(self) -> PsqlpyConnection:
+        """Create a single async connection (not from pool).
+
+        Returns:
+            A psqlpy Connection instance.
+        """
+        conn_dict = {k: v for k, v in self.connection_config.items() if v is not Empty}
+        # psqlpy Connection constructor is synchronous, not async
+        return Connection(**conn_dict)  # type: ignore[return-value]
 
     @asynccontextmanager
-    async def provide_session(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[PsqlpyDriver, None]":
-        """Create and provide a database session using a pooled connection.
+    async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[PsqlpyConnection, None]:
+        """Provide an async connection context manager.
+
+        Args:
+            *args: Additional arguments.
+            **kwargs: Additional keyword arguments.
 
         Yields:
-            A Psqlpy driver instance wrapping a pooled connection.
+            A psqlpy Connection instance.
         """
-        async with self.provide_connection(*args, **kwargs) as connection:
-            yield self.driver_type(connection)
+        if self.pool_instance:
+            async with self.pool_instance.acquire() as conn:
+                yield conn  # type: ignore[misc]
+        else:
+            conn = await self.create_connection()
+            try:
+                yield conn
+            finally:
+                if conn is not None:
+                    await conn.close()
+
+    @asynccontextmanager
+    async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[PsqlpyDriver, None]:
+        """Provide an async driver session context manager.
+
+        Args:
+            *args: Additional arguments.
+            **kwargs: Additional keyword arguments.
+
+        Yields:
+            A PsqlpyDriver instance.
+        """
+        async with self.provide_connection(*args, **kwargs) as conn:
+            driver = self.driver_type(
+                connection=conn,
+                config=self.statement_config,
+                instrumentation_config=self.instrumentation,
+            )
+            yield driver
+
+    async def provide_pool(self, *args: Any, **kwargs: Any) -> ConnectionPool:
+        """Provide async pool instance.
+
+        Returns:
+            The async connection pool.
+        """
+        if not self.pool_instance:
+            self.pool_instance = await self.create_pool()
+        return self.pool_instance

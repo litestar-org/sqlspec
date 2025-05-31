@@ -1,6 +1,6 @@
 [project]
 authors = [{ name = "Cody Fincher", email = "cody@litestar.dev" }]
-dependencies = ["typing-extensions", "sqlglot", "eval_type_backport; python_version < \"3.10\""]
+dependencies = ["typing-extensions", "sqlglot", "eval_type_backport; python_version < \"3.10\"", "click"]
 description = "SQL Experiments in Python"
 license = "MIT"
 maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
@@ -22,6 +22,7 @@ aiosqlite = ["aiosqlite"]
 asyncmy = ["asyncmy"]
 asyncpg = ["asyncpg"]
 bigquery = ["google-cloud-bigquery"]
+cli = ["rich-click"]
 duckdb = ["duckdb"]
 fastapi = ["fastapi"]
 flask = ["flask"]
@@ -265,6 +266,8 @@ module = [
   "opentelemetry",
   "prometheus_client",
   "prometheus_client.*",
+  "aiosql",
+  "aiosql.*",
 ]
 
 [[tool.mypy.overrides]]
@@ -341,6 +344,7 @@ ignore = [
   "PLR0915", # pylint - Too many lines in module
   "PLR0916", # pylint - Too many statements in function
   "PLR0917", # pylint - Too many statements in class
+  "DOC201",  # pydocstyle - Missing return statement
 ]
 select = ["ALL"]
 

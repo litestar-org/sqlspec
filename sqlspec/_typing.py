@@ -1,4 +1,4 @@
-# ruff: noqa: RUF100, PLR0913, A002, DOC201, PLR6301, PLR0917
+# ruff: noqa: RUF100, PLR0913, A002, DOC201, PLR6301, PLR0917, ARG004
 """This is a simple wrapper around a few important classes in each library.
 
 This is used to ensure compatibility when one or more of the libraries are installed.
@@ -232,6 +232,7 @@ except ImportError:
 
 
 try:
+    from opentelemetry import trace  # pyright: ignore[reportMissingImports, reportAssignmentType]
     from opentelemetry.trace import (  # pyright: ignore[reportMissingImports, reportAssignmentType]
         Span,  # pyright: ignore[reportMissingImports, reportAssignmentType]
         Status,
@@ -341,17 +342,19 @@ except ImportError:
 try:
     import aiosql  # pyright: ignore[reportMissingImports, reportAssignmentType]
     from aiosql.types import (  # pyright: ignore[reportMissingImports, reportAssignmentType]
-        AsyncDriverAdapterProtocol as AiosqlAsyncProtocol,
+        AsyncDriverAdapterProtocol as AiosqlAsyncProtocol,  # pyright: ignore[reportMissingImports, reportAssignmentType]
+    )
+    from aiosql.types import (  # pyright: ignore[reportMissingImports, reportAssignmentType]
+        DriverAdapterProtocol as AiosqlProtocol,  # pyright: ignore[reportMissingImports, reportAssignmentType]
     )
     from aiosql.types import (
-        DriverAdapterProtocol as AiosqlProtocol,
+        ParamType as AiosqlParamType,  # pyright: ignore[reportMissingImports, reportAssignmentType]
     )
     from aiosql.types import (
-        ParamType,
-        SQLOperationType,
+        SQLOperationType as AiosqlSQLOperationType,  # pyright: ignore[reportMissingImports, reportAssignmentType]
     )
-    from aiosql.types import (
-        SyncDriverAdapterProtocol as AiosqlSyncProtocol,
+    from aiosql.types import (  # pyright: ignore[reportMissingImports, reportAssignmentType]
+        SyncDriverAdapterProtocol as AiosqlSyncProtocol,  # pyright: ignore[reportMissingImports, reportAssignmentType]
     )
 
     AIOSQL_INSTALLED = True
@@ -374,8 +377,18 @@ except ImportError:
     aiosql = _AiosqlShim()  # type: ignore[assignment]
 
     # Placeholder types for aiosql protocols
-    ParamType = Any
-    SQLOperationType = Any
+    AiosqlParamType = Union[dict[str, Any], list[Any], tuple[Any, ...], None]  # pyright: ignore[reportConstantRedefinition]
+
+    class AiosqlSQLOperationType(Enum):
+        """Enumeration of aiosql operation types."""
+
+        INSERT_RETURNING = 0
+        INSERT_UPDATE_DELETE = 1
+        INSERT_UPDATE_DELETE_MANY = 2
+        SCRIPT = 3
+        SELECT = 4
+        SELECT_ONE = 5
+        SELECT_VALUE = 6
 
     @runtime_checkable
     class AiosqlProtocol(Protocol):  # type: ignore[no-redef]
@@ -434,7 +447,9 @@ __all__ = (
     "PYDANTIC_INSTALLED",
     "UNSET",
     "AiosqlAsyncProtocol",
+    "AiosqlParamType",
     "AiosqlProtocol",
+    "AiosqlSQLOperationType",
     "AiosqlSyncProtocol",
     "ArrowTable",
     "ArrowTableResult",
@@ -448,8 +463,6 @@ __all__ = (
     "FailFast",
     "Gauge",
     "Histogram",
-    "ParamType",
-    "SQLOperationType",
     "Span",
     "Status",
     "StatusCode",
@@ -461,4 +474,5 @@ __all__ = (
     "UnsetType",
     "aiosql",
     "convert",
+    "trace",
 )

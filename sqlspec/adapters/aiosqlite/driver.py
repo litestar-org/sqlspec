@@ -12,6 +12,7 @@ from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTransl
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ExecuteResult, SelectResult
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
+from sqlspec.utils.telemetry import instrument_async
 
 if TYPE_CHECKING:
     from sqlspec.statement.filters import StatementFilter
@@ -56,6 +57,7 @@ class AiosqliteDriver(
         """Return the placeholder style for SQLite (qmark: ?)."""
         return ParameterStyle.QMARK
 
+    @instrument_async(operation_type="database")
     async def execute(
         self,
         statement: "Union[SQL, Statement, QueryBuilder[Any]]",
@@ -165,6 +167,7 @@ class AiosqliteDriver(
             if cursor:
                 await cursor.close()
 
+    @instrument_async(operation_type="database")
     async def execute_many(
         self,
         statement: "Union[SQL, Statement, QueryBuilder[ExecuteResult[Any]]]",
@@ -288,6 +291,7 @@ class AiosqliteDriver(
             operation_type=operation_type,
         )
 
+    @instrument_async(operation_type="database")
     async def execute_script(
         self,
         statement: "Union[str, SQL]",

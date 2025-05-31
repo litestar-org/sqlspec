@@ -41,10 +41,12 @@ class MergeBuilder(QueryBuilder[ExecuteResult[dict[str, Any]]]):
             .into("target_table")
             .using("source_table", "src")
             .on("target_table.id = src.id")
-            .when_matched_then_update({
-                "name": "src.name",
-                "updated_at": "NOW()",
-            })
+            .when_matched_then_update(
+                {
+                    "name": "src.name",
+                    "updated_at": "NOW()",
+                }
+            )
             .when_not_matched_then_insert(
                 columns=["id", "name", "created_at"],
                 values=["src.id", "src.name", "NOW()"],

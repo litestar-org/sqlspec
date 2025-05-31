@@ -65,10 +65,12 @@ class InsertBuilder(QueryBuilder[ExecuteResult[dict[str, Any]]]):
         insert_query = (
             InsertBuilder()
             .into("users")
-            .values_from_dict({
-                "name": "John",
-                "email": "john@example.com",
-            })
+            .values_from_dict(
+                {
+                    "name": "John",
+                    "email": "john@example.com",
+                }
+            )
         )
 
         # INSERT from SELECT

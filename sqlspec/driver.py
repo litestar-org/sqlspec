@@ -7,7 +7,6 @@ from typing import (
     ClassVar,
     Generic,
     Optional,
-    TypeVar,
     Union,
     cast,
     overload,
@@ -15,6 +14,7 @@ from typing import (
 
 from psycopg.rows import TupleRow  # Assuming this is a common row type, adjust if needed
 from sqlglot import exp
+from typing_extensions import TypeVar
 
 from sqlspec._typing import trace  # pyright: ignore
 from sqlspec.config import (
@@ -43,6 +43,7 @@ from sqlspec.typing import (
     T,
     Tracer,  # type: ignore
 )
+from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -121,12 +122,14 @@ class CommonDriverAttributes(ABC, Generic[ConnectionT, DefaultRowT]):
         self._setup_instrumentation()
 
     def _setup_instrumentation(self) -> None:
+        """Set up OpenTelemetry and Prometheus instrumentation."""
         if self.instrumentation_config.enable_opentelemetry:
             self._setup_opentelemetry()
         if self.instrumentation_config.enable_prometheus:
             self._setup_prometheus()
 
     def _setup_opentelemetry(self) -> None:
+        """Set up OpenTelemetry tracer with proper service naming."""
         if trace is None:  # pragma: no cover
             logger.warning("OpenTelemetry not installed, skipping OpenTelemetry setup.")
             return  # pragma: no cover
@@ -136,37 +139,42 @@ class CommonDriverAttributes(ABC, Generic[ConnectionT, DefaultRowT]):
         )
 
     def _setup_prometheus(self) -> None:  # pragma: no cover
+        """Set up Prometheus metrics with proper labeling and semantic naming."""
         try:
             service_name = self.instrumentation_config.service_name
             custom_tag_keys = list(self.instrumentation_config.custom_tags.keys())
+
+            # Database operation metrics
             self._query_counter = Counter(  # type: ignore[misc]
-                f"{service_name}_queries_total",
-                "Total number of SQL queries executed",
-                ["operation", "status", "dialect", *custom_tag_keys],
+                f"{service_name}_db_operations_total",
+                "Total number of database operations executed",
+                ["operation", "status", "db_system", *custom_tag_keys],
             )
             self._error_counter = Counter(  # type: ignore[misc]
-                f"{service_name}_errors_total",
-                "Total number of SQL errors",
-                ["operation", "error_type", "dialect", *custom_tag_keys],
+                f"{service_name}_db_errors_total",
+                "Total number of database errors",
+                ["operation", "error_type", "db_system", *custom_tag_keys],
             )
             self._latency_histogram = Histogram(  # type: ignore[misc]
-                f"{service_name}_query_latency_seconds",
-                "SQL query latency in seconds",
-                ["operation", "dialect", *custom_tag_keys],
+                f"{service_name}_db_operation_duration_seconds",
+                "Database operation duration in seconds",
+                ["operation", "db_system", *custom_tag_keys],
                 buckets=self.instrumentation_config.prometheus_latency_buckets
                 or [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2.5, 5, 10],  # Default buckets
             )
+
+            # Connection pool metrics
             self._pool_latency_histogram = Histogram(  # type: ignore[misc]
-                f"{service_name}_pool_operation_latency_seconds",
-                "Connection pool operation latency in seconds",
-                ["operation", "dialect", *custom_tag_keys],
+                f"{service_name}_db_pool_operation_duration_seconds",
+                "Database connection pool operation duration in seconds",
+                ["operation", "db_system", *custom_tag_keys],
                 buckets=self.instrumentation_config.prometheus_latency_buckets
                 or [0.001, 0.005, 0.01, 0.05, 0.1, 5, 10],  # Buckets for pool operations
             )
             self._pool_connections_gauge = Gauge(  # type: ignore[misc]
-                f"{service_name}_pool_connections",
-                "Number of active connections in the pool",
-                ["dialect", *custom_tag_keys],
+                f"{service_name}_db_pool_connections",
+                "Number of database connections in the pool by status",
+                ["db_system", "status", *custom_tag_keys],
             )
         except (ImportError, AttributeError) as e:  # pragma: no cover
             logger.warning("Prometheus client not available or misconfigured, skipping Prometheus setup: %s", e)
@@ -243,17 +251,20 @@ class SyncInstrumentationMixin(ABC):
         *args: Any,
         **kwargs: Any,
     ) -> Any:
+        """Instrument a synchronous operation with OpenTelemetry and Prometheus."""
         start_time = time.monotonic()
         final_custom_tags = {**self.instrumentation_config.custom_tags, **custom_tags_from_decorator}
 
         if self.instrumentation_config.log_queries:
-            logger.info("Starting %s", operation_name)
+            logger.info("Starting %s operation", operation_name, extra={"operation_type": operation_type})
 
         span = None
         if self._tracer:
             span = self._tracer.start_span(operation_name)
             span.set_attribute("operation.type", operation_type)
             span.set_attribute("db.system", self.dialect)
+            span.set_attribute("service.name", self.instrumentation_config.service_name)
+
             # Merge decorator tags with global custom tags
             for key, value in final_custom_tags.items():
                 span.set_attribute(key, value)
@@ -265,37 +276,58 @@ class SyncInstrumentationMixin(ABC):
             latency = time.monotonic() - start_time
 
             if self.instrumentation_config.log_runtime:
-                logger.info("Completed %s in %.2fms", operation_name, latency * 1000)
+                logger.info(
+                    "Completed %s in %.3fms",
+                    operation_name,
+                    latency * 1000,
+                    extra={"operation_type": operation_type, "latency_ms": latency * 1000, "status": "success"},
+                )
 
-            # Use final_custom_tags for Prometheus labels
+            # Update Prometheus metrics with proper labels
             if self._query_counter and operation_type == "database":
                 self._query_counter.labels(
-                    operation=operation_name, status="success", dialect=self.dialect, **final_custom_tags
+                    operation=operation_name, status="success", db_system=self.dialect, **final_custom_tags
                 ).inc()
             if self._latency_histogram and operation_type == "database":
                 self._latency_histogram.labels(
-                    operation=operation_name, dialect=self.dialect, **final_custom_tags
+                    operation=operation_name, db_system=self.dialect, **final_custom_tags
                 ).observe(latency)
 
             if span:
                 span.set_attribute("duration_ms", latency * 1000)
                 if hasattr(result, "get_affected_count"):  # Check on actual result
-                    span.set_attribute("db.rows_affected", result.get_affected_count())
+                    affected_count = result.get_affected_count()
+                    span.set_attribute("db.rows_affected", affected_count)
                 elif isinstance(result, (list, tuple)):  # Common raw results
-                    span.set_attribute("db.rows_returned", len(result))
+                    rows_returned = len(result)
+                    span.set_attribute("db.rows_returned", rows_returned)
 
                 if StatusCode is not None and Status is not None:
                     span.set_status(Status(StatusCode.OK))
         except Exception as e:
+            latency = time.monotonic() - start_time
+
             if self.instrumentation_config.log_queries:
-                logger.exception("Error in %s", operation_name)
+                logger.exception(
+                    "Error in %s after %.3fms",
+                    operation_name,
+                    latency * 1000,
+                    extra={
+                        "operation_type": operation_type,
+                        "latency_ms": latency * 1000,
+                        "status": "error",
+                        "error_type": type(e).__name__,
+                    },
+                )
+
             if span:
                 span.record_exception(e)
                 if StatusCode is not None and Status is not None:
                     span.set_status(Status(StatusCode.ERROR, str(e)))
+
             if self._error_counter:
                 self._error_counter.labels(
-                    operation=operation_name, error_type=type(e).__name__, dialect=self.dialect, **final_custom_tags
+                    operation=operation_name, error_type=type(e).__name__, db_system=self.dialect, **final_custom_tags
                 ).inc()
             raise
         else:
@@ -325,52 +357,79 @@ class AsyncInstrumentationMixin(ABC):
         *args: Any,
         **kwargs: Any,
     ) -> Any:
+        """Instrument an asynchronous operation with OpenTelemetry and Prometheus."""
         start_time = time.monotonic()
         final_custom_tags = {**self.instrumentation_config.custom_tags, **custom_tags_from_decorator}
 
         if self.instrumentation_config.log_queries:
-            logger.info("Starting %s", operation_name)
+            logger.info("Starting %s operation", operation_name, extra={"operation_type": operation_type})
+
         span = None
         if self._tracer:
             span = self._tracer.start_span(operation_name)
             span.set_attribute("operation.type", operation_type)
             span.set_attribute("db.system", self.dialect)
+            span.set_attribute("service.name", self.instrumentation_config.service_name)
+
             for key, value in final_custom_tags.items():
                 span.set_attribute(key, value)
+
         try:
             result = await func_to_execute(original_self, *args, **kwargs)
             latency = time.monotonic() - start_time
+
             if self.instrumentation_config.log_runtime:
-                logger.info("Completed %s in %.2fms", operation_name, latency * 1000)
+                logger.info(
+                    "Completed %s in %.3fms",
+                    operation_name,
+                    latency * 1000,
+                    extra={"operation_type": operation_type, "latency_ms": latency * 1000, "status": "success"},
+                )
 
             if self._query_counter and operation_type == "database":
                 self._query_counter.labels(
-                    operation=operation_name, status="success", dialect=self.dialect, **final_custom_tags
+                    operation=operation_name, status="success", db_system=self.dialect, **final_custom_tags
                 ).inc()
             if self._latency_histogram and operation_type == "database":
                 self._latency_histogram.labels(
-                    operation=operation_name, dialect=self.dialect, **final_custom_tags
+                    operation=operation_name, db_system=self.dialect, **final_custom_tags
                 ).observe(latency)
 
             if span:
                 span.set_attribute("duration_ms", latency * 1000)
                 if hasattr(result, "get_affected_count"):
-                    span.set_attribute("db.rows_affected", result.get_affected_count())
+                    affected_count = result.get_affected_count()
+                    span.set_attribute("db.rows_affected", affected_count)
                 elif isinstance(result, (list, tuple)):
-                    span.set_attribute("db.rows_returned", len(result))
+                    rows_returned = len(result)
+                    span.set_attribute("db.rows_returned", rows_returned)
 
                 if StatusCode is not None and Status is not None:
                     span.set_status(Status(StatusCode.OK))
         except Exception as e:
+            latency = time.monotonic() - start_time
+
             if self.instrumentation_config.log_queries:
-                logger.exception("Error in %s", operation_name)
+                logger.exception(
+                    "Error in %s after %.3fms",
+                    operation_name,
+                    latency * 1000,
+                    extra={
+                        "operation_type": operation_type,
+                        "latency_ms": latency * 1000,
+                        "status": "error",
+                        "error_type": type(e).__name__,
+                    },
+                )
+
             if span:
                 span.record_exception(e)
                 if StatusCode is not None and Status is not None:
                     span.set_status(Status(StatusCode.ERROR, str(e)))
+
             if self._error_counter:
                 self._error_counter.labels(
-                    operation=operation_name, error_type=type(e).__name__, dialect=self.dialect, **final_custom_tags
+                    operation=operation_name, error_type=type(e).__name__, db_system=self.dialect, **final_custom_tags
                 ).inc()
             raise
         else:
@@ -555,17 +614,18 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         config_override: "Optional[SQLConfig]" = None,  # Renamed from 'config' to avoid clash
         **kwargs: Any,
     ) -> "Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]], ExecuteResult[Any]]":
-        sql_statement = self._build_statement(statement, config_override, *filters)
-        raw_driver_result = self._execute_impl(
-            statement=sql_statement,
-            parameters=parameters,
-            connection=self._connection(connection),
-            config=config_override or self.config,
-            **kwargs,
-        )
-        if CommonDriverAttributes.returns_rows(sql_statement.expression):
-            return self._wrap_select_result(sql_statement, raw_driver_result, schema_type=schema_type, **kwargs)
-        return self._wrap_execute_result(sql_statement, raw_driver_result, **kwargs)
+        with instrument_operation(self, "execute", "database"):
+            sql_statement = self._build_statement(statement, config_override, *filters)
+            raw_driver_result = self._execute_impl(
+                statement=sql_statement,
+                parameters=parameters,
+                connection=self._connection(connection),
+                config=config_override or self.config,
+                **kwargs,
+            )
+            if CommonDriverAttributes.returns_rows(sql_statement.expression):
+                return self._wrap_select_result(sql_statement, raw_driver_result, schema_type=schema_type, **kwargs)
+            return self._wrap_execute_result(sql_statement, raw_driver_result, **kwargs)
 
     def execute_many(
         self,
@@ -577,16 +637,17 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         config_override: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> "ExecuteResult[Any]":
-        sql_statement = self._build_statement(statement, config_override, *filters)
-        raw_driver_result = self._execute_impl(
-            statement=sql_statement,
-            parameters=parameters,
-            connection=self._connection(connection),
-            config=config_override or self.config,
-            is_many=True,
-            **kwargs,
-        )
-        return self._wrap_execute_result(sql_statement, raw_driver_result, **kwargs)
+        with instrument_operation(self, "execute_many", "database"):
+            sql_statement = self._build_statement(statement, config_override, *filters)
+            raw_driver_result = self._execute_impl(
+                statement=sql_statement,
+                parameters=parameters,
+                connection=self._connection(connection),
+                config=config_override or self.config,
+                is_many=True,
+                **kwargs,
+            )
+            return self._wrap_execute_result(sql_statement, raw_driver_result, **kwargs)
 
     def execute_script(
         self,
@@ -598,21 +659,22 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         config_override: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> str:
-        final_script_content = statement.sql if isinstance(statement, SQL) else statement
+        with instrument_operation(self, "execute_script", "database"):
+            final_script_content = statement.sql if isinstance(statement, SQL) else statement
 
-        sql_placeholder_for_script = SQL(
-            final_script_content, parameters=parameters, dialect=self.dialect, config=config_override or self.config
-        )
+            sql_placeholder_for_script = SQL(
+                final_script_content, parameters=parameters, dialect=self.dialect, config=config_override or self.config
+            )
 
-        script_output = self._execute_impl(
-            statement=sql_placeholder_for_script,
-            parameters=parameters,
-            connection=self._connection(connection),
-            config=config_override or self.config,
-            is_script=True,
-            **kwargs,
-        )
-        return cast("str", script_output)
+            script_output = self._execute_impl(
+                statement=sql_placeholder_for_script,
+                parameters=parameters,
+                connection=self._connection(connection),
+                config=config_override or self.config,
+                is_script=True,
+                **kwargs,
+            )
+            return cast("str", script_output)
 
 
 class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT], AsyncInstrumentationMixin, ABC):
@@ -788,17 +850,20 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         config_override: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> "Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]], ExecuteResult[Any]]":
-        sql_statement = self._build_statement(statement, config_override, *filters)
-        raw_driver_result = await self._execute_impl(
-            statement=sql_statement,
-            parameters=parameters,
-            connection=self._connection(connection),
-            config=config_override or self.config,
-            **kwargs,
-        )
-        if CommonDriverAttributes.returns_rows(sql_statement.expression):
-            return await self._wrap_select_result(sql_statement, raw_driver_result, schema_type=schema_type, **kwargs)
-        return await self._wrap_execute_result(sql_statement, raw_driver_result, **kwargs)
+        async with instrument_operation_async(self, "execute", "database"):
+            sql_statement = self._build_statement(statement, config_override, *filters)
+            raw_driver_result = await self._execute_impl(
+                statement=sql_statement,
+                parameters=parameters,
+                connection=self._connection(connection),
+                config=config_override or self.config,
+                **kwargs,
+            )
+            if CommonDriverAttributes.returns_rows(sql_statement.expression):
+                return await self._wrap_select_result(
+                    sql_statement, raw_driver_result, schema_type=schema_type, **kwargs
+                )
+            return await self._wrap_execute_result(sql_statement, raw_driver_result, **kwargs)
 
     async def execute_many(
         self,
@@ -809,16 +874,17 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         config_override: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> "ExecuteResult[Any]":
-        sql_statement = self._build_statement(statement, config_override, *filters)
-        raw_driver_result = await self._execute_impl(
-            statement=sql_statement,
-            parameters=parameters,
-            connection=self._connection(connection),
-            config=config_override or self.config,
-            is_many=True,
-            **kwargs,
-        )
-        return await self._wrap_execute_result(sql_statement, raw_driver_result, **kwargs)
+        async with instrument_operation_async(self, "execute_many", "database"):
+            sql_statement = self._build_statement(statement, config_override, *filters)
+            raw_driver_result = await self._execute_impl(
+                statement=sql_statement,
+                parameters=parameters,
+                connection=self._connection(connection),
+                config=config_override or self.config,
+                is_many=True,
+                **kwargs,
+            )
+            return await self._wrap_execute_result(sql_statement, raw_driver_result, **kwargs)
 
     async def execute_script(
         self,
@@ -829,21 +895,22 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         config_override: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> str:
-        final_script_content = statement.sql if isinstance(statement, SQL) else statement
+        async with instrument_operation_async(self, "execute_script", "database"):
+            final_script_content = statement.sql if isinstance(statement, SQL) else statement
 
-        sql_placeholder_for_script = SQL(
-            final_script_content, parameters=parameters, dialect=self.dialect, config=config_override or self.config
-        )
+            sql_placeholder_for_script = SQL(
+                final_script_content, parameters=parameters, dialect=self.dialect, config=config_override or self.config
+            )
 
-        script_output = await self._execute_impl(
-            statement=sql_placeholder_for_script,
-            parameters=parameters,
-            connection=self._connection(connection),
-            config=config_override or self.config,
-            is_script=True,
-            **kwargs,
-        )
-        return cast("str", script_output)
+            script_output = await self._execute_impl(
+                statement=sql_placeholder_for_script,
+                parameters=parameters,
+                connection=self._connection(connection),
+                config=config_override or self.config,
+                is_script=True,
+                **kwargs,
+            )
+            return cast("str", script_output)
 
 
 DriverAdapterProtocol = Union[

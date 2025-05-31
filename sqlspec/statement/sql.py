@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 
     from sqlspec.statement.parameters import ParameterInfo
     from sqlspec.statement.pipelines import ProcessorProtocol, SQLValidator, TransformerPipeline
+    from sqlspec.statement.pipelines.analyzers import StatementAnalysis, StatementAnalyzer
     from sqlspec.typing import SQLParameterType
 
 __all__ = (
@@ -95,6 +96,9 @@ class SQLConfig:
     enable_transformations: bool = True
     """Whether to enable SQL transformer."""
 
+    enable_analysis: bool = False
+    """Whether to enable SQL statement analysis for metadata extraction."""
+
     strict_mode: bool = True
     """Whether to use strict validation of rules."""
 
@@ -116,6 +120,9 @@ class SQLConfig:
     sqlglot_schema: "Optional[SQLGlotSchema]" = None
     """Optional sqlglot schema for schema-aware transformations."""
 
+    analysis_cache_size: int = 1000
+    """Maximum number of analysis results to cache."""
+
     def get_pipeline(self) -> "TransformerPipeline":
         """Constructs and returns a TransformerPipeline from the configured components.
         If no components are specified, it will add default ones based on flags.
@@ -127,6 +134,13 @@ class SQLConfig:
 
         components_to_use = list(self.processing_pipeline_components)  # Make a copy
 
+        # Add default analyzer if analysis is enabled and no components specified
+        if not components_to_use and self.enable_analysis:
+            from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
+
+            components_to_use.append(StatementAnalyzer(cache_size=self.analysis_cache_size))
+
+        # Add default validator if validation is enabled and no components specified
         if not components_to_use and self.enable_validation:
             components_to_use.append(_default_validator())
 
@@ -168,6 +182,7 @@ class SQL:
     """
 
     __slots__ = (
+        "_analysis_result",
         "_builder_result_type",
         "_config",
         "_dialect",
@@ -175,6 +190,7 @@ class SQL:
         "_parameter_info",
         "_parsed_expression",
         "_sql",
+        "_statement_analyzer",
         "_validation_result",
     )
 
@@ -216,6 +232,8 @@ class SQL:
         self._builder_result_type: Optional[type] = _existing_statement_data.get(
             "_builder_result_type", _builder_result_type
         )
+        self._analysis_result: Optional[StatementAnalysis] = _existing_statement_data.get("_analysis_result", None)
+        self._statement_analyzer: Optional[StatementAnalyzer] = None
 
         if not _existing_statement_data:
             self._initialize_statement(self._sql, parameters, args, kwargs)
@@ -237,6 +255,8 @@ class SQL:
         self._dialect = dialect if dialect is not None else existing._dialect
         self._sql = existing._sql
         self._builder_result_type = existing._builder_result_type
+        self._analysis_result = existing._analysis_result
+        self._statement_analyzer = existing._statement_analyzer
 
         if parameters is not None or args is not None or kwargs is not None:
             current_sql_source = existing._sql
@@ -448,6 +468,15 @@ class SQL:
         """
         return self._builder_result_type
 
+    @property
+    def analysis_result(self) -> "Optional[StatementAnalysis]":
+        """Get the analysis result if analysis was performed.
+
+        Returns:
+            StatementAnalysis if analysis is available, None otherwise.
+        """
+        return self._analysis_result
+
     def to_sql(
         self,
         placeholder_style: "Optional[Union[str, ParameterStyle]]" = None,
@@ -573,13 +602,13 @@ class SQL:
                     >= validator_for_threshold_check.min_risk_to_raise.value
                 ):
                     error_msg = f"SQL validation failed with risk level {self._validation_result.risk_level}:\n"
-                    error_msg += "Issues:\n" + "\n".join([
-                        f"- {issue}" for issue in self._validation_result.issues or []
-                    ])
+                    error_msg += "Issues:\n" + "\n".join(
+                        [f"- {issue}" for issue in self._validation_result.issues or []]
+                    )
                     if self._validation_result.warnings:
-                        error_msg += "\nWarnings:\n" + "\n".join([
-                            f"- {warn}" for warn in self._validation_result.warnings
-                        ])
+                        error_msg += "\nWarnings:\n" + "\n".join(
+                            [f"- {warn}" for warn in self._validation_result.warnings]
+                        )
                     raise SQLValidationError(error_msg, self.to_sql(), self._validation_result.risk_level)
             return self._validation_result
 
@@ -1116,9 +1145,46 @@ class SQL:
         else:
             hashable_params = (self._merged_parameters,)
 
-        return hash((
-            str(self._sql),
-            hashable_params,
-            self._dialect,
-            self._config,
-        ))
+        return hash(
+            (
+                str(self._sql),
+                hashable_params,
+                self._dialect,
+                self._config,
+            )
+        )
+
+    def analyze(self) -> "StatementAnalysis":
+        """Analyze the SQL statement and return analysis metadata.
+
+        This method will create or reuse a StatementAnalyzer to extract
+        metadata about the SQL statement, such as table names, complexity
+        score, join count, etc.
+
+        Returns:
+            StatementAnalysis with extracted metadata.
+
+        Raises:
+            SQLSpecError: If parsing is disabled, as analysis requires a parsed expression.
+        """
+        if not self._config.enable_parsing:
+            msg = "Cannot analyze SQL if parsing is disabled."
+            raise SQLSpecError(msg)
+
+        # Create analyzer if not exists
+        if self._statement_analyzer is None:
+            from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
+
+            self._statement_analyzer = StatementAnalyzer(cache_size=self._config.analysis_cache_size)
+
+        # Use cached result if available
+        if self._analysis_result is not None:
+            return self._analysis_result
+
+        # Perform analysis
+        if self.expression is not None:
+            self._analysis_result = self._statement_analyzer.analyze_expression(self.expression)
+        else:
+            self._analysis_result = self._statement_analyzer.analyze_statement(self.sql, self._dialect)
+
+        return self._analysis_result

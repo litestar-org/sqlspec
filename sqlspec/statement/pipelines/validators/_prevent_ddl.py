@@ -10,6 +10,8 @@ if TYPE_CHECKING:
 
     from sqlspec.statement.sql import SQLConfig
 
+__all__ = ("PreventDDL",)
+
 
 class PreventDDL(SQLValidation):
     """Validates against the presence of DDL statements."""

@@ -1,4 +1,8 @@
-from sqlspec.statement.pipelines import transformers, validators
+from sqlspec.statement.pipelines import analyzers, transformers, validators
+from sqlspec.statement.pipelines.analyzers import (
+    StatementAnalysis,
+    StatementAnalyzer,
+)
 from sqlspec.statement.pipelines.base import (
     ProcessorProtocol,
     SQLValidation,
@@ -45,12 +49,15 @@ __all__ = (
     "SQLValidation",
     "SQLValidator",
     "StarExpander",
+    "StatementAnalysis",
+    "StatementAnalyzer",
     "SuspiciousComments",
     "SuspiciousKeywords",
     "TautologyConditions",
     "TransformerPipeline",
     "UsesExpression",
     "ValidationResult",
+    "analyzers",
     "transformers",
     "validators",
 )

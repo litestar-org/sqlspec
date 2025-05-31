@@ -4,16 +4,6 @@ from dataclasses import Field, fields
 from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated, Any, Optional, TypeVar, Union, cast
 
-from aiosql.types import (
-    DriverAdapterProtocol as AiosqlProtocol,
-)
-from aiosql.types import (
-    ParamType,
-    SQLOperationType,
-)
-from aiosql.types import (
-    SyncDriverAdapterProtocol as AiosqlSyncProtocol,
-)
 from typing_extensions import TypeAlias, TypeGuard
 
 from sqlspec._typing import (
@@ -25,9 +15,11 @@ from sqlspec._typing import (
     PYARROW_INSTALLED,
     PYDANTIC_INSTALLED,
     UNSET,
-    AiosqlAsyncProtocol,
-    AiosqlProtocol,
-    AiosqlSyncProtocol,
+    AiosqlAsyncProtocol,  # pyright: ignore[reportAttributeAccessIssue]
+    AiosqlParamType,  # pyright: ignore[reportAttributeAccessIssue]
+    AiosqlProtocol,  # pyright: ignore[reportAttributeAccessIssue]
+    AiosqlSQLOperationType,  # pyright: ignore[reportAttributeAccessIssue]
+    AiosqlSyncProtocol,  # pyright: ignore[reportAttributeAccessIssue]
     ArrowTable,
     BaseModel,
     Counter,  # pyright: ignore[reportAttributeAccessIssue]
@@ -37,9 +29,7 @@ from sqlspec._typing import (
     EmptyType,
     Gauge,  # pyright: ignore[reportAttributeAccessIssue]
     Histogram,  # pyright: ignore[reportAttributeAccessIssue]
-    ParamType,
     Span,  # pyright: ignore[reportAttributeAccessIssue]
-    SQLOperationType,
     Status,  # pyright: ignore[reportAttributeAccessIssue]
     StatusCode,  # pyright: ignore[reportAttributeAccessIssue]
     Struct,
@@ -48,6 +38,7 @@ from sqlspec._typing import (
     UnsetType,
     aiosql,
     convert,  # pyright: ignore[reportAttributeAccessIssue]
+    trace,
 )
 
 if TYPE_CHECKING:
@@ -549,7 +540,9 @@ __all__ = (
     "PYDANTIC_USE_FAILFAST",
     "UNSET",
     "AiosqlAsyncProtocol",
+    "AiosqlParamType",
     "AiosqlProtocol",
+    "AiosqlSQLOperationType",
     "AiosqlSyncProtocol",
     "ArrowTable",
     "BaseModel",
@@ -569,11 +562,9 @@ __all__ = (
     "ModelDictList",
     "ModelDictList",
     "ModelT",
-    "ParamType",
     "PoolT",
     "PoolT_co",
     "PydanticOrMsgspecT",
-    "SQLOperationType",
     "SQLParameterType",
     "Span",
     "Status",
@@ -611,6 +602,7 @@ __all__ = (
     "is_schema_with_field",
     "is_schema_without_field",
     "schema_dump",
+    "trace",
 )
 
 if TYPE_CHECKING:
@@ -633,7 +625,7 @@ if TYPE_CHECKING:
     else:
         from litestar.dto import DTOData  # noqa: TC004
     if not OPENTELEMETRY_INSTALLED:
-        from sqlspec._typing import Span, Status, StatusCode, Tracer  # pyright: ignore
+        from sqlspec._typing import Span, Status, StatusCode, Tracer, trace  # noqa: TC004  # pyright: ignore
     else:
         from opentelemetry.trace import (  # pyright: ignore[reportMissingImports] # noqa: TC004
             Span,
@@ -648,11 +640,27 @@ if TYPE_CHECKING:
 
     if not AIOSQL_INSTALLED:
         from sqlspec._typing import (
-            AiosqlAsyncProtocol,
+            AiosqlAsyncProtocol,  # pyright: ignore[reportAttributeAccessIssue]
+            AiosqlParamType,  # pyright: ignore[reportAttributeAccessIssue]
+            AiosqlProtocol,  # pyright: ignore[reportAttributeAccessIssue]
+            AiosqlSQLOperationType,  # pyright: ignore[reportAttributeAccessIssue]
+            AiosqlSyncProtocol,  # pyright: ignore[reportAttributeAccessIssue]
             aiosql,
         )
     else:
-        import aiosql  # noqa: TC004
-        from aiosql.types import (  # noqa: TC004
+        import aiosql  # noqa: TC004 # pyright: ignore
+        from aiosql.types import (  # noqa: TC004 # pyright: ignore[reportMissingImports]
             AsyncDriverAdapterProtocol as AiosqlAsyncProtocol,
+        )
+        from aiosql.types import (  # noqa: TC004 # pyright: ignore[reportMissingImports]
+            DriverAdapterProtocol as AiosqlProtocol,
+        )
+        from aiosql.types import (
+            ParamType as AiosqlParamType,  # noqa: TC004 # pyright: ignore[reportMissingImports]
+        )
+        from aiosql.types import (
+            SQLOperationType as AiosqlSQLOperationType,  # noqa: TC004 # pyright: ignore[reportMissingImports]
+        )
+        from aiosql.types import (  # noqa: TC004 # pyright: ignore[reportMissingImports]
+            SyncDriverAdapterProtocol as AiosqlSyncProtocol,
         )

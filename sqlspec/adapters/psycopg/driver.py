@@ -14,6 +14,7 @@ from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ExecuteResult, SelectResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import ModelDTOT, SQLParameterType
+from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
 
 logger = logging.getLogger("sqlspec")
 
@@ -66,46 +67,36 @@ class PsycopgSyncDriver(
         is_script: bool = False,
         **kwargs: Any,
     ) -> Any:
-        conn = self._connection(connection)
-        final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
+        with instrument_operation(self, "psycopg_execute", "database"):
+            conn = self._connection(connection)
+            final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
 
-        final_exec_params: Union[dict[str, Any], list[dict[str, Any]], None] = None
+            final_exec_params: Union[dict[str, Any], list[dict[str, Any]], None] = None
 
-        if is_many:
-            many_params_list: list[dict[str, Any]] = []
-            if parameters is not None and isinstance(parameters, Sequence):
-                for param_set in parameters:
-                    if isinstance(param_set, dict):
-                        many_params_list.append(param_set)
-                    else:
-                        logger.warning(
-                            "executemany with PYFORMAT_NAMED expects dict, got %s. Skipping.", type(param_set)
-                        )
-            final_exec_params = many_params_list
-        else:
-            single_params = statement.get_parameters(style=self._get_placeholder_style())
-            if single_params is None:
-                final_exec_params = {}
-            elif isinstance(single_params, dict):
-                final_exec_params = single_params
-            elif isinstance(single_params, (list, tuple)):
-                logger.warning("PYFORMAT_NAMED style resolved to sequence, expected dict. Adapting.")
-                final_exec_params = {f"param_{i}": v for i, v in enumerate(single_params)}
-            else:
-                logger.warning("PYFORMAT_NAMED style resolved to scalar, expected dict. Adapting.")
-                final_exec_params = {"param_0": single_params}
-
-        with self._get_cursor(conn) as cursor:
-            logger.debug("Executing SQL (Psycopg Sync): %s with params: %s", final_sql, final_exec_params)
-            if is_script:
-                script_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-                cursor.execute(script_sql)
-                return cursor.statusmessage or "SCRIPT EXECUTED"
             if is_many:
-                cursor.executemany(final_sql, cast("list[dict[str, Any]]", final_exec_params))
+                final_exec_params = []
+                if parameters and isinstance(parameters, Sequence):
+                    final_exec_params = [p for p in parameters if isinstance(p, dict)]
             else:
-                cursor.execute(final_sql, cast("dict[str, Any]", final_exec_params))
-            return cursor
+                single_params = statement.get_parameters(style=self._get_placeholder_style())
+                final_exec_params = single_params if isinstance(single_params, dict) else {}
+
+            with self._get_cursor(conn) as cursor:
+                if self.instrumentation_config.log_queries:
+                    logger.debug("Executing SQL: %s", final_sql)
+
+                if self.instrumentation_config.log_parameters and final_exec_params:
+                    logger.debug("Query parameters: %s", final_exec_params)
+
+                if is_script:
+                    script_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
+                    cursor.execute(script_sql)
+                    return cursor.statusmessage or "SCRIPT EXECUTED"
+                if is_many:
+                    cursor.executemany(final_sql, cast("list[dict[str, Any]]", final_exec_params))
+                else:
+                    cursor.execute(final_sql, cast("dict[str, Any]", final_exec_params))
+                return cursor
 
     def _wrap_select_result(
         self,
@@ -114,25 +105,26 @@ class PsycopgSyncDriver(
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
     ) -> Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]]]:
-        cursor = raw_driver_result
-        fetched_data: list[DictRow] = cursor.fetchall()
-        column_names = [col.name for col in cursor.description or []]
-        rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
+        with instrument_operation(self, "psycopg_wrap_select", "database"):
+            cursor = raw_driver_result
+            fetched_data: list[DictRow] = cursor.fetchall()
+            column_names = [col.name for col in cursor.description or []]
+            rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
 
-        if schema_type:
-            converted_rows = self.to_schema(rows_as_dicts, schema_type=schema_type)
-            return SelectResult(
-                rows=converted_rows,
+            if self.instrumentation_config.log_results_count:
+                logger.debug("Query returned %d rows", len(rows_as_dicts))
+
+            if schema_type:
+                return SelectResult[ModelDTOT](
+                    raw_result=cast("ModelDTOT", fetched_data),
+                    rows=rows_as_dicts,
+                    column_names=column_names,
+                )
+            return SelectResult[dict[str, Any]](
+                raw_result=fetched_data[0] if fetched_data else {},
+                rows=rows_as_dicts,
                 column_names=column_names,
-                raw_result=fetched_data,
-                statement=statement,
             )
-        return SelectResult(
-            rows=rows_as_dicts,
-            column_names=column_names,
-            raw_result=fetched_data,
-            statement=statement,
-        )
 
     def _wrap_execute_result(
         self,
@@ -140,30 +132,29 @@ class PsycopgSyncDriver(
         raw_driver_result: Any,
         **kwargs: Any,
     ) -> ExecuteResult[Any]:
-        operation_type = "UNKNOWN"
-        if statement.expression and hasattr(statement.expression, "key"):
-            operation_type = str(statement.expression.key).upper()
+        with instrument_operation(self, "psycopg_wrap_execute", "database"):
+            operation_type = "UNKNOWN"
+            if statement.expression and hasattr(statement.expression, "key"):
+                operation_type = str(statement.expression.key).upper()
 
-        rows_affected = -1
+            if isinstance(raw_driver_result, str):
+                return ExecuteResult(
+                    raw_result=raw_driver_result,
+                    rows_affected=0,
+                    operation_type=operation_type or "SCRIPT",
+                )
 
-        if isinstance(raw_driver_result, str):
+            cursor = raw_driver_result
+            rows_affected = getattr(cursor, "rowcount", -1)
+
+            if self.instrumentation_config.log_results_count:
+                logger.debug("Execute operation affected %d rows", rows_affected)
+
             return ExecuteResult(
-                raw_result=raw_driver_result,
-                rows_affected=0,
-                operation_type=operation_type or "SCRIPT",
-                statement=statement,
+                raw_result=None,
+                rows_affected=rows_affected,
+                operation_type=operation_type,
             )
-
-        cursor = raw_driver_result
-        if cursor and hasattr(cursor, "rowcount"):
-            rows_affected = cursor.rowcount
-
-        return ExecuteResult(
-            raw_result=None,
-            rows_affected=rows_affected,
-            operation_type=operation_type,
-            statement=statement,
-        )
 
 
 class PsycopgAsyncDriver(
@@ -209,46 +200,36 @@ class PsycopgAsyncDriver(
         is_script: bool = False,
         **kwargs: Any,
     ) -> Any:
-        conn = self._connection(connection)
-        final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
+        async with instrument_operation_async(self, "psycopg_async_execute", "database"):
+            conn = self._connection(connection)
+            final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
 
-        final_exec_params: Union[dict[str, Any], list[dict[str, Any]], None] = None
+            final_exec_params: Union[dict[str, Any], list[dict[str, Any]], None] = None
 
-        if is_many:
-            many_params_list: list[dict[str, Any]] = []
-            if parameters is not None and isinstance(parameters, Sequence):
-                for param_set in parameters:
-                    if isinstance(param_set, dict):
-                        many_params_list.append(param_set)
-                    else:
-                        logger.warning(
-                            "executemany with PYFORMAT_NAMED expects dict, got %s. Skipping.", type(param_set)
-                        )
-            final_exec_params = many_params_list
-        else:
-            single_params = statement.get_parameters(style=self._get_placeholder_style())
-            if single_params is None:
-                final_exec_params = {}
-            elif isinstance(single_params, dict):
-                final_exec_params = single_params
-            elif isinstance(single_params, (list, tuple)):
-                logger.warning("PYFORMAT_NAMED style resolved to sequence, expected dict. Adapting.")
-                final_exec_params = {f"param_{i}": v for i, v in enumerate(single_params)}
-            else:
-                logger.warning("PYFORMAT_NAMED style resolved to scalar, expected dict. Adapting.")
-                final_exec_params = {"param_0": single_params}
-
-        async with self._get_cursor(conn) as cursor:
-            logger.debug("Executing SQL (Psycopg Async): %s with params: %s", final_sql, final_exec_params)
-            if is_script:
-                script_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-                await cursor.execute(script_sql)
-                return cursor.statusmessage or "SCRIPT EXECUTED"
             if is_many:
-                await cursor.executemany(final_sql, cast("list[dict[str, Any]]", final_exec_params))
+                final_exec_params = []
+                if parameters and isinstance(parameters, Sequence):
+                    final_exec_params = [p for p in parameters if isinstance(p, dict)]
             else:
-                await cursor.execute(final_sql, cast("dict[str, Any]", final_exec_params))
-            return cursor
+                single_params = statement.get_parameters(style=self._get_placeholder_style())
+                final_exec_params = single_params if isinstance(single_params, dict) else {}
+
+            async with self._get_cursor(conn) as cursor:
+                if self.instrumentation_config.log_queries:
+                    logger.debug("Executing SQL: %s", final_sql)
+
+                if self.instrumentation_config.log_parameters and final_exec_params:
+                    logger.debug("Query parameters: %s", final_exec_params)
+
+                if is_script:
+                    script_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
+                    await cursor.execute(script_sql)
+                    return cursor.statusmessage or "SCRIPT EXECUTED"
+                if is_many:
+                    await cursor.executemany(final_sql, cast("list[dict[str, Any]]", final_exec_params))
+                else:
+                    await cursor.execute(final_sql, cast("dict[str, Any]", final_exec_params))
+                return cursor
 
     async def _wrap_select_result(
         self,
@@ -257,25 +238,26 @@ class PsycopgAsyncDriver(
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
     ) -> Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]]]:
-        cursor = raw_driver_result
-        fetched_data: list[DictRow] = await cursor.fetchall()
-        column_names = [col.name for col in cursor.description or []]
-        rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
+        async with instrument_operation_async(self, "psycopg_async_wrap_select", "database"):
+            cursor = raw_driver_result
+            fetched_data: list[DictRow] = await cursor.fetchall()
+            column_names = [col.name for col in cursor.description or []]
+            rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
 
-        if schema_type:
-            converted_rows = self.to_schema(rows_as_dicts, schema_type=schema_type)
-            return SelectResult(
-                rows=converted_rows,
+            if self.instrumentation_config.log_results_count:
+                logger.debug("Query returned %d rows", len(rows_as_dicts))
+
+            if schema_type:
+                return SelectResult[ModelDTOT](
+                    raw_result=cast("ModelDTOT", fetched_data),
+                    rows=rows_as_dicts,
+                    column_names=column_names,
+                )
+            return SelectResult[dict[str, Any]](
+                raw_result=fetched_data[0] if fetched_data else {},
+                rows=rows_as_dicts,
                 column_names=column_names,
-                raw_result=fetched_data,
-                statement=statement,
             )
-        return SelectResult(
-            rows=rows_as_dicts,
-            column_names=column_names,
-            raw_result=fetched_data,
-            statement=statement,
-        )
 
     async def _wrap_execute_result(
         self,
@@ -283,27 +265,26 @@ class PsycopgAsyncDriver(
         raw_driver_result: Any,
         **kwargs: Any,
     ) -> ExecuteResult[Any]:
-        operation_type = "UNKNOWN"
-        if statement.expression and hasattr(statement.expression, "key"):
-            operation_type = str(statement.expression.key).upper()
+        async with instrument_operation_async(self, "psycopg_async_wrap_execute", "database"):
+            operation_type = "UNKNOWN"
+            if statement.expression and hasattr(statement.expression, "key"):
+                operation_type = str(statement.expression.key).upper()
 
-        rows_affected = -1
+            if isinstance(raw_driver_result, str):
+                return ExecuteResult(
+                    raw_result=raw_driver_result,
+                    rows_affected=0,
+                    operation_type=operation_type or "SCRIPT",
+                )
 
-        if isinstance(raw_driver_result, str):
+            cursor = raw_driver_result
+            rows_affected = getattr(cursor, "rowcount", -1)
+
+            if self.instrumentation_config.log_results_count:
+                logger.debug("Execute operation affected %d rows", rows_affected)
+
             return ExecuteResult(
-                raw_result=raw_driver_result,
-                rows_affected=0,
-                operation_type=operation_type or "SCRIPT",
-                statement=statement,
+                raw_result=None,
+                rows_affected=rows_affected,
+                operation_type=operation_type,
             )
-
-        cursor = raw_driver_result
-        if cursor and hasattr(cursor, "rowcount"):
-            rows_affected = cursor.rowcount
-
-        return ExecuteResult(
-            raw_result=None,
-            rows_affected=rows_affected,
-            operation_type=operation_type,
-            statement=statement,
-        )

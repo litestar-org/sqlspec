@@ -21,6 +21,16 @@ if TYPE_CHECKING:
 
     from sqlspec.statement.sql import SQLConfig, Statement
 
+__all__ = (
+    "ProcessorProtocol",
+    "SQLValidation",
+    "SQLValidator",
+    "TransformerPipeline",
+    "UsesExpression",
+    "ValidationResult",
+)
+
+
 logger = logging.getLogger("sqlspec")
 
 ExpressionT = TypeVar("ExpressionT", bound="exp.Expression")

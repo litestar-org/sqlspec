@@ -10,6 +10,8 @@ from sqlspec.statement.pipelines.base import SQLValidation, ValidationResult
 if TYPE_CHECKING:
     from sqlspec.statement.sql import SQLConfig
 
+__all__ = ("RiskyProceduralCode",)
+
 
 class RiskyProceduralCode(SQLValidation):
     """Validates against the use of dangerous or suspicious SQL functions and procedures."""

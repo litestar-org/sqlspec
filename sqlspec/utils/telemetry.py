@@ -1,95 +1,219 @@
-from functools import wraps
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Optional,
-    TypeVar,
-    cast,
-)
-
-from typing_extensions import Concatenate, ParamSpec
+import logging
+import time
+from collections.abc import Generator
+from contextlib import asynccontextmanager, contextmanager
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
+    from collections.abc import AsyncGenerator
 
 __all__ = (
-    "instrument_async",
-    "instrument_sync",
+    "instrument_operation",
+    "instrument_operation_async",
 )
 
-P = ParamSpec("P")
-R = TypeVar("R")
-SelfT = TypeVar("SelfT")
+logger = logging.getLogger("sqlspec.telemetry")
 
 
-def instrument_sync(
-    operation_name: "Optional[str]" = None,
-    operation_type: "str" = "database",
-    **custom_tags: "Any",
-) -> "Callable[[Callable[Concatenate[SelfT, P], R]], Callable[Concatenate[SelfT, P], R]]":
-    """Decorator for adding instrumentation to synchronous driver methods.
+@contextmanager
+def instrument_operation(
+    driver_obj: Any,
+    operation_name: str,
+    operation_type: str = "database",
+    **custom_tags: Any,
+) -> Generator[None, None, None]:
+    """Context manager for instrumenting synchronous operations.
 
     Args:
-        operation_name: Optional name for the operation.
+        driver_obj: The driver object that has instrumentation capabilities.
+        operation_name: Name of the operation.
         operation_type: Type of operation, defaults to "database".
         custom_tags: Additional tags for the span.
 
-    Returns:
-        Callable: Decorated function that instruments the operation.
+    Yields:
+        None: Context for the instrumented operation.
     """
+    if not hasattr(driver_obj, "instrumentation_config"):
+        yield
+        return
 
-    def decorator(func: "Callable[Concatenate[SelfT, P], R]") -> "Callable[Concatenate[SelfT, P], R]":
-        @wraps(func)
-        def wrapper(self_obj: "SelfT", *args: "P.args", **kwargs: "P.kwargs") -> "R":
-            if not hasattr(self_obj, "instrument_sync_operation"):
-                return func(self_obj, *args, **kwargs)
+    start_time = time.monotonic()
 
-            span_name = operation_name or f"{self_obj.__class__.__name__}.{func.__name__}"
-            return cast(
-                "R",
-                self_obj.instrument_sync_operation(  # type: ignore[attr-defined]
-                    span_name, operation_type, custom_tags, func, self_obj, *args, **kwargs
-                ),
+    # Merge custom tags
+    final_custom_tags = getattr(driver_obj.instrumentation_config, "custom_tags", {}).copy()
+    final_custom_tags.update(custom_tags)
+
+    if driver_obj.instrumentation_config.log_queries:
+        logger.info("Starting %s operation", operation_name, extra={"operation_type": operation_type})
+
+    span = None
+    if hasattr(driver_obj, "_tracer") and driver_obj._tracer:
+        span = driver_obj._tracer.start_span(operation_name)
+        span.set_attribute("operation.type", operation_type)
+        span.set_attribute("db.system", getattr(driver_obj, "dialect", "unknown"))
+        span.set_attribute("service.name", driver_obj.instrumentation_config.service_name)
+
+        for key, value in final_custom_tags.items():
+            span.set_attribute(key, value)
+
+    try:
+        yield
+        latency = time.monotonic() - start_time
+
+        if driver_obj.instrumentation_config.log_runtime:
+            logger.info(
+                "Completed %s in %.3fms",
+                operation_name,
+                latency * 1000,
+                extra={"operation_type": operation_type, "latency_ms": latency * 1000, "status": "success"},
             )
 
-        return wrapper  # type: ignore[return-value]
+        # Update metrics
+        if hasattr(driver_obj, "_query_counter") and driver_obj._query_counter:
+            driver_obj._query_counter.labels(
+                operation=operation_name,
+                status="success",
+                db_system=getattr(driver_obj, "dialect", "unknown"),
+                **final_custom_tags,
+            ).inc()
 
-    return decorator
+        if hasattr(driver_obj, "_latency_histogram") and driver_obj._latency_histogram:
+            driver_obj._latency_histogram.labels(
+                operation=operation_name, db_system=getattr(driver_obj, "dialect", "unknown"), **final_custom_tags
+            ).observe(latency)
+
+        if span:
+            span.set_attribute("duration_ms", latency * 1000)
+
+    except Exception as e:
+        latency = time.monotonic() - start_time
+
+        if driver_obj.instrumentation_config.log_queries:
+            logger.exception(
+                "Error in %s after %.3fms",
+                operation_name,
+                latency * 1000,
+                extra={
+                    "operation_type": operation_type,
+                    "latency_ms": latency * 1000,
+                    "status": "error",
+                    "error_type": type(e).__name__,
+                },
+            )
+
+        if span:
+            span.record_exception(e)
+
+        if hasattr(driver_obj, "_error_counter") and driver_obj._error_counter:
+            driver_obj._error_counter.labels(
+                operation=operation_name,
+                error_type=type(e).__name__,
+                db_system=getattr(driver_obj, "dialect", "unknown"),
+                **final_custom_tags,
+            ).inc()
+        raise
+    finally:
+        if span:
+            span.end()
 
 
-def instrument_async(
-    operation_name: "Optional[str]" = None,
-    operation_type: "str" = "database",
-    **custom_tags: "Any",
-) -> "Callable[[Callable[Concatenate[SelfT, P], Awaitable[R]]], Callable[Concatenate[SelfT, P], Awaitable[R]]]":
-    """Decorator for adding instrumentation to asynchronous driver methods.
+@asynccontextmanager
+async def instrument_operation_async(
+    driver_obj: Any,
+    operation_name: str,
+    operation_type: str = "database",
+    **custom_tags: Any,
+) -> "AsyncGenerator[None, None]":
+    """Context manager for instrumenting asynchronous operations.
 
     Args:
-        operation_name: Optional name for the operation.
+        driver_obj: The driver object that has instrumentation capabilities.
+        operation_name: Name of the operation.
         operation_type: Type of operation, defaults to "database".
         custom_tags: Additional tags for the span.
 
-    Returns:
-        Callable: Decorated function that instruments the operation.
+    Yields:
+        None: Context for the instrumented operation.
     """
+    if not hasattr(driver_obj, "instrumentation_config"):
+        yield
+        return
 
-    def decorator(
-        func: "Callable[Concatenate[SelfT, P], Awaitable[R]]",  # pyright: ignore
-    ) -> "Callable[Concatenate[SelfT, P], Awaitable[R]]":  # pyright: ignore
-        @wraps(func)
-        async def wrapper(self_obj: "SelfT", *args: "P.args", **kwargs: "P.kwargs") -> "R":
-            if not hasattr(self_obj, "instrument_async_operation"):
-                return await func(self_obj, *args, **kwargs)
+    start_time = time.monotonic()
 
-            span_name = operation_name or f"{self_obj.__class__.__name__}.{func.__name__}"
-            return cast(
-                "R",
-                await self_obj.instrument_async_operation(  # type: ignore[attr-defined]
-                    span_name, operation_type, custom_tags, func, self_obj, *args, **kwargs
-                ),
+    # Merge custom tags
+    final_custom_tags = getattr(driver_obj.instrumentation_config, "custom_tags", {}).copy()
+    final_custom_tags.update(custom_tags)
+
+    if driver_obj.instrumentation_config.log_queries:
+        logger.info("Starting %s operation", operation_name, extra={"operation_type": operation_type})
+
+    span = None
+    if hasattr(driver_obj, "_tracer") and driver_obj._tracer:
+        span = driver_obj._tracer.start_span(operation_name)
+        span.set_attribute("operation.type", operation_type)
+        span.set_attribute("db.system", getattr(driver_obj, "dialect", "unknown"))
+        span.set_attribute("service.name", driver_obj.instrumentation_config.service_name)
+
+        for key, value in final_custom_tags.items():
+            span.set_attribute(key, value)
+
+    try:
+        yield
+        latency = time.monotonic() - start_time
+
+        if driver_obj.instrumentation_config.log_runtime:
+            logger.info(
+                "Completed %s in %.3fms",
+                operation_name,
+                latency * 1000,
+                extra={"operation_type": operation_type, "latency_ms": latency * 1000, "status": "success"},
             )
 
-        return wrapper  # type: ignore[return-value]
+        # Update metrics
+        if hasattr(driver_obj, "_query_counter") and driver_obj._query_counter:
+            driver_obj._query_counter.labels(
+                operation=operation_name,
+                status="success",
+                db_system=getattr(driver_obj, "dialect", "unknown"),
+                **final_custom_tags,
+            ).inc()
 
-    return decorator
+        if hasattr(driver_obj, "_latency_histogram") and driver_obj._latency_histogram:
+            driver_obj._latency_histogram.labels(
+                operation=operation_name, db_system=getattr(driver_obj, "dialect", "unknown"), **final_custom_tags
+            ).observe(latency)
+
+        if span:
+            span.set_attribute("duration_ms", latency * 1000)
+
+    except Exception as e:
+        latency = time.monotonic() - start_time
+
+        if driver_obj.instrumentation_config.log_queries:
+            logger.exception(
+                "Error in %s after %.3fms",
+                operation_name,
+                latency * 1000,
+                extra={
+                    "operation_type": operation_type,
+                    "latency_ms": latency * 1000,
+                    "status": "error",
+                    "error_type": type(e).__name__,
+                },
+            )
+
+        if span:
+            span.record_exception(e)
+
+        if hasattr(driver_obj, "_error_counter") and driver_obj._error_counter:
+            driver_obj._error_counter.labels(
+                operation=operation_name,
+                error_type=type(e).__name__,
+                db_system=getattr(driver_obj, "dialect", "unknown"),
+                **final_custom_tags,
+            ).inc()
+        raise
+    finally:
+        if span:
+            span.end()

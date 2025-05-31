@@ -10,6 +10,8 @@ if TYPE_CHECKING:
 
     from sqlspec.statement.sql import SQLConfig
 
+__all__ = ("TautologyConditions",)
+
 
 class TautologyConditions(SQLValidation):
     """Validates against tautological conditions often used in SQL injection.

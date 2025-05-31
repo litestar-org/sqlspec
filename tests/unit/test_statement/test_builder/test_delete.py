@@ -2,12 +2,12 @@
 
 from sqlglot import exp
 
-from sqlspec.statement.builder import DeleteBuilder, delete
+from sqlspec.statement.builder import DeleteBuilder
 
 
-def test_basic_delete() -> None:
+def test_basic_DeleteBuilder() -> None:
     """Test basic DELETE statement construction."""
-    builder = delete()
+    builder = DeleteBuilder()
     result = builder.from_("users").build()
 
     # Verify SQL structure
@@ -17,7 +17,7 @@ def test_basic_delete() -> None:
 
 def test_delete_with_where() -> None:
     """Test DELETE with WHERE clause."""
-    builder = delete()
+    builder = DeleteBuilder()
     result = builder.from_("users").where("age < 18").build()
 
     assert "DELETE" in result.sql
@@ -26,7 +26,7 @@ def test_delete_with_where() -> None:
 
 def test_delete_with_where_eq() -> None:
     """Test DELETE with parameterized WHERE equality."""
-    builder = delete()
+    builder = DeleteBuilder()
     result = builder.from_("users").where_eq("id", 123).build()
 
     assert "DELETE" in result.sql
@@ -38,7 +38,7 @@ def test_delete_with_where_eq() -> None:
 
 def test_delete_with_where_in() -> None:
     """Test DELETE with WHERE IN clause."""
-    builder = delete()
+    builder = DeleteBuilder()
     result = builder.from_("users").where_in("status", ["inactive", "banned"]).build()
 
     assert "DELETE" in result.sql
@@ -50,7 +50,7 @@ def test_delete_with_where_in() -> None:
 
 def test_delete_parameter_binding() -> None:
     """Test that values are properly parameterized."""
-    builder = delete()
+    builder = DeleteBuilder()
     result = builder.from_("users").where_eq("name", "'; DROP TABLE users; --").build()
 
     # Verify SQL injection is prevented
@@ -61,7 +61,7 @@ def test_delete_parameter_binding() -> None:
 
 def test_delete_with_expression_column() -> None:
     """Test DELETE with sqlglot expression as column."""
-    builder = delete()
+    builder = DeleteBuilder()
     col_expr = exp.column("status")
     result = builder.from_("users").where_eq(col_expr, "deleted").build()
 
@@ -72,7 +72,7 @@ def test_delete_with_expression_column() -> None:
 
 def test_delete_chaining() -> None:
     """Test method chaining returns builder instance."""
-    builder = delete()
+    builder = DeleteBuilder()
 
     assert isinstance(builder.from_("users"), DeleteBuilder)
     assert isinstance(builder.where("id = 1"), DeleteBuilder)
@@ -82,7 +82,7 @@ def test_delete_chaining() -> None:
 
 def test_delete_multiple_where_conditions() -> None:
     """Test DELETE with multiple WHERE conditions."""
-    builder = delete()
+    builder = DeleteBuilder()
     result = (
         builder.from_("users")
         .where("age < 18")
@@ -100,7 +100,7 @@ def test_delete_multiple_where_conditions() -> None:
 
 def test_delete_string_representation() -> None:
     """Test string representation of DeleteBuilder."""
-    builder = delete()
+    builder = DeleteBuilder()
     builder.from_("users")
 
     sql_str = str(builder)
@@ -110,7 +110,7 @@ def test_delete_string_representation() -> None:
 
 def test_delete_with_complex_conditions() -> None:
     """Test DELETE with complex WHERE conditions."""
-    builder = delete()
+    builder = DeleteBuilder()
     result = builder.from_("users").where("created_at < '2020-01-01' AND last_login IS NULL").build()
 
     assert "DELETE" in result.sql
@@ -120,7 +120,7 @@ def test_delete_with_complex_conditions() -> None:
 
 def test_delete_table_storage() -> None:
     """Test that table name is stored internally."""
-    builder = delete()
+    builder = DeleteBuilder()
     builder.from_("users")
 
     assert builder._table == "users"
@@ -128,7 +128,7 @@ def test_delete_table_storage() -> None:
 
 def test_delete_condition_chaining() -> None:
     """Test that WHERE conditions are properly chained."""
-    builder = delete()
+    builder = DeleteBuilder()
     result = builder.from_("users").where_eq("status", "inactive").where("age > 65").build()
 
     # Both conditions should be present
@@ -140,7 +140,7 @@ def test_delete_condition_chaining() -> None:
 
 def test_delete_where_in_with_tuples() -> None:
     """Test DELETE with WHERE IN using tuples."""
-    builder = delete()
+    builder = DeleteBuilder()
     result = builder.from_("users").where_in("id", (1, 2, 3, 4, 5)).build()
 
     assert "DELETE" in result.sql
@@ -151,7 +151,7 @@ def test_delete_where_in_with_tuples() -> None:
 
 def test_delete_empty_where_in_list() -> None:
     """Test DELETE with empty WHERE IN list."""
-    builder = delete()
+    builder = DeleteBuilder()
     result = builder.from_("users").where_in("id", []).build()
 
     assert "DELETE" in result.sql

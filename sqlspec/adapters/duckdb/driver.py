@@ -14,6 +14,7 @@ from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
 from sqlspec.typing import DictRow, ModelDTOT, SQLParameterType
+from sqlspec.utils.telemetry import instrument_sync
 
 if TYPE_CHECKING:
     from pyarrow import Table as ArrowTable
@@ -74,6 +75,7 @@ class DuckDBDriver(
     def _get_parameter_style(self) -> ParameterStyle:
         return ParameterStyle.QMARK
 
+    @instrument_sync(operation_type="database")
     def execute(
         self,
         statement: "Union[SQL, Statement, QueryBuilder[Any]]",
@@ -167,6 +169,7 @@ class DuckDBDriver(
                 operation_type=operation_type,
             )
 
+    @instrument_sync(operation_type="database")
     def execute_many(
         self,
         statement: "Union[SQL, Statement, QueryBuilder[ExecuteResult[Any]]]",
@@ -278,6 +281,7 @@ class DuckDBDriver(
             operation_type=operation_type,
         )
 
+    @instrument_sync(operation_type="database")
     def execute_script(
         self,
         statement: "Statement",
@@ -322,6 +326,7 @@ class DuckDBDriver(
             cursor.execute(final_sql)
             return "SCRIPT EXECUTED"
 
+    @instrument_sync(operation_type="database")
     def select_to_arrow(
         self,
         statement: "Statement",

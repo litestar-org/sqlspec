@@ -10,6 +10,8 @@ if TYPE_CHECKING:
 
     from sqlspec.statement.sql import SQLConfig
 
+__all__ = ("RiskyDML",)
+
 
 class RiskyDML(SQLValidation):
     """Validates DML statements for risky operations.

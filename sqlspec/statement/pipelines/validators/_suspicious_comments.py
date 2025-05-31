@@ -11,6 +11,8 @@ if TYPE_CHECKING:
 
     from sqlspec.statement.sql import SQLConfig
 
+__all__ = ("SuspiciousComments",)
+
 
 class SuspiciousComments(SQLValidation):
     """Validates SQL comments for suspicious patterns."""
