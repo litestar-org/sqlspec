@@ -1,3 +1,6 @@
+"""DuckDB database configuration using TypedDict for better maintainability."""
+
+import logging
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict
 
@@ -10,13 +13,20 @@ from sqlspec.typing import DictRow, Empty
 
 if TYPE_CHECKING:
     from collections.abc import Generator
+    from contextlib import AbstractContextManager
 
+logger = logging.getLogger("sqlspec.adapters.duckdb")
 
-__all__ = ("DuckDBConfig", "DuckDBConnectionConfig")
+__all__ = (
+    "DuckDBConfig",
+    "DuckDBConnectionConfig",
+    "DuckDBExtensionConfig",
+    "DuckDBSecretConfig",
+)
 
 
 class DuckDBExtensionConfig(TypedDict, total=False):
-    """DuckDB extension configuration."""
+    """DuckDB extension configuration for auto-management."""
 
     name: str
     """Name of the extension to install/load."""
@@ -25,14 +35,17 @@ class DuckDBExtensionConfig(TypedDict, total=False):
     """Specific version of the extension."""
 
     repository: NotRequired[str]
-    """Custom repository for the extension."""
+    """Repository for the extension (core, community, or custom URL)."""
+
+    force_install: NotRequired[bool]
+    """Force reinstallation of the extension."""
 
 
 class DuckDBSecretConfig(TypedDict, total=False):
     """DuckDB secret configuration for AI/API integrations."""
 
     secret_type: str
-    """Type of secret (e.g., 'open_prompt', 'aws', 'azure')."""
+    """Type of secret (e.g., 'openai', 'aws', 'azure', 'gcp')."""
 
     name: str
     """Name of the secret."""
@@ -40,13 +53,17 @@ class DuckDBSecretConfig(TypedDict, total=False):
     value: dict[str, Any]
     """Secret configuration values."""
 
+    scope: NotRequired[str]
+    """Scope of the secret (LOCAL or PERSISTENT)."""
+
 
 class DuckDBConnectionConfig(TypedDict, total=False):
     """DuckDB connection configuration as TypedDict.
 
-    All parameters for duckdb.connect().
+    All parameters for duckdb.connect() and configuration settings.
     """
 
+    # Core connection parameters
     database: NotRequired[str]
     """Path to the DuckDB database file. Use ':memory:' for in-memory database."""
 
@@ -54,18 +71,120 @@ class DuckDBConnectionConfig(TypedDict, total=False):
     """Whether to open the database in read-only mode."""
 
     config: NotRequired[dict[str, Any]]
-    """DuckDB configuration options."""
+    """DuckDB configuration options passed directly to the connection."""
+
+    # Resource management
+    memory_limit: NotRequired[str]
+    """Maximum memory usage (e.g., '1GB', '80% of RAM')."""
+
+    threads: NotRequired[int]
+    """Number of threads to use for parallel query execution."""
+
+    temp_directory: NotRequired[str]
+    """Directory for temporary files during spilling."""
+
+    max_temp_directory_size: NotRequired[str]
+    """Maximum size of temp directory (e.g., '1GB')."""
+
+    # Extension configuration
+    autoload_known_extensions: NotRequired[bool]
+    """Automatically load known extensions when needed."""
+
+    autoinstall_known_extensions: NotRequired[bool]
+    """Automatically install known extensions when needed."""
+
+    allow_community_extensions: NotRequired[bool]
+    """Allow community-built extensions."""
+
+    allow_unsigned_extensions: NotRequired[bool]
+    """Allow unsigned extensions (development only)."""
+
+    extension_directory: NotRequired[str]
+    """Directory to store extensions."""
+
+    custom_extension_repository: NotRequired[str]
+    """Custom endpoint for extension installation."""
+
+    autoinstall_extension_repository: NotRequired[str]
+    """Override endpoint for autoloading extensions."""
+
+    # Security and access
+    allow_persistent_secrets: NotRequired[bool]
+    """Enable persistent secret storage."""
+
+    enable_external_access: NotRequired[bool]
+    """Allow external file system access."""
+
+    secret_directory: NotRequired[str]
+    """Directory for persistent secrets."""
+
+    # Performance optimizations
+    enable_object_cache: NotRequired[bool]
+    """Enable caching of objects (e.g., Parquet metadata)."""
+
+    parquet_metadata_cache: NotRequired[bool]
+    """Cache Parquet metadata for repeated access."""
+
+    enable_external_file_cache: NotRequired[bool]
+    """Cache external files in memory."""
+
+    checkpoint_threshold: NotRequired[str]
+    """WAL size threshold for automatic checkpoints."""
+
+    # User experience
+    enable_progress_bar: NotRequired[bool]
+    """Show progress bar for long queries."""
+
+    progress_bar_time: NotRequired[int]
+    """Time in milliseconds before showing progress bar."""
+
+    # Logging and debugging
+    enable_logging: NotRequired[bool]
+    """Enable DuckDB logging."""
+
+    log_query_path: NotRequired[str]
+    """Path to log queries for debugging."""
+
+    logging_level: NotRequired[str]
+    """Log level (DEBUG, INFO, WARNING, ERROR)."""
+
+    # Data processing settings
+    preserve_insertion_order: NotRequired[bool]
+    """Whether to preserve insertion order in results."""
+
+    default_null_order: NotRequired[str]
+    """Default NULL ordering (NULLS_FIRST, NULLS_LAST)."""
+
+    default_order: NotRequired[str]
+    """Default sort order (ASC, DESC)."""
+
+    ieee_floating_point_ops: NotRequired[bool]
+    """Use IEEE 754 compliant floating point operations."""
+
+    # File format settings
+    binary_as_string: NotRequired[bool]
+    """Interpret binary data as string in Parquet files."""
+
+    arrow_large_buffer_size: NotRequired[bool]
+    """Use large Arrow buffers for strings, blobs, etc."""
+
+    # Error handling
+    errors_as_json: NotRequired[bool]
+    """Return errors in JSON format."""
 
 
 class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
-    """Enhanced DuckDB configuration with extension autoconfiguration and intelligent features.
+    """Enhanced DuckDB configuration with intelligent features and modern architecture.
 
-    Supports the missing DuckDB production features including:
+    DuckDB is an embedded analytical database that doesn't require connection pooling.
+    This configuration supports all of DuckDB's unique features including:
+
     - Extension auto-management and installation
     - Secret management for API integrations
-    - Connection lifecycle hooks for custom setup
-    - DuckDB autoconfiguration settings
-    - Performance optimizations for production
+    - Intelligent autoconfiguration settings
+    - High-performance Arrow integration
+    - Direct file querying capabilities
+    - Performance optimizations for analytics workloads
     """
 
     __is_async__: ClassVar[bool] = False
@@ -77,115 +196,51 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         statement_config: Optional[SQLConfig] = None,
         instrumentation: Optional[InstrumentationConfig] = None,
         default_row_type: type[DictRow] = DictRow,  # type: ignore[assignment]
-        # Intelligent Features from Main Branch
+        # DuckDB intelligent features
         extensions: Optional[list[DuckDBExtensionConfig]] = None,
         secrets: Optional[list[DuckDBSecretConfig]] = None,
         on_connection_create: Optional[Callable[[DuckDBConnection], None]] = None,
-        # DuckDB Autoconfiguration (Missing Production Features)
-        autoload_known_extensions: bool = True,
-        autoinstall_known_extensions: bool = False,
-        extension_directory: Optional[str] = None,
-        custom_extension_repository: Optional[str] = None,
-        autoinstall_extension_repository: Optional[str] = None,
-        # Security Settings
-        allow_community_extensions: bool = True,
-        allow_unsigned_extensions: bool = False,
-        allow_persistent_secrets: bool = True,
-        enable_external_access: bool = True,
-        # Performance Settings
-        memory_limit: Optional[str] = None,
-        threads: Optional[int] = None,
-        temp_directory: Optional[str] = None,
-        # Intelligent Caching
-        parquet_metadata_cache: bool = True,
-        enable_external_file_cache: bool = True,
-        # User Experience
-        enable_progress_bar: bool = True,
-        enable_logging: bool = False,
-        log_query_path: Optional[str] = None,
     ) -> None:
-        """Initialize enhanced DuckDB configuration with intelligent features.
+        """Initialize DuckDB configuration with intelligent features.
 
         Args:
-            connection_config: DuckDB connection parameters
+            connection_config: DuckDB connection and configuration parameters
             statement_config: Default SQL statement configuration
             instrumentation: Instrumentation configuration
             default_row_type: Default row type for results
+            extensions: List of extensions to auto-install/load
+            secrets: List of secrets for AI/API integrations
+            on_connection_create: Callback executed when connection is created
 
-            # Intelligent Features from Main Branch
-            extensions: List of extensions to auto-install/load (e.g., [{"name": "open_prompt"}])
-            secrets: List of secrets for AI/API integrations (e.g., OpenAI, Gemini)
-            on_connection_create: Callback to run when connection is created (for macros, etc.)
-
-            # DuckDB Autoconfiguration (Production Features)
-            autoload_known_extensions: Automatically load known extensions when needed
-            autoinstall_known_extensions: Automatically install known extensions when needed
-            extension_directory: Directory to store extensions (important for production)
-            custom_extension_repository: Custom endpoint for extension installation
-            autoinstall_extension_repository: Override endpoint for autoloading
-
-            # Security Controls
-            allow_community_extensions: Allow community-built extensions
-            allow_unsigned_extensions: Allow unsigned extensions (dev only)
-            allow_persistent_secrets: Enable persistent secret storage
-            enable_external_access: Allow external file system access
-
-            # Performance & Memory
-            memory_limit: Maximum memory usage (e.g., '1GB', '80% of RAM')
-            threads: Number of threads to use
-            temp_directory: Directory for temporary files
-
-            # Intelligent Caching (Performance Boost)
-            parquet_metadata_cache: Cache Parquet metadata for repeated access
-            enable_external_file_cache: Cache external files in memory
-
-            # User Experience
-            enable_progress_bar: Show progress bar for long queries
-            enable_logging: Enable DuckDB logging
-            log_query_path: Path to log queries for debugging
+        Example:
+            >>> config = DuckDBConfig(
+            ...     connection_config={
+            ...         "database": ":memory:",
+            ...         "memory_limit": "1GB",
+            ...         "threads": 4,
+            ...         "autoload_known_extensions": True,
+            ...     },
+            ...     extensions=[
+            ...         {"name": "spatial", "repository": "core"},
+            ...         {"name": "aws", "repository": "core"},
+            ...     ],
+            ...     secrets=[
+            ...         {
+            ...             "secret_type": "openai",
+            ...             "name": "my_openai_secret",
+            ...             "value": {"api_key": "sk-..."},
+            ...         }
+            ...     ],
+            ... )
         """
         self.connection_config = connection_config or {"database": ":memory:"}
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
-        # Intelligent features from main branch
+        # DuckDB intelligent features
         self.extensions = extensions or []
         self.secrets = secrets or []
         self.on_connection_create = on_connection_create
-
-        # Store the intelligent DuckDB configuration
-        self.duckdb_settings: dict[str, Any] = {
-            # Extension autoconfiguration - these were missing!
-            "autoload_known_extensions": autoload_known_extensions,
-            "autoinstall_known_extensions": autoinstall_known_extensions,
-            "allow_community_extensions": allow_community_extensions,
-            "allow_unsigned_extensions": allow_unsigned_extensions,
-            # Security and access
-            "allow_persistent_secrets": allow_persistent_secrets,
-            "enable_external_access": enable_external_access,
-            # Performance optimizations
-            "parquet_metadata_cache": parquet_metadata_cache,
-            "enable_external_file_cache": enable_external_file_cache,
-            # User experience
-            "enable_progress_bar": enable_progress_bar,
-            "enable_logging": enable_logging,
-        }
-
-        # Add optional settings
-        if extension_directory:
-            self.duckdb_settings["extension_directory"] = extension_directory
-        if custom_extension_repository:
-            self.duckdb_settings["custom_extension_repository"] = custom_extension_repository
-        if autoinstall_extension_repository:
-            self.duckdb_settings["autoinstall_extension_repository"] = autoinstall_extension_repository
-        if memory_limit:
-            self.duckdb_settings["memory_limit"] = memory_limit
-        if threads:
-            self.duckdb_settings["threads"] = threads
-        if temp_directory:
-            self.duckdb_settings["temp_directory"] = temp_directory
-        if log_query_path:
-            self.duckdb_settings["log_query_path"] = log_query_path
 
         super().__init__(
             instrumentation=instrumentation or InstrumentationConfig(),
@@ -204,92 +259,168 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
     @property
     def connection_config_dict(self) -> dict[str, Any]:
         """Return the connection configuration as a dict."""
-        # Filter out empty values and return clean dict
-        return {k: v for k, v in self.connection_config.items() if v is not Empty}
+        # Filter out empty values and prepare config for duckdb.connect()
+        config_dict = {k: v for k, v in self.connection_config.items() if v is not Empty}
+
+        # Extract DuckDB-specific settings into the config parameter
+        duckdb_settings = {}
+        connection_params = {}
+
+        # Parameters that go directly to duckdb.connect()
+        direct_params = {"database", "read_only", "config"}
+
+        for key, value in config_dict.items():
+            if key in direct_params:
+                connection_params[key] = value
+            else:
+                # All other parameters are DuckDB configuration settings
+                duckdb_settings[key] = value
+
+        # Merge user config with our settings
+        existing_config = connection_params.get("config", {})
+        if duckdb_settings:
+            existing_config.update(duckdb_settings)
+            connection_params["config"] = existing_config
+
+        return connection_params
 
     def create_connection(self) -> DuckDBConnection:
         """Create and return a DuckDB connection with intelligent configuration applied."""
         import duckdb
 
-        config = self.connection_config_dict
-        connection = duckdb.connect(**config)
+        if self.instrumentation.log_pool_operations:
+            logger.info("Creating DuckDB connection", extra={"adapter": "duckdb"})
 
-        # Apply the intelligent DuckDB settings
-        for setting, value in self.duckdb_settings.items():
-            try:
-                if isinstance(value, bool):
-                    connection.execute(f"SET {setting} = {str(value).lower()}")
-                elif isinstance(value, (int, float)):
-                    connection.execute(f"SET {setting} = {value}")
-                elif isinstance(value, str):
-                    connection.execute(f"SET {setting} = '{value}'")
-            except Exception:
-                # Some settings might not be available in all DuckDB versions
-                # Gracefully continue rather than failing
-                pass
+        try:
+            config_dict = self.connection_config_dict
+            connection = duckdb.connect(**config_dict)
 
-        # Install and load extensions (intelligent feature from main branch)
-        for ext_config in self.extensions:
-            try:
-                ext_name = ext_config.get("name")
-                if ext_name:
-                    # Try to install if autoinstall is enabled
-                    if self.duckdb_settings.get("autoinstall_known_extensions", False):
-                        connection.execute(f"INSTALL {ext_name}")
+            if self.instrumentation.log_pool_operations:
+                logger.info("DuckDB connection created successfully", extra={"adapter": "duckdb"})
+
+            # Install and load extensions
+            for ext_config in self.extensions:
+                ext_name = None
+                try:
+                    ext_name = ext_config.get("name")
+                    if not ext_name:
+                        continue
+
+                    # Install extension if needed
+                    install_kwargs = {}
+                    if "version" in ext_config:
+                        install_kwargs["version"] = ext_config["version"]
+                    if "repository" in ext_config:
+                        install_kwargs["repository"] = ext_config["repository"]
+                    if ext_config.get("force_install", False):
+                        install_kwargs["force_install"] = True
+
+                    if install_kwargs or self.connection_config.get("autoinstall_known_extensions", False):
+                        connection.install_extension(ext_name, **install_kwargs)
+
                     # Load the extension
-                    connection.execute(f"LOAD {ext_name}")
-            except Exception:
-                # Extension might already be installed or not available
-                pass
+                    connection.load_extension(ext_name)
 
-        # Create secrets for AI/API integrations (intelligent feature from main branch)
-        for secret_config in self.secrets:
-            try:
-                secret_type = secret_config.get("secret_type")
-                secret_name = secret_config.get("name")
-                secret_value = secret_config.get("value")
+                    if self.instrumentation.log_pool_operations:
+                        logger.debug(f"Loaded DuckDB extension: {ext_name}", extra={"adapter": "duckdb"})
 
-                if secret_type and secret_name and secret_value:
-                    # Build the secret creation SQL
-                    value_pairs = []
-                    for key, value in secret_value.items():
-                        value_pairs.append(f"'{key}' = '{value}'")
-                    value_string = ", ".join(value_pairs)
-
-                    connection.execute(f"""
-                        CREATE SECRET {secret_name} (
-                            TYPE {secret_type},
-                            {value_string}
+                except Exception as e:
+                    if self.instrumentation.log_pool_operations and ext_name:
+                        logger.warning(
+                            f"Failed to load DuckDB extension: {ext_name}", extra={"adapter": "duckdb", "error": str(e)}
                         )
-                    """)
-            except Exception:
-                # Secret might already exist or have issues
-                pass
 
-        # Run connection creation hook (intelligent feature from main branch)
-        if self.on_connection_create:
-            try:
-                self.on_connection_create(connection)
-            except Exception:
-                # Don't fail connection creation if hook fails
-                pass
+            # Create secrets for AI/API integrations
+            for secret_config in self.secrets:
+                secret_name = None
+                try:
+                    secret_type = secret_config.get("secret_type")
+                    secret_name = secret_config.get("name")
+                    secret_value = secret_config.get("value")
 
-        return connection
+                    if secret_type and secret_name and secret_value:
+                        # Build the secret creation SQL
+                        value_pairs = []
+                        for key, value in secret_value.items():
+                            # Escape single quotes in values
+                            escaped_value = str(value).replace("'", "''")
+                            value_pairs.append(f"'{key}' = '{escaped_value}'")
+                        value_string = ", ".join(value_pairs)
+
+                        # Add scope if specified
+                        scope_clause = ""
+                        if "scope" in secret_config:
+                            scope_clause = f" SCOPE '{secret_config['scope']}'"
+
+                        sql = f"""
+                            CREATE SECRET {secret_name} (
+                                TYPE {secret_type},
+                                {value_string}
+                            ){scope_clause}
+                        """
+                        connection.execute(sql)
+
+                        if self.instrumentation.log_pool_operations:
+                            logger.debug(f"Created DuckDB secret: {secret_name}", extra={"adapter": "duckdb"})
+
+                except Exception as e:
+                    if self.instrumentation.log_pool_operations and secret_name:
+                        logger.warning(
+                            f"Failed to create DuckDB secret: {secret_name}",
+                            extra={"adapter": "duckdb", "error": str(e)},
+                        )
+
+            # Run connection creation hook
+            if self.on_connection_create:
+                try:
+                    self.on_connection_create(connection)
+                    if self.instrumentation.log_pool_operations:
+                        logger.debug("Executed connection creation hook", extra={"adapter": "duckdb"})
+                except Exception as e:
+                    if self.instrumentation.log_pool_operations:
+                        logger.warning("Connection creation hook failed", extra={"adapter": "duckdb", "error": str(e)})
+
+            return connection
+
+        except Exception as e:
+            logger.exception("Failed to create DuckDB connection", extra={"adapter": "duckdb", "error": str(e)})
+            raise
 
     @contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[DuckDBConnection, None, None]":
-        """Provide a DuckDB connection context manager."""
+        """Provide a DuckDB connection context manager.
+
+        Args:
+            *args: Additional arguments.
+            **kwargs: Additional keyword arguments.
+
+        Yields:
+            A DuckDB connection instance.
+        """
         connection = self.create_connection()
         try:
             yield connection
         finally:
             connection.close()
 
-    @contextmanager
-    def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[DuckDBDriver, None, None]":
-        """Provide a DuckDB driver session context manager."""
-        with self.provide_connection(*args, **kwargs) as connection:
-            yield self.driver_type(
-                connection=connection,
-                config=self.statement_config,
-            )
+    def provide_session(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[DuckDBDriver]":
+        """Provide a DuckDB driver session context manager.
+
+        Args:
+            *args: Additional arguments.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            A context manager that yields a DuckDBDriver instance.
+        """
+
+        @contextmanager
+        def session_manager() -> "Generator[DuckDBDriver, None, None]":
+            with self.provide_connection(*args, **kwargs) as connection:
+                driver = self.driver_type(
+                    connection=connection,
+                    config=self.statement_config,
+                )
+                yield driver
+
+        return session_manager()

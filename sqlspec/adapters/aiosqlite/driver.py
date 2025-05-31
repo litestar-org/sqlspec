@@ -1,22 +1,23 @@
 # ruff: noqa: PLR6301
 import logging
-from collections.abc import Iterable, Sequence
-from dataclasses import replace
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
+from collections.abc import AsyncGenerator, Sequence
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
 import aiosqlite
+import pyarrow as pa
 
+from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import AsyncDriverAdapterProtocol
-from sqlspec.statement.builder import QueryBuilder
 from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ExecuteResult, SelectResult
-from sqlspec.statement.sql import SQL, SQLConfig, Statement
-from sqlspec.utils.telemetry import instrument_async
+from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
+from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.typing import DictRow, ModelDTOT, SQLParameterType
+from sqlspec.utils.telemetry import instrument_operation_async
 
 if TYPE_CHECKING:
     from sqlspec.statement.filters import StatementFilter
-    from sqlspec.typing import DictRow, ModelDTOT, SQLParameterType
 
 __all__ = ("AiosqliteConnection", "AiosqliteDriver")
 
@@ -26,330 +27,239 @@ AiosqliteConnection = aiosqlite.Connection
 
 
 class AiosqliteDriver(
-    SQLTranslatorMixin["AiosqliteConnection"],
-    AsyncDriverAdapterProtocol[AiosqliteConnection],
-    AsyncArrowMixin["AiosqliteConnection"],
+    AsyncDriverAdapterProtocol[AiosqliteConnection, DictRow],
+    AsyncArrowMixin[AiosqliteConnection],
+    SQLTranslatorMixin[AiosqliteConnection],
     ResultConverter,
 ):
-    """SQLite Async Driver Adapter.
+    """Aiosqlite SQLite Driver Adapter. Modern protocol implementation."""
 
-    This driver implements the new unified SQLSpec protocol with the core 3 methods:
-    - execute() - Universal method for all SQL operations
-    - execute_many() - Batch operations
-    - execute_script() - Multi-statement scripts
-
-    Enhanced Features:
-    - Full SQLStatement integration with filters and validation
-    - SQLite-specific parameter style handling (qmark: ?)
-    - Comprehensive parameter validation and security checks
-    - Support for filter composition (pagination, search, etc.)
-    """
-
-    connection: "AiosqliteConnection"
-    __supports_arrow__: ClassVar[bool] = False  # SQLite doesn't support Arrow natively
     dialect: str = "sqlite"
+    __supports_arrow__: ClassVar[bool] = True
 
-    def __init__(self, connection: AiosqliteConnection, config: Optional[SQLConfig] = None) -> None:
-        """Initialize the aiosqlite driver adapter."""
-        super().__init__(connection, config=config)
+    def __init__(
+        self,
+        connection: AiosqliteConnection,
+        config: Optional[SQLConfig] = None,
+        instrumentation_config: Optional[InstrumentationConfig] = None,
+    ) -> None:
+        super().__init__(
+            connection=connection,
+            config=config,
+            instrumentation_config=instrumentation_config,
+            default_row_type=DictRow,
+        )
 
-    def _get_parameter_style(self) -> ParameterStyle:
-        """Return the placeholder style for SQLite (qmark: ?)."""
+    def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.QMARK
 
-    @instrument_async(operation_type="database")
-    async def execute(
+    @asynccontextmanager
+    async def _get_cursor(
+        self, connection: Optional[AiosqliteConnection] = None
+    ) -> AsyncGenerator[aiosqlite.Cursor, None]:
+        conn_to_use = connection or self.connection
+        conn_to_use.row_factory = aiosqlite.Row
+        cursor = await conn_to_use.cursor()
+        try:
+            yield cursor
+        finally:
+            await cursor.close()
+
+    async def _execute_impl(
         self,
-        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
-        parameters: Optional["SQLParameterType"] = None,
-        *filters: "StatementFilter",
-        schema_type: "Optional[type[ModelDTOT]]" = None,
+        statement: SQL,
+        parameters: Optional[SQLParameterType] = None,
         connection: Optional[AiosqliteConnection] = None,
         config: Optional[SQLConfig] = None,
+        is_many: bool = False,
+        is_script: bool = False,
         **kwargs: Any,
-    ) -> "Union[SelectResult[ModelDTOT], SelectResult[DictRow], ExecuteResult[Any]]":
-        """Execute a SQL statement and return a StatementResult.
+    ) -> Any:
+        async with instrument_operation_async(self, "aiosqlite_execute", "database"):
+            conn = self._connection(connection)
 
-        This is the unified method for all SQL operations (SELECT, INSERT, UPDATE, DELETE).
-        Use the StatementResult methods to extract the data you need.
+            if is_script:
+                final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
+                if self.instrumentation_config.log_queries:
+                    logger.debug("Executing SQL script: %s", final_sql)
+                async with self._get_cursor(conn) as cursor:
+                    await cursor.executescript(final_sql)
+                    await conn.commit()
+                return "SCRIPT EXECUTED"
 
-        Args:
-            statement: The SQL statement or query builder to execute.
-            parameters: Parameters for the statement.
-            *filters: Statement filters to apply (e.g., pagination, search filters).
-            schema_type: Optional Pydantic model or dataclass to map results to.
-            connection: Optional connection override.
-            config: Optional statement configuration.
-            **kwargs: Additional keyword arguments.
+            final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
 
-        Returns:
-            A StatementResult containing the operation results.
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL: %s", final_sql)
 
-        Example:
-            >>> from sqlspec.sql.filters import LimitOffset, SearchFilter
-            >>> # Basic query
-            >>> result = await driver.execute(
-            ...     "SELECT * FROM users WHERE id = ?", [123]
-            ... )
-            >>> # Query with filters
-            >>> result = await driver.execute(
-            ...     "SELECT * FROM users",
-            ...     LimitOffset(limit=10, offset=0),
-            ...     SearchFilter(field_name="name", value="John"),
-            ... )
-        """
-        if schema_type is not None:
-            logger.warning("schema_type parameter is not yet fully implemented for aiosqlite driver's execute method.")
+            if is_many:
+                params_list: list[tuple[Any, ...]] = []
+                if parameters and isinstance(parameters, Sequence):
+                    for param_set in parameters:
+                        if isinstance(param_set, (list, tuple)):
+                            params_list.append(tuple(param_set))
+                        elif param_set is None:
+                            params_list.append(())
+                        else:
+                            params_list.append((param_set,))
 
-        conn: AiosqliteConnection = self._connection(connection)
-        conn.row_factory = aiosqlite.Row
-        effective_config = config or self.config
+                if self.instrumentation_config.log_parameters and params_list:
+                    logger.debug("Query parameters (batch): %s", params_list)
 
-        # Process the input statement
-        current_stmt: SQL
-        if isinstance(statement, QueryBuilder):
-            base_sql_obj = statement.to_statement(config=effective_config)
-            current_stmt = SQL(
-                base_sql_obj, parameters, *filters, dialect=self.dialect, config=effective_config, **kwargs
-            )
-        elif isinstance(statement, SQL):
-            current_stmt = SQL(statement, parameters, *filters, dialect=self.dialect, config=effective_config, **kwargs)
-        else:  # Raw Statement (str or sqlglot.Expression)
-            current_stmt = SQL(statement, parameters, *filters, dialect=self.dialect, config=effective_config, **kwargs)
-
-        current_stmt.validate()
-        parameter_style = self._get_parameter_style()
-        final_sql = current_stmt.to_sql(placeholder_style=parameter_style)
-        ordered_params = current_stmt.get_parameters(style=parameter_style)
-
-        # Convert parameters to tuple format for aiosqlite using simplified logic
-        db_params_tuple: tuple[Any, ...] = ()
-        if ordered_params is not None:
-            if isinstance(ordered_params, list) or (
-                isinstance(ordered_params, Iterable) and not isinstance(ordered_params, (str, bytes))
-            ):
-                db_params_tuple = tuple(ordered_params)
+                async with self._get_cursor(conn) as cursor:
+                    await cursor.executemany(final_sql, params_list)
+                    await conn.commit()
+                    return cursor.rowcount if cursor.rowcount != -1 else len(params_list)
             else:
-                db_params_tuple = (ordered_params,)
+                # Single execution
+                ordered_params = statement.get_parameters(style=self._get_placeholder_style())
+                db_params: tuple[Any, ...] = ()
 
-        cursor: Optional[aiosqlite.Cursor] = None
-        try:
-            cursor = await conn.cursor()
-            logger.debug("Executing SQL (aiosqlite): %s with params: %s", final_sql, db_params_tuple)
-            await cursor.execute(final_sql, db_params_tuple)
+                if ordered_params is not None:
+                    if isinstance(ordered_params, (list, tuple)):
+                        db_params = tuple(ordered_params)
+                    else:
+                        db_params = (ordered_params,)
 
-            if self.returns_rows(current_stmt.expression):
-                raw_rows: list[aiosqlite.Row] = list(await cursor.fetchall())
-                column_names = [d[0] for d in cursor.description or []]
-                dict_rows: list[DictRow] = [dict(row) for row in raw_rows]
-                raw_select_result_data = dict_rows[0] if dict_rows else {}
-                return SelectResult(
-                    rows=dict_rows,
+                if self.instrumentation_config.log_parameters and db_params:
+                    logger.debug("Query parameters: %s", db_params)
+
+                async with self._get_cursor(conn) as cursor:
+                    await cursor.execute(final_sql, db_params)
+
+                    if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
+                        return await cursor.fetchall()
+                    await conn.commit()
+                    return cursor
+
+    async def _wrap_select_result(
+        self,
+        statement: SQL,
+        raw_driver_result: Any,
+        schema_type: Optional[type[ModelDTOT]] = None,
+        **kwargs: Any,
+    ) -> Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]]]:
+        async with instrument_operation_async(self, "aiosqlite_wrap_select", "database"):
+            cursor = cast("aiosqlite.Cursor", raw_driver_result)
+            fetched_data = await cursor.fetchall()
+            column_names = [desc[0] for desc in cursor.description or []]
+
+            # Convert sqlite3.Row objects to dictionaries
+            rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
+
+            if self.instrumentation_config.log_results_count:
+                logger.debug("Aiosqlite query returned %d rows", len(rows_as_dicts))
+
+            if schema_type:
+                converted_data = self.to_schema(data=rows_as_dicts, schema_type=schema_type)
+                return SelectResult[ModelDTOT](
+                    statement=statement,
+                    data=converted_data,
                     column_names=column_names,
-                    raw_result=raw_select_result_data,
+                )
+            return SelectResult[dict[str, Any]](
+                statement=statement,
+                data=rows_as_dicts,
+                column_names=column_names,
+            )
+
+    async def _wrap_execute_result(
+        self,
+        statement: SQL,
+        raw_driver_result: Any,
+        **kwargs: Any,
+    ) -> ExecuteResult:
+        async with instrument_operation_async(self, "aiosqlite_wrap_execute", "database"):
+            operation_type = "UNKNOWN"
+            if statement.expression and hasattr(statement.expression, "key"):
+                operation_type = str(statement.expression.key).upper()
+
+            if isinstance(raw_driver_result, str):
+                execute_data = {
+                    "rows_affected": 0,
+                    "last_inserted_id": None,
+                    "inserted_ids": [],
+                    "returning_data": None,
+                    "operation_type": operation_type or "SCRIPT",
+                }
+                return ExecuteResult(
+                    statement=statement,
+                    data=execute_data,
+                    rows_affected=0,
+                    operation_type=operation_type or "SCRIPT",
                 )
 
-            affected_rows = cursor.rowcount
-            last_id = cursor.lastrowid
-            await conn.commit()
+            cursor = cast("aiosqlite.Cursor", raw_driver_result)
+            rows_affected = getattr(cursor, "rowcount", -1)
 
-            operation_type = "UNKNOWN"
-            if current_stmt.expression and hasattr(current_stmt.expression, "key"):
-                operation_type = str(current_stmt.expression.key).upper()
+            if self.instrumentation_config.log_results_count:
+                logger.debug("Aiosqlite execute operation affected %d rows", rows_affected)
 
+            execute_data = {
+                "rows_affected": rows_affected,
+                "last_inserted_id": None,
+                "inserted_ids": [],
+                "returning_data": None,
+                "operation_type": operation_type,
+            }
             return ExecuteResult(
-                raw_result={},
-                rows_affected=affected_rows,
-                last_inserted_id=last_id,
+                statement=statement,
+                data=execute_data,
+                rows_affected=rows_affected,
                 operation_type=operation_type,
             )
-        finally:
-            if cursor:
-                await cursor.close()
 
-    @instrument_async(operation_type="database")
-    async def execute_many(
+    async def select_to_arrow(
         self,
-        statement: "Union[SQL, Statement, QueryBuilder[ExecuteResult[Any]]]",
-        parameters: Optional[Sequence["SQLParameterType"]] = None,
+        statement: "Union[str, SQL, Any]",
+        parameters: Optional[SQLParameterType] = None,
         *filters: "StatementFilter",
         connection: Optional[AiosqliteConnection] = None,
         config: Optional[SQLConfig] = None,
         **kwargs: Any,
-    ) -> "ExecuteResult[Any]":
-        """Execute a SQL statement with multiple parameter sets.
+    ) -> "ArrowResult":
+        async with instrument_operation_async(self, "aiosqlite_select_to_arrow", "database"):
+            conn = self._connection(connection)
+            current_config = config or self.config
+            stmt_obj = SQL(
+                statement, parameters, *(filters or ()), dialect=self.dialect, config=current_config, **kwargs
+            )
+            stmt_obj.validate()
 
-        Useful for batch INSERT, UPDATE, or DELETE operations.
-
-        Args:
-            statement: The SQL statement or query builder to execute.
-            parameters: Sequence of parameter sets.
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            config: Optional statement configuration.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            An ExecuteResult containing the batch operation results.
-
-        Example:
-            >>> # Batch insert with validation
-            >>> await driver.execute_many(
-            ...     "INSERT INTO users (name, email) VALUES (?, ?)",
-            ...     [
-            ...         ["John", "john@example.com"],
-            ...         ["Jane", "jane@example.com"],
-            ...     ],
-            ... )
-        """
-        conn: AiosqliteConnection = self._connection(connection)
-        effective_config = config or self.config
-
-        # Process the input statement for the template
-        template_sql_input: Statement
-        if isinstance(statement, QueryBuilder):
-            template_sql_input = statement.to_statement(config=effective_config).sql
-        elif isinstance(statement, SQL):
-            template_sql_input = statement.sql
-        else:  # Raw Statement
-            template_sql_input = statement
-
-        # Create template statement with filters for validation
-        template_stmt = SQL(
-            template_sql_input,
-            None,  # No parameters for template itself
-            *filters,
-            dialect=self.dialect,
-            config=effective_config,
-            **kwargs,
-        )
-
-        # Validate template and get final SQL
-        template_stmt.validate()
-        parameter_style = self._get_parameter_style()
-        final_sql = template_stmt.to_sql(placeholder_style=parameter_style)
-
-        # Process parameter sets
-        processed_params_list: list[tuple[Any, ...]] = []
-        param_sequence = parameters if parameters is not None else []
-
-        if param_sequence:
-            # Create a building config that skips validation for individual parameter sets
-            building_config = replace(effective_config, enable_validation=False)
-
-            for param_set in param_sequence:
-                item_stmt = SQL(
-                    template_stmt.sql,  # Use processed SQL string from template
-                    param_set,
-                    dialect=self.dialect,
-                    config=building_config,  # type: ignore[arg-type]
+            if not AsyncDriverAdapterProtocol.returns_rows(stmt_obj.expression):
+                op_type = (
+                    str(stmt_obj.expression.key).upper()
+                    if stmt_obj.expression and hasattr(stmt_obj.expression, "key")
+                    else "UNKNOWN"
                 )
-                ordered_params_for_item = item_stmt.get_parameters(style=parameter_style)
+                msg = f"Cannot fetch Arrow table for a non-query statement. Command type: {op_type}"
+                raise TypeError(msg)
 
-                if isinstance(ordered_params_for_item, list):
-                    processed_params_list.append(tuple(ordered_params_for_item))
-                elif ordered_params_for_item is None:
-                    processed_params_list.append(())
-                # Convert to tuple
-                elif isinstance(ordered_params_for_item, Iterable) and not isinstance(
-                    ordered_params_for_item, (str, bytes)
-                ):
-                    processed_params_list.append(tuple(ordered_params_for_item))
-                else:
-                    processed_params_list.append((ordered_params_for_item,))
+            final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
+            ordered_params = stmt_obj.get_parameters(style=self._get_placeholder_style())
 
-        if not param_sequence:
-            logger.debug("execute_many called with no parameters for SQL: %s", final_sql)
-            return ExecuteResult(raw_result={}, rows_affected=0, operation_type="EXECUTE")
+            db_params: tuple[Any, ...] = ()
+            if ordered_params is not None:
+                db_params = tuple(ordered_params) if isinstance(ordered_params, (list, tuple)) else (ordered_params,)
 
-        logger.debug(
-            "Executing SQL (aiosqlite) many: %s with %s param sets.",
-            final_sql,
-            len(processed_params_list),
-        )
+            async with self._get_cursor(conn) as cursor:
+                await cursor.execute(final_sql, db_params)
+                rows = await cursor.fetchall()
 
-        affected_rows: int = -1
-        cursor: Optional[aiosqlite.Cursor] = None
-        try:
-            cursor = await conn.cursor()
-            await cursor.executemany(final_sql, processed_params_list)
-            affected_rows = cursor.rowcount
-            if affected_rows == -1 and processed_params_list:
-                affected_rows = len(processed_params_list)
-            await conn.commit()
-        finally:
-            if cursor:
-                await cursor.close()
+                if not rows:
+                    return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=[]))
 
-        operation_type = "EXECUTE"
-        if template_stmt.expression and hasattr(template_stmt.expression, "key"):
-            operation_type = str(template_stmt.expression.key).upper()
+                # Convert aiosqlite rows to Arrow table
+                row_list = list(rows)
+                column_names = list(row_list[0].keys())
+                columns_data = []
 
-        return ExecuteResult(
-            raw_result={},
-            rows_affected=affected_rows,
-            operation_type=operation_type,
-        )
+                for col_name in column_names:
+                    column_values = [row[col_name] for row in row_list]
+                    columns_data.append(column_values)
 
-    @instrument_async(operation_type="database")
-    async def execute_script(
-        self,
-        statement: "Union[str, SQL]",
-        parameters: Optional["SQLParameterType"] = None,
-        *filters: "StatementFilter",
-        connection: Optional[AiosqliteConnection] = None,
-        config: Optional[SQLConfig] = None,
-        **kwargs: Any,
-    ) -> str:
-        """Execute a multi-statement SQL script.
-
-        For script execution, parameters are rendered as static literals directly
-        in the SQL rather than using placeholders, since aiosqlite's executescript
-        doesn't support parameter binding.
-
-        Args:
-            statement: The SQL script to execute.
-            parameters: Parameters for the script.
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            config: Optional statement configuration.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            A string with execution results/output.
-        """
-        conn: AiosqliteConnection = self._connection(connection)
-        config = config or self.config
-
-        merged_params = parameters
-        if kwargs:
-            if merged_params is None:
-                merged_params = kwargs
-            elif isinstance(merged_params, dict):
-                merged_params = {**merged_params, **kwargs}
-
-        # Process the input statement
-        script_stmt: SQL
-        if isinstance(statement, SQL):
-            # If already SQL, re-wrap to apply current context, primarily for parameter merging
-            script_stmt = SQL(statement, merged_params, *filters, dialect=self.dialect, config=config)
-        else:  # Raw string
-            script_stmt = SQL(statement, merged_params, *filters, dialect=self.dialect, config=config)
-
-        script_stmt.validate()
-        # aiosqlite's executescript doesn't support parameter binding, so render statically.
-        final_sql = script_stmt.to_sql(placeholder_style=ParameterStyle.STATIC, dialect=self.dialect)
-
-        logger.debug("Executing script (aiosqlite): %s", final_sql)
-        cursor: Optional[aiosqlite.Cursor] = None
-        try:
-            cursor = await conn.cursor()
-            await cursor.executescript(final_sql)
-            await conn.commit()
-        finally:
-            if cursor:
-                await cursor.close()
-        return "SCRIPT EXECUTED"
+                arrow_table = pa.Table.from_arrays(columns_data, names=column_names)
+                return ArrowResult(statement=stmt_obj, data=arrow_table)
 
     def _connection(self, connection: Optional[AiosqliteConnection] = None) -> AiosqliteConnection:
         """Get the connection to use for the operation."""

@@ -1,5 +1,6 @@
 """Psqlpy database configuration using TypedDict for better maintainability."""
 
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict
@@ -16,9 +17,10 @@ from sqlspec.typing import Empty
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+logger = logging.getLogger("sqlspec.adapters.psqlpy")
 
 __all__ = (
-    "PsqlpyAsyncConfig",
+    "PsqlpyConfig",
     "PsqlpyConnectionConfig",
     "PsqlpyPoolConfig",
 )
@@ -79,19 +81,64 @@ class PsqlpyConnectionConfig(TypedDict, total=False):
     """The maximum number of TCP keepalive probes that will be sent before dropping a connection."""
 
     ssl_mode: NotRequired[str]
-    """SSL mode."""
+    """SSL mode (disable, prefer, require, verify-ca, verify-full)."""
 
     ca_file: NotRequired[str]
     """Path to ca_file for SSL."""
 
     target_session_attrs: NotRequired[str]
-    """Specifies requirements of the session (e.g., 'read-write')."""
+    """Specifies requirements of the session (e.g., 'read-write', 'read-only', 'primary', 'standby')."""
 
     options: NotRequired[str]
     """Command line options used to configure the server."""
 
     application_name: NotRequired[str]
     """Sets the application_name parameter on the server."""
+
+    client_encoding: NotRequired[str]
+    """Sets the client_encoding parameter."""
+
+    gssencmode: NotRequired[str]
+    """GSS encryption mode (disable, prefer, require)."""
+
+    sslnegotiation: NotRequired[str]
+    """SSL negotiation mode (postgres, direct)."""
+
+    sslcompression: NotRequired[bool]
+    """Whether to use SSL compression."""
+
+    sslcert: NotRequired[str]
+    """Client SSL certificate file."""
+
+    sslkey: NotRequired[str]
+    """Client SSL private key file."""
+
+    sslpassword: NotRequired[str]
+    """Password for the SSL private key."""
+
+    sslrootcert: NotRequired[str]
+    """SSL root certificate file."""
+
+    sslcrl: NotRequired[str]
+    """SSL certificate revocation list file."""
+
+    require_auth: NotRequired[str]
+    """Authentication method requirements."""
+
+    channel_binding: NotRequired[str]
+    """Channel binding preference (disable, prefer, require)."""
+
+    krbsrvname: NotRequired[str]
+    """Kerberos service name."""
+
+    gsslib: NotRequired[str]
+    """GSS library to use."""
+
+    gssdelegation: NotRequired[bool]
+    """Forward GSS credentials to server."""
+
+    service: NotRequired[str]
+    """Service name for additional parameters."""
 
 
 class PsqlpyPoolConfig(TypedDict, total=False):
@@ -157,19 +204,64 @@ class PsqlpyPoolConfig(TypedDict, total=False):
     """The maximum number of TCP keepalive probes that will be sent before dropping a connection."""
 
     ssl_mode: NotRequired[str]
-    """SSL mode."""
+    """SSL mode (disable, prefer, require, verify-ca, verify-full)."""
 
     ca_file: NotRequired[str]
     """Path to ca_file for SSL."""
 
     target_session_attrs: NotRequired[str]
-    """Specifies requirements of the session (e.g., 'read-write')."""
+    """Specifies requirements of the session (e.g., 'read-write', 'read-only', 'primary', 'standby')."""
 
     options: NotRequired[str]
     """Command line options used to configure the server."""
 
     application_name: NotRequired[str]
     """Sets the application_name parameter on the server."""
+
+    client_encoding: NotRequired[str]
+    """Sets the client_encoding parameter."""
+
+    gssencmode: NotRequired[str]
+    """GSS encryption mode (disable, prefer, require)."""
+
+    sslnegotiation: NotRequired[str]
+    """SSL negotiation mode (postgres, direct)."""
+
+    sslcompression: NotRequired[bool]
+    """Whether to use SSL compression."""
+
+    sslcert: NotRequired[str]
+    """Client SSL certificate file."""
+
+    sslkey: NotRequired[str]
+    """Client SSL private key file."""
+
+    sslpassword: NotRequired[str]
+    """Password for the SSL private key."""
+
+    sslrootcert: NotRequired[str]
+    """SSL root certificate file."""
+
+    sslcrl: NotRequired[str]
+    """SSL certificate revocation list file."""
+
+    require_auth: NotRequired[str]
+    """Authentication method requirements."""
+
+    channel_binding: NotRequired[str]
+    """Channel binding preference (disable, prefer, require)."""
+
+    krbsrvname: NotRequired[str]
+    """Kerberos service name."""
+
+    gsslib: NotRequired[str]
+    """GSS library to use."""
+
+    gssdelegation: NotRequired[bool]
+    """Forward GSS credentials to server."""
+
+    service: NotRequired[str]
+    """Service name for additional parameters."""
 
     load_balance_hosts: NotRequired[str]
     """Controls the order in which the client tries to connect to the available hosts and addresses ('disable' or 'random')."""
@@ -185,7 +277,7 @@ class PsqlpyPoolConfig(TypedDict, total=False):
     """Callback to configure new connections."""
 
 
-class PsqlpyAsyncConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
+class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
     """Configuration for Psqlpy asynchronous database connections using TypedDict."""
 
     __is_async__: ClassVar[bool] = True
@@ -236,12 +328,33 @@ class PsqlpyAsyncConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, Ps
 
     async def _create_pool_impl(self) -> ConnectionPool:
         """Create the actual async connection pool."""
-        return ConnectionPool(**self.connection_config_dict)
+        if self.instrumentation.log_pool_operations:
+            logger.info("Creating psqlpy connection pool", extra={"adapter": "psqlpy"})
+
+        try:
+            pool = ConnectionPool(**self.connection_config_dict)
+            if self.instrumentation.log_pool_operations:
+                logger.info("Psqlpy connection pool created successfully", extra={"adapter": "psqlpy"})
+        except Exception as e:
+            logger.exception("Failed to create psqlpy connection pool", extra={"adapter": "psqlpy", "error": str(e)})
+            raise
+        return pool
 
     async def _close_pool_impl(self) -> None:
         """Close the actual async connection pool."""
-        if self.pool_instance:
+        if not self.pool_instance:
+            return
+
+        if self.instrumentation.log_pool_operations:
+            logger.info("Closing psqlpy connection pool", extra={"adapter": "psqlpy"})
+
+        try:
             self.pool_instance.close()
+            if self.instrumentation.log_pool_operations:
+                logger.info("Psqlpy connection pool closed successfully", extra={"adapter": "psqlpy"})
+        except Exception as e:
+            logger.exception("Failed to close psqlpy connection pool", extra={"adapter": "psqlpy", "error": str(e)})
+            raise
 
     async def create_connection(self) -> PsqlpyConnection:
         """Create a single async connection (not from pool).
@@ -273,7 +386,7 @@ class PsqlpyAsyncConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, Ps
                 yield conn
             finally:
                 if conn is not None:
-                    await conn.close()
+                    conn.close()
 
     @asynccontextmanager
     async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[PsqlpyDriver, None]:

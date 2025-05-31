@@ -1,5 +1,4 @@
 import logging
-import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
@@ -8,17 +7,18 @@ from asyncpg import Record
 from typing_extensions import TypeAlias
 
 from sqlspec.config import InstrumentationConfig
-from sqlspec.driver import AsyncDriverAdapterProtocol, CommonDriverAttributes
+from sqlspec.driver import AsyncDriverAdapterProtocol
 from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ExecuteResult, SelectResult
+from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, SQLParameterType
-from sqlspec.utils.telemetry import instrument_async
+from sqlspec.utils.telemetry import instrument_operation_async
 
 if TYPE_CHECKING:
     from asyncpg.pool import PoolConnectionProxy
 
+    from sqlspec.statement.filters import StatementFilter
 
 __all__ = ("AsyncpgConnection", "AsyncpgDriver")
 
@@ -29,33 +29,17 @@ if TYPE_CHECKING:
 else:
     AsyncpgConnection: TypeAlias = Union[AsyncpgNativeConnection, Any]
 
-# Compile the row count regex once for efficiency
-ROWCOUNT_REGEX = re.compile(r"^(?:INSERT|UPDATE|DELETE|MERGE) \d+ (\d+)$", re.IGNORECASE)
-
 
 class AsyncpgDriver(
     AsyncDriverAdapterProtocol[AsyncpgConnection, DictRow],
-    SQLTranslatorMixin[AsyncpgConnection],
     AsyncArrowMixin[AsyncpgConnection],
+    SQLTranslatorMixin[AsyncpgConnection],
     ResultConverter,
 ):
-    """AsyncPG Postgres Driver Adapter.
+    """AsyncPG PostgreSQL Driver Adapter. Modern protocol implementation."""
 
-    This driver implements the new unified SQLSpec protocol with the core 3 methods:
-    - execute() - Universal method for all SQL operations
-    - execute_many() - Batch operations
-    - execute_script() - Multi-statement scripts
-
-    Enhanced Features:
-    - Full SQLStatement integration with filters and validation
-    - PostgreSQL-specific parameter style handling ($1, $2, etc.)
-    - Comprehensive parameter validation and security checks
-    - Support for filter composition (pagination, search, etc.)
-    """
-
-    __supports_arrow__: ClassVar[bool] = False  # asyncpg doesn't support Arrow natively
     dialect: str = "postgres"
-    config: SQLConfig
+    __supports_arrow__: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -63,7 +47,6 @@ class AsyncpgDriver(
         config: Optional[SQLConfig] = None,
         instrumentation_config: Optional[InstrumentationConfig] = None,
     ) -> None:
-        """Initialize the AsyncPG driver adapter."""
         super().__init__(
             connection=connection,
             config=config,
@@ -72,10 +55,8 @@ class AsyncpgDriver(
         )
 
     def _get_placeholder_style(self) -> ParameterStyle:
-        """Return the placeholder style for PostgreSQL ($1, $2, etc.)."""
         return ParameterStyle.NUMERIC
 
-    @instrument_async(operation_type="database")
     async def _execute_impl(
         self,
         statement: SQL,
@@ -86,121 +67,206 @@ class AsyncpgDriver(
         is_script: bool = False,
         **kwargs: Any,
     ) -> Any:
-        conn = self._connection(connection)
+        async with instrument_operation_async(self, "asyncpg_execute", "database"):
+            conn = self._connection(connection)
 
-        final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
+            if is_script:
+                final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
+                if self.instrumentation_config.log_queries:
+                    logger.debug("Executing SQL script: %s", final_sql)
+                return await conn.execute(final_sql)
 
-        # Parameters for asyncpg need to be passed as separate arguments *args
-        # or as a list/tuple for executemany.
-        args_for_driver: list[Any] = []  # For single execute or script
-        args_for_driver_many: list[Sequence[Any]] = []  # For executemany
+            final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
 
-        if is_script:
-            # asyncpg's execute for scripts doesn't take parameters in the same way as query methods.
-            # Parameters should be rendered into the script if needed, using STATIC style.
-            final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-            # No separate args for conn.execute(script_sql_string)
-        elif is_many:
-            if parameters is not None and isinstance(parameters, Sequence):
-                for param_set in parameters:
-                    # Each param_set should be a sequence (list/tuple) for one row
-                    if isinstance(param_set, (list, tuple)):
-                        args_for_driver_many.append(param_set)
-                    elif param_set is None:  # Should not happen for a row's params
-                        args_for_driver_many.append(())
-                    else:  # Single param for a row
-                        args_for_driver_many.append((param_set,))
-        else:  # Single execute
-            # Get parameters as a flat list/tuple for *args unpacking
-            # The `parameters` arg to _execute_impl is the SQLParameterType for the single call
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL: %s", final_sql)
+
+            if is_many:
+                args_list: list[Sequence[Any]] = []
+                if parameters and isinstance(parameters, Sequence):
+                    for param_set in parameters:
+                        if isinstance(param_set, (list, tuple)):
+                            args_list.append(param_set)
+                        elif isinstance(param_set, dict):
+                            # Convert dict to ordered args based on statement parameters
+                            ordered_params = statement.get_parameters(style=self._get_placeholder_style())
+                            if isinstance(ordered_params, (list, tuple)):
+                                args_list.append(ordered_params)
+                            else:
+                                args_list.append((ordered_params,) if ordered_params is not None else ())
+                        elif param_set is None:
+                            args_list.append(())
+                        else:
+                            args_list.append((param_set,))
+
+                if self.instrumentation_config.log_parameters and args_list:
+                    logger.debug("Query parameters (batch): %s", args_list)
+
+                await conn.executemany(final_sql, args_list)
+                return len(args_list)
+            # Single execution
             ordered_params = statement.get_parameters(style=self._get_placeholder_style())
+            args: list[Any] = []
+
             if isinstance(ordered_params, (list, tuple)):
-                args_for_driver.extend(ordered_params)
+                args.extend(ordered_params)
             elif ordered_params is not None:
-                args_for_driver.append(ordered_params)
-            # If ordered_params is None, args_for_driver remains empty []
+                args.append(ordered_params)
 
-        if is_script:
-            # For scripts, conn.execute() is used and it returns the status string of the last command.
-            status_str: str = await conn.execute(final_sql)
-            return status_str
+            if self.instrumentation_config.log_parameters and args:
+                logger.debug("Query parameters: %s", args)
 
-        if is_many:
-            # executemany doesn't return records directly; status indicates completion.
-            # It's primarily for batch DML. asyncpg doesn't have a rowcount for executemany.
-            await conn.executemany(final_sql, args_for_driver_many)
-            # We can return the number of parameter sets processed as an indicator of operations.
-            return len(args_for_driver_many)  # Or a status string if asyncpg provided one.
+            if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
+                return await conn.fetch(final_sql, *args)
+            return await conn.execute(final_sql, *args)
 
-        # Single execute: can be SELECT (fetch) or DML (execute)
-        # The protocol execute method will decide based on statement.returns_rows
-        # whether to call _wrap_select_result or _wrap_execute_result.
-        # This _execute_impl should provide the raw data needed by those wrappers.
-        if CommonDriverAttributes.returns_rows(statement.expression):  # Use the helper from base
-            records: list[Record] = await conn.fetch(final_sql, *args_for_driver)
-            return records  # List of asyncpg.Record objects
-        status_str: str = await conn.execute(final_sql, *args_for_driver)
-        return status_str  # Status string like 'INSERT 0 1'
-
-    @instrument_async(operation_type="database")
     async def _wrap_select_result(
         self,
         statement: SQL,
-        raw_driver_result: Any,  # This will be list[Record]
+        raw_driver_result: Any,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
-    ) -> Union[SelectResult[ModelDTOT], SelectResult[DictRow]]:
-        records = cast("list[Record]", raw_driver_result)
+    ) -> Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]]]:
+        async with instrument_operation_async(self, "asyncpg_wrap_select", "database"):
+            records = cast("list[Record]", raw_driver_result)
 
-        if not records:
-            return SelectResult(rows=[], column_names=[], raw_result=records)
+            if not records:
+                return SelectResult[dict[str, Any]](
+                    statement=statement,
+                    data=[],
+                    column_names=[],
+                )
 
-        # Assuming Record objects are dict-like (they are mapping-like)
-        column_names = list(records[0].keys())
-        rows_as_dicts: list[dict[str, Any]] = [dict(record) for record in records]
+            column_names = list(records[0].keys())
+            rows_as_dicts: list[dict[str, Any]] = [dict(record) for record in records]
 
-        if schema_type:
-            converted_rows = self.to_schema(rows_as_dicts, schema_type=schema_type)
-            return SelectResult(
-                rows=converted_rows,  # type: ignore[arg-type]
+            if self.instrumentation_config.log_results_count:
+                logger.debug("Query returned %d rows", len(rows_as_dicts))
+
+            if schema_type:
+                converted_data = self.to_schema(data=rows_as_dicts, schema_type=schema_type)
+                return SelectResult[ModelDTOT](
+                    statement=statement,
+                    data=converted_data,
+                    column_names=column_names,
+                )
+
+            return SelectResult[dict[str, Any]](
+                statement=statement,
+                data=rows_as_dicts,
                 column_names=column_names,
-                raw_result=records,
             )
 
-        return SelectResult(
-            rows=rows_as_dicts,
-            column_names=column_names,
-            raw_result=records,
-        )
-
-    @instrument_async(operation_type="database")
     async def _wrap_execute_result(
         self,
         statement: SQL,
-        raw_driver_result: Any,  # For DML, this is status string or row count for executemany
+        raw_driver_result: Any,
         **kwargs: Any,
-    ) -> ExecuteResult[Any]:
-        rows_affected = 0
+    ) -> ExecuteResult:
+        async with instrument_operation_async(self, "asyncpg_wrap_execute", "database"):
+            operation_type = "UNKNOWN"
+            if statement.expression and hasattr(statement.expression, "key"):
+                operation_type = str(statement.expression.key).upper()
 
-        if isinstance(raw_driver_result, str):  # Status string from conn.execute()
-            match = ROWCOUNT_REGEX.match(raw_driver_result)
-            if match:
-                rows_affected = int(match.group(1))
-        elif isinstance(raw_driver_result, int):  # Count from executemany
-            rows_affected = raw_driver_result
+            if isinstance(raw_driver_result, str):
+                # Handle SCRIPT execution result or parse status string
+                if "SCRIPT" in operation_type:
+                    execute_data = {
+                        "rows_affected": 0,
+                        "last_inserted_id": None,
+                        "inserted_ids": [],
+                        "returning_data": None,
+                        "operation_type": operation_type,
+                    }
+                    return ExecuteResult(
+                        statement=statement,
+                        data=execute_data,
+                        rows_affected=0,
+                        operation_type=operation_type,
+                    )
 
-        operation_type = "UNKNOWN"
-        if statement.expression and hasattr(statement.expression, "key"):
-            operation_type = str(statement.expression.key).upper()
+                # Parse status string like "INSERT 0 1" or "UPDATE 5"
+                import re
 
-        return ExecuteResult(
-            raw_result=raw_driver_result,  # Store the original status string or count
-            rows_affected=rows_affected,
-            operation_type=operation_type,
-            # last_inserted_id is not directly available in asyncpg status string
-            # For RETURNING clauses, data would come via _wrap_select_result
-        )
+                rows_affected = 0
+                match = re.match(r"^(?:INSERT|UPDATE|DELETE|MERGE)\s+\d+\s+(\d+)$", raw_driver_result, re.IGNORECASE)
+                if match:
+                    rows_affected = int(match.group(1))
+            elif isinstance(raw_driver_result, int):
+                rows_affected = raw_driver_result
+            else:
+                rows_affected = 0
 
-    def _connection(self, connection: "Optional[AsyncpgConnection]" = None) -> "AsyncpgConnection":
-        """Return the connection to use. If None, use the default connection."""
-        return connection if connection is not None else self.connection
+            if self.instrumentation_config.log_results_count:
+                logger.debug("Execute operation affected %d rows", rows_affected)
+
+            execute_data = {
+                "rows_affected": rows_affected,
+                "last_inserted_id": None,
+                "inserted_ids": [],
+                "returning_data": None,
+                "operation_type": operation_type,
+            }
+            return ExecuteResult(
+                statement=statement,
+                data=execute_data,
+                rows_affected=rows_affected,
+                operation_type=operation_type,
+            )
+
+    async def select_to_arrow(
+        self,
+        statement: "Union[str, SQL, Any]",
+        parameters: Optional[SQLParameterType] = None,
+        *filters: "StatementFilter",
+        connection: Optional[AsyncpgConnection] = None,
+        config: Optional[SQLConfig] = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        async with instrument_operation_async(self, "asyncpg_select_to_arrow", "database"):
+            import pyarrow as pa
+
+            conn = self._connection(connection)
+            current_config = config or self.config
+            stmt_obj = SQL(
+                statement, parameters, *(filters or ()), dialect=self.dialect, config=current_config, **kwargs
+            )
+            stmt_obj.validate()
+
+            if not AsyncDriverAdapterProtocol.returns_rows(stmt_obj.expression):
+                op_type = (
+                    str(stmt_obj.expression.key).upper()
+                    if stmt_obj.expression and hasattr(stmt_obj.expression, "key")
+                    else "UNKNOWN"
+                )
+                msg = f"Cannot fetch Arrow table for a non-query statement. Command type: {op_type}"
+                raise TypeError(msg)
+
+            final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
+            ordered_params = stmt_obj.get_parameters(style=self._get_placeholder_style())
+
+            args: list[Any] = []
+            if isinstance(ordered_params, (list, tuple)):
+                args.extend(ordered_params)
+            elif ordered_params is not None:
+                args.append(ordered_params)
+
+            records = await conn.fetch(final_sql, *args)
+
+            if not records:
+                return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=[]))
+
+            # Convert asyncpg records to Arrow table
+            column_names = list(records[0].keys())
+            columns_data = []
+
+            for col_name in column_names:
+                column_values = [record[col_name] for record in records]
+                columns_data.append(column_values)
+
+            arrow_table = pa.Table.from_arrays(columns_data, names=column_names)
+            return ArrowResult(statement=stmt_obj, data=arrow_table)
+
+    def _connection(self, connection: Optional[AsyncpgConnection] = None) -> AsyncpgConnection:
+        """Get the connection to use for the operation."""
+        return connection or self.connection

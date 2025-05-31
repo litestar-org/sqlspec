@@ -92,7 +92,7 @@ class MockSyncPoolConfig(SyncDatabaseConfig[Mock, Mock, Mock]):
         return Mock()
 
     def _create_pool_impl(self) -> Mock:
-        return self.pool_instance
+        return self.pool_instance  # pyright: ignore
 
     def _close_pool_impl(self) -> None:
         pass
@@ -122,7 +122,7 @@ class MockAsyncPoolConfig(AsyncDatabaseConfig[Mock, Mock, Mock]):
         return AsyncMock()
 
     async def _create_pool_impl(self) -> Mock:
-        return self.pool_instance
+        return self.pool_instance  # pyright: ignore
 
     async def _close_pool_impl(self) -> None:
         pass
@@ -369,7 +369,7 @@ def test_get_session_driver_instantiation() -> None:
     mock_driver_class = Mock()
     mock_driver_instance = Mock()
     mock_driver_class.return_value = mock_driver_instance
-    config.driver_type = mock_driver_class
+    config.driver_type = mock_driver_class  # pyright: ignore
 
     with patch.object(config, "create_connection", return_value=mock_connection):
         session = sqlspec.get_session(MockSyncConfig)
@@ -395,7 +395,7 @@ def test_provide_connection_sync() -> None:
     with patch.object(config, "provide_connection", return_value=mock_cm):
         result = sqlspec.provide_connection(MockSyncConfig)
         assert result == mock_cm
-        config.provide_connection.assert_called_once_with()
+        config.provide_connection.assert_called_once_with()  # pyright: ignore
 
 
 def test_provide_connection_with_args() -> None:
@@ -419,7 +419,7 @@ def test_provide_session_sync() -> None:
     with patch.object(config, "provide_session", return_value=mock_cm):
         result = sqlspec.provide_session(MockSyncConfig)
         assert result == mock_cm
-        config.provide_session.assert_called_once_with()
+        config.provide_session.assert_called_once_with()  # pyright: ignore
 
 
 def test_provide_session_with_instance() -> None:
@@ -461,20 +461,20 @@ def test_get_pool_no_pool_config() -> None:
 def test_get_pool_sync_with_pool() -> None:
     """Test get_pool with sync pooled configuration."""
     sqlspec = SQLSpec()
-    config = MockSyncPoolConfig("test")
+    config = MockSyncPoolConfig("test")  # pyright: ignore
     sqlspec.add_config(config)
 
     mock_pool = Mock()
     with patch.object(config, "create_pool", return_value=mock_pool):
         result = sqlspec.get_pool(MockSyncPoolConfig)
         assert result == mock_pool
-        config.create_pool.assert_called_once()
+        config.create_pool.assert_called_once()  # pyright: ignore
 
 
 async def test_get_pool_async_with_pool() -> None:
     """Test get_pool with async pooled configuration."""
     sqlspec = SQLSpec()
-    config = MockAsyncPoolConfig("test")
+    config = MockAsyncPoolConfig("test")  # pyright: ignore
     sqlspec.add_config(config)
 
     mock_pool = AsyncMock()
@@ -482,12 +482,12 @@ async def test_get_pool_async_with_pool() -> None:
         result_awaitable = sqlspec.get_pool(MockAsyncPoolConfig)
         result = await result_awaitable
         assert result == mock_pool
-        config.create_pool.assert_called_once()
+        config.create_pool.assert_called_once()  # pyright: ignore
 
 
 def test_get_pool_with_instance() -> None:
     """Test get_pool with config instance."""
-    config = MockSyncPoolConfig("test")
+    config = MockSyncPoolConfig("test")  # pyright: ignore
     sqlspec = SQLSpec()
 
     mock_pool = Mock()
@@ -522,7 +522,7 @@ def test_close_pool_no_pool_config() -> None:
 def test_close_pool_sync_with_pool() -> None:
     """Test close_pool with sync pooled configuration."""
     sqlspec = SQLSpec()
-    config = MockSyncPoolConfig("test")
+    config = MockSyncPoolConfig("test")  # pyright: ignore
     sqlspec.add_config(config)
 
     with patch.object(config, "close_pool") as mock_close:
@@ -533,7 +533,7 @@ def test_close_pool_sync_with_pool() -> None:
 async def test_close_pool_async_with_pool() -> None:
     """Test close_pool with async pooled configuration."""
     sqlspec = SQLSpec()
-    config = MockAsyncPoolConfig("test")
+    config = MockAsyncPoolConfig("test")  # pyright: ignore
     sqlspec.add_config(config)
 
     with patch.object(config, "close_pool") as mock_close:
@@ -558,7 +558,7 @@ def test_cleanup_pools_empty() -> None:
 def test_cleanup_pools_sync_configs() -> None:
     """Test cleanup with sync configurations."""
     sqlspec = SQLSpec()
-    config = MockSyncPoolConfig("test")
+    config = MockSyncPoolConfig("test")  # pyright: ignore
     sqlspec.add_config(config)
 
     with patch.object(config, "close_pool") as mock_close:
@@ -574,7 +574,7 @@ def test_cleanup_pools_sync_configs() -> None:
 def test_cleanup_pools_async_configs() -> None:
     """Test cleanup with async configurations."""
     sqlspec = SQLSpec()
-    config = MockAsyncPoolConfig("test")
+    config = MockAsyncPoolConfig("test")  # pyright: ignore
     sqlspec.add_config(config)
 
     async_mock = AsyncMock()
@@ -590,7 +590,7 @@ def test_cleanup_pools_async_configs() -> None:
 def test_cleanup_pools_exception_handling() -> None:
     """Test cleanup handles exceptions gracefully."""
     sqlspec = SQLSpec()
-    config = MockSyncPoolConfig("test")
+    config = MockSyncPoolConfig("test")  # pyright: ignore
     sqlspec.add_config(config)
 
     with patch.object(config, "close_pool", side_effect=Exception("Pool error")):
@@ -606,7 +606,7 @@ def test_cleanup_pools_exception_handling() -> None:
 def test_cleanup_pools_running_event_loop() -> None:
     """Test cleanup with running event loop."""
     sqlspec = SQLSpec()
-    config = MockAsyncPoolConfig("test")
+    config = MockAsyncPoolConfig("test")  # pyright: ignore
     sqlspec.add_config(config)
 
     mock_loop = Mock()
@@ -624,7 +624,7 @@ def test_cleanup_pools_clears_configs() -> None:
     """Test that cleanup clears the configs dictionary."""
     sqlspec = SQLSpec()
     config1 = MockSyncConfig("test1")
-    config2 = MockSyncPoolConfig("test2")
+    config2 = MockSyncPoolConfig("test2")  # pyright: ignore
 
     sqlspec.add_config(config1)
     sqlspec.add_config(config2)
@@ -723,8 +723,8 @@ def test_mixed_config_types() -> None:
 
     sync_config = MockSyncConfig("sync")
     async_config = MockAsyncConfig("async")
-    sync_pool_config = MockSyncPoolConfig("sync_pool")
-    async_pool_config = MockAsyncPoolConfig("async_pool")
+    sync_pool_config = MockSyncPoolConfig("sync_pool")  # pyright: ignore
+    async_pool_config = MockAsyncPoolConfig("async_pool")  # pyright: ignore
 
     sqlspec.add_config(sync_config)
     sqlspec.add_config(async_config)
@@ -812,8 +812,8 @@ def test_atexit_cleanup_integration() -> None:
         mock_register.assert_called_once_with(sqlspec._cleanup_pools)
 
         # Add some configs
-        config1 = MockSyncPoolConfig("test1")
-        config2 = MockAsyncPoolConfig("test2")
+        config1 = MockSyncPoolConfig("test1")  # pyright: ignore
+        config2 = MockAsyncPoolConfig("test2")  # pyright: ignore
         sqlspec.add_config(config1)
         sqlspec.add_config(config2)
 

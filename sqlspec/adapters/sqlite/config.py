@@ -1,5 +1,6 @@
 """SQLite database configuration using TypedDict for better maintainability."""
 
+import logging
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
 
@@ -13,6 +14,7 @@ from sqlspec.typing import DictRow, Empty
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+logger = logging.getLogger("sqlspec.adapters.sqlite")
 
 __all__ = ("SqliteConfig", "SqliteConnectionConfig")
 
@@ -99,25 +101,58 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
         # Extract database separately since it's required
         config = self.connection_config_dict
 
-        connection = sqlite3.connect(**config)
+        if self.instrumentation.log_pool_operations:
+            logger.info("Creating SQLite connection", extra={"adapter": "sqlite", "database": config.get("database")})
 
-        # Configure row factory for dictionary-like access
-        connection.row_factory = sqlite3.Row
+        try:
+            connection = sqlite3.connect(**config)
 
+            # Configure row factory for dictionary-like access
+            connection.row_factory = sqlite3.Row
+
+            if self.instrumentation.log_pool_operations:
+                logger.info("SQLite connection created successfully", extra={"adapter": "sqlite"})
+
+        except Exception as e:
+            logger.exception("Failed to create SQLite connection", extra={"adapter": "sqlite", "error": str(e)})
+            raise
         return connection
 
     @contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[SqliteConnection, None, None]":
-        """Provide a SQLite connection context manager."""
+        """Provide a SQLite connection context manager.
+
+        Args:
+            *args: Variable length argument list
+            **kwargs: Arbitrary keyword arguments
+
+        Yields:
+            SqliteConnection: A SQLite connection
+
+        """
         connection = self.create_connection()
         try:
             yield connection
         finally:
-            connection.close()
+            if self.instrumentation.log_pool_operations:
+                logger.debug("Closing SQLite connection", extra={"adapter": "sqlite"})
+            try:
+                connection.close()
+            except Exception as e:
+                logger.exception("Failed to close SQLite connection", extra={"adapter": "sqlite", "error": str(e)})
+                raise
 
     @contextmanager
     def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[SqliteDriver, None, None]":
-        """Provide a SQLite driver session context manager."""
+        """Provide a SQLite driver session context manager.
+
+        Args:
+            *args: Variable length argument list
+            **kwargs: Arbitrary keyword arguments
+
+        Yields:
+            SqliteDriver: A SQLite driver
+        """
         with self.provide_connection(*args, **kwargs) as connection:
             yield self.driver_type(
                 connection=connection,

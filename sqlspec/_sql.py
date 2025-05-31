@@ -247,7 +247,6 @@ class SQLFactory:
         return any(candidate_upper.startswith(starter) for starter in sql_starters)
 
     def _populate_insert_from_sql(self, builder: "InsertBuilder", sql_string: str) -> "InsertBuilder":
-        """Populate InsertBuilder from raw SQL string."""
         try:
             from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
 
@@ -278,9 +277,9 @@ class SQLFactory:
             from sqlspec.exceptions import SQLBuilderError
 
             msg = f"Cannot create INSERT from {analysis.statement_type} statement"
-            raise SQLBuilderError(msg)
+            raise SQLBuilderError(msg)  # noqa: TRY301
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Failed to parse INSERT SQL, falling back to traditional mode: %s", e)
             return builder
 
@@ -472,6 +471,125 @@ class SQLFactory:
         """
         col_expr = exp.column(column) if isinstance(column, str) else column
         return exp.Min(this=col_expr)
+
+    # ===================
+    # Advanced SQL Operations
+    # ===================
+
+    @staticmethod
+    def rollup(*columns: Union[str, exp.Expression]) -> exp.Expression:
+        """Create a ROLLUP expression for GROUP BY clauses.
+
+        Args:
+            *columns: Columns to include in the rollup.
+
+        Returns:
+            ROLLUP expression.
+
+        Example:
+            ```python
+            # GROUP BY ROLLUP(product, region)
+            query = (
+                sql.select("product", "region", sql.sum("sales"))
+                .from_("sales_data")
+                .group_by(sql.rollup("product", "region"))
+            )
+            ```
+        """
+        column_exprs = [exp.column(col) if isinstance(col, str) else col for col in columns]
+        return exp.Rollup(expressions=column_exprs)
+
+    @staticmethod
+    def cube(*columns: Union[str, exp.Expression]) -> exp.Expression:
+        """Create a CUBE expression for GROUP BY clauses.
+
+        Args:
+            *columns: Columns to include in the cube.
+
+        Returns:
+            CUBE expression.
+
+        Example:
+            ```python
+            # GROUP BY CUBE(product, region)
+            query = (
+                sql.select("product", "region", sql.sum("sales"))
+                .from_("sales_data")
+                .group_by(sql.cube("product", "region"))
+            )
+            ```
+        """
+        column_exprs = [exp.column(col) if isinstance(col, str) else col for col in columns]
+        return exp.Cube(expressions=column_exprs)
+
+    @staticmethod
+    def grouping_sets(*column_sets: Union[tuple[str, ...], list[str]]) -> exp.Expression:
+        """Create a GROUPING SETS expression for GROUP BY clauses.
+
+        Args:
+            *column_sets: Sets of columns to group by.
+
+        Returns:
+            GROUPING SETS expression.
+
+        Example:
+            ```python
+            # GROUP BY GROUPING SETS ((product), (region), ())
+            query = (
+                sql.select("product", "region", sql.sum("sales"))
+                .from_("sales_data")
+                .group_by(
+                    sql.grouping_sets(("product",), ("region",), ())
+                )
+            )
+            ```
+        """
+        set_expressions = []
+        for column_set in column_sets:
+            if isinstance(column_set, (tuple, list)):
+                if len(column_set) == 0:
+                    # Empty set for grand total
+                    set_expressions.append(exp.Tuple(expressions=[]))
+                else:
+                    columns = [exp.column(col) for col in column_set]
+                    set_expressions.append(exp.Tuple(expressions=columns))
+            else:
+                set_expressions.append(exp.column(column_set))
+
+        return exp.GroupingSets(expressions=set_expressions)
+
+    @staticmethod
+    def any(values: Union[list[Any], exp.Expression, str]) -> exp.Expression:
+        """Create an ANY expression for use with comparison operators.
+
+        Args:
+            values: Values, expression, or subquery for the ANY clause.
+
+        Returns:
+            ANY expression.
+
+        Example:
+            ```python
+            # WHERE id = ANY(subquery)
+            subquery = sql.select("user_id").from_("active_users")
+            query = (
+                sql.select("*")
+                .from_("users")
+                .where(sql.id.eq(sql.any(subquery)))
+            )
+            ```
+        """
+        if isinstance(values, list):
+            # Convert list to array literal
+            literals = [exp.Literal.string(str(v)) if isinstance(v, str) else exp.Literal.number(v) for v in values]
+            return exp.Any(this=exp.Array(expressions=literals))
+        if isinstance(values, str):
+            # Parse as SQL
+            parsed = exp.maybe_parse(values)
+            if parsed:
+                return exp.Any(this=parsed)
+            return exp.Any(this=exp.Literal.string(values))
+        return exp.Any(this=values)
 
     # ===================
     # String Functions

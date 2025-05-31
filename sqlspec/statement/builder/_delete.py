@@ -21,7 +21,7 @@ __all__ = ("DeleteBuilder",)
 
 
 @dataclass(unsafe_hash=True)
-class DeleteBuilder(QueryBuilder[ExecuteResult[dict[str, Any]]], WhereClauseMixin):
+class DeleteBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
     """Builder for DELETE statements.
 
     This builder provides a fluent interface for constructing SQL DELETE statements
@@ -48,13 +48,13 @@ class DeleteBuilder(QueryBuilder[ExecuteResult[dict[str, Any]]], WhereClauseMixi
     _table: "Optional[str]" = field(default=None, init=False)
 
     @property
-    def _expected_result_type(self) -> "type[ExecuteResult[dict[str, Any]]]":
+    def _expected_result_type(self) -> "type[ExecuteResult]":
         """Get the expected result type for DELETE operations.
 
         Returns:
             The ExecuteResult type for DELETE statements.
         """
-        return ExecuteResult[dict[str, Any]]
+        return ExecuteResult
 
     def _create_base_expression(self) -> "exp.Delete":
         """Create a new sqlglot Delete expression.

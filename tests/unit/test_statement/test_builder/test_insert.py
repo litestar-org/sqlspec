@@ -1,3 +1,4 @@
+# ruff: noqa: RUF043
 """Comprehensive unit tests for InsertBuilder.
 
 This module tests all InsertBuilder functionality including:
@@ -525,7 +526,7 @@ def test_insert_expected_result_type() -> None:
     builder = InsertBuilder()
     from sqlspec.statement.result import ExecuteResult
 
-    assert builder._expected_result_type == ExecuteResult[dict[str, Any]]
+    assert builder._expected_result_type == ExecuteResult
 
 
 def test_insert_create_base_expression() -> None:

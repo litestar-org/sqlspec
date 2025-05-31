@@ -115,14 +115,15 @@ class PsycopgSyncDriver(
                 logger.debug("Query returned %d rows", len(rows_as_dicts))
 
             if schema_type:
+                converted_data = self.to_schema(data=fetched_data, schema_type=schema_type)
                 return SelectResult[ModelDTOT](
-                    raw_result=cast("ModelDTOT", fetched_data),
-                    rows=rows_as_dicts,
+                    statement=statement,
+                    data=converted_data,
                     column_names=column_names,
                 )
             return SelectResult[dict[str, Any]](
-                raw_result=fetched_data[0] if fetched_data else {},
-                rows=rows_as_dicts,
+                statement=statement,
+                data=rows_as_dicts,
                 column_names=column_names,
             )
 
@@ -131,15 +132,23 @@ class PsycopgSyncDriver(
         statement: SQL,
         raw_driver_result: Any,
         **kwargs: Any,
-    ) -> ExecuteResult[Any]:
+    ) -> ExecuteResult:
         with instrument_operation(self, "psycopg_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             if statement.expression and hasattr(statement.expression, "key"):
                 operation_type = str(statement.expression.key).upper()
 
             if isinstance(raw_driver_result, str):
+                execute_data = {
+                    "rows_affected": 0,
+                    "last_inserted_id": None,
+                    "inserted_ids": [],
+                    "returning_data": None,
+                    "operation_type": operation_type or "SCRIPT",
+                }
                 return ExecuteResult(
-                    raw_result=raw_driver_result,
+                    statement=statement,
+                    data=execute_data,
                     rows_affected=0,
                     operation_type=operation_type or "SCRIPT",
                 )
@@ -150,11 +159,23 @@ class PsycopgSyncDriver(
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)
 
+            execute_data = {
+                "rows_affected": rows_affected,
+                "last_inserted_id": None,
+                "inserted_ids": [],
+                "returning_data": None,
+                "operation_type": operation_type,
+            }
             return ExecuteResult(
-                raw_result=None,
+                statement=statement,
+                data=execute_data,
                 rows_affected=rows_affected,
                 operation_type=operation_type,
             )
+
+    def _connection(self, connection: Optional[PsycopgSyncConnection] = None) -> PsycopgSyncConnection:
+        """Get the connection to use for the operation."""
+        return connection or self.connection
 
 
 class PsycopgAsyncDriver(
@@ -238,9 +259,9 @@ class PsycopgAsyncDriver(
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
     ) -> Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]]]:
-        async with instrument_operation_async(self, "psycopg_async_wrap_select", "database"):
+        with instrument_operation(self, "psycopg_wrap_select", "database"):
             cursor = raw_driver_result
-            fetched_data: list[DictRow] = await cursor.fetchall()
+            fetched_data: list[DictRow] = cursor.fetchall()
             column_names = [col.name for col in cursor.description or []]
             rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
 
@@ -248,14 +269,15 @@ class PsycopgAsyncDriver(
                 logger.debug("Query returned %d rows", len(rows_as_dicts))
 
             if schema_type:
+                converted_data = self.to_schema(data=fetched_data, schema_type=schema_type)
                 return SelectResult[ModelDTOT](
-                    raw_result=cast("ModelDTOT", fetched_data),
-                    rows=rows_as_dicts,
+                    statement=statement,
+                    data=converted_data,
                     column_names=column_names,
                 )
             return SelectResult[dict[str, Any]](
-                raw_result=fetched_data[0] if fetched_data else {},
-                rows=rows_as_dicts,
+                statement=statement,
+                data=rows_as_dicts,
                 column_names=column_names,
             )
 
@@ -264,15 +286,23 @@ class PsycopgAsyncDriver(
         statement: SQL,
         raw_driver_result: Any,
         **kwargs: Any,
-    ) -> ExecuteResult[Any]:
-        async with instrument_operation_async(self, "psycopg_async_wrap_execute", "database"):
+    ) -> ExecuteResult:
+        with instrument_operation(self, "psycopg_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             if statement.expression and hasattr(statement.expression, "key"):
                 operation_type = str(statement.expression.key).upper()
 
             if isinstance(raw_driver_result, str):
+                execute_data = {
+                    "rows_affected": 0,
+                    "last_inserted_id": None,
+                    "inserted_ids": [],
+                    "returning_data": None,
+                    "operation_type": operation_type or "SCRIPT",
+                }
                 return ExecuteResult(
-                    raw_result=raw_driver_result,
+                    statement=statement,
+                    data=execute_data,
                     rows_affected=0,
                     operation_type=operation_type or "SCRIPT",
                 )
@@ -283,8 +313,20 @@ class PsycopgAsyncDriver(
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)
 
+            execute_data = {
+                "rows_affected": rows_affected,
+                "last_inserted_id": None,
+                "inserted_ids": [],
+                "returning_data": None,
+                "operation_type": operation_type,
+            }
             return ExecuteResult(
-                raw_result=None,
+                statement=statement,
+                data=execute_data,
                 rows_affected=rows_affected,
                 operation_type=operation_type,
             )
+
+    def _connection(self, connection: Optional[PsycopgAsyncConnection] = None) -> PsycopgAsyncConnection:
+        """Get the connection to use for the operation."""
+        return connection or self.connection

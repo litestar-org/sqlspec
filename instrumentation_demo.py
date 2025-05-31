@@ -41,6 +41,20 @@ from prometheus_client import generate_latest, start_http_server
 from sqlspec.base import SQLSpec
 from sqlspec.config import InstrumentationConfig
 
+__all__ = (
+    "demo_async_operations",
+    "demo_database_config",
+    "demo_error_handling",
+    "demo_performance_monitoring",
+    "demo_sqlspec_integration",
+    "demo_sync_operations",
+    "main",
+    "print_metrics_summary",
+    "setup_opentelemetry",
+    "setup_prometheus_metrics",
+)
+
+
 # Configure logging with structured format
 logging.basicConfig(
     level=logging.INFO,
@@ -53,12 +67,14 @@ logger = logging.getLogger(__name__)
 
 def setup_opentelemetry() -> None:
     """Set up OpenTelemetry with Jaeger exporter and proper resource attributes."""
-    resource = Resource.create({
-        "service.name": "sqlspec-instrumentation-demo",
-        "service.version": "1.0.0",
-        "service.environment": "demo",
-        "deployment.environment": "local",
-    })
+    resource = Resource.create(
+        {
+            "service.name": "sqlspec-instrumentation-demo",
+            "service.version": "1.0.0",
+            "service.environment": "demo",
+            "deployment.environment": "local",
+        }
+    )
 
     # Create tracer provider
     provider = TracerProvider(resource=resource)
@@ -435,7 +451,6 @@ async def main() -> None:
             main_span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
             logger.error("Demo failed: %s", e, exc_info=True)
             raise
-
 
 
 if __name__ == "__main__":

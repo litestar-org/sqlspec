@@ -184,6 +184,7 @@ class SQL:
     __slots__ = (
         "_analysis_result",
         "_builder_result_type",
+        "_cached_sql_string",
         "_config",
         "_dialect",
         "_merged_parameters",
@@ -375,6 +376,56 @@ class SQL:
             raise ParameterError(msg, sql_str)
         merged_parameters = self._config.parameter_converter.merge_parameters(parameters, args, kwargs)
         return [], merged_parameters
+
+    def _get_sql_string_for_processing(self) -> str:
+        """Get SQL string for parameter processing, using cached version when possible."""
+        # Cache the SQL string representation to avoid repeated expression->string conversions
+        if not hasattr(self, "_cached_sql_string"):
+            if self._config.enable_parsing and self._parsed_expression is not None:
+                self._cached_sql_string = self.to_sql(dialect=self._dialect)
+            else:
+                self._cached_sql_string = str(self._sql)
+        return self._cached_sql_string
+
+    def _invalidate_sql_cache(self) -> None:
+        """Invalidate cached SQL string when expression changes."""
+        if hasattr(self, "_cached_sql_string"):
+            delattr(self, "_cached_sql_string")
+
+    def _invalidate_validation_cache(self) -> None:
+        """Invalidate validation cache when SQL structure changes."""
+        self._validation_result = None
+
+    def _apply_filters(self, filters_to_apply: "Sequence[StatementFilter]") -> None:
+        if not filters_to_apply:
+            return
+
+        if not self._config.enable_parsing:
+            msg = "Filters are not supported when parsing is disabled"
+            raise ParameterError(msg)
+
+        current_stmt_for_filtering = self
+        for f in filters_to_apply:
+            # apply_filter returns a new instance. We need to update self.
+            # Create a temporary "snapshot" config for filtering to avoid unintended validation
+            temp_config = replace(
+                current_stmt_for_filtering._config,
+                enable_validation=False,  # Defer validation until all filters applied
+            )
+            temp_stmt = current_stmt_for_filtering.copy(config=temp_config)
+            filtered_stmt = apply_filter(temp_stmt, f)
+
+            # Update the current instance's attributes from the filtered_stmt
+            self._sql = filtered_stmt._sql  # The original SQL might change if a filter alters the base expression
+            self._parsed_expression = filtered_stmt._parsed_expression
+            self._merged_parameters = filtered_stmt._merged_parameters
+            self._parameter_info = filtered_stmt._parameter_info
+            # Clear validation and SQL cache since structure changed
+            self._invalidate_validation_cache()
+            self._invalidate_sql_cache()
+
+            # Update current_stmt_for_filtering for the next iteration
+            current_stmt_for_filtering = self
 
     @staticmethod
     def to_expression(statement: "Statement", dialect: "DialectType" = None) -> exp.Expression:
@@ -586,48 +637,26 @@ class SQL:
                 self._validation_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
             return self._validation_result
 
-        # If validation result is already computed (e.g., by __init__), return it.
-        # Re-validation might be needed if filters are applied, which should clear _validation_result.
+        # If validation result is already computed and current, return it.
+        # The result is considered current if it exists and no modifications have occurred
+        # that would invalidate it (like applying filters).
         if self._validation_result is not None:
-            # Still, check for strict mode raising based on the existing result
-            if not self._validation_result.is_safe and self._config.strict_mode:
-                # Determine the threshold to use for raising.
-                # This assumes that if a custom validator was in a pipeline, it would have already raised.
-                # So, we check against a default validator's threshold here if the pipeline didn't raise.
-                validator_for_threshold_check = _default_validator()  # Or some other configured primary validator
-                if (
-                    validator_for_threshold_check.min_risk_to_raise is not None
-                    and self._validation_result.risk_level is not None
-                    and self._validation_result.risk_level.value
-                    >= validator_for_threshold_check.min_risk_to_raise.value
-                ):
-                    error_msg = f"SQL validation failed with risk level {self._validation_result.risk_level}:\n"
-                    error_msg += "Issues:\n" + "\n".join(
-                        [f"- {issue}" for issue in self._validation_result.issues or []]
-                    )
-                    if self._validation_result.warnings:
-                        error_msg += "\nWarnings:\n" + "\n".join(
-                            [f"- {warn}" for warn in self._validation_result.warnings]
-                        )
-                    raise SQLValidationError(error_msg, self.to_sql(), self._validation_result.risk_level)
+            # Check for strict mode raising based on the existing result
+            self._check_and_raise_for_strict_mode()
             return self._validation_result
 
-        # If no validation result yet, and parsing is enabled, run the pipeline
+        # If no validation result yet, run validation (but avoid re-running transformation pipeline)
         if self._config.enable_parsing and self.expression is not None:
-            pipeline = self._config.get_pipeline()
-            # The pipeline execution in __init__ should already set self._parsed_expression and self._validation_result.
-            # This explicit call might be redundant if __init__ always runs the pipeline for parsed statements.
-            # However, if validate() is called independently after modifications, it might be necessary.
-            _transformed_expr, validation_res = pipeline.execute(self.expression, self._dialect, self._config)
-            # SQL.validate() primarily returns validation, transformation is via SQL.transform() or __init__.
-            # So, we don't update self.expression here from validate().
+            # Only run validation components, not the full pipeline which might include transformers
+            validator_only_pipeline = self._get_validation_only_pipeline()
+            _, validation_res = validator_only_pipeline.execute(self.expression, self._dialect, self._config)
             self._validation_result = validation_res
         elif self._config.enable_parsing and self.expression is None:
             # Attempt to parse first if not already an expression
             try:
                 parsed_expr = self.to_expression(self.sql, self._dialect)
-                pipeline = self._config.get_pipeline()
-                _, validation_res = pipeline.execute(parsed_expr, self._dialect, self._config)
+                validator_only_pipeline = self._get_validation_only_pipeline()
+                _, validation_res = validator_only_pipeline.execute(parsed_expr, self._dialect, self._config)
                 self._validation_result = validation_res
             except SQLValidationError as e:
                 self._validation_result = ValidationResult(is_safe=False, risk_level=RiskLevel.HIGH, issues=[str(e)])
@@ -635,7 +664,31 @@ class SQL:
             validator = _default_validator()
             self._validation_result = validator.validate(self.sql, self._dialect)
 
-        # Final check for strict mode after potentially running validation above
+        # Final check for strict mode after running validation
+        self._check_and_raise_for_strict_mode()
+        return self._validation_result
+
+    def _get_validation_only_pipeline(self) -> "TransformerPipeline":
+        """Get a pipeline with only validation components, no transformers."""
+        from sqlspec.statement.pipelines import TransformerPipeline
+
+        # Extract only validation components from the main pipeline
+
+        # First, try to get components from existing config
+        # Check if component is a validator (implements SQLValidator pattern or is a validator)
+        validation_components = [
+            component
+            for component in self._config.processing_pipeline_components
+            if hasattr(component, "validators") or component.__class__.__name__.endswith("Validator")
+        ]
+
+        # If no validation components found, use defaults
+        if not validation_components:
+            validation_components.append(_default_validator())
+
+        return TransformerPipeline(components=validation_components)
+
+    def _check_and_raise_for_strict_mode(self) -> None:
         if self._validation_result is not None and not self._validation_result.is_safe and self._config.strict_mode:
             validator_for_threshold_check = _default_validator()
             if (
@@ -643,10 +696,11 @@ class SQL:
                 and self._validation_result.risk_level is not None
                 and self._validation_result.risk_level.value >= validator_for_threshold_check.min_risk_to_raise.value
             ):
-                error_msg = f"SQL validation failed (after explicit validate call) with risk level {self._validation_result.risk_level}:\n"
+                error_msg = f"SQL validation failed with risk level {self._validation_result.risk_level}:\n"
                 error_msg += "Issues:\n" + "\n".join([f"- {issue}" for issue in self._validation_result.issues or []])
+                if self._validation_result.warnings:
+                    error_msg += "\nWarnings:\n" + "\n".join([f"- {warn}" for warn in self._validation_result.warnings])
                 raise SQLValidationError(error_msg, self.to_sql(), self._validation_result.risk_level)
-        return self._validation_result
 
     def _transform_sql_placeholders(
         self,
@@ -916,38 +970,6 @@ class SQL:
             msg = f"SQL transformation pipeline failed: {e}"
             raise SQLTransformationError(msg, self.sql) from e
 
-    def _apply_filters(self, filters_to_apply: "Sequence[StatementFilter]") -> None:
-        if not filters_to_apply:
-            return
-
-        if not self._config.enable_parsing:
-            msg = "Filters are not supported when parsing is disabled"
-            raise ParameterError(msg)
-
-        current_stmt_for_filtering = self
-        for f in filters_to_apply:
-            # apply_filter returns a new instance. We need to update self.
-            # Create a temporary "snapshot" config for filtering to avoid unintended validation
-            temp_config = replace(
-                current_stmt_for_filtering._config,
-                enable_validation=False,  # Defer validation until all filters applied
-            )
-            temp_stmt = current_stmt_for_filtering.copy(config=temp_config)
-            filtered_stmt = apply_filter(temp_stmt, f)
-
-            # Update the current instance's attributes from the filtered_stmt
-            self._sql = filtered_stmt._sql  # The original SQL might change if a filter alters the base expression
-            self._parsed_expression = filtered_stmt._parsed_expression
-            self._merged_parameters = filtered_stmt._merged_parameters
-            self._parameter_info = filtered_stmt._parameter_info
-            # _validation_result should be re-evaluated after all filters if needed,
-            # or cleared if filters potentially invalidate it. For now, let's clear it
-            # to ensure it's re-evaluated by a subsequent .validate() call.
-            self._validation_result = None
-
-            # Update current_stmt_for_filtering for the next iteration
-            current_stmt_for_filtering = self
-
     def where(self, *conditions: "Union[Condition, str]") -> "SQL":
         """Applies WHERE conditions and returns a new SQLStatement.
 
@@ -976,8 +998,19 @@ class SQL:
                     raise SQLParsingError(msg) from e
             elif isinstance(cond_item, exp.Condition):
                 condition_expression = cond_item
+            else:
+                msg = f"Invalid condition type: {type(cond_item)}"
+                raise SQLParsingError(msg)
 
-            new_expr = new_expr.where(condition_expression)  # type: ignore[attr-defined]
+            # Ensure we have a Select expression that supports where()
+            if hasattr(new_expr, "where") and callable(new_expr.where):  # pyright: ignore
+                new_expr = new_expr.where(condition_expression)  # pyright: ignore
+            else:
+                # Convert to Select if not already selectable
+                if not isinstance(new_expr, exp.Select):
+                    logger.warning("Converting non-Select expression to Select for WHERE clause")
+                    new_expr = exp.Select().from_(new_expr)
+                new_expr = new_expr.where(condition_expression)
 
         return self.copy(statement=new_expr, parameters=self._merged_parameters)
 
@@ -992,15 +1025,32 @@ class SQL:
             A new SQLStatement instance with the limit applied.
         """
         new_expr = self._get_current_expression_for_modification()
+
         if use_parameter:
             param_name = self.get_unique_parameter_name("limit_val")
             new_stmt = self.add_named_parameter(param_name, limit_value)
             expr_with_param = new_stmt._get_current_expression_for_modification()
-            expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
-            # Preserve parameters from new_stmt by copying its internal state
+
+            # Ensure expression supports limit()
+            if hasattr(expr_with_param, "limit") and callable(expr_with_param.limit):  # pyright: ignore
+                expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))  # pyright: ignore
+            else:
+                logger.warning("Expression does not support limit(), converting to Select")
+                if not isinstance(expr_with_param, exp.Select):
+                    expr_with_param = exp.Select().from_(expr_with_param)
+                expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))
+
             return new_stmt.copy(statement=expr_with_param, parameters=new_stmt._merged_parameters)
 
-        new_expr = new_expr.limit(limit_value)  # type: ignore[attr-defined]
+        # Direct limit without parameter
+        if hasattr(new_expr, "limit") and callable(new_expr.limit):  # pyright: ignore
+            new_expr = new_expr.limit(limit_value)  # pyright: ignore
+        else:
+            logger.warning("Expression does not support limit(), converting to Select")
+            if not isinstance(new_expr, exp.Select):
+                new_expr = exp.Select().from_(new_expr)
+            new_expr = new_expr.limit(limit_value)
+
         return self.copy(statement=new_expr)
 
     def offset(self, offset_value: int, use_parameter: bool = False) -> "SQL":
@@ -1014,15 +1064,32 @@ class SQL:
             A new SQLStatement instance with the offset applied.
         """
         new_expr = self._get_current_expression_for_modification()
+
         if use_parameter:
             param_name = self.get_unique_parameter_name("offset_val")
             new_stmt = self.add_named_parameter(param_name, offset_value)
             expr_with_param = new_stmt._get_current_expression_for_modification()
-            expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
-            # Preserve parameters from new_stmt by copying its internal state
+
+            # Ensure expression supports offset()
+            if hasattr(expr_with_param, "offset") and callable(expr_with_param.offset):  # pyright: ignore
+                expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))  # pyright: ignore
+            else:
+                logger.warning("Expression does not support offset(), converting to Select")
+                if not isinstance(expr_with_param, exp.Select):
+                    expr_with_param = exp.Select().from_(expr_with_param)
+                expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))
+
             return new_stmt.copy(statement=expr_with_param, parameters=new_stmt._merged_parameters)
 
-        new_expr = new_expr.offset(offset_value)  # type: ignore[attr-defined]
+        # Direct offset without parameter
+        if hasattr(new_expr, "offset") and callable(new_expr.offset):  # pyright: ignore
+            new_expr = new_expr.offset(offset_value)  # pyright: ignore
+        else:
+            logger.warning("Expression does not support offset(), converting to Select")
+            if not isinstance(new_expr, exp.Select):
+                new_expr = exp.Select().from_(new_expr)
+            new_expr = new_expr.offset(offset_value)
+
         return self.copy(statement=new_expr)
 
     def order_by(self, *order_expressions: "Union[str, exp.Order, exp.Ordered]") -> "SQL":
@@ -1036,6 +1103,7 @@ class SQL:
         """
         new_expr = self._get_current_expression_for_modification()
         parsed_orders: list[exp.Ordered] = []
+
         for o_expr in order_expressions:
             if isinstance(o_expr, str):
                 # Basic parsing for "col asc", "col desc", "col"
@@ -1054,11 +1122,26 @@ class SQL:
             elif isinstance(o_expr, exp.Ordered):
                 parsed_orders.append(o_expr)
             elif isinstance(o_expr, exp.Order):
-                # Convert Order to Ordered if needed or if sqlglot handles it
-                parsed_orders.append(o_expr)  # type: ignore[arg-type]
+                # Convert Order to Ordered by extracting the expression and desc flag
+                if hasattr(o_expr, "this") and hasattr(o_expr, "desc"):
+                    if o_expr.desc:
+                        parsed_orders.append(o_expr.this.desc())
+                    else:
+                        parsed_orders.append(o_expr.this.asc())
+                else:
+                    # Fallback: treat as ordered expression
+                    parsed_orders.append(o_expr)  # type: ignore[arg-type]
 
         if parsed_orders:
-            new_expr = new_expr.order_by(*parsed_orders)  # type: ignore[attr-defined]
+            # Ensure expression supports order_by()
+            if hasattr(new_expr, "order_by") and callable(new_expr.order_by):  # pyright: ignore
+                new_expr = new_expr.order_by(*parsed_orders)  # pyright: ignore
+            else:
+                logger.warning("Expression does not support order_by(), converting to Select")
+                if not isinstance(new_expr, exp.Select):
+                    new_expr = exp.Select().from_(new_expr)
+                new_expr = new_expr.order_by(*parsed_orders)
+
         return self.copy(statement=new_expr)
 
     def add_named_parameter(self, name: str, value: Any) -> "SQL":

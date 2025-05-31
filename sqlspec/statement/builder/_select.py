@@ -250,6 +250,208 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         """
         return self.join(table, on, alias, "FULL")
 
+    def cross_join(
+        self,
+        table: "Union[str, exp.Expression, SelectBuilder]",
+        alias: "Optional[str]" = None,
+    ) -> "SelectBuilder":
+        """Add CROSS JOIN clause.
+
+        Args:
+            table: The table name, expression, or subquery to cross join.
+            alias: Optional alias for the joined table.
+
+        Raises:
+            SQLBuilderError: If the current expression is not a SELECT statement.
+
+        Returns:
+            SelectBuilder: The current builder instance for method chaining.
+        """
+        if self._expression is None:
+            self._expression = exp.Select()
+        if not isinstance(self._expression, exp.Select):
+            msg = "Cannot add cross join to a non-SELECT expression."
+            raise SQLBuilderError(msg)
+
+        table_expr: exp.Expression
+        if isinstance(table, str):
+            table_expr = exp.table_(table, alias=alias)
+        elif isinstance(table, SelectBuilder):
+            subquery = table.build()
+            subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=self.dialect))
+            table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
+
+            current_params = self._parameters
+            merged_params = ParameterConverter.merge_parameters(
+                parameters=subquery.parameters,
+                args=current_params if isinstance(current_params, list) else None,
+                kwargs=current_params if isinstance(current_params, dict) else {},
+            )
+            self._parameters = merged_params  # type: ignore[assignment]
+        else:
+            table_expr = table
+
+        # CROSS JOIN doesn't have an ON clause
+        join_expr = exp.Join(this=table_expr, kind="CROSS")
+        self._expression = self._expression.join(join_expr, copy=False)
+        return self
+
+    def pivot(
+        self,
+        aggregate_expr: "Union[str, exp.Expression]",
+        for_column: "Union[str, exp.Expression]",
+        in_values: "Union[list[str], list[exp.Expression]]",
+        alias: "Optional[str]" = None,
+    ) -> "SelectBuilder":
+        """Add PIVOT operation to transform rows into columns.
+
+        Args:
+            aggregate_expr: The aggregation function (e.g., "SUM(sales)", "COUNT(*)").
+            for_column: The column whose values become new column headers.
+            in_values: List of values to pivot on (e.g., ["Q1", "Q2", "Q3", "Q4"]).
+            alias: Optional alias for the pivot table.
+
+        Raises:
+            SQLBuilderError: If the current expression is not a SELECT statement.
+
+        Returns:
+            SelectBuilder: The current builder instance for method chaining.
+
+        Example:
+            ```python
+            builder = (
+                sql.select("product", "Q1", "Q2", "Q3", "Q4")
+                .from_("sales_data")
+                .pivot(
+                    "SUM(sales)", "quarter", ["Q1", "Q2", "Q3", "Q4"]
+                )
+            )
+            ```
+        """
+        if self._expression is None:
+            self._expression = exp.Select()
+        if not isinstance(self._expression, exp.Select):
+            msg = "Cannot add pivot to a non-SELECT expression."
+            raise SQLBuilderError(msg)
+
+        # Parse the aggregate expression
+        agg_expr: exp.Expression
+        if isinstance(aggregate_expr, str):
+            parsed_agg = exp.maybe_parse(aggregate_expr, dialect=self.dialect)
+            if not parsed_agg:
+                msg = f"Could not parse aggregate expression: {aggregate_expr}"
+                raise SQLBuilderError(msg)
+            agg_expr = parsed_agg
+        else:
+            agg_expr = aggregate_expr
+
+        # Parse the FOR column
+        for_expr: exp.Expression
+        for_expr = exp.column(for_column) if isinstance(for_column, str) else for_column
+
+        # Parse the IN values
+        in_expressions: list[exp.Expression] = []
+        for value in in_values:
+            if isinstance(value, str):
+                in_expressions.append(exp.Literal.string(value))
+            else:
+                in_expressions.append(value)
+
+        # Find the FROM clause and apply the PIVOT
+        from_clause = self._expression.find(exp.From)
+        if from_clause and from_clause.this:
+            # Create a proper PIVOT table expression
+            # Format: table PIVOT (agg_func FOR column IN (values))
+            pivot_args = {
+                "this": from_clause.this,
+                "expressions": [agg_expr],
+                "field": for_expr,
+                "unpivot": False,
+            }
+
+            # Add IN clause if values provided
+            if in_expressions:
+                pivot_args["in"] = in_expressions
+
+            pivoted_table = exp.Pivot(**pivot_args)
+
+            if alias:
+                pivoted_table = exp.alias_(pivoted_table, alias)
+
+            from_clause.set("this", pivoted_table)
+        else:
+            msg = "Cannot apply PIVOT without a FROM clause."
+            raise SQLBuilderError(msg)
+
+        return self
+
+    def unpivot(
+        self,
+        value_column: "str",
+        name_column: "str",
+        for_columns: "list[str]",
+        alias: "Optional[str]" = None,
+    ) -> "SelectBuilder":
+        """Add UNPIVOT operation to transform columns into rows.
+
+        Args:
+            value_column: Name for the column that will contain the unpivoted values.
+            name_column: Name for the column that will contain the original column names.
+            for_columns: List of column names to unpivot.
+            alias: Optional alias for the unpivot table.
+
+        Raises:
+            SQLBuilderError: If the current expression is not a SELECT statement.
+
+        Returns:
+            SelectBuilder: The current builder instance for method chaining.
+
+        Example:
+            ```python
+            builder = (
+                sql.select("product", "quarter", "sales")
+                .from_("pivot_data")
+                .unpivot("sales", "quarter", ["Q1", "Q2", "Q3", "Q4"])
+            )
+            ```
+        """
+        if self._expression is None:
+            self._expression = exp.Select()
+        if not isinstance(self._expression, exp.Select):
+            msg = "Cannot add unpivot to a non-SELECT expression."
+            raise SQLBuilderError(msg)
+
+        # Create column expressions for the UNPIVOT
+        column_expressions = [exp.Literal.string(col) for col in for_columns]
+
+        # Find the FROM clause and apply the UNPIVOT
+        from_clause = self._expression.find(exp.From)
+        if from_clause and from_clause.this:
+            # Create the UNPIVOT expression
+            # Format: table UNPIVOT (value_col FOR name_col IN (columns))
+            unpivot_args = {
+                "this": from_clause.this,
+                "expressions": [exp.column(value_column)],
+                "field": exp.column(name_column),
+                "unpivot": True,
+            }
+
+            # Add IN clause for columns to unpivot
+            if column_expressions:
+                unpivot_args["in"] = column_expressions
+
+            unpivoted_table = exp.Pivot(**unpivot_args)
+
+            if alias:
+                unpivoted_table = exp.alias_(unpivoted_table, alias)
+
+            from_clause.set("this", unpivoted_table)
+        else:
+            msg = "Cannot apply UNPIVOT without a FROM clause."
+            raise SQLBuilderError(msg)
+
+        return self
+
     def with_(
         self,
         name: "str",
@@ -348,17 +550,27 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         self._expression = self._expression.where(condition_expr, copy=False)
         return self
 
-    def group_by(self, *columns: "Union[str, exp.Expression]") -> "SelectBuilder":
-        """Add GROUP BY clause.
+    def group_by(self, *columns: "Union[str, exp.Expression]", rollup: bool = False) -> "SelectBuilder":
+        """Add GROUP BY clause with optional ROLLUP support.
 
         Args:
             *columns: Columns to group by. Can be strings (column names) or sqlglot expressions.
+            rollup: If True, use ROLLUP to generate subtotals and grand totals.
 
         Raises:
             SQLBuilderError: If the current expression is not a SELECT statement.
 
         Returns:
             SelectBuilder: The current builder instance for method chaining.
+
+        Example:
+            ```python
+            # Regular GROUP BY
+            builder.group_by("product", "region")
+
+            # GROUP BY with ROLLUP for subtotals
+            builder.group_by("product", "region", rollup=True)
+            ```
         """
         if self._expression is None:
             self._expression = exp.Select()
@@ -366,9 +578,16 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
             msg = "Cannot add GROUP BY to a non-SELECT expression."
             raise SQLBuilderError(msg)
 
-        for column in columns:
-            group_expr = exp.column(column) if isinstance(column, str) else column
-            self._expression = self._expression.group_by(group_expr, copy=False)
+        if rollup and columns:
+            # Create ROLLUP expression with all columns
+            column_exprs = [exp.column(col) if isinstance(col, str) else col for col in columns]
+            rollup_expr = exp.Rollup(expressions=column_exprs)
+            self._expression = self._expression.group_by(rollup_expr, copy=False)
+        else:
+            # Regular GROUP BY
+            for column in columns:
+                group_expr = exp.column(column) if isinstance(column, str) else column
+                self._expression = self._expression.group_by(group_expr, copy=False)
         return self
 
     def having(self, condition: "Union[str, exp.Expression]") -> "SelectBuilder":
@@ -862,6 +1081,136 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         not_null_expr = exp.Is(this=col_expr, expression=exp.Null())
         not_null_expr = exp.Not(this=not_null_expr)  # type: ignore[assignment]
         return self.where(not_null_expr)
+
+    def where_any(
+        self, column: "Union[str, exp.Expression]", values: "Union[list[Any], tuple[Any, ...], SelectBuilder, str]"
+    ) -> "SelectBuilder":
+        """Add a WHERE column = ANY(values) condition.
+
+        Args:
+            column: The column to check.
+            values: List of values, tuple, subquery, or SQL string.
+
+        Raises:
+            SQLBuilderError: If the current expression is not a SELECT statement or values type is unsupported.
+
+        Returns:
+            SelectBuilder: The current builder instance for method chaining.
+        """
+        col_expr = exp.column(column) if isinstance(column, str) else column
+
+        if isinstance(values, (list, tuple)):
+            # For list/tuple, add as a single parameter and use ANY with array
+            param_name = self._add_parameter(values)
+            array_expr = exp.Placeholder(this=param_name)
+            any_condition = exp.EQ(this=col_expr, expression=exp.Any(this=array_expr))
+            return self.where(any_condition)
+
+        if isinstance(values, SelectBuilder):
+            # For subquery
+            sub_sql_obj = values.build()
+            if not sub_sql_obj.sql:
+                msg = "Subquery for ANY produced an empty SQL string."
+                raise SQLBuilderError(msg)
+
+            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect)
+            if not sub_expr:
+                msg = f"Could not parse subquery for ANY: {values}"
+                raise SQLBuilderError(msg)
+
+            any_condition = exp.EQ(this=col_expr, expression=exp.Any(this=sub_expr))
+
+            # Merge parameters
+            current_params = self._parameters
+            merged_params = ParameterConverter.merge_parameters(
+                parameters=sub_sql_obj.parameters,
+                args=current_params if isinstance(current_params, list) else None,
+                kwargs=current_params if isinstance(current_params, dict) else {},
+            )
+            if merged_params is not None:
+                self._parameters = merged_params  # type: ignore[assignment]
+
+            return self.where(any_condition)
+
+        if isinstance(values, str):
+            # For raw SQL string
+            if not values.strip():
+                msg = "Raw SQL for ANY cannot be empty."
+                raise SQLBuilderError(msg)
+            sub_expr = exp.maybe_parse(values, dialect=self.dialect)
+            if not sub_expr:
+                msg = f"Could not parse raw SQL for ANY: {values}"
+                raise SQLBuilderError(msg)
+            any_condition = exp.EQ(this=col_expr, expression=exp.Any(this=sub_expr))
+            return self.where(any_condition)
+
+        msg = f"Unsupported values type for ANY clause: {type(values)}"
+        raise SQLBuilderError(msg)
+
+    def where_not_any(
+        self, column: "Union[str, exp.Expression]", values: "Union[list[Any], tuple[Any, ...], SelectBuilder, str]"
+    ) -> "SelectBuilder":
+        """Add a WHERE NOT (column = ANY(values)) condition.
+
+        Args:
+            column: The column to check.
+            values: List of values, tuple, subquery, or SQL string.
+
+        Raises:
+            SQLBuilderError: If the current expression is not a SELECT statement or values type is unsupported.
+
+        Returns:
+            SelectBuilder: The current builder instance for method chaining.
+        """
+        col_expr = exp.column(column) if isinstance(column, str) else column
+
+        if isinstance(values, (list, tuple)):
+            # For list/tuple, add as a single parameter and use NOT ANY with array
+            param_name = self._add_parameter(values)
+            array_expr = exp.Placeholder(this=param_name)
+            not_any_condition = exp.Not(this=exp.EQ(this=col_expr, expression=exp.Any(this=array_expr)))
+            return self.where(not_any_condition)
+
+        if isinstance(values, SelectBuilder):
+            # For subquery
+            sub_sql_obj = values.build()
+            if not sub_sql_obj.sql:
+                msg = "Subquery for NOT ANY produced an empty SQL string."
+                raise SQLBuilderError(msg)
+
+            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect)
+            if not sub_expr:
+                msg = f"Could not parse subquery for NOT ANY: {values}"
+                raise SQLBuilderError(msg)
+
+            not_any_condition = exp.Not(this=exp.EQ(this=col_expr, expression=exp.Any(this=sub_expr)))
+
+            # Merge parameters
+            current_params = self._parameters
+            merged_params = ParameterConverter.merge_parameters(
+                parameters=sub_sql_obj.parameters,
+                args=current_params if isinstance(current_params, list) else None,
+                kwargs=current_params if isinstance(current_params, dict) else {},
+            )
+            if merged_params is not None:
+                self._parameters = merged_params  # type: ignore[assignment]
+
+            return self.where(not_any_condition)
+
+        if isinstance(values, str):
+            # For raw SQL string
+            if not values.strip():
+                msg = "Raw SQL for NOT ANY cannot be empty."
+                raise SQLBuilderError(msg)
+            sub_expr = exp.maybe_parse(values, dialect=self.dialect)
+            if not sub_expr:
+                msg = f"Could not parse raw SQL for NOT ANY: {values}"
+                raise SQLBuilderError(msg)
+            not_any_condition = exp.Not(this=exp.EQ(this=col_expr, expression=exp.Any(this=sub_expr)))
+            return self.where(not_any_condition)
+
+        msg = f"Unsupported values type for ANY clause: {type(values)}"
+        raise SQLBuilderError(msg)
 
     def count_(self, column: "Union[str, exp.Expression]" = '"*"', alias: "Optional[str]" = None) -> "SelectBuilder":
         """Add COUNT function to SELECT clause.

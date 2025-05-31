@@ -3,12 +3,12 @@
 import pytest
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import MergeBuilder, merge, select
+from sqlspec.statement.builder import MergeBuilder, SelectBuilder
 
 
-def test_basic_merge() -> None:
+def test_basic_MergeBuilder() -> None:
     """Test basic MERGE statement construction."""
-    builder = merge()
+    builder = MergeBuilder()
     result = (
         builder.into("target_table")
         .using("source_table", "src")
@@ -27,8 +27,8 @@ def test_basic_merge() -> None:
 
 def test_merge_with_subquery_source() -> None:
     """Test MERGE with subquery as source."""
-    subquery = select("id", "name").from_("temp_updates")
-    builder = merge()
+    subquery = SelectBuilder().select("id", "name").from_("temp_updates")
+    builder = MergeBuilder()
     result = (
         builder.into("users")
         .using(subquery, "src")
@@ -43,7 +43,7 @@ def test_merge_with_subquery_source() -> None:
 
 def test_merge_when_matched_then_delete() -> None:
     """Test MERGE with DELETE action for matched rows."""
-    builder = merge()
+    builder = MergeBuilder()
     result = (
         builder.into("users").using("inactive_users", "src").on("users.id = src.id").when_matched_then_delete().build()
     )
@@ -55,7 +55,7 @@ def test_merge_when_matched_then_delete() -> None:
 
 def test_merge_when_not_matched_then_insert() -> None:
     """Test MERGE with INSERT action for unmatched rows."""
-    builder = merge()
+    builder = MergeBuilder()
     result = (
         builder.into("users")
         .using("new_users", "src")
@@ -71,7 +71,7 @@ def test_merge_when_not_matched_then_insert() -> None:
 
 def test_merge_multiple_when_clauses() -> None:
     """Test MERGE with multiple WHEN clauses."""
-    builder = merge()
+    builder = MergeBuilder()
     result = (
         builder.into("users")
         .using("user_updates", "src")
@@ -88,7 +88,7 @@ def test_merge_multiple_when_clauses() -> None:
 
 def test_merge_with_conditions() -> None:
     """Test MERGE with conditional WHEN clauses."""
-    builder = merge()
+    builder = MergeBuilder()
     result = (
         builder.into("users")
         .using("user_updates", "src")
@@ -104,7 +104,7 @@ def test_merge_with_conditions() -> None:
 
 def test_merge_parameter_binding() -> None:
     """Test that MERGE values are properly parameterized."""
-    builder = merge()
+    builder = MergeBuilder()
     result = (
         builder.into("users")
         .using("updates", "src")
@@ -120,7 +120,7 @@ def test_merge_parameter_binding() -> None:
 
 def test_merge_chaining() -> None:
     """Test method chaining returns builder instance."""
-    builder = merge()
+    builder = MergeBuilder()
 
     assert isinstance(builder.into("users"), MergeBuilder)
     assert isinstance(builder.using("source", "src"), MergeBuilder)
@@ -131,7 +131,7 @@ def test_merge_chaining() -> None:
 
 def test_merge_insert_column_value_mismatch() -> None:
     """Test that INSERT with mismatched columns/values raises error."""
-    builder = merge()
+    builder = MergeBuilder()
     builder.into("users").using("source", "src").on("users.id = src.id")
 
     with pytest.raises(SQLBuilderError, match="Number of columns must match number of values"):
@@ -143,7 +143,7 @@ def test_merge_insert_column_value_mismatch() -> None:
 
 def test_merge_insert_columns_without_values() -> None:
     """Test that INSERT with columns but no values raises error."""
-    builder = merge()
+    builder = MergeBuilder()
     builder.into("users").using("source", "src").on("users.id = src.id")
 
     with pytest.raises(SQLBuilderError, match="Specifying columns without values"):
@@ -152,7 +152,7 @@ def test_merge_insert_columns_without_values() -> None:
 
 def test_merge_insert_values_without_columns() -> None:
     """Test that INSERT with values but no columns raises error."""
-    builder = merge()
+    builder = MergeBuilder()
     builder.into("users").using("source", "src").on("users.id = src.id")
 
     with pytest.raises(SQLBuilderError, match="Cannot specify values without columns"):
@@ -161,7 +161,7 @@ def test_merge_insert_values_without_columns() -> None:
 
 def test_merge_insert_default_values() -> None:
     """Test MERGE with INSERT DEFAULT VALUES."""
-    builder = merge()
+    builder = MergeBuilder()
     result = (
         builder.into("users")
         .using("source", "src")
@@ -176,7 +176,7 @@ def test_merge_insert_default_values() -> None:
 
 def test_merge_condition_parsing_error() -> None:
     """Test that invalid conditions raise parsing errors."""
-    builder = merge()
+    builder = MergeBuilder()
     builder.into("users").using("source", "src")
 
     # This should work fine - valid condition
@@ -192,7 +192,7 @@ def test_merge_condition_parsing_error() -> None:
 
 def test_merge_with_table_alias() -> None:
     """Test MERGE with table aliases."""
-    builder = merge()
+    builder = MergeBuilder()
     result = (
         builder.into("users", "u")
         .using("user_updates", "src")
@@ -206,7 +206,7 @@ def test_merge_with_table_alias() -> None:
 
 def test_merge_string_representation() -> None:
     """Test string representation of MergeBuilder."""
-    builder = merge()
+    builder = MergeBuilder()
     builder.into("users").using("source", "src").on("users.id = src.id")
 
     sql_str = str(builder)
@@ -215,7 +215,7 @@ def test_merge_string_representation() -> None:
 
 def test_merge_not_matched_by_source() -> None:
     """Test MERGE with NOT MATCHED BY SOURCE."""
-    builder = merge()
+    builder = MergeBuilder()
     result = (
         builder.into("users")
         .using("active_users", "src")
@@ -229,7 +229,7 @@ def test_merge_not_matched_by_source() -> None:
 
 def test_merge_complex_scenario() -> None:
     """Test complex MERGE scenario with multiple operations."""
-    builder = merge()
+    builder = MergeBuilder()
     result = (
         builder.into("inventory", "inv")
         .using("daily_sales", "sales")

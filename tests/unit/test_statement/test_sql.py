@@ -226,7 +226,7 @@ def test_mixed_parameter_handling(
         stmt = SQL(sql, args=args, kwargs=kwargs, config=config)
         if expected_type is None:
             assert stmt.parameters in (None, (), [])
-        elif expected_type == dict:
+        elif expected_type is dict:
             assert isinstance(stmt.parameters, (dict, tuple))
 
 

@@ -36,7 +36,7 @@ ERR_MSG_EXPRESSION_NOT_INITIALIZED = "Internal error: base expression not initia
 
 
 @dataclass(unsafe_hash=True)
-class InsertBuilder(QueryBuilder[ExecuteResult[dict[str, Any]]]):
+class InsertBuilder(QueryBuilder[ExecuteResult]):
     """Builder for INSERT statements.
 
     This builder facilitates the construction of SQL INSERT queries
@@ -102,13 +102,13 @@ class InsertBuilder(QueryBuilder[ExecuteResult[dict[str, Any]]]):
         return exp.Insert()
 
     @property
-    def _expected_result_type(self) -> type[ExecuteResult[dict[str, Any]]]:
+    def _expected_result_type(self) -> type[ExecuteResult]:
         """Specifies the expected result type for an INSERT query.
 
         Returns:
             The type of result expected for INSERT operations.
         """
-        return ExecuteResult[dict[str, Any]]
+        return ExecuteResult
 
     def _get_insert_expression(self) -> exp.Insert:
         """Safely gets and casts the internal expression to exp.Insert.

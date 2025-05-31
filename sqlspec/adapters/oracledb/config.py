@@ -16,7 +16,7 @@ from sqlspec.adapters.oracledb.driver import (
 from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig, SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow, Empty
-from sqlspec.utils.telemetry import instrument_async, instrument_sync
+from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -27,10 +27,9 @@ if TYPE_CHECKING:
 
 __all__ = (
     "OracleAsyncConfig",
-    "OracleAsyncPoolConfig",
     "OracleConnectionConfig",
+    "OraclePoolConfig",
     "OracleSyncConfig",
-    "OracleSyncPoolConfig",
 )
 
 
@@ -89,10 +88,10 @@ class OracleConnectionConfig(TypedDict, total=False):
     """Edition name for edition-based redefinition."""
 
 
-class OracleSyncPoolConfig(TypedDict, total=False):
-    """Oracle synchronous pool configuration as TypedDict.
+class OraclePoolConfig(TypedDict, total=False):
+    """Oracle pool configuration as TypedDict.
 
-    All parameters for oracledb.create_pool().
+    All parameters for oracledb.create_pool() and oracledb.create_pool_async().
     Inherits connection parameters and adds pool-specific settings.
     """
 
@@ -186,94 +185,6 @@ class OracleSyncPoolConfig(TypedDict, total=False):
     """Interval for pinging pooled connections."""
 
 
-class OracleAsyncPoolConfig(TypedDict, total=False):
-    """Oracle asynchronous pool configuration as TypedDict.
-
-    All parameters for oracledb.create_pool_async().
-    Inherits connection parameters and adds pool-specific settings.
-    """
-
-    # Connection parameters (inherit from connection config)
-    dsn: NotRequired[str]
-    """Connection string for the database."""
-
-    user: NotRequired[str]
-    """Username for database authentication."""
-
-    password: NotRequired[str]
-    """Password for database authentication."""
-
-    host: NotRequired[str]
-    """Database server hostname."""
-
-    port: NotRequired[int]
-    """Database server port number."""
-
-    service_name: NotRequired[str]
-    """Oracle service name."""
-
-    sid: NotRequired[str]
-    """Oracle System ID (SID)."""
-
-    wallet_location: NotRequired[str]
-    """Location of Oracle Wallet."""
-
-    wallet_password: NotRequired[str]
-    """Password for accessing Oracle Wallet."""
-
-    config_dir: NotRequired[str]
-    """Directory containing Oracle configuration files."""
-
-    tcp_connect_timeout: NotRequired[float]
-    """Timeout for establishing TCP connections."""
-
-    retry_count: NotRequired[int]
-    """Number of attempts to connect."""
-
-    retry_delay: NotRequired[int]
-    """Time in seconds between connection attempts."""
-
-    mode: NotRequired["AuthMode"]
-    """Session mode (SYSDBA, SYSOPER, etc.)."""
-
-    events: NotRequired[bool]
-    """If True, enables Oracle events for FAN and RLB."""
-
-    edition: NotRequired[str]
-    """Edition name for edition-based redefinition."""
-
-    # Pool-specific parameters
-    min: NotRequired[int]
-    """Minimum number of connections in the pool."""
-
-    max: NotRequired[int]
-    """Maximum number of connections in the pool."""
-
-    increment: NotRequired[int]
-    """Number of connections to create when pool needs to grow."""
-
-    homogeneous: NotRequired[bool]
-    """Whether all connections use the same credentials."""
-
-    timeout: NotRequired[int]
-    """Time in seconds after which idle connections are closed."""
-
-    wait_timeout: NotRequired[int]
-    """Time in seconds to wait for an available connection."""
-
-    max_lifetime_session: NotRequired[int]
-    """Maximum time in seconds that a connection can remain in the pool."""
-
-    max_sessions_per_shard: NotRequired[int]
-    """Maximum number of sessions per shard."""
-
-    soda_metadata_cache: NotRequired[bool]
-    """Whether to enable SODA metadata caching."""
-
-    ping_interval: NotRequired[int]
-    """Interval for pinging pooled connections."""
-
-
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool", OracleSyncDriver]):
     """Configuration for Oracle synchronous database connections using TypedDict."""
 
@@ -282,7 +193,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
 
     def __init__(
         self,
-        pool_config: "OracleSyncPoolConfig",
+        pool_config: "OraclePoolConfig",
         connection_config: "Optional[OracleConnectionConfig]" = None,
         statement_config: "Optional[SQLConfig]" = None,
         instrumentation: "Optional[InstrumentationConfig]" = None,
@@ -336,16 +247,16 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         if self.pool_instance:
             self.pool_instance.close()
 
-    @instrument_sync(operation_type="connection")
     def create_connection(self) -> OracleSyncConnection:
         """Create a single connection (not from pool).
 
         Returns:
             An Oracle Connection instance.
         """
-        import oracledb
+        with instrument_operation(self, "oracle_create_connection", "database"):
+            import oracledb
 
-        return oracledb.connect(**{k: v for k, v in self.connection_config.items() if v is not Empty})
+            return oracledb.connect(**{k: v for k, v in self.connection_config.items() if v is not Empty})
 
     @contextlib.contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[OracleSyncConnection, None, None]":
@@ -409,7 +320,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
 
     def __init__(
         self,
-        pool_config: "OracleAsyncPoolConfig",
+        pool_config: "OraclePoolConfig",
         connection_config: "Optional[OracleConnectionConfig]" = None,
         statement_config: "Optional[SQLConfig]" = None,
         instrumentation: "Optional[InstrumentationConfig]" = None,
@@ -464,16 +375,16 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         if self.pool_instance:
             await self.pool_instance.close()
 
-    @instrument_async(operation_type="connection")
     async def create_connection(self) -> OracleAsyncConnection:
         """Create a single async connection (not from pool).
 
         Returns:
             An Oracle AsyncConnection instance.
         """
-        import oracledb
+        async with instrument_operation_async(self, "oracle_async_create_connection", "database"):
+            import oracledb
 
-        return await oracledb.connect_async(**{k: v for k, v in self.connection_config.items() if v is not Empty})
+            return await oracledb.connect_async(**{k: v for k, v in self.connection_config.items() if v is not Empty})
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[OracleAsyncConnection, None]:

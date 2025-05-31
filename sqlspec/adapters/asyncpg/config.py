@@ -15,7 +15,7 @@ from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow, Empty
-from sqlspec.utils.telemetry import instrument_async
+from sqlspec.utils.telemetry import instrument_operation_async
 
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop
@@ -31,6 +31,7 @@ class AsyncpgConnectionConfig(TypedDict, total=False):
     """AsyncPG connection configuration as TypedDict.
 
     Basic connection parameters for asyncpg.connect().
+    Based on latest AsyncPG documentation.
     """
 
     dsn: NotRequired[str]
@@ -51,11 +52,29 @@ class AsyncpgConnectionConfig(TypedDict, total=False):
     database: NotRequired[str]
     """Database name."""
 
+    ssl: NotRequired[Any]
+    """SSL configuration (True, False, or SSLContext)."""
+
+    passfile: NotRequired[str]
+    """Path to password file."""
+
+    direct_tls: NotRequired[bool]
+    """Use direct TLS connection."""
+
     connect_timeout: NotRequired[float]
     """Connection timeout in seconds."""
 
     command_timeout: NotRequired[float]
     """Command timeout in seconds."""
+
+    statement_cache_size: NotRequired[int]
+    """Statement cache size."""
+
+    max_cached_statement_lifetime: NotRequired[int]
+    """Maximum cached statement lifetime in seconds."""
+
+    max_cacheable_statement_size: NotRequired[int]
+    """Maximum size of cacheable statements in bytes."""
 
     server_settings: NotRequired[dict[str, str]]
     """Server settings to apply on connection."""
@@ -65,6 +84,7 @@ class AsyncpgPoolConfig(TypedDict, total=False):
     """AsyncPG pool configuration as TypedDict.
 
     All parameters for asyncpg.create_pool() including connection parameters.
+    Based on latest AsyncPG documentation.
     """
 
     # Connection parameters (inherit from connection config)
@@ -86,11 +106,29 @@ class AsyncpgPoolConfig(TypedDict, total=False):
     database: NotRequired[str]
     """Database name."""
 
+    ssl: NotRequired[Any]
+    """SSL configuration (True, False, or SSLContext)."""
+
+    passfile: NotRequired[str]
+    """Path to password file."""
+
+    direct_tls: NotRequired[bool]
+    """Use direct TLS connection."""
+
     connect_timeout: NotRequired[float]
     """Connection timeout in seconds."""
 
     command_timeout: NotRequired[float]
     """Command timeout in seconds."""
+
+    statement_cache_size: NotRequired[int]
+    """Statement cache size."""
+
+    max_cached_statement_lifetime: NotRequired[int]
+    """Maximum cached statement lifetime in seconds."""
+
+    max_cacheable_statement_size: NotRequired[int]
+    """Maximum size of cacheable statements in bytes."""
 
     server_settings: NotRequired[dict[str, str]]
     """Server settings to apply on connection."""
@@ -175,13 +213,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
     @property
     def connection_config_dict(self) -> dict[str, Any]:
         """Return the connection configuration as a dict."""
-        # For asyncpg, connection config comes from pool config
-        config = {k: v for k, v in self.pool_config.items() if v is not Empty}
-
-        # Add basic connection config if provided separately
-        if self.connection_config:
-            basic_config = {k: v for k, v in self.connection_config.items() if v is not Empty}
-            config.update(basic_config)
+        # Merge connection_config into pool_config, with pool_config taking precedence
+        merged_config = {**self.connection_config, **self.pool_config}
+        config = {k: v for k, v in merged_config.items() if v is not Empty}
 
         # Validate essential connection info
         has_dsn = config.get("dsn") is not None
@@ -193,56 +227,78 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         return config
 
-    @property
-    def pool_config_dict(self) -> dict[str, Any]:
-        """Return the pool configuration as a dict."""
-        return {k: v for k, v in self.pool_config.items() if v is not Empty}
+    async def _create_pool_impl(self) -> "Pool[Record]":
+        """Create the actual async connection pool."""
+        pool_args = self.connection_config_dict
+        return await asyncpg_create_pool(**pool_args)
 
-    @instrument_async(operation_type="pool_lifecycle")
-    async def create_pool(self) -> "Pool[Record]":
-        """Create and return an AsyncPG connection pool."""
-        if self.pool_instance is not None:
-            return self.pool_instance
+    async def _close_pool_impl(self) -> None:
+        """Close the actual async connection pool."""
+        if self.pool_instance:
+            await self.pool_instance.close()
 
-        pool_args = self.pool_config_dict
-        self.pool_instance = await asyncpg_create_pool(**pool_args)
-        return self.pool_instance
-
-    @instrument_async(operation_type="connection")
     async def create_connection(self) -> AsyncpgConnection:
-        """Create and return an AsyncPG connection from the pool."""
-        try:
-            pool = await self.create_pool()
-            return await pool.acquire()
-        except Exception as e:
-            msg = f"Could not acquire asyncpg connection from pool. Error: {e!s}"
-            raise ImproperConfigurationError(msg) from e
+        """Create a single async connection (not from pool).
+
+        Returns:
+            An AsyncPG connection instance.
+        """
+        async with instrument_operation_async(self, "asyncpg_create_connection", "database"):
+            import asyncpg
+
+            config = self.connection_config_dict
+            return await asyncpg.connect(**config)
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncpgConnection, None]:
-        """Provide an AsyncPG connection context manager."""
-        pool = await self.create_pool()
-        connection: Optional[AsyncpgConnection] = None
-        try:
-            connection = await pool.acquire()
-            yield connection
-        finally:
-            if connection is not None:
-                await pool.release(connection)
+        """Provide an async connection context manager.
 
-    @instrument_async(operation_type="pool_lifecycle")
-    async def close_pool(self) -> None:
-        """Close the AsyncPG connection pool."""
-        if self.pool_instance is not None:
-            await self.pool_instance.close()
-            self.pool_instance = None
+        Args:
+            *args: Additional arguments.
+            **kwargs: Additional keyword arguments.
+
+        Yields:
+            An AsyncPG connection instance.
+        """
+        if self.pool_instance:
+            connection: Optional[AsyncpgConnection] = None
+            try:
+                connection = await self.pool_instance.acquire()
+                yield connection
+            finally:
+                if connection is not None:
+                    await self.pool_instance.release(connection)
+        else:
+            connection = await self.create_connection()
+            try:
+                yield connection
+            finally:
+                await connection.close()
 
     @asynccontextmanager
     async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncpgDriver, None]:
-        """Provide an AsyncPG driver session context manager."""
+        """Provide an async driver session context manager.
+
+        Args:
+            *args: Additional arguments.
+            **kwargs: Additional keyword arguments.
+
+        Yields:
+            An AsyncpgDriver instance.
+        """
         async with self.provide_connection(*args, **kwargs) as connection:
             yield self.driver_type(
                 connection=connection,
                 config=self.statement_config,
                 instrumentation_config=self.instrumentation,
             )
+
+    async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool[Record]":
+        """Provide async pool instance.
+
+        Returns:
+            The async connection pool.
+        """
+        if not self.pool_instance:
+            self.pool_instance = await self.create_pool()
+        return self.pool_instance

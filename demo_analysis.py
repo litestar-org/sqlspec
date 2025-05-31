@@ -8,6 +8,13 @@ to a proper pipeline component, making it configurable and extensible.
 from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
 from sqlspec.statement.sql import SQL, SQLConfig
 
+__all__ = (
+    "demo_basic_analysis",
+    "demo_custom_analysis_pipeline",
+    "demo_factory_integration",
+    "demo_pipeline_integration",
+)
+
 
 def demo_basic_analysis() -> None:
     """Demo basic analysis functionality."""
@@ -37,9 +44,7 @@ def demo_basic_analysis() -> None:
     ]
 
     for _i, sql in enumerate(sqls, 1):
-
         analyzer.analyze_statement(sql)
-
 
 
 def demo_pipeline_integration() -> None:
@@ -59,13 +64,11 @@ def demo_pipeline_integration() -> None:
     ]
 
     for _i, sql_text in enumerate(sqls, 1):
-
         # Create SQL statement with analysis config
         stmt = SQL(sql_text, config=config)
 
         # Get analysis results
         stmt.analyze()
-
 
         # The analysis result is cached on the statement
 
@@ -78,7 +81,6 @@ def demo_factory_integration() -> None:
     # The factory methods now use the new StatementAnalyzer internally
     sql.insert("INSERT INTO users (name, email) VALUES ('Jane', 'jane@example.com')")
     sql.select("SELECT name, email FROM users WHERE active = true")
-
 
 
 def demo_custom_analysis_pipeline() -> None:
@@ -96,7 +98,6 @@ def demo_custom_analysis_pipeline() -> None:
     sql_text = "SELECT c.name, SUM(o.amount) FROM customers c JOIN orders o ON c.id = o.customer_id GROUP BY c.name"
     stmt = SQL(sql_text, config=config)
 
-
     # Analysis happens automatically during SQL initialization when analyzer is in pipeline
     stmt.analyze()
 
@@ -106,4 +107,3 @@ if __name__ == "__main__":
     demo_pipeline_integration()
     demo_factory_integration()
     demo_custom_analysis_pipeline()
-

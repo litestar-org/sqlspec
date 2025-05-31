@@ -517,7 +517,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         statement: "SQL",
         raw_driver_result: Any,
         **kwargs: Any,
-    ) -> "ExecuteResult[Any]":
+    ) -> "ExecuteResult":
         raise NotImplementedError
 
     # Type-safe overloads based on the refactor plan pattern
@@ -554,7 +554,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "ExecuteResult[Any]": ...
+    ) -> "ExecuteResult": ...
 
     @overload
     def execute(
@@ -602,7 +602,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[SelectResult[dict[str, Any]], ExecuteResult[Any]]": ...
+    ) -> "Union[SelectResult[dict[str, Any]], ExecuteResult]": ...
 
     def execute(
         self,
@@ -613,7 +613,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         connection: "Optional[ConnectionT]" = None,
         config_override: "Optional[SQLConfig]" = None,  # Renamed from 'config' to avoid clash
         **kwargs: Any,
-    ) -> "Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]], ExecuteResult[Any]]":
+    ) -> "Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]], ExecuteResult]":
         with instrument_operation(self, "execute", "database"):
             sql_statement = self._build_statement(statement, config_override, *filters)
             raw_driver_result = self._execute_impl(
@@ -629,14 +629,14 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
 
     def execute_many(
         self,
-        statement: "Union[SQL, Statement, QueryBuilder[ExecuteResult[Any]]]",  # Typically for DML builders
+        statement: "Union[SQL, Statement, QueryBuilder[ExecuteResult]]",  # Typically for DML builders
         parameters: "Optional[Sequence[SQLParameterType]]" = None,
         *filters: "StatementFilter",
         # schema_type is usually not relevant for execute_many's primary result
         connection: "Optional[ConnectionT]" = None,
         config_override: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "ExecuteResult[Any]":
+    ) -> "ExecuteResult":
         with instrument_operation(self, "execute_many", "database"):
             sql_statement = self._build_statement(statement, config_override, *filters)
             raw_driver_result = self._execute_impl(
@@ -651,9 +651,8 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
 
     def execute_script(
         self,
-        statement: "Union[str, SQL]",  # Scripts are often raw strings or SQL objects
+        statement: "Union[str, SQL]",
         parameters: "Optional[SQLParameterType]" = None,
-        # filters and schema_type are less common for scripts but allowed
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         config_override: "Optional[SQLConfig]" = None,
@@ -663,7 +662,11 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
             final_script_content = statement.sql if isinstance(statement, SQL) else statement
 
             sql_placeholder_for_script = SQL(
-                final_script_content, parameters=parameters, dialect=self.dialect, config=config_override or self.config
+                final_script_content,
+                *filters,
+                parameters=parameters,
+                dialect=self.dialect,
+                config=config_override or self.config,
             )
 
             script_output = self._execute_impl(
@@ -753,7 +756,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         statement: "SQL",
         raw_driver_result: Any,
         **kwargs: Any,
-    ) -> "ExecuteResult[Any]":
+    ) -> "ExecuteResult":
         raise NotImplementedError
 
     # Type-safe overloads based on the refactor plan pattern
@@ -790,7 +793,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "ExecuteResult[Any]": ...
+    ) -> "ExecuteResult": ...
 
     @overload
     async def execute(
@@ -838,7 +841,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[SelectResult[dict[str, Any]], ExecuteResult[Any]]": ...
+    ) -> "Union[SelectResult[dict[str, Any]], ExecuteResult]": ...
 
     async def execute(
         self,
@@ -849,7 +852,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         connection: "Optional[ConnectionT]" = None,
         config_override: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]], ExecuteResult[Any]]":
+    ) -> "Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]], ExecuteResult]":
         async with instrument_operation_async(self, "execute", "database"):
             sql_statement = self._build_statement(statement, config_override, *filters)
             raw_driver_result = await self._execute_impl(
@@ -867,13 +870,13 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
 
     async def execute_many(
         self,
-        statement: "Union[SQL, Statement, QueryBuilder[ExecuteResult[Any]]]",
+        statement: "Union[SQL, Statement, QueryBuilder[ExecuteResult]]",
         parameters: "Optional[Sequence[SQLParameterType]]" = None,
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         config_override: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "ExecuteResult[Any]":
+    ) -> "ExecuteResult":
         async with instrument_operation_async(self, "execute_many", "database"):
             sql_statement = self._build_statement(statement, config_override, *filters)
             raw_driver_result = await self._execute_impl(

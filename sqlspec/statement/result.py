@@ -9,6 +9,7 @@ from sqlspec.typing import ArrowTable
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from sqlspec.statement.sql import Statement
 
 __all__ = ("ArrowResult", "ExecuteResult", "ScriptResult", "SelectResult", "StatementResult")
 
@@ -41,15 +42,18 @@ class StatementResult(ABC, Generic[T]):
     SELECT, INSERT/UPDATE/DELETE, and script operations.
 
     Args:
-        raw_result: The raw result from the database driver.
+        statement: The original SQL statement that was executed.
+        data: The result data from the operation.
         rows_affected: Number of rows affected by the operation (if applicable).
         last_inserted_id: Last inserted ID (if applicable).
         execution_time: Time taken to execute the statement in seconds.
         metadata: Additional metadata about the operation.
     """
 
-    raw_result: T
-    """The raw result from the database driver."""
+    statement: "Union[Statement, str]"
+    """The original SQL statement that was executed."""
+    data: Any
+    """The result data from the operation."""
     rows_affected: Optional[int] = None
     """Number of rows affected by the operation."""
     last_inserted_id: Optional[Union[int, str]] = None
@@ -68,7 +72,7 @@ class StatementResult(ABC, Generic[T]):
         """
 
     @abstractmethod
-    def get_data(self) -> Any:
+    def get_data(self) -> "T":
         """Get the processed data from the result.
 
         Returns:
@@ -105,8 +109,6 @@ class SelectResult(StatementResult[T]):
     to access rows, convert to different formats, and handle pagination.
     """
 
-    rows: "Sequence[dict[str, Any]]" = field(default_factory=list)
-    """The fetched rows from the SELECT operation."""
     column_names: "list[str]" = field(default_factory=list)
     """Names of the columns in the result set."""
     total_count: Optional[int] = None
@@ -120,23 +122,23 @@ class SelectResult(StatementResult[T]):
         Returns:
             True if rows were fetched successfully.
         """
-        return self.rows is not None
+        return self.data is not None
 
-    def get_data(self) -> "Sequence[dict[str, Any]]":
-        """Get the rows from the SELECT result.
+    def get_data(self) -> "T":
+        """Get the rows from the result.
 
         Returns:
-            The fetched rows.
+            The rows in the result set.
         """
-        return self.rows
+        return self.data
 
-    def get_first(self) -> "Optional[dict[str, Any]]":
+    def get_first(self) -> "Optional[T]":
         """Get the first row from the result.
 
         Returns:
             The first row or None if no rows.
         """
-        return self.rows[0] if self.rows else None
+        return self.data[0] if self.data else None
 
     def get_count(self) -> int:
         """Get the number of rows returned.
@@ -144,7 +146,7 @@ class SelectResult(StatementResult[T]):
         Returns:
             The number of rows in the result.
         """
-        return len(self.rows)
+        return len(self.data)
 
     def is_empty(self) -> bool:
         """Check if the result set is empty.
@@ -152,11 +154,11 @@ class SelectResult(StatementResult[T]):
         Returns:
             True if no rows were returned.
         """
-        return len(self.rows) == 0
+        return len(self.data) == 0
 
 
 @dataclass
-class ExecuteResult(StatementResult[T]):
+class ExecuteResult(StatementResult[ExecuteResultData]):
     """Result class for INSERT, UPDATE, DELETE operations.
 
     This class handles the results of data modification operations,
@@ -253,7 +255,7 @@ class ExecuteResult(StatementResult[T]):
 
 
 @dataclass
-class ScriptResult(StatementResult[T]):
+class ScriptResult(StatementResult[ScriptResultData]):
     """Result class for script execution (multiple statements).
 
     This class handles the results of script execution containing
@@ -360,13 +362,11 @@ class ArrowResult(StatementResult[ArrowTable]):
     useful for analytics workloads and data science applications.
 
     Args:
-        arrow_table: The Apache Arrow Table containing the result data.
-        raw_result: The raw result from the database driver.
+        statement: The original SQL statement that was executed.
+        data: The Apache Arrow Table containing the result data.
         schema: Optional Arrow schema information.
     """
 
-    arrow_table: Optional["ArrowTable"] = None
-    """The Apache Arrow Table containing the result data."""
     schema: Optional["dict[str, Any]"] = None
     """Optional Arrow schema information."""
 
@@ -376,7 +376,7 @@ class ArrowResult(StatementResult[ArrowTable]):
         Returns:
             True if the operation completed successfully and has valid Arrow data.
         """
-        return self.arrow_table is not None
+        return self.data is not None
 
     def get_data(self) -> "ArrowTable":  # pyright: ignore
         """Get the Apache Arrow Table from the result.
@@ -387,10 +387,10 @@ class ArrowResult(StatementResult[ArrowTable]):
         Raises:
             ValueError: If no Arrow table is available.
         """
-        if self.arrow_table is None:
+        if self.data is None:
             msg = "No Arrow table available for this result"
             raise ValueError(msg)
-        return self.arrow_table
+        return self.data
 
     def column_names(self) -> "list[str]":
         """Get the column names from the Arrow table.
@@ -401,11 +401,11 @@ class ArrowResult(StatementResult[ArrowTable]):
         Raises:
             ValueError: If no Arrow table is available.
         """
-        if self.arrow_table is None:
+        if self.data is None:
             msg = "No Arrow table available"
             raise ValueError(msg)
 
-        return self.arrow_table.column_names
+        return self.data.column_names
 
     def num_rows(self) -> int:
         """Get the number of rows in the Arrow table.
@@ -416,11 +416,11 @@ class ArrowResult(StatementResult[ArrowTable]):
         Raises:
             ValueError: If no Arrow table is available.
         """
-        if self.arrow_table is None:
+        if self.data is None:
             msg = "No Arrow table available"
             raise ValueError(msg)
 
-        return self.arrow_table.num_rows
+        return self.data.num_rows
 
     def num_columns(self) -> int:
         """Get the number of columns in the Arrow table.
@@ -431,8 +431,8 @@ class ArrowResult(StatementResult[ArrowTable]):
         Raises:
             ValueError: If no Arrow table is available.
         """
-        if self.arrow_table is None:
+        if self.data is None:
             msg = "No Arrow table available"
             raise ValueError(msg)
 
-        return self.arrow_table.num_columns
+        return self.data.num_columns

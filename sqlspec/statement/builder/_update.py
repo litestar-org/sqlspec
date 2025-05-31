@@ -25,7 +25,7 @@ logger = logging.getLogger("sqlspec")
 
 
 @dataclass(unsafe_hash=True)
-class UpdateBuilder(QueryBuilder[ExecuteResult[dict[str, Any]]], WhereClauseMixin):
+class UpdateBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
     """Builder for UPDATE statements.
 
     This builder provides a fluent interface for constructing SQL UPDATE statements
@@ -64,9 +64,9 @@ class UpdateBuilder(QueryBuilder[ExecuteResult[dict[str, Any]]], WhereClauseMixi
     _table: "Optional[str]" = field(default=None, init=False)
 
     @property
-    def _expected_result_type(self) -> "type[ExecuteResult[dict[str, Any]]]":
+    def _expected_result_type(self) -> "type[ExecuteResult]":
         """Return the expected result type for this builder."""
-        return ExecuteResult[dict[str, Any]]
+        return ExecuteResult
 
     def _create_base_expression(self) -> exp.Update:
         """Create a base UPDATE expression.

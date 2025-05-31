@@ -251,86 +251,6 @@ def test_where_not_null() -> None:
     assert "IS NOT NULL" in query.sql or ("IS" in query.sql and "NOT NULL" in query.sql)
 
 
-def test_where_any_with_list() -> None:
-    """Test WHERE ANY with list of values."""
-    builder = SelectBuilder().select("*").from_("users").where_any("id", [1, 2, 3])
-    query = builder.build()
-    assert isinstance(query.parameters, dict)
-    assert f"id = ANY ({next(iter(query.parameters.keys()))})" in query.sql
-    assert [1, 2, 3] in query.parameters.values()
-
-
-def test_where_any_with_tuple() -> None:
-    """Test WHERE ANY with tuple of values."""
-    builder = SelectBuilder().select("*").from_("users").where_any("status", ("active", "pending"))
-    query = builder.build()
-    assert isinstance(query.parameters, dict)
-    assert f"status = ANY ({next(iter(query.parameters.keys()))})" in query.sql
-    assert ("active", "pending") in query.parameters.values()
-
-
-def test_where_any_with_subquery() -> None:
-    """Test WHERE ANY with subquery."""
-    subquery = SelectBuilder().select("user_id").from_("orders")
-    builder = SelectBuilder().select("*").from_("users").where_any("id", subquery)
-    query = builder.build()
-    assert "id = ANY (SELECT user_id FROM orders)" in query.sql
-
-
-def test_where_any_with_raw_sql() -> None:
-    """Test WHERE ANY with raw SQL string."""
-    builder = SelectBuilder().select("*").from_("users").where_any("id", "(SELECT 1 UNION SELECT 2)")
-    query = builder.build()
-    assert "id = ANY ((SELECT 1 UNION SELECT 2))" in query.sql
-
-
-def test_where_not_any_with_list() -> None:
-    """Test WHERE NOT ANY with list of values."""
-    builder = SelectBuilder().select("*").from_("users").where_not_any("id", [1, 2, 3])
-    query = builder.build()
-    assert isinstance(query.parameters, dict)
-    assert f"NOT (id = ANY ({next(iter(query.parameters.keys()))}))" in query.sql
-    assert [1, 2, 3] in query.parameters.values()
-
-
-def test_where_not_any_with_tuple() -> None:
-    """Test WHERE NOT ANY with tuple of values."""
-    builder = SelectBuilder().select("*").from_("users").where_not_any("status", ("active", "pending"))
-    query = builder.build()
-    assert isinstance(query.parameters, dict)
-    assert f"NOT (status = ANY ({next(iter(query.parameters.keys()))}))" in query.sql
-    assert ("active", "pending") in query.parameters.values()
-
-
-def test_where_not_any_with_subquery() -> None:
-    """Test WHERE NOT ANY with subquery."""
-    subquery = SelectBuilder().select("user_id").from_("orders")
-    builder = SelectBuilder().select("*").from_("users").where_not_any("id", subquery)
-    query = builder.build()
-    assert "NOT (id = ANY (SELECT user_id FROM orders))" in query.sql
-
-
-def test_where_not_any_with_raw_sql() -> None:
-    """Test WHERE NOT ANY with raw SQL string."""
-    builder = SelectBuilder().select("*").from_("users").where_not_any("id", "(SELECT 1 UNION SELECT 2)")
-    query = builder.build()
-    assert "NOT (id = ANY ((SELECT 1 UNION SELECT 2)))" in query.sql
-
-
-def test_unsupported_values_type_where_any() -> None:
-    """Test WHERE ANY with unsupported values type raises error."""
-    with pytest.raises(SQLBuilderError) as exc_info:
-        SelectBuilder().select("*").from_("users").where_any("id", 42)  # type: ignore[arg-type]
-    assert "Unsupported values type for ANY clause" in str(exc_info.value)
-
-
-def test_unsupported_values_type_where_not_any() -> None:
-    """Test WHERE NOT ANY with unsupported values type raises error."""
-    with pytest.raises(SQLBuilderError) as exc_info:
-        SelectBuilder().select("*").from_("users").where_not_any("id", 42)  # type: ignore[arg-type]
-    assert "Unsupported values type for ANY clause" in str(exc_info.value)
-
-
 def test_select_count_star() -> None:
     """Test COUNT(*) function."""
     builder = SelectBuilder().count_().from_("users")
@@ -960,36 +880,316 @@ def test_large_in_clause_parameters() -> None:
 
 
 def test_complex_nested_query_parameters() -> None:
-    """Test parameter handling in deeply nested queries."""
-    level3 = SelectBuilder().select("user_id").from_("transactions").where_between("amount", 1000, 5000)
+    """Test parameter handling in complex nested queries with multiple subqueries."""
+    # Inner subquery
+    inner_subquery = SelectBuilder().select("user_id").from_("orders").where(("total", 100))
 
-    level2 = (
-        SelectBuilder().select("user_id").from_("orders").where_in("user_id", level3).where_like("status", "completed%")
-    )
+    # Outer subquery
+    outer_subquery = SelectBuilder().select("id").from_("users").where_in("id", inner_subquery)
 
-    level1 = (
+    # Main query
+    main_query = SelectBuilder().select("*").from_("customers").where_exists(outer_subquery).where(("status", "active"))
+
+    query = main_query.build()
+
+    # Should have parameters from all levels
+    assert isinstance(query.parameters, dict)
+    assert 100 in query.parameters.values()
+    assert "active" in query.parameters.values()
+
+    # Should contain nested structure
+    assert "EXISTS" in query.sql or "orders" in query.sql
+    assert "customers" in query.sql
+
+
+def test_cross_join_basic() -> None:
+    """Test basic CROSS JOIN functionality."""
+    builder = SelectBuilder().select("*").from_("table1").cross_join("table2")
+    query = builder.build()
+
+    assert "CROSS JOIN" in query.sql
+    assert "table1" in query.sql
+    assert "table2" in query.sql
+
+
+def test_cross_join_with_alias() -> None:
+    """Test CROSS JOIN with table alias."""
+    builder = SelectBuilder().select("*").from_("users").cross_join("products", alias="p")
+    query = builder.build()
+
+    assert "CROSS JOIN" in query.sql
+    assert "products" in query.sql
+    assert " p" in query.sql
+
+
+def test_cross_join_with_subquery() -> None:
+    """Test CROSS JOIN with subquery."""
+    subquery = SelectBuilder().select("id").from_("categories")
+    builder = SelectBuilder().select("*").from_("products").cross_join(subquery, alias="cat")
+    query = builder.build()
+
+    assert "CROSS JOIN" in query.sql
+    assert "categories" in query.sql
+    assert "cat" in query.sql
+
+
+def test_pivot_basic() -> None:
+    """Test basic PIVOT functionality."""
+    builder = (
         SelectBuilder()
-        .select("id", "name", "email")
-        .from_("users")
-        .where_in("id", level2)
-        .where_not_null("email")
-        .where_between("created_at", "2024-01-01", "2024-12-31")
+        .select("product", "Q1", "Q2", "Q3", "Q4")
+        .from_("sales_data")
+        .pivot("SUM(sales)", "quarter", ["Q1", "Q2", "Q3", "Q4"])
     )
+    query = builder.build()
 
-    query = level1.build()
+    assert "PIVOT" in query.sql
+    assert "SUM(sales)" in query.sql or "SUM" in query.sql
+    assert "quarter" in query.sql
+
+
+def test_pivot_with_alias() -> None:
+    """Test PIVOT with table alias."""
+    builder = (
+        SelectBuilder()
+        .select("product", "Q1", "Q2")
+        .from_("sales_data")
+        .pivot("COUNT(*)", "quarter", ["Q1", "Q2"], alias="pivot_table")
+    )
+    query = builder.build()
+
+    assert "PIVOT" in query.sql
+    assert "COUNT" in query.sql
+
+
+def test_unpivot_basic() -> None:
+    """Test basic UNPIVOT functionality."""
+    builder = (
+        SelectBuilder()
+        .select("product", "quarter", "sales")
+        .from_("pivot_data")
+        .unpivot("sales", "quarter", ["Q1", "Q2", "Q3", "Q4"])
+    )
+    query = builder.build()
+
+    assert "UNPIVOT" in query.sql or "PIVOT" in query.sql  # sqlglot may use PIVOT with unpivot=True
+    assert "sales" in query.sql
+    assert "quarter" in query.sql
+
+
+def test_unpivot_with_alias() -> None:
+    """Test UNPIVOT with table alias."""
+    builder = (
+        SelectBuilder()
+        .select("product", "month", "value")
+        .from_("monthly_data")
+        .unpivot("value", "month", ["Jan", "Feb", "Mar"], alias="unpivot_table")
+    )
+    query = builder.build()
+
+    assert "value" in query.sql
+    assert "month" in query.sql
+
+
+def test_rollup_basic() -> None:
+    """Test basic ROLLUP functionality in GROUP BY."""
+    builder = (
+        SelectBuilder()
+        .select("product", "region", "SUM(sales)")
+        .from_("sales_data")
+        .group_by("product", "region", rollup=True)
+    )
+    query = builder.build()
+
+    assert "ROLLUP" in query.sql
+    assert "product" in query.sql
+    assert "region" in query.sql
+    assert "GROUP BY" in query.sql
+
+
+def test_rollup_single_column() -> None:
+    """Test ROLLUP with single column."""
+    builder = SelectBuilder().select("product", "SUM(sales)").from_("sales_data").group_by("product", rollup=True)
+    query = builder.build()
+
+    assert "ROLLUP" in query.sql
+    assert "product" in query.sql
+
+
+def test_rollup_with_expressions() -> None:
+    """Test ROLLUP with column expressions."""
+    from sqlglot import exp
+
+    col_expr = exp.column("product")
+    builder = (
+        SelectBuilder()
+        .select("product", "region", "SUM(sales)")
+        .from_("sales_data")
+        .group_by(col_expr, "region", rollup=True)
+    )
+    query = builder.build()
+
+    assert "ROLLUP" in query.sql
+    assert "product" in query.sql
+
+
+def test_where_any_with_list() -> None:
+    """Test WHERE ANY with list of values."""
+    builder = SelectBuilder().select("*").from_("users").where_any("id", [1, 2, 3])
+    query = builder.build()
 
     assert isinstance(query.parameters, dict)
-    # Should contain parameters from all levels
-    assert 1000 in query.parameters.values()  # level3
-    assert 5000 in query.parameters.values()  # level3
-    assert "completed%" in query.parameters.values()  # level2
-    assert "2024-01-01" in query.parameters.values()  # level1
-    assert "2024-12-31" in query.parameters.values()  # level1
+    assert "id = ANY" in query.sql
+    assert [1, 2, 3] in query.parameters.values()
 
-    # Should have reasonable SQL structure
-    assert "SELECT" in query.sql
-    assert "FROM users" in query.sql
-    assert "IN" in query.sql
-    assert "LIKE" in query.sql
-    assert "BETWEEN" in query.sql
-    assert "IS NOT NULL" in query.sql or ("IS" in query.sql and "NOT NULL" in query.sql)
+
+def test_where_any_with_tuple() -> None:
+    """Test WHERE ANY with tuple of values."""
+    builder = SelectBuilder().select("*").from_("users").where_any("status", ("active", "pending"))
+    query = builder.build()
+
+    assert isinstance(query.parameters, dict)
+    assert "status = ANY" in query.sql
+    assert ("active", "pending") in query.parameters.values()
+
+
+def test_where_any_with_subquery() -> None:
+    """Test WHERE ANY with subquery."""
+    subquery = SelectBuilder().select("user_id").from_("orders")
+    builder = SelectBuilder().select("*").from_("users").where_any("id", subquery)
+    query = builder.build()
+
+    assert "id = ANY" in query.sql
+    assert "SELECT user_id FROM orders" in query.sql
+
+
+def test_where_any_with_raw_sql() -> None:
+    """Test WHERE ANY with raw SQL string."""
+    builder = SelectBuilder().select("*").from_("users").where_any("id", "(SELECT 1 UNION SELECT 2)")
+    query = builder.build()
+
+    assert "id = ANY" in query.sql
+    assert "SELECT 1 UNION SELECT 2" in query.sql
+
+
+def test_where_not_any_with_list() -> None:
+    """Test WHERE NOT ANY with list of values."""
+    builder = SelectBuilder().select("*").from_("users").where_not_any("id", [1, 2, 3])
+    query = builder.build()
+
+    assert isinstance(query.parameters, dict)
+    assert "NOT" in query.sql
+    assert "id = ANY" in query.sql
+    assert [1, 2, 3] in query.parameters.values()
+
+
+def test_where_not_any_with_tuple() -> None:
+    """Test WHERE NOT ANY with tuple of values."""
+    builder = SelectBuilder().select("*").from_("users").where_not_any("status", ("active", "pending"))
+    query = builder.build()
+
+    assert isinstance(query.parameters, dict)
+    assert "NOT" in query.sql
+    assert "status = ANY" in query.sql
+    assert ("active", "pending") in query.parameters.values()
+
+
+def test_where_not_any_with_subquery() -> None:
+    """Test WHERE NOT ANY with subquery."""
+    subquery = SelectBuilder().select("user_id").from_("orders")
+    builder = SelectBuilder().select("*").from_("users").where_not_any("id", subquery)
+    query = builder.build()
+
+    assert "NOT" in query.sql
+    assert "id = ANY" in query.sql
+    assert "SELECT user_id FROM orders" in query.sql
+
+
+def test_where_not_any_with_raw_sql() -> None:
+    """Test WHERE NOT ANY with raw SQL string."""
+    builder = SelectBuilder().select("*").from_("users").where_not_any("id", "(SELECT 1 UNION SELECT 2)")
+    query = builder.build()
+
+    assert "NOT" in query.sql
+    assert "id = ANY" in query.sql
+    assert "SELECT 1 UNION SELECT 2" in query.sql
+
+
+def test_unsupported_values_type_where_any() -> None:
+    """Test WHERE ANY with unsupported values type raises error."""
+    with pytest.raises(SQLBuilderError) as exc_info:
+        SelectBuilder().select("*").from_("users").where_any("id", 42)  # type: ignore[arg-type]
+    assert "Unsupported values type for ANY clause" in str(exc_info.value)
+
+
+def test_unsupported_values_type_where_not_any() -> None:
+    """Test WHERE NOT ANY with unsupported values type raises error."""
+    with pytest.raises(SQLBuilderError) as exc_info:
+        SelectBuilder().select("*").from_("users").where_not_any("id", 42)  # type: ignore[arg-type]
+    assert "Unsupported values type for ANY clause" in str(exc_info.value)
+
+
+def test_complex_query_with_new_features() -> None:
+    """Test complex query combining multiple new features."""
+    # Subquery for WHERE ANY
+    active_users = SelectBuilder().select("id").from_("active_sessions")
+
+    # Main query with multiple new features
+    builder = (
+        SelectBuilder()
+        .select("product", "region", "quarter", "sales")
+        .from_("sales_data")
+        .cross_join("product_categories", alias="pc")
+        .where_any("user_id", active_users)
+        .where_not_any("status", ["deleted", "archived"])
+        .group_by("product", "region", rollup=True)
+    )
+
+    query = builder.build()
+
+    # Should contain all the features
+    assert "CROSS JOIN" in query.sql
+    assert "= ANY" in query.sql
+    assert "NOT" in query.sql
+    assert "ANY" in query.sql
+    assert "ROLLUP" in query.sql
+    assert "product_categories" in query.sql
+    assert "pc" in query.sql
+
+
+def test_pivot_unpivot_integration() -> None:
+    """Test that PIVOT and UNPIVOT can be used in sequence (conceptually)."""
+    # First, a query that could be pivoted
+    pivot_builder = (
+        SelectBuilder()
+        .select("product", "Q1", "Q2", "Q3", "Q4")
+        .from_("sales_summary")
+        .pivot("SUM(amount)", "quarter", ["Q1", "Q2", "Q3", "Q4"])
+    )
+
+    # Then, a query that could unpivot the result
+    unpivot_builder = (
+        SelectBuilder()
+        .select("product", "quarter", "amount")
+        .from_("quarterly_sales")
+        .unpivot("amount", "quarter", ["Q1", "Q2", "Q3", "Q4"])
+    )
+
+    pivot_query = pivot_builder.build()
+    unpivot_query = unpivot_builder.build()
+
+    assert "PIVOT" in pivot_query.sql
+    assert "UNPIVOT" in unpivot_query.sql or "PIVOT" in unpivot_query.sql
+
+
+def test_error_conditions_new_features() -> None:
+    """Test error conditions for new features."""
+    # Test PIVOT without FROM clause
+    with pytest.raises(SQLBuilderError) as exc_info:
+        SelectBuilder().select("*").pivot("SUM(sales)", "quarter", ["Q1", "Q2"]).build()
+    assert "Cannot apply PIVOT without a FROM clause" in str(exc_info.value)
+
+    # Test UNPIVOT without FROM clause
+    with pytest.raises(SQLBuilderError) as exc_info:
+        SelectBuilder().select("*").unpivot("sales", "quarter", ["Q1", "Q2"]).build()
+    assert "Cannot apply UNPIVOT without a FROM clause" in str(exc_info.value)

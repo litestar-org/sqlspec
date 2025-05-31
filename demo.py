@@ -46,6 +46,28 @@ from sqlspec.statement.filters import LimitOffsetFilter, SearchFilter
 if TYPE_CHECKING:
     from sqlspec.statement.sql import SQL
 
+__all__ = (
+    "Analytics",
+    "Order",
+    "Product",
+    "User",
+    "cleanup_demo_files",
+    "create_advanced_sql_files",
+    "create_sample_database",
+    "demo_advanced_filtering",
+    "demo_builder_api_magic",
+    "demo_complex_scenarios",
+    "demo_conclusion",
+    "demo_ecosystem_integration",
+    "demo_header",
+    "demo_performance_showcase",
+    "demo_service_integration",
+    "demo_singleton_caching",
+    "demo_typed_queries",
+    "main",
+)
+
+
 # Initialize Rich console and Faker
 console = Console()
 fake = Faker()
@@ -348,7 +370,7 @@ def create_sample_database() -> Any:
 
     with config.provide_session() as driver:
         # Create tables
-        driver.execute("""
+        driver.execute_script("""
             CREATE SEQUENCE IF NOT EXISTS user_id_seq;
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY DEFAULT nextval('user_id_seq'),
@@ -362,7 +384,7 @@ def create_sample_database() -> Any:
             )
         """)
 
-        driver.execute("""
+        driver.execute_script("""
             CREATE SEQUENCE IF NOT EXISTS product_id_seq;
             CREATE TABLE IF NOT EXISTS products (
                 id INTEGER PRIMARY KEY DEFAULT nextval('product_id_seq'),
@@ -375,7 +397,7 @@ def create_sample_database() -> Any:
             )
         """)
 
-        driver.execute("""
+        driver.execute_script("""
             CREATE SEQUENCE IF NOT EXISTS order_id_seq;
             CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY DEFAULT nextval('order_id_seq'),
@@ -397,15 +419,17 @@ def create_sample_database() -> Any:
         users_data = []
         for _ in range(100):
             hire_date = fake.date_between(start_date="-5y", end_date="today")
-            users_data.append({
-                "name": fake.name(),
-                "email": fake.unique.email(),
-                "department": fake.random_element(departments),
-                "age": fake.random_int(min=22, max=65),
-                "salary": fake.random_int(min=40000, max=200000),
-                "hire_date": hire_date,
-                "active": fake.boolean(chance_of_getting_true=85),
-            })
+            users_data.append(
+                {
+                    "name": fake.name(),
+                    "email": fake.unique.email(),
+                    "department": fake.random_element(departments),
+                    "age": fake.random_int(min=22, max=65),
+                    "salary": fake.random_int(min=40000, max=200000),
+                    "hire_date": hire_date,
+                    "active": fake.boolean(chance_of_getting_true=85),
+                }
+            )
 
         for user in users_data:
             driver.execute(
@@ -443,14 +467,16 @@ def create_sample_database() -> Any:
         for _ in range(500):
             quantity = fake.random_int(min=1, max=5)
             price = fake.random_int(min=10, max=500)
-            orders_data.append({
-                "user_id": fake.random_int(min=1, max=100),
-                "product_id": fake.random_int(min=1, max=50),
-                "quantity": quantity,
-                "total_amount": quantity * price,
-                "order_date": fake.date_time_between(start_date="-1y", end_date="now"),
-                "status": fake.random_element(statuses),
-            })
+            orders_data.append(
+                {
+                    "user_id": fake.random_int(min=1, max=100),
+                    "product_id": fake.random_int(min=1, max=50),
+                    "quantity": quantity,
+                    "total_amount": quantity * price,
+                    "order_date": fake.date_time_between(start_date="-1y", end_date="now"),
+                    "status": fake.random_element(statuses),
+                }
+            )
 
         for order in orders_data:
             driver.execute(
@@ -558,7 +584,7 @@ def demo_typed_queries(loader: "AiosqlLoader") -> tuple["AiosqlQuery", "AiosqlQu
     ]
 
     for name, return_type, op_type, sql_preview in queries_info:
-        table.add_row(name, return_type, op_type, sql_preview)
+        table.add_row(name, return_type, str(op_type), sql_preview)
 
     console.print(table)
     console.print()
@@ -730,7 +756,7 @@ def demo_complex_scenarios(driver: Any, loader: "AiosqlLoader") -> None:
             details_table.add_column("Value", style="white")
 
             details_table.add_row("Query Name:", query.name)
-            details_table.add_row("Operation Type:", query.operation_type)
+            details_table.add_row("Operation Type:", str(query.operation_type))
             details_table.add_row("Parameters:", str(scenario["params"]))
             details_table.add_row("SQL Length:", f"{len(query.sql_text)} characters")
 

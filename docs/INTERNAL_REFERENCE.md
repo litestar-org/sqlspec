@@ -36,7 +36,7 @@ result = driver.execute("SELECT * FROM users")
 
 # Results in telemetry hierarchy:
 # 1. High-level: "execute" operation (API usage)
-# 2. Low-level: "psycopg_execute" operation (database access)  
+# 2. Low-level: "psycopg_execute" operation (database access)
 # 3. Low-level: "psycopg_wrap_select" operation (result processing)
 ```
 
@@ -68,7 +68,7 @@ result = driver.execute("SELECT * FROM users")
 **CODE EXAMPLES**:
 
 ```python
-# With schema type - gets SelectResult[User] 
+# With schema type - gets SelectResult[User]
 users = driver.execute("SELECT * FROM users", schema_type=User)
 
 # Without schema type - gets SelectResult[dict[str, Any]]
@@ -85,7 +85,7 @@ user_name = raw_data.rows[0]["name"]  # ✅ Dict access
 @overload
 def execute(statement: SelectBuilder, *, schema_type: type[ModelDTOT]) -> SelectResult[ModelDTOT]: ...
 
-@overload  
+@overload
 def execute(statement: SelectBuilder, *, schema_type: None = None) -> SelectResult[dict[str, Any]]: ...
 ```
 
@@ -98,7 +98,7 @@ def execute(statement: SelectBuilder, *, schema_type: None = None) -> SelectResu
 **IMPLEMENTATION**:
 
 - Pool creation: `_create_pool_impl()` with timing and logging
-- Pool closure: `_close_pool_impl()` with cleanup tracking  
+- Pool closure: `_close_pool_impl()` with cleanup tracking
 - Connection provision: Context managers for connection lifecycle
 - Session provision: Context managers for driver instances
 
@@ -180,7 +180,7 @@ logger.debug(
     final_sql,
     extra={
         "dialect": self.dialect,
-        "is_many": is_many, 
+        "is_many": is_many,
         "is_script": is_script,
         "param_count": len(final_exec_params) if isinstance(final_exec_params, dict) else 0,
     },
@@ -217,7 +217,7 @@ SyncDriverAdapterProtocol
 ├── SyncInstrumentationMixin (telemetry capabilities)
 └── Abstract methods for driver implementation
 
-PsycopgSyncDriver  
+PsycopgSyncDriver
 ├── Inherits from SyncDriverAdapterProtocol
 └── Implements: _execute_impl, _wrap_select_result, _wrap_execute_result
 ```
@@ -426,7 +426,7 @@ result = driver.execute("SELECT * FROM users", schema_type=User)
 # 1. Build SQL statement from input
 sql_statement = self._build_statement(statement, config, *filters)
 
-# 2. Execute via driver-specific implementation  
+# 2. Execute via driver-specific implementation
 raw_result = self._execute_impl(sql_statement, parameters, connection)
 
 # 3. Wrap result based on statement type
@@ -861,7 +861,7 @@ query = (
 salary_category = (
     sql.case()
     .when(sql.salary < 50000, "Junior")
-    .when(sql.salary < 100000, "Mid-level") 
+    .when(sql.salary < 100000, "Mid-level")
     .when(sql.salary < 150000, "Senior")
     .else_("Executive")
     .end()
@@ -951,7 +951,7 @@ async with sqlspec.provide_session(MyDatabaseConfig) as driver:
         .where_eq("active", True),
         schema_type=User
     )
-    
+
     # Raw SQL enhanced with builder
     complex_result = await driver.execute(
         sql.select("SELECT u.*, COUNT(o.id) as order_count FROM users u")
@@ -961,7 +961,7 @@ async with sqlspec.provide_session(MyDatabaseConfig) as driver:
         .having("COUNT(o.id) > 0"),
         schema_type=UserWithOrders
     )
-    
+
     # Batch operations
     await driver.execute_many(
         sql.insert("audit_log").columns("action", "user_id", "timestamp"),
@@ -1066,7 +1066,7 @@ RETURNING id, name, email, department
 SELECT * FROM users
 WHERE salary > :min_salary
   AND active = TRUE
-  AND (name ILIKE '%' || :search_term || '%' 
+  AND (name ILIKE '%' || :search_term || '%'
        OR email ILIKE '%' || :search_term || '%')
 ```
 
@@ -1207,7 +1207,7 @@ queries = aiosql.from_path("queries.sql", adapter)
 
 # Same interface, but now with SQLSpec power!
 result = queries.get_users(
-    conn, 
+    conn,
     department="Engineering",
     _sqlspec_filters=[LimitOffsetFilter(50, 0)]  # NEW: SQLSpec filters!
 )
@@ -1223,12 +1223,12 @@ The contents of `analytics.sql`:
 
 ```sql
 -- name: complex_analytics^
-SELECT 
+SELECT
     department,
     COUNT(*) as employee_count,
     AVG(salary) as avg_salary,
     MAX(hire_date) as newest_hire
-FROM users 
+FROM users
 WHERE active = TRUE
 GROUP BY department
 HAVING COUNT(*) > :min_employees
@@ -1294,7 +1294,7 @@ async def generate_department_report(department: str, start_date: datetime):
         parameters={"department": department, "start_date": start_date},
         schema_type=User
     )
-    
+
     # 2. Analytics with filters
     analytics_query = analytics_loader.get_query("department_performance", return_type=Analytics)
     performance = await driver.execute(
@@ -1303,7 +1303,7 @@ async def generate_department_report(department: str, start_date: datetime):
         filters=[LimitOffsetFilter(10, 0)],
         schema_type=Analytics
     )
-    
+
     # 3. Complex reporting with service
     reports = service.load_queries("complex_reports.sql")
     revenue_data = await service.execute_query_with_filters(
@@ -1313,7 +1313,7 @@ async def generate_department_report(department: str, start_date: datetime):
         filters=[SearchFilter("status", "completed")],
         schema_type=RevenueReport
     )
-    
+
     return {
         "users": users.rows,
         "performance": performance.rows,
@@ -1345,7 +1345,7 @@ enhanced = query.where("active = true").limit(10)  # Fast transformation
 # Performance showcase from real usage
 metrics = {
     "File Parsing": "Once per file",          # Singleton eliminates re-parsing
-    "Query Loading": "< 1ms (cached)",        # Lightning-fast retrieval  
+    "Query Loading": "< 1ms (cached)",        # Lightning-fast retrieval
     "Filter Application": "< 0.1ms",          # Efficient SQL transformation
     "Memory Usage": "Minimal",                # Shared cached queries
     "Type Safety": "100%",                    # Full validation support
@@ -1388,7 +1388,7 @@ result = await driver.execute(
 
 # 4. Instrumentation and monitoring (automatic)
 # - OpenTelemetry tracing
-# - Prometheus metrics  
+# - Prometheus metrics
 # - Query performance tracking
 # - Error reporting
 ```
@@ -1397,7 +1397,7 @@ result = await driver.execute(
 
 - **Zero Migration Cost**: Drop-in replacement for existing aiosql setups
 - **Performance Revolution**: Singleton caching provides massive speedups
-- **Builder API Magic**: Enhance file-loaded queries with SQLSpec builder patterns  
+- **Builder API Magic**: Enhance file-loaded queries with SQLSpec builder patterns
 - **Filter Ecosystem**: Use powerful SQLSpec filters through `_sqlspec_filters` parameter
 - **Type Safety**: Full type annotation support with return type inference
 - **Service Abstractions**: High-level service for complex workflows and default configurations
@@ -1435,7 +1435,7 @@ result = await driver.execute(
 config = SQLConfig(
     enable_parsing=True,           # SQLGlot parsing for transformations
     enable_validation=True,        # Security and safety checks
-    enable_transformations=True,   # SQL modification capabilities  
+    enable_transformations=True,   # SQL modification capabilities
     enable_analysis=True,          # Metadata extraction
     strict_mode=True,             # Fail fast on validation errors
     processing_pipeline_components=[...],  # Custom processors
@@ -1452,7 +1452,7 @@ stmt = SQL(
 **USER BENEFIT**:
 
 - **Security First**: Automatic SQL injection prevention and security validation
-- **Rich Metadata**: Deep insights into query structure, complexity, and characteristics  
+- **Rich Metadata**: Deep insights into query structure, complexity, and characteristics
 - **Performance**: Intelligent caching at multiple levels (parsing, analysis, validation)
 - **Developer Experience**: Type-safe, immutable objects with comprehensive introspection
 - **Extensibility**: Plugin architecture for custom validators, analyzers, and transformers
@@ -1550,7 +1550,7 @@ from sqlglot import exp
 
 class CustomAnalyzer(ProcessorProtocol[exp.Expression]):
     """Custom processor example."""
-    
+
     def process(
         self,
         expression: exp.Expression,
@@ -1559,11 +1559,11 @@ class CustomAnalyzer(ProcessorProtocol[exp.Expression]):
     ) -> tuple[exp.Expression, Optional[ValidationResult]]:
         # Analyze the expression
         analysis_result = self._perform_analysis(expression)
-        
+
         # Return unchanged expression (analyzers don't modify)
         # and optional validation result
         return expression, None
-    
+
     def _perform_analysis(self, expr: exp.Expression) -> AnalysisResult:
         # Custom analysis logic
         pass
@@ -1627,8 +1627,8 @@ stmt = SQL(
     """
     SELECT u.name, u.email, COUNT(o.id) as order_count,
            AVG(o.amount) as avg_order_value
-    FROM users u 
-    LEFT JOIN orders o ON u.id = o.user_id 
+    FROM users u
+    LEFT JOIN orders o ON u.id = o.user_id
     WHERE u.department IN ('Sales', 'Marketing')
       AND u.active = true
     GROUP BY u.id, u.name, u.email
@@ -1743,7 +1743,7 @@ async with sqlspec.provide_session(PsycopgConfig) as driver:
     # SQLStatement integrates with driver protocol
     result = await driver.execute(stmt, schema_type=User)
     # result.rows is List[User] - type-safe!
-    
+
     users: list[User] = result.rows
     for user in users:
         print(f"User: {user.name} ({user.email})")  # Full type safety
@@ -1766,7 +1766,7 @@ analysis2 = analyzer.analyze_statement("SELECT * FROM users")  # Cached result
 # 3. Parameter Processing Cache
 # Parameter extraction and validation results cached by SQL string
 
-# 4. Validation Result Cache  
+# 4. Validation Result Cache
 # Security validation results cached when expression unchanged
 ```
 
@@ -1791,33 +1791,33 @@ performance_metrics = {
 ```python
 # SQLStatement works directly with all driver methods
 async with sqlspec.provide_session(DatabaseConfig) as driver:
-    
+
     # 1. Single execution with full processing
     stmt = SQL(
         "SELECT * FROM users WHERE department = :dept",
         parameters={"dept": "Engineering"},
         config=SQLConfig(enable_validation=True, enable_analysis=True)
     )
-    
+
     result = await driver.execute(stmt, schema_type=User)
-    
+
     # 2. Batch execution
     insert_stmt = SQL(
         "INSERT INTO audit_log (action, user_id) VALUES (:action, :user_id)",
         config=SQLConfig(enable_validation=True)
     )
-    
+
     await driver.execute_many(insert_stmt, parameters=[
         {"action": "login", "user_id": 1},
         {"action": "logout", "user_id": 1},
     ])
-    
+
     # 3. Script execution (validation disabled for DDL)
     schema_stmt = SQL(
         "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT)",
         config=SQLConfig(enable_validation=False)  # DDL allowed
     )
-    
+
     await driver.execute_script(schema_stmt)
 ```
 
@@ -1870,7 +1870,7 @@ if not validation.is_safe:
     print(f"Validation Issues: {validation.issues}")
     print(f"Warnings: {validation.warnings}")
     print(f"Risk Level: {validation.risk_level}")
-    
+
     # Decide whether to proceed based on risk assessment
     if validation.risk_level.value >= RiskLevel.HIGH.value:
         raise SecurityError("Query too risky to execute")
@@ -1883,10 +1883,10 @@ if not validation.is_safe:
 ```python
 class TableAccessLogger(ProcessorProtocol[exp.Expression]):
     """Log all table access for audit purposes."""
-    
+
     def __init__(self, audit_service: AuditService):
         self.audit_service = audit_service
-    
+
     def process(
         self,
         expression: exp.Expression,
@@ -1895,7 +1895,7 @@ class TableAccessLogger(ProcessorProtocol[exp.Expression]):
     ) -> tuple[exp.Expression, Optional[ValidationResult]]:
         # Extract table names
         tables = [str(t.name) for t in expression.find_all(exp.Table)]
-        
+
         # Log access
         for table in tables:
             self.audit_service.log_table_access(
@@ -1903,7 +1903,7 @@ class TableAccessLogger(ProcessorProtocol[exp.Expression]):
                 query_type=type(expression).__name__,
                 user=config.current_user if config else None
             )
-        
+
         # Return unchanged expression
         return expression, None
 
@@ -1995,7 +1995,7 @@ Copy this template when adding new reference sections:
 **📋 NEXT SECTIONS TO ADD**:
 
 - Error handling patterns and custom exceptions
-- Arrow integration architecture  
+- Arrow integration architecture
 - Statement builder integration
 - Extension system design
 - Testing patterns and fixtures

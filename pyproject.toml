@@ -358,6 +358,7 @@ max-complexity = 25
 max-bool-expr = 10
 max-branches = 20
 max-locals = 20
+max-nested-blocks = 7
 max-returns = 15
 
 [tool.ruff.lint.pep8-naming]

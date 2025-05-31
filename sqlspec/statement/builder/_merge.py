@@ -27,7 +27,7 @@ logger = logging.getLogger("sqlspec")
 
 
 @dataclass(unsafe_hash=True)
-class MergeBuilder(QueryBuilder[ExecuteResult[dict[str, Any]]]):
+class MergeBuilder(QueryBuilder[ExecuteResult]):
     """Builder for MERGE statements.
 
     This builder provides a fluent interface for constructing SQL MERGE statements
@@ -76,13 +76,13 @@ class MergeBuilder(QueryBuilder[ExecuteResult[dict[str, Any]]]):
     """
 
     @property
-    def _expected_result_type(self) -> type[ExecuteResult[dict[str, Any]]]:
+    def _expected_result_type(self) -> type[ExecuteResult]:
         """Return the expected result type for this builder.
 
         Returns:
             The ExecuteResult type for MERGE statements.
         """
-        return ExecuteResult[dict[str, Any]]
+        return ExecuteResult
 
     def _create_base_expression(self) -> exp.Merge:
         """Create a base MERGE expression.
