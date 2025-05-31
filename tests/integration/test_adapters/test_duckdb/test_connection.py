@@ -3,7 +3,7 @@
 import pytest
 
 from sqlspec.adapters.duckdb.config import DuckDBConfig
-from sqlspec.sql.result import SelectResult
+from sqlspec.statement.result import SelectResult
 
 
 @pytest.mark.xdist_group("duckdb")

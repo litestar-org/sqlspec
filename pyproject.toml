@@ -17,6 +17,7 @@ Source = "https://github.com/litestar-org/sqlspec"
 [project.optional-dependencies]
 adbc = ["adbc_driver_manager", "pyarrow"]
 aioodbc = ["aioodbc"]
+aiosql = ["aiosql"]
 aiosqlite = ["aiosqlite"]
 asyncmy = ["asyncmy"]
 asyncpg = ["asyncpg"]
@@ -27,10 +28,12 @@ flask = ["flask"]
 litestar = ["litestar"]
 msgspec = ["msgspec"]
 nanoid = ["fastnanoid>=0.4.1"]
+opentelemetry = ["opentelemetry-instrumentation"]
 oracledb = ["oracledb"]
 orjson = ["orjson"]
 performance = ["sqlglot[rs]", "msgspec"]
 polars = ["polars", "pyarrow"]
+prometheus = ["prometheus-client"]
 psqlpy = ["psqlpy"]
 psycopg = ["psycopg[binary,pool]"]
 pydantic = ["pydantic", "pydantic-extra-types"]
@@ -38,6 +41,7 @@ pymssql = ["pymssql"]
 pymysql = ["pymysql"]
 spanner = ["google-cloud-spanner"]
 uuid = ["uuid-utils>=0.6.1"]
+
 
 [dependency-groups]
 build = ["bump-my-version"]
@@ -256,6 +260,11 @@ module = [
   "asyncmy.*",
   "pyarrow",
   "pyarrow.*",
+  "opentelemetry.*",
+  "opentelemetry.instrumentation.*",
+  "opentelemetry",
+  "prometheus_client",
+  "prometheus_client.*",
 ]
 
 [[tool.mypy.overrides]]
@@ -326,6 +335,12 @@ ignore = [
   "RUF029",  # Ruff - function is declared as async but has no awaitable calls
   "COM812",  # flake8-comma - Missing trailing comma
   "PGH003",  # Use Specific ignore for pyright
+  "PLR0911", # pylint - Too many return statements
+  "PLR0912", # pylint - Too many branches
+  "PLR0914", # pylint - Too many statements
+  "PLR0915", # pylint - Too many lines in module
+  "PLR0916", # pylint - Too many statements in function
+  "PLR0917", # pylint - Too many statements in class
 ]
 select = ["ALL"]
 

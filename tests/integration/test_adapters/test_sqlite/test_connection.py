@@ -3,7 +3,7 @@
 import pytest
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.sql.result import SelectResult
+from sqlspec.statement.result import SelectResult
 
 
 @pytest.mark.xdist_group("sqlite")

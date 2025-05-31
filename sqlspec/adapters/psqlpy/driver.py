@@ -3,19 +3,20 @@
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 from psqlpy import Connection, QueryResult
 
-from sqlspec.base import AsyncDriverAdapterProtocol
-from sqlspec.sql.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin
-from sqlspec.sql.parameters import ParameterStyle
-from sqlspec.sql.result import ExecuteResult, SelectResult
-from sqlspec.sql.statement import SQLStatement, Statement, StatementConfig
-from sqlspec.typing import StatementParameterType
+from sqlspec.driver import AsyncDriverAdapterProtocol
+from sqlspec.statement.builder import QueryBuilder
+from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin
+from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.statement.result import ExecuteResult, SelectResult
+from sqlspec.statement.sql import SQL, SQLConfig, Statement
+from sqlspec.typing import DictRow, ModelDTOT, SQLParameterType
 
 if TYPE_CHECKING:
-    from sqlspec.sql.filters import StatementFilter
+    from sqlspec.statement.filters import StatementFilter
 
 __all__ = ("PsqlpyConnection", "PsqlpyDriver")
 
@@ -47,34 +48,36 @@ class PsqlpyDriver(
     __supports_arrow__: ClassVar[bool] = False  # psqlpy doesn't support Arrow natively
     dialect: str = "postgres"
 
-    def __init__(self, connection: "PsqlpyConnection", statement_config: Optional[StatementConfig] = None) -> None:
+    def __init__(self, connection: "PsqlpyConnection", config: Optional[SQLConfig] = None) -> None:
         """Initialize the psqlpy driver adapter."""
-        super().__init__(connection, statement_config=statement_config)
+        super().__init__(connection, config=config)
 
-    def _get_placeholder_style(self) -> ParameterStyle:
+    def _get_parameter_style(self) -> ParameterStyle:
         """Return the placeholder style for PostgreSQL ($1, $2, etc.)."""
         return ParameterStyle.NUMERIC
 
     async def execute(
         self,
-        statement: "Statement",
-        parameters: Optional[StatementParameterType] = None,
+        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
+        parameters: Optional[SQLParameterType] = None,
         *filters: "StatementFilter",
+        schema_type: "Optional[type[ModelDTOT]]" = None,
         connection: Optional[PsqlpyConnection] = None,
-        statement_config: Optional[StatementConfig] = None,
+        config: Optional[SQLConfig] = None,
         **kwargs: Any,
-    ) -> "Union[SelectResult[dict[str, Any]], ExecuteResult[dict[str, Any]]]":
+    ) -> "Union[SelectResult[ModelDTOT], SelectResult[DictRow], ExecuteResult[Any]]":
         """Execute a SQL statement and return a StatementResult.
 
         This is the unified method for all SQL operations (SELECT, INSERT, UPDATE, DELETE).
         Use the StatementResult methods to extract the data you need.
 
         Args:
-            statement: The SQL statement to execute.
+            statement: The SQL statement or query builder to execute.
             parameters: Parameters for the statement.
             *filters: Statement filters to apply (e.g., pagination, search filters).
+            schema_type: Optional Pydantic model or dataclass to map results to.
             connection: Optional connection override.
-            statement_config: Optional statement configuration.
+            config: Optional statement configuration.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -93,14 +96,28 @@ class PsqlpyDriver(
             ...     SearchFilter(field_name="name", value="John"),
             ... )
         """
+        if schema_type is not None:
+            logger.warning("schema_type parameter is not yet fully implemented for psqlpy driver's execute method.")
+
         conn = self._connection(connection)
-        config = statement_config or self.statement_config
+        effective_config = config or self.config
 
-        stmt = SQLStatement(statement, parameters, *filters, dialect=self.dialect, statement_config=config, **kwargs)
-        stmt.validate()
+        # Process the input statement
+        current_stmt: SQL
+        if isinstance(statement, QueryBuilder):
+            base_sql_obj = statement.to_statement(config=effective_config)
+            current_stmt = SQL(
+                base_sql_obj, parameters, *filters, dialect=self.dialect, config=effective_config, **kwargs
+            )
+        elif isinstance(statement, SQL):
+            current_stmt = SQL(statement, parameters, *filters, dialect=self.dialect, config=effective_config, **kwargs)
+        else:  # Raw Statement
+            current_stmt = SQL(statement, parameters, *filters, dialect=self.dialect, config=effective_config, **kwargs)
 
-        final_sql = stmt.to_sql(placeholder_style=self._get_placeholder_style())
-        ordered_params = stmt.get_parameters(style=self._get_placeholder_style())
+        current_stmt.validate()
+        parameter_style = self._get_parameter_style()
+        final_sql = current_stmt.to_sql(placeholder_style=parameter_style)
+        ordered_params = current_stmt.get_parameters(style=parameter_style)
 
         # Convert parameters to list format for psqlpy using simplified logic
         params_for_psqlpy = None
@@ -112,17 +129,18 @@ class PsqlpyDriver(
             else:
                 params_for_psqlpy = [ordered_params]
 
-        if self.returns_rows(stmt.expression):
+        if self.returns_rows(current_stmt.expression):
             query_result: QueryResult = await conn.fetch(final_sql, parameters=params_for_psqlpy)
-            dict_rows: list[dict[str, Any]] = query_result.result()
+            dict_rows: list[DictRow] = query_result.result()
             if not dict_rows:
-                return SelectResult(rows=[], column_names=[], raw_result=cast("dict[str, Any]", {}))
+                # Ensure raw_result is an empty dict for SelectResult[DictRow] if no rows
+                return SelectResult(rows=[], column_names=[], raw_result={})
 
             column_names = list(dict_rows[0].keys())
             return SelectResult(
                 rows=dict_rows,
                 column_names=column_names,
-                raw_result=dict_rows[0],
+                raw_result=dict_rows[0],  # First row as raw_result for SelectResult[DictRow]
             )
 
         query_result_dml: QueryResult = await conn.execute(final_sql, parameters=params_for_psqlpy)
@@ -135,34 +153,34 @@ class PsqlpyDriver(
         )
 
         operation_type = "UNKNOWN"
-        if stmt.expression and hasattr(stmt.expression, "key"):
-            operation_type = str(stmt.expression.key).upper()
+        if current_stmt.expression and hasattr(current_stmt.expression, "key"):
+            operation_type = str(current_stmt.expression.key).upper()
 
         return ExecuteResult(
-            raw_result=cast("dict[str, Any]", {}),
+            raw_result={},
             rows_affected=rows_affected,
             operation_type=operation_type,
         )
 
     async def execute_many(
         self,
-        statement: "Statement",
-        parameters: Optional[Sequence[StatementParameterType]] = None,
+        statement: "Union[SQL, Statement, QueryBuilder[ExecuteResult[Any]]]",
+        parameters: Optional[Sequence[SQLParameterType]] = None,
         *filters: "StatementFilter",
         connection: Optional[PsqlpyConnection] = None,
-        statement_config: Optional[StatementConfig] = None,
+        config: Optional[SQLConfig] = None,
         **kwargs: Any,
-    ) -> "ExecuteResult[dict[str, Any]]":
+    ) -> "ExecuteResult[Any]":
         """Execute a SQL statement with multiple parameter sets.
 
         Useful for batch INSERT, UPDATE, or DELETE operations.
 
         Args:
-            statement: The SQL statement to execute.
+            statement: The SQL statement or query builder to execute.
             parameters: Sequence of parameter sets.
             *filters: Statement filters to apply.
             connection: Optional connection override.
-            statement_config: Optional statement configuration.
+            config: Optional statement configuration.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -179,37 +197,49 @@ class PsqlpyDriver(
             ... )
         """
         conn = self._connection(connection)
-        config = statement_config or self.statement_config
+        effective_config = config or self.config
+
+        # Process the input statement for the template
+        template_sql_input: Statement
+        if isinstance(statement, QueryBuilder):
+            template_sql_input = statement.to_statement(config=effective_config).sql
+        elif isinstance(statement, SQL):
+            template_sql_input = statement.sql
+        else:  # Raw Statement
+            template_sql_input = statement
 
         # Create template statement with filters for validation
-        template_stmt = SQLStatement(
-            statement,
-            None,  # No parameters for template
+        template_stmt = SQL(
+            template_sql_input,
+            None,  # No parameters for template itself
             *filters,
             dialect=self.dialect,
-            statement_config=config,
+            config=effective_config,
             **kwargs,
         )
 
         template_stmt.validate()
-        final_sql = template_stmt.to_sql(placeholder_style=self._get_placeholder_style())
+        parameter_style = self._get_parameter_style()
+        final_sql = template_stmt.to_sql(placeholder_style=parameter_style)
         param_sequence = parameters if parameters is not None else []
 
         if not param_sequence:
-            return ExecuteResult(raw_result=cast("dict[str, Any]", {}), rows_affected=0, operation_type="EXECUTE")
+            return ExecuteResult(raw_result={}, rows_affected=0, operation_type="EXECUTE")
 
         # Process parameter sets individually - simplified
         total_rows_affected = 0
-        building_config = replace(config or StatementConfig(), enable_validation=False)
+        # psqlpy executemany is available but the driver here executes one by one.
+        # Keeping existing logic for now, but this could be a point of optimization if psqlpy.executemany is suitable.
+        building_config = replace(effective_config, enable_validation=False)
 
         for param_set in param_sequence:
-            item_stmt = SQLStatement(
+            item_stmt = SQL(
                 template_stmt.sql,  # Use processed SQL from template
                 param_set,
                 dialect=self.dialect,
-                statement_config=building_config,
+                config=building_config,
             )
-            item_params = item_stmt.get_parameters(style=self._get_placeholder_style())
+            item_params = item_stmt.get_parameters(style=parameter_style)
             item_params_for_psqlpy = (
                 item_params if isinstance(item_params, list) else ([item_params] if item_params is not None else None)
             )
@@ -228,23 +258,23 @@ class PsqlpyDriver(
             elif template_stmt.expression and not self.returns_rows(template_stmt.expression):
                 total_rows_affected += 1  # Heuristic for DML operations
 
-        operation_type = "EXECUTE"
+        operation_type = "EXECUTE"  # Default operation type
         if template_stmt.expression and hasattr(template_stmt.expression, "key"):
             operation_type = str(template_stmt.expression.key).upper()
 
         return ExecuteResult(
-            raw_result=cast("dict[str, Any]", {}),
+            raw_result={},
             rows_affected=total_rows_affected,
             operation_type=operation_type,
         )
 
     async def execute_script(
         self,
-        statement: "Statement",
-        parameters: Optional[StatementParameterType] = None,
+        statement: "Union[str, SQL]",
+        parameters: Optional[SQLParameterType] = None,
         *filters: "StatementFilter",
         connection: Optional[PsqlpyConnection] = None,
-        statement_config: Optional[StatementConfig] = None,
+        config: Optional[SQLConfig] = None,
         **kwargs: Any,
     ) -> str:
         """Execute a multi-statement SQL script.
@@ -258,14 +288,14 @@ class PsqlpyDriver(
             parameters: Parameters for the script.
             *filters: Statement filters to apply.
             connection: Optional connection override.
-            statement_config: Optional statement configuration.
+            config: Optional statement configuration.
             **kwargs: Additional keyword arguments.
 
         Returns:
             A string with execution results/output.
         """
         conn = self._connection(connection)
-        config = statement_config or self.statement_config
+        config = config or self.config
 
         merged_params = parameters
         if kwargs:
@@ -274,9 +304,15 @@ class PsqlpyDriver(
             elif isinstance(merged_params, dict):
                 merged_params = {**merged_params, **kwargs}
 
-        stmt = SQLStatement(statement, merged_params, *filters, dialect=self.dialect, statement_config=config)
-        stmt.validate()
-        final_sql = stmt.to_sql(placeholder_style=ParameterStyle.STATIC)
+        # Process the input statement
+        script_stmt: SQL
+        if isinstance(statement, SQL):
+            script_stmt = SQL(statement, merged_params, *filters, dialect=self.dialect, config=config)  # type: ignore[arg-type]
+        else:  # Raw string
+            script_stmt = SQL(statement, merged_params, *filters, dialect=self.dialect, config=config)
+
+        script_stmt.validate()
+        final_sql = script_stmt.to_sql(placeholder_style=ParameterStyle.STATIC)
 
         await conn.execute(final_sql, parameters=None)
         return "SCRIPT EXECUTED"

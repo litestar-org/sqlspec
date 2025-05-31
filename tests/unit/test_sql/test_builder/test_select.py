@@ -16,8 +16,8 @@ import pytest
 from sqlglot import exp
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.sql.builder import SelectBuilder
-from sqlspec.sql.builder._select import CaseBuilder
+from sqlspec.statement.builder import SelectBuilder
+from sqlspec.statement.builder._select import CaseBuilder
 
 
 def test_distinct_columns() -> None:
@@ -110,6 +110,7 @@ def test_set_operations_with_parameters() -> None:
     union_builder = builder1.union(builder2)
     query = union_builder.build()
 
+    assert isinstance(query.parameters, dict)
     # Both parameter values should be present
     assert "John" in query.parameters.values()
     assert "Jane" in query.parameters.values()
@@ -154,6 +155,7 @@ def test_where_in_with_list() -> None:
     query = builder.build()
 
     assert "IN" in query.sql
+    assert isinstance(query.parameters, dict)
     # Parameters should contain all values
     assert 1 in query.parameters.values()
     assert 2 in query.parameters.values()
@@ -167,6 +169,7 @@ def test_where_in_with_tuple() -> None:
     query = builder.build()
 
     assert "IN" in query.sql
+    assert isinstance(query.parameters, dict)
     assert "active" in query.parameters.values()
     assert "pending" in query.parameters.values()
 
@@ -189,6 +192,7 @@ def test_where_not_in() -> None:
     query = builder.build()
 
     assert "NOT IN" in query.sql or ("NOT" in query.sql and "IN" in query.sql)
+    assert isinstance(query.parameters, dict)
     assert "banned" in query.parameters.values()
     assert "deleted" in query.parameters.values()
 
@@ -200,6 +204,7 @@ def test_where_like_basic() -> None:
     query = builder.build()
 
     assert "LIKE" in query.sql
+    assert isinstance(query.parameters, dict)
     assert "John%" in query.parameters.values()
 
 
@@ -211,6 +216,7 @@ def test_where_like_with_escape() -> None:
 
     assert "LIKE" in query.sql
     assert "ESCAPE" in query.sql
+    assert isinstance(query.parameters, dict)
     assert "John\\_%" in query.parameters.values()
     assert "\\" in query.parameters.values()
 
@@ -222,6 +228,7 @@ def test_where_between() -> None:
     query = builder.build()
 
     assert "BETWEEN" in query.sql
+    assert isinstance(query.parameters, dict)
     assert 18 in query.parameters.values()
     assert 65 in query.parameters.values()
 
@@ -242,6 +249,86 @@ def test_where_not_null() -> None:
     query = builder.build()
 
     assert "IS NOT NULL" in query.sql or ("IS" in query.sql and "NOT NULL" in query.sql)
+
+
+def test_where_any_with_list() -> None:
+    """Test WHERE ANY with list of values."""
+    builder = SelectBuilder().select("*").from_("users").where_any("id", [1, 2, 3])
+    query = builder.build()
+    assert isinstance(query.parameters, dict)
+    assert f"id = ANY ({next(iter(query.parameters.keys()))})" in query.sql
+    assert [1, 2, 3] in query.parameters.values()
+
+
+def test_where_any_with_tuple() -> None:
+    """Test WHERE ANY with tuple of values."""
+    builder = SelectBuilder().select("*").from_("users").where_any("status", ("active", "pending"))
+    query = builder.build()
+    assert isinstance(query.parameters, dict)
+    assert f"status = ANY ({next(iter(query.parameters.keys()))})" in query.sql
+    assert ("active", "pending") in query.parameters.values()
+
+
+def test_where_any_with_subquery() -> None:
+    """Test WHERE ANY with subquery."""
+    subquery = SelectBuilder().select("user_id").from_("orders")
+    builder = SelectBuilder().select("*").from_("users").where_any("id", subquery)
+    query = builder.build()
+    assert "id = ANY (SELECT user_id FROM orders)" in query.sql
+
+
+def test_where_any_with_raw_sql() -> None:
+    """Test WHERE ANY with raw SQL string."""
+    builder = SelectBuilder().select("*").from_("users").where_any("id", "(SELECT 1 UNION SELECT 2)")
+    query = builder.build()
+    assert "id = ANY ((SELECT 1 UNION SELECT 2))" in query.sql
+
+
+def test_where_not_any_with_list() -> None:
+    """Test WHERE NOT ANY with list of values."""
+    builder = SelectBuilder().select("*").from_("users").where_not_any("id", [1, 2, 3])
+    query = builder.build()
+    assert isinstance(query.parameters, dict)
+    assert f"NOT (id = ANY ({next(iter(query.parameters.keys()))}))" in query.sql
+    assert [1, 2, 3] in query.parameters.values()
+
+
+def test_where_not_any_with_tuple() -> None:
+    """Test WHERE NOT ANY with tuple of values."""
+    builder = SelectBuilder().select("*").from_("users").where_not_any("status", ("active", "pending"))
+    query = builder.build()
+    assert isinstance(query.parameters, dict)
+    assert f"NOT (status = ANY ({next(iter(query.parameters.keys()))}))" in query.sql
+    assert ("active", "pending") in query.parameters.values()
+
+
+def test_where_not_any_with_subquery() -> None:
+    """Test WHERE NOT ANY with subquery."""
+    subquery = SelectBuilder().select("user_id").from_("orders")
+    builder = SelectBuilder().select("*").from_("users").where_not_any("id", subquery)
+    query = builder.build()
+    assert "NOT (id = ANY (SELECT user_id FROM orders))" in query.sql
+
+
+def test_where_not_any_with_raw_sql() -> None:
+    """Test WHERE NOT ANY with raw SQL string."""
+    builder = SelectBuilder().select("*").from_("users").where_not_any("id", "(SELECT 1 UNION SELECT 2)")
+    query = builder.build()
+    assert "NOT (id = ANY ((SELECT 1 UNION SELECT 2)))" in query.sql
+
+
+def test_unsupported_values_type_where_any() -> None:
+    """Test WHERE ANY with unsupported values type raises error."""
+    with pytest.raises(SQLBuilderError) as exc_info:
+        SelectBuilder().select("*").from_("users").where_any("id", 42)  # type: ignore[arg-type]
+    assert "Unsupported values type for ANY clause" in str(exc_info.value)
+
+
+def test_unsupported_values_type_where_not_any() -> None:
+    """Test WHERE NOT ANY with unsupported values type raises error."""
+    with pytest.raises(SQLBuilderError) as exc_info:
+        SelectBuilder().select("*").from_("users").where_not_any("id", 42)  # type: ignore[arg-type]
+    assert "Unsupported values type for ANY clause" in str(exc_info.value)
 
 
 def test_select_count_star() -> None:
@@ -422,6 +509,7 @@ def test_case_when_else_basic() -> None:
     assert "ELSE" in query.sql
     assert "END" in query.sql
     assert "status_text" in query.sql
+    assert isinstance(query.parameters, dict)
     # Parameters should contain the values
     assert "Active" in query.parameters.values()
     assert "Inactive" in query.parameters.values()
@@ -446,6 +534,7 @@ def test_case_without_else() -> None:
     assert "END" in query.sql
     # Should not contain ELSE
     assert "ELSE" not in query.sql
+    assert isinstance(query.parameters, dict)
     assert "High" in query.parameters.values()
     assert "Medium" in query.parameters.values()
 
@@ -470,6 +559,7 @@ def test_case_multiple_conditions() -> None:
     # Should have multiple WHEN clauses
     when_count = query.sql.count("WHEN")
     assert when_count == 4
+    assert isinstance(query.parameters, dict)
     assert "A" in query.parameters.values()
     assert "B" in query.parameters.values()
     assert "C" in query.parameters.values()
@@ -487,6 +577,7 @@ def test_case_with_expression_conditions() -> None:
 
     assert "CASE" in query.sql
     assert "WHEN" in query.sql
+    assert isinstance(query.parameters, dict)
     assert "Adult" in query.parameters.values()
     assert "Minor" in query.parameters.values()
 
@@ -514,6 +605,7 @@ def test_case_fluent_chaining() -> None:
     assert "FROM users" in query.sql
     assert "WHERE" in query.sql
     assert "ORDER BY" in query.sql
+    assert isinstance(query.parameters, dict)
     assert True in query.parameters.values()
 
 
@@ -533,6 +625,7 @@ def test_single_value_in_where_in() -> None:
     query = builder.build()
 
     assert "IN" in query.sql
+    assert isinstance(query.parameters, dict)
     assert 42 in query.parameters.values()
 
 
@@ -541,6 +634,7 @@ def test_none_values_in_parameters() -> None:
     builder = SelectBuilder().select("*").from_("users").where(("deleted_at", None))
     query = builder.build()
 
+    assert isinstance(query.parameters, dict)
     assert None in query.parameters.values()
 
 
@@ -565,6 +659,7 @@ def test_complex_nested_conditions() -> None:
     assert "IS NOT NULL" in query.sql or ("IS" in query.sql and "NOT NULL" in query.sql)
     assert "LIKE" in query.sql
     assert "BETWEEN" in query.sql
+    assert isinstance(query.parameters, dict)
     # Parameters from main query and subquery
     assert "%John%" in query.parameters.values()
     assert 18 in query.parameters.values()
@@ -597,6 +692,7 @@ def test_malicious_string_in_where_clause() -> None:
     query = builder.build()
 
     # The malicious input should be in parameters, not directly in SQL
+    assert isinstance(query.parameters, dict)
     assert malicious_input in query.parameters.values()
     assert "DROP TABLE" not in query.sql
     assert "';" not in query.sql or query.sql.count("';") == 0  # No SQL injection
@@ -609,6 +705,7 @@ def test_malicious_string_in_like_pattern() -> None:
 
     query = builder.build()
 
+    assert isinstance(query.parameters, dict)
     assert malicious_pattern in query.parameters.values()
     assert "DELETE FROM" not in query.sql
 
@@ -620,6 +717,7 @@ def test_malicious_values_in_where_in() -> None:
 
     query = builder.build()
 
+    assert isinstance(query.parameters, dict)
     # All malicious values should be in parameters
     for value in malicious_values:
         assert value in query.parameters.values()
@@ -637,6 +735,8 @@ def test_malicious_case_values() -> None:
 
     query = builder.build()
 
+    assert query.parameters is not None
+    assert isinstance(query.parameters, dict)
     assert malicious_value in query.parameters.values()
     assert "DROP TABLE" not in query.sql
 
@@ -687,12 +787,13 @@ def test_complex_analytics_query() -> None:
     assert "IN" in query.sql
     assert "ORDER BY" in query.sql
 
-    # Check parameterized values
-    assert "High Performer" in query.parameters.values()
-    assert "Average Performer" in query.parameters.values()
-    assert "Needs Improvement" in query.parameters.values()
-    assert "active" in query.parameters.values()
-    assert "on_leave" in query.parameters.values()
+    assert query.parameters is not None
+    assert isinstance(query.parameters, dict)
+    assert "High Performer" in query.parameters  # Checks for key existence
+    assert "Average Performer" in query.parameters  # Checks for key existence
+    assert "Needs Improvement" in query.parameters  # Checks for key existence
+    assert "active" in query.parameters  # Checks for key existence
+    assert "on_leave" in query.parameters  # Checks for key existence
 
 
 def test_complex_reporting_query_with_unions() -> None:
@@ -727,6 +828,7 @@ def test_complex_reporting_query_with_unions() -> None:
     assert "orders" in query.sql
     assert "archived_orders" in query.sql
     assert "pending_orders" in query.sql
+    assert isinstance(query.parameters, dict)
     # Date parameters should be present
     assert "2024-01-01" in query.parameters.values()
     assert "2024-12-31" in query.parameters.values()
@@ -771,6 +873,7 @@ def test_postgresql_dialect() -> None:
     query = builder.build()
 
     assert "SELECT" in query.sql
+    assert isinstance(query.parameters, dict)
     assert True in query.parameters.values()
 
 
@@ -795,6 +898,7 @@ def test_sqlite_dialect() -> None:
 
     assert "SELECT" in query.sql
     assert "LIKE" in query.sql
+    assert isinstance(query.parameters, dict)
     assert "%test%" in query.parameters.values()
 
 
@@ -827,6 +931,7 @@ def test_parameter_naming_consistency() -> None:
 
     query = builder.build()
 
+    assert isinstance(query.parameters, dict)
     # All parameter names should be unique
     param_names = list(query.parameters.keys())
     assert len(param_names) == len(set(param_names))  # No duplicates
@@ -847,6 +952,7 @@ def test_large_in_clause_parameters() -> None:
     query = builder.build()
 
     assert "IN" in query.sql
+    assert isinstance(query.parameters, dict)
     assert len(query.parameters) == 1000
     # Check that all values are present
     for value in large_list:
@@ -872,6 +978,7 @@ def test_complex_nested_query_parameters() -> None:
 
     query = level1.build()
 
+    assert isinstance(query.parameters, dict)
     # Should contain parameters from all levels
     assert 1000 in query.parameters.values()  # level3
     assert 5000 in query.parameters.values()  # level3

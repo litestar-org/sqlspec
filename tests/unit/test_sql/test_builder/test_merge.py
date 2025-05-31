@@ -3,7 +3,7 @@
 import pytest
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.sql.builder import MergeBuilder, merge, select
+from sqlspec.statement.builder import MergeBuilder, merge, select
 
 
 def test_basic_merge() -> None:

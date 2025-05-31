@@ -11,8 +11,8 @@ from typing import (
 
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.service.pagination import OffsetPagination
-from sqlspec.sql.filters import FilterTypeT, LimitOffset, StatementFilter
-from sqlspec.sql.mixins import _DEFAULT_TYPE_DECODERS, _default_msgspec_deserializer
+from sqlspec.statement.filters import FilterTypeT, LimitOffsetFilter, StatementFilter
+from sqlspec.statement.mixins import _DEFAULT_TYPE_DECODERS, _default_msgspec_deserializer
 from sqlspec.typing import (
     BaseModel,
     DataclassProtocol,
@@ -135,7 +135,7 @@ class ResultConverter:
                     get_type_adapter(schema_type).validate_python(data, from_attributes=True),  # pyright: ignore
                 )
         assert isinstance(data, Sequence)  # noqa: S101
-        limit_offset = find_filter(LimitOffset, filters=filters)
+        limit_offset = find_filter(LimitOffsetFilter, filters=filters)
         if schema_type is None:
             return OffsetPagination[ModelT](
                 items=cast("list[ModelT]", data),

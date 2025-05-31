@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
 from sqlspec.adapters.adbc.driver import AdbcConnection, AdbcDriver
-from sqlspec.base import NoPoolSyncConfig
+from sqlspec.config import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType
 from sqlspec.utils.module_loader import import_string

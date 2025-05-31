@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import pytest
 
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig, PsqlpyPoolConfig
-from sqlspec.sql.result import ExecuteResult, SelectResult
+from sqlspec.statement.result import ExecuteResult, SelectResult
 
 if TYPE_CHECKING:
     from pytest_databases.docker.postgres import PostgresService

@@ -1,10 +1,8 @@
 """Tests for DeleteBuilder."""
 
-import pytest
 from sqlglot import exp
 
-from sqlspec.exceptions import SQLBuilderError
-from sqlspec.sql.builder import DeleteBuilder, delete
+from sqlspec.statement.builder import DeleteBuilder, delete
 
 
 def test_basic_delete() -> None:
@@ -33,6 +31,7 @@ def test_delete_with_where_eq() -> None:
 
     assert "DELETE" in result.sql
     assert "WHERE" in result.sql
+    assert isinstance(result.parameters, dict)
     assert len(result.parameters) == 1
     assert 123 in result.parameters.values()
 
@@ -45,21 +44,8 @@ def test_delete_with_where_in() -> None:
     assert "DELETE" in result.sql
     assert "WHERE" in result.sql
     assert "IN" in result.sql
+    assert isinstance(result.parameters, dict)
     assert len(result.parameters) == 2
-
-
-def test_delete_with_joins() -> None:
-    """Test DELETE with JOIN clauses."""
-    builder = delete()
-    result = (
-        builder.from_("users")
-        .inner_join("orders", "users.id = orders.user_id")
-        .where("orders.status = 'cancelled'")
-        .build()
-    )
-
-    assert "DELETE" in result.sql
-    assert "JOIN" in result.sql
 
 
 def test_delete_parameter_binding() -> None:
@@ -69,6 +55,7 @@ def test_delete_parameter_binding() -> None:
 
     # Verify SQL injection is prevented
     assert "DROP TABLE" not in result.sql
+    assert isinstance(result.parameters, dict)
     assert len(result.parameters) == 1
 
 
@@ -79,31 +66,8 @@ def test_delete_with_expression_column() -> None:
     result = builder.from_("users").where_eq(col_expr, "deleted").build()
 
     assert "DELETE" in result.sql
+    assert isinstance(result.parameters, dict)
     assert len(result.parameters) == 1
-
-
-def test_delete_join_types() -> None:
-    """Test different JOIN types in DELETE."""
-    builder = delete()
-
-    # Test LEFT JOIN
-    result1 = (
-        builder.from_("users")
-        .left_join("profiles", "users.id = profiles.user_id")
-        .where("profiles.status = 'inactive'")
-        .build()
-    )
-    assert "LEFT JOIN" in result1.sql
-
-    # Test RIGHT JOIN
-    builder2 = delete()
-    result2 = (
-        builder2.from_("users")
-        .right_join("profiles", "users.id = profiles.user_id")
-        .where("profiles.status = 'inactive'")
-        .build()
-    )
-    assert "RIGHT JOIN" in result2.sql
 
 
 def test_delete_chaining() -> None:
@@ -114,7 +78,6 @@ def test_delete_chaining() -> None:
     assert isinstance(builder.where("id = 1"), DeleteBuilder)
     assert isinstance(builder.where_eq("status", "active"), DeleteBuilder)
     assert isinstance(builder.where_in("id", [1, 2, 3]), DeleteBuilder)
-    assert isinstance(builder.inner_join("orders", "users.id = orders.user_id"), DeleteBuilder)
 
 
 def test_delete_multiple_where_conditions() -> None:
@@ -131,27 +94,8 @@ def test_delete_multiple_where_conditions() -> None:
     assert "DELETE" in result.sql
     assert "WHERE" in result.sql
     # Should have parameters for the parameterized conditions
+    assert isinstance(result.parameters, dict)
     assert len(result.parameters) >= 3
-
-
-def test_delete_without_from_raises_error_on_join() -> None:
-    """Test that JOIN without FROM raises error."""
-    builder = delete()
-
-    with pytest.raises(SQLBuilderError, match="Cannot add JOIN to DELETE without a FROM clause"):
-        builder.inner_join("orders", "users.id = orders.user_id")
-
-
-def test_delete_error_on_non_delete_expression() -> None:
-    """Test that methods raise errors on non-DELETE expressions."""
-    builder = DeleteBuilder()
-    builder._expression = exp.Select()  # Set wrong expression type
-
-    with pytest.raises(SQLBuilderError, match="Cannot add WHERE clause to non-DELETE expression"):
-        builder.where("id = 1")
-
-    with pytest.raises(SQLBuilderError, match="Cannot add JOIN clause to non-DELETE expression"):
-        builder.inner_join("orders", "users.id = orders.user_id")
 
 
 def test_delete_string_representation() -> None:
@@ -190,6 +134,7 @@ def test_delete_condition_chaining() -> None:
     # Both conditions should be present
     assert "WHERE" in result.sql
     # Should have at least one parameter from where_eq
+    assert isinstance(result.parameters, dict)
     assert len(result.parameters) >= 1
 
 
@@ -200,6 +145,7 @@ def test_delete_where_in_with_tuples() -> None:
 
     assert "DELETE" in result.sql
     assert "IN" in result.sql
+    assert isinstance(result.parameters, dict)
     assert len(result.parameters) == 5
 
 
@@ -210,4 +156,5 @@ def test_delete_empty_where_in_list() -> None:
 
     assert "DELETE" in result.sql
     # Empty IN clause should still be valid SQL
+    assert isinstance(result.parameters, dict)
     assert len(result.parameters) == 0

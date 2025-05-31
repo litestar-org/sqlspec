@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 from psqlpy import Connection, ConnectionPool
 
 from sqlspec.adapters.psqlpy.driver import PsqlpyConnection, PsqlpyDriver
-from sqlspec.base import AsyncDatabaseConfig, GenericPoolConfig
+from sqlspec.config import AsyncDatabaseConfig, GenericPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 

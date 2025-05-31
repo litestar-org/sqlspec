@@ -6,11 +6,11 @@ from typing import (
 from sqlspec.base import DriverT
 from sqlspec.service._util import ResultConverter, find_filter
 from sqlspec.service.pagination import OffsetPagination
-from sqlspec.sql.filters import FilterTypeT, LimitOffset, StatementFilter
+from sqlspec.statement.filters import FilterTypeT, LimitOffsetFilter, StatementFilter
 
 __all__ = (
     "FilterTypeT",
-    "LimitOffset",
+    "LimitOffsetFilter",
     "OffsetPagination",
     "ResultConverter",
     "SqlspecService",

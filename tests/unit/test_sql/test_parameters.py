@@ -13,7 +13,7 @@ from sqlspec.exceptions import (
     MissingParameterError,
     ParameterStyleMismatchError,
 )
-from sqlspec.sql.parameters import (
+from sqlspec.statement.parameters import (
     ParameterConverter,
     ParameterInfo,
     ParameterStyle,

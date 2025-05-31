@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Optional, TypeVar, Union
 from asyncmy.connection import Connection  # pyright: ignore[reportUnknownVariableType]
 
 from sqlspec.adapters.asyncmy.driver import AsyncmyDriver  # type: ignore[attr-defined]
-from sqlspec.base import AsyncDatabaseConfig, GenericPoolConfig
+from sqlspec.config import AsyncDatabaseConfig, GenericPoolConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 

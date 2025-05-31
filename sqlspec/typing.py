@@ -1,30 +1,57 @@
+from collections.abc import Iterable, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import Field, fields
 from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated, Any, Optional, TypeVar, Union, cast
 
+from aiosql.types import (
+    DriverAdapterProtocol as AiosqlProtocol,
+)
+from aiosql.types import (
+    ParamType,
+    SQLOperationType,
+)
+from aiosql.types import (
+    SyncDriverAdapterProtocol as AiosqlSyncProtocol,
+)
 from typing_extensions import TypeAlias, TypeGuard
 
 from sqlspec._typing import (
+    AIOSQL_INSTALLED,
     LITESTAR_INSTALLED,
     MSGSPEC_INSTALLED,
+    OPENTELEMETRY_INSTALLED,
+    PROMETHEUS_INSTALLED,
     PYARROW_INSTALLED,
     PYDANTIC_INSTALLED,
     UNSET,
+    AiosqlAsyncProtocol,
+    AiosqlProtocol,
+    AiosqlSyncProtocol,
     ArrowTable,
     BaseModel,
+    Counter,  # pyright: ignore[reportAttributeAccessIssue]
     DataclassProtocol,
     DTOData,
     Empty,
     EmptyType,
+    Gauge,  # pyright: ignore[reportAttributeAccessIssue]
+    Histogram,  # pyright: ignore[reportAttributeAccessIssue]
+    ParamType,
+    Span,  # pyright: ignore[reportAttributeAccessIssue]
+    SQLOperationType,
+    Status,  # pyright: ignore[reportAttributeAccessIssue]
+    StatusCode,  # pyright: ignore[reportAttributeAccessIssue]
     Struct,
+    Tracer,  # pyright: ignore[reportAttributeAccessIssue]
     TypeAdapter,
     UnsetType,
-    convert,
+    aiosql,
+    convert,  # pyright: ignore[reportAttributeAccessIssue]
 )
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
-    from collections.abc import Set as AbstractSet
 
 
 PYDANTIC_USE_FAILFAST = False  # leave permanently disabled for now
@@ -53,12 +80,17 @@ ModelT = TypeVar("ModelT", bound="Union[dict[str, Any], Struct, BaseModel, Datac
 """
 
 
+DictRow: TypeAlias = "dict[str, Any]"
+"""Type variable for DictRow types."""
+TupleRow: TypeAlias = "tuple[Any, ...]"
+"""Type variable for TupleRow types."""
+
 SupportedSchemaModel: TypeAlias = "Union[Struct, BaseModel, DataclassProtocol]"
 """Type alias for pydantic or msgspec models.
 
 :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol`
 """
-StatementParameterType: TypeAlias = "Union[Any, dict[str, Any], list[Any], tuple[Any, ...], None]"
+SQLParameterType: TypeAlias = "Union[Any, dict[str, Any], list[Any], tuple[Any, ...], None]"
 """Type alias for parameter types.
 
 Represents:
@@ -101,7 +133,7 @@ Represents:
 """
 
 
-def is_dataclass_instance(obj: Any) -> "TypeGuard[DataclassProtocol]":
+def is_dataclass_instance(obj: Any) -> TypeGuard[DataclassProtocol]:
     """Check if an object is a dataclass instance.
 
     Args:
@@ -509,25 +541,50 @@ def is_dto_data(v: Any) -> TypeGuard[DTOData[Any]]:
 
 
 __all__ = (
+    "AIOSQL_INSTALLED",
     "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
     "PYARROW_INSTALLED",
     "PYDANTIC_INSTALLED",
     "PYDANTIC_USE_FAILFAST",
     "UNSET",
+    "AiosqlAsyncProtocol",
+    "AiosqlProtocol",
+    "AiosqlSyncProtocol",
     "ArrowTable",
     "BaseModel",
+    "BulkModelDict",
+    "Counter",
     "DataclassProtocol",
+    "DictRow",
     "Empty",
     "EmptyType",
     "FailFast",
+    "Gauge",
+    "Histogram",
+    "Mapping",
+    "ModelDTOT",
+    "ModelDict",
     "ModelDict",
     "ModelDictList",
-    "StatementParameterType",
+    "ModelDictList",
+    "ModelT",
+    "ParamType",
+    "PoolT",
+    "PoolT_co",
+    "PydanticOrMsgspecT",
+    "SQLOperationType",
+    "SQLParameterType",
+    "Span",
+    "Status",
+    "StatusCode",
     "Struct",
     "SupportedSchemaModel",
+    "Tracer",
+    "TupleRow",
     "TypeAdapter",
     "UnsetType",
+    "aiosql",
     "convert",
     "dataclass_to_dict",
     "extract_dataclass_fields",
@@ -575,3 +632,27 @@ if TYPE_CHECKING:
         from sqlspec._typing import DTOData
     else:
         from litestar.dto import DTOData  # noqa: TC004
+    if not OPENTELEMETRY_INSTALLED:
+        from sqlspec._typing import Span, Status, StatusCode, Tracer  # pyright: ignore
+    else:
+        from opentelemetry.trace import (  # pyright: ignore[reportMissingImports] # noqa: TC004
+            Span,
+            Status,
+            StatusCode,
+            Tracer,
+        )
+    if not PROMETHEUS_INSTALLED:
+        from sqlspec._typing import Counter, Gauge, Histogram  # pyright: ignore
+    else:
+        from prometheus_client import Counter, Gauge, Histogram  # noqa: TC004 # pyright: ignore # noqa: TC004
+
+    if not AIOSQL_INSTALLED:
+        from sqlspec._typing import (
+            AiosqlAsyncProtocol,
+            aiosql,
+        )
+    else:
+        import aiosql  # noqa: TC004
+        from aiosql.types import (  # noqa: TC004
+            AsyncDriverAdapterProtocol as AiosqlAsyncProtocol,
+        )

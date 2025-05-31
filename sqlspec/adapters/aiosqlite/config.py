@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 import aiosqlite
 
 from sqlspec.adapters.aiosqlite.driver import AiosqliteConnection, AiosqliteDriver
-from sqlspec.base import NoPoolAsyncConfig
+from sqlspec.config import NoPoolAsyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
 

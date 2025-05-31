@@ -2,19 +2,20 @@
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 import aiosqlite
 
-from sqlspec.base import AsyncDriverAdapterProtocol
-from sqlspec.sql.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin
-from sqlspec.sql.parameters import ParameterStyle
-from sqlspec.sql.result import ExecuteResult, SelectResult
-from sqlspec.sql.statement import SQLStatement, Statement, StatementConfig
+from sqlspec.driver import AsyncDriverAdapterProtocol
+from sqlspec.statement.builder import QueryBuilder
+from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin
+from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.statement.result import ExecuteResult, SelectResult
+from sqlspec.statement.sql import SQL, SQLConfig, Statement
 
 if TYPE_CHECKING:
-    from sqlspec.sql.filters import StatementFilter
-    from sqlspec.typing import StatementParameterType
+    from sqlspec.statement.filters import StatementFilter
+    from sqlspec.typing import DictRow, ModelDTOT, SQLParameterType
 
 __all__ = ("AiosqliteConnection", "AiosqliteDriver")
 
@@ -47,34 +48,36 @@ class AiosqliteDriver(
     __supports_arrow__: ClassVar[bool] = False  # SQLite doesn't support Arrow natively
     dialect: str = "sqlite"
 
-    def __init__(self, connection: AiosqliteConnection, statement_config: Optional[StatementConfig] = None) -> None:
+    def __init__(self, connection: AiosqliteConnection, config: Optional[SQLConfig] = None) -> None:
         """Initialize the aiosqlite driver adapter."""
-        super().__init__(connection, statement_config=statement_config)
+        super().__init__(connection, config=config)
 
-    def _get_placeholder_style(self) -> ParameterStyle:
+    def _get_parameter_style(self) -> ParameterStyle:
         """Return the placeholder style for SQLite (qmark: ?)."""
         return ParameterStyle.QMARK
 
     async def execute(
         self,
-        statement: "Statement",
-        parameters: Optional["StatementParameterType"] = None,
+        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
+        parameters: Optional["SQLParameterType"] = None,
         *filters: "StatementFilter",
+        schema_type: "Optional[type[ModelDTOT]]" = None,
         connection: Optional[AiosqliteConnection] = None,
-        statement_config: Optional[StatementConfig] = None,
+        config: Optional[SQLConfig] = None,
         **kwargs: Any,
-    ) -> "Union[SelectResult[dict[str, Any]], ExecuteResult[dict[str, Any]]]":
+    ) -> "Union[SelectResult[ModelDTOT], SelectResult[DictRow], ExecuteResult[Any]]":
         """Execute a SQL statement and return a StatementResult.
 
         This is the unified method for all SQL operations (SELECT, INSERT, UPDATE, DELETE).
         Use the StatementResult methods to extract the data you need.
 
         Args:
-            statement: The SQL statement to execute.
+            statement: The SQL statement or query builder to execute.
             parameters: Parameters for the statement.
             *filters: Statement filters to apply (e.g., pagination, search filters).
+            schema_type: Optional Pydantic model or dataclass to map results to.
             connection: Optional connection override.
-            statement_config: Optional statement configuration.
+            config: Optional statement configuration.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -93,16 +96,29 @@ class AiosqliteDriver(
             ...     SearchFilter(field_name="name", value="John"),
             ... )
         """
+        if schema_type is not None:
+            logger.warning("schema_type parameter is not yet fully implemented for aiosqlite driver's execute method.")
+
         conn: AiosqliteConnection = self._connection(connection)
         conn.row_factory = aiosqlite.Row
-        config = statement_config or self.statement_config
+        effective_config = config or self.config
 
-        stmt = SQLStatement(statement, parameters, *filters, dialect=self.dialect, statement_config=config, **kwargs)
+        # Process the input statement
+        current_stmt: SQL
+        if isinstance(statement, QueryBuilder):
+            base_sql_obj = statement.to_statement(config=effective_config)
+            current_stmt = SQL(
+                base_sql_obj, parameters, *filters, dialect=self.dialect, config=effective_config, **kwargs
+            )
+        elif isinstance(statement, SQL):
+            current_stmt = SQL(statement, parameters, *filters, dialect=self.dialect, config=effective_config, **kwargs)
+        else:  # Raw Statement (str or sqlglot.Expression)
+            current_stmt = SQL(statement, parameters, *filters, dialect=self.dialect, config=effective_config, **kwargs)
 
-        stmt.validate()
-        placeholder_style = self._get_placeholder_style()
-        final_sql = stmt.to_sql(placeholder_style=placeholder_style)
-        ordered_params = stmt.get_parameters(style=placeholder_style)
+        current_stmt.validate()
+        parameter_style = self._get_parameter_style()
+        final_sql = current_stmt.to_sql(placeholder_style=parameter_style)
+        ordered_params = current_stmt.get_parameters(style=parameter_style)
 
         # Convert parameters to tuple format for aiosqlite using simplified logic
         db_params_tuple: tuple[Any, ...] = ()
@@ -120,11 +136,11 @@ class AiosqliteDriver(
             logger.debug("Executing SQL (aiosqlite): %s with params: %s", final_sql, db_params_tuple)
             await cursor.execute(final_sql, db_params_tuple)
 
-            if self.returns_rows(stmt.expression):
+            if self.returns_rows(current_stmt.expression):
                 raw_rows: list[aiosqlite.Row] = list(await cursor.fetchall())
                 column_names = [d[0] for d in cursor.description or []]
-                dict_rows = [dict(row) for row in raw_rows]
-                raw_select_result_data = dict_rows[0] if dict_rows else cast("dict[str, Any]", {})
+                dict_rows: list[DictRow] = [dict(row) for row in raw_rows]
+                raw_select_result_data = dict_rows[0] if dict_rows else {}
                 return SelectResult(
                     rows=dict_rows,
                     column_names=column_names,
@@ -136,11 +152,11 @@ class AiosqliteDriver(
             await conn.commit()
 
             operation_type = "UNKNOWN"
-            if stmt.expression and hasattr(stmt.expression, "key"):
-                operation_type = str(stmt.expression.key).upper()
+            if current_stmt.expression and hasattr(current_stmt.expression, "key"):
+                operation_type = str(current_stmt.expression.key).upper()
 
             return ExecuteResult(
-                raw_result=cast("dict[str, Any]", {}),
+                raw_result={},
                 rows_affected=affected_rows,
                 last_inserted_id=last_id,
                 operation_type=operation_type,
@@ -151,23 +167,23 @@ class AiosqliteDriver(
 
     async def execute_many(
         self,
-        statement: "Statement",
-        parameters: Optional[Sequence["StatementParameterType"]] = None,
+        statement: "Union[SQL, Statement, QueryBuilder[ExecuteResult[Any]]]",
+        parameters: Optional[Sequence["SQLParameterType"]] = None,
         *filters: "StatementFilter",
         connection: Optional[AiosqliteConnection] = None,
-        statement_config: Optional[StatementConfig] = None,
+        config: Optional[SQLConfig] = None,
         **kwargs: Any,
-    ) -> "ExecuteResult[dict[str, Any]]":
+    ) -> "ExecuteResult[Any]":
         """Execute a SQL statement with multiple parameter sets.
 
         Useful for batch INSERT, UPDATE, or DELETE operations.
 
         Args:
-            statement: The SQL statement to execute.
+            statement: The SQL statement or query builder to execute.
             parameters: Sequence of parameter sets.
             *filters: Statement filters to apply.
             connection: Optional connection override.
-            statement_config: Optional statement configuration.
+            config: Optional statement configuration.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -184,22 +200,31 @@ class AiosqliteDriver(
             ... )
         """
         conn: AiosqliteConnection = self._connection(connection)
-        config = statement_config or self.statement_config
+        effective_config = config or self.config
+
+        # Process the input statement for the template
+        template_sql_input: Statement
+        if isinstance(statement, QueryBuilder):
+            template_sql_input = statement.to_statement(config=effective_config).sql
+        elif isinstance(statement, SQL):
+            template_sql_input = statement.sql
+        else:  # Raw Statement
+            template_sql_input = statement
 
         # Create template statement with filters for validation
-        template_stmt = SQLStatement(
-            statement,
-            None,  # No parameters for template
+        template_stmt = SQL(
+            template_sql_input,
+            None,  # No parameters for template itself
             *filters,
             dialect=self.dialect,
-            statement_config=config,
+            config=effective_config,
             **kwargs,
         )
 
         # Validate template and get final SQL
         template_stmt.validate()
-        placeholder_style = self._get_placeholder_style()
-        final_sql = template_stmt.to_sql(placeholder_style=placeholder_style)
+        parameter_style = self._get_parameter_style()
+        final_sql = template_stmt.to_sql(placeholder_style=parameter_style)
 
         # Process parameter sets
         processed_params_list: list[tuple[Any, ...]] = []
@@ -207,16 +232,16 @@ class AiosqliteDriver(
 
         if param_sequence:
             # Create a building config that skips validation for individual parameter sets
-            building_config = replace(config, enable_validation=False)
+            building_config = replace(effective_config, enable_validation=False)
 
             for param_set in param_sequence:
-                item_stmt = SQLStatement(
-                    template_stmt.sql,  # Use processed SQL from template
+                item_stmt = SQL(
+                    template_stmt.sql,  # Use processed SQL string from template
                     param_set,
                     dialect=self.dialect,
-                    statement_config=building_config,
+                    config=building_config,  # type: ignore[arg-type]
                 )
-                ordered_params_for_item = item_stmt.get_parameters(style=placeholder_style)
+                ordered_params_for_item = item_stmt.get_parameters(style=parameter_style)
 
                 if isinstance(ordered_params_for_item, list):
                     processed_params_list.append(tuple(ordered_params_for_item))
@@ -232,7 +257,7 @@ class AiosqliteDriver(
 
         if not param_sequence:
             logger.debug("execute_many called with no parameters for SQL: %s", final_sql)
-            return ExecuteResult(raw_result=cast("dict[str, Any]", {}), rows_affected=0, operation_type="EXECUTE")
+            return ExecuteResult(raw_result={}, rows_affected=0, operation_type="EXECUTE")
 
         logger.debug(
             "Executing SQL (aiosqlite) many: %s with %s param sets.",
@@ -258,18 +283,18 @@ class AiosqliteDriver(
             operation_type = str(template_stmt.expression.key).upper()
 
         return ExecuteResult(
-            raw_result=cast("dict[str, Any]", {}),
+            raw_result={},
             rows_affected=affected_rows,
             operation_type=operation_type,
         )
 
     async def execute_script(
         self,
-        statement: "Statement",
-        parameters: Optional["StatementParameterType"] = None,
+        statement: "Union[str, SQL]",
+        parameters: Optional["SQLParameterType"] = None,
         *filters: "StatementFilter",
         connection: Optional[AiosqliteConnection] = None,
-        statement_config: Optional[StatementConfig] = None,
+        config: Optional[SQLConfig] = None,
         **kwargs: Any,
     ) -> str:
         """Execute a multi-statement SQL script.
@@ -283,14 +308,14 @@ class AiosqliteDriver(
             parameters: Parameters for the script.
             *filters: Statement filters to apply.
             connection: Optional connection override.
-            statement_config: Optional statement configuration.
+            config: Optional statement configuration.
             **kwargs: Additional keyword arguments.
 
         Returns:
             A string with execution results/output.
         """
         conn: AiosqliteConnection = self._connection(connection)
-        config = statement_config or self.statement_config
+        config = config or self.config
 
         merged_params = parameters
         if kwargs:
@@ -299,9 +324,17 @@ class AiosqliteDriver(
             elif isinstance(merged_params, dict):
                 merged_params = {**merged_params, **kwargs}
 
-        stmt = SQLStatement(statement, merged_params, *filters, dialect=self.dialect, statement_config=config)
-        stmt.validate()
-        final_sql = stmt.to_sql(placeholder_style=ParameterStyle.STATIC, dialect=self.dialect)
+        # Process the input statement
+        script_stmt: SQL
+        if isinstance(statement, SQL):
+            # If already SQL, re-wrap to apply current context, primarily for parameter merging
+            script_stmt = SQL(statement, merged_params, *filters, dialect=self.dialect, config=config)
+        else:  # Raw string
+            script_stmt = SQL(statement, merged_params, *filters, dialect=self.dialect, config=config)
+
+        script_stmt.validate()
+        # aiosqlite's executescript doesn't support parameter binding, so render statically.
+        final_sql = script_stmt.to_sql(placeholder_style=ParameterStyle.STATIC, dialect=self.dialect)
 
         logger.debug("Executing script (aiosqlite): %s", final_sql)
         cursor: Optional[aiosqlite.Cursor] = None

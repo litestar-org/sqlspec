@@ -9,7 +9,7 @@ import pyarrow as pa
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
-from sqlspec.sql.result import ExecuteResult, SelectResult
+from sqlspec.statement.result import ExecuteResult, SelectResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 

@@ -1,193 +1,40 @@
-# ruff: noqa: PLR6301
+import asyncio
 import atexit
-import contextlib
 import logging
-from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Coroutine
 from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
-    ClassVar,
-    Generic,
     Optional,
-    TypeVar,
     Union,
     cast,
     overload,
 )
 
-from sqlglot import exp
-
-from sqlspec.exceptions import NotFoundError
-from sqlspec.sql.statement import Statement, StatementConfig
-from sqlspec.typing import ConnectionT, PoolT, StatementParameterType, T
-from sqlspec.utils.sync_tools import ensure_async_
+from sqlspec.config import (
+    AsyncConfigT,
+    AsyncDatabaseConfig,
+    DatabaseConfigProtocol,
+    DriverT,
+    NoPoolAsyncConfig,
+    NoPoolSyncConfig,
+    SyncConfigT,
+    SyncDatabaseConfig,
+)
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
-    from sqlspec.sql.filters import StatementFilter
-    from sqlspec.sql.parameters import ParameterStyle
-    from sqlspec.sql.result import StatementResult
+    from sqlspec.typing import (
+        ConnectionT,
+        PoolT,
+    )
 
-StatementResultType = Union["StatementResult[dict[str, Any]]", "StatementResult[Any]"]
 
-
-__all__ = (
-    "AsyncDatabaseConfig",
-    "AsyncDriverAdapterProtocol",
-    "CommonDriverAttributes",
-    "DatabaseConfigProtocol",
-    "GenericPoolConfig",
-    "NoPoolAsyncConfig",
-    "NoPoolSyncConfig",
-    "SQLSpec",
-    "SyncDatabaseConfig",
-    "SyncDriverAdapterProtocol",
-)
-
-AsyncConfigT = TypeVar("AsyncConfigT", bound="Union[AsyncDatabaseConfig[Any, Any, Any], NoPoolAsyncConfig[Any, Any]]")
-SyncConfigT = TypeVar("SyncConfigT", bound="Union[SyncDatabaseConfig[Any, Any, Any], NoPoolSyncConfig[Any, Any]]")
-ConfigT = TypeVar(
-    "ConfigT",
-    bound="Union[Union[AsyncDatabaseConfig[Any, Any, Any], NoPoolAsyncConfig[Any, Any]], SyncDatabaseConfig[Any, Any, Any], NoPoolSyncConfig[Any, Any]]",
-)
-DriverT = TypeVar("DriverT", bound="Union[SyncDriverAdapterProtocol[Any], AsyncDriverAdapterProtocol[Any]]")
+__all__ = ("SQLSpec",)
 
 logger = logging.getLogger("sqlspec")
-
-
-@dataclass
-class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
-    """Protocol defining the interface for database configurations."""
-
-    connection_type: "type[ConnectionT]" = field(init=False)
-    driver_type: "type[DriverT]" = field(init=False)
-    pool_instance: "Optional[PoolT]" = field(default=None)
-    __is_async__: "ClassVar[bool]" = False
-    __supports_connection_pooling__: "ClassVar[bool]" = False
-
-    def __hash__(self) -> int:
-        return id(self)
-
-    @abstractmethod
-    def create_connection(self) -> "Union[ConnectionT, Awaitable[ConnectionT]]":
-        """Create and return a new database connection."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def provide_connection(
-        self,
-        *args: Any,
-        **kwargs: Any,
-    ) -> "Union[AbstractContextManager[ConnectionT], AbstractAsyncContextManager[ConnectionT]]":
-        """Provide a database connection context manager."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def provide_session(
-        self,
-        *args: Any,
-        **kwargs: Any,
-    ) -> "Union[AbstractContextManager[DriverT], AbstractAsyncContextManager[DriverT]]":
-        """Provide a database session context manager."""
-        raise NotImplementedError
-
-    @property
-    @abstractmethod
-    def connection_config_dict(self) -> "dict[str, Any]":
-        """Return the connection configuration as a dict."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def create_pool(self) -> "Union[PoolT, Awaitable[PoolT]]":
-        """Create and return connection pool."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def close_pool(self) -> "Optional[Awaitable[None]]":
-        """Terminate the connection pool."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def provide_pool(
-        self,
-        *args: Any,
-        **kwargs: Any,
-    ) -> "Union[PoolT, Awaitable[PoolT], AbstractContextManager[PoolT], AbstractAsyncContextManager[PoolT]]":
-        """Provide pool instance."""
-        raise NotImplementedError
-
-    @property
-    def is_async(self) -> bool:
-        """Return whether the configuration is for an async database."""
-        return self.__is_async__
-
-    @property
-    def support_connection_pooling(self) -> bool:
-        """Return whether the configuration supports connection pooling."""
-        return self.__supports_connection_pooling__
-
-
-class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
-    """Base class for a sync database configurations that do not implement a pool."""
-
-    __is_async__ = False
-    __supports_connection_pooling__ = False
-    pool_instance: None = None
-
-    def create_pool(self) -> None:
-        """This database backend has not implemented the pooling configurations."""
-        return
-
-    def close_pool(self) -> None:
-        return
-
-    def provide_pool(self, *args: Any, **kwargs: Any) -> None:
-        """This database backend has not implemented the pooling configurations."""
-        return
-
-
-class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
-    """Base class for an async database configurations that do not implement a pool."""
-
-    __is_async__ = True
-    __supports_connection_pooling__ = False
-    pool_instance: None = None
-
-    async def create_pool(self) -> None:
-        """This database backend has not implemented the pooling configurations."""
-        return
-
-    async def close_pool(self) -> None:
-        return
-
-    def provide_pool(self, *args: Any, **kwargs: Any) -> None:
-        """This database backend has not implemented the pooling configurations."""
-        return
-
-
-@dataclass
-class GenericPoolConfig:
-    """Generic Database Pool Configuration."""
-
-
-@dataclass
-class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
-    """Generic Sync Database Configuration."""
-
-    __is_async__ = False
-    __supports_connection_pooling__ = True
-
-
-@dataclass
-class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
-    """Generic Async Database Configuration."""
-
-    __is_async__ = True
-    __supports_connection_pooling__ = True
 
 
 class SQLSpec:
@@ -197,34 +44,53 @@ class SQLSpec:
 
     def __init__(self) -> None:
         self._configs: dict[Any, DatabaseConfigProtocol[Any, Any, Any]] = {}
-        # Register the cleanup handler to run at program exit
         atexit.register(self._cleanup_pools)
 
     def _cleanup_pools(self) -> None:
-        """Clean up all open database pools at program exit."""
+        """Clean up all registered connection pools."""
         for config in self._configs.values():
-            if config.support_connection_pooling and config.pool_instance is not None:
-                with contextlib.suppress(Exception):
-                    ensure_async_(config.close_pool)()
+            if config.__supports_connection_pooling__:
+                if config.is_async:
+                    close_pool_awaitable = config.close_pool()
+                    if close_pool_awaitable is not None:
+                        try:
+                            loop = asyncio.get_running_loop()
+                            if loop.is_running():
+                                _task = asyncio.ensure_future(close_pool_awaitable, loop=loop)  # noqa: RUF006
+                                # Don't wait for task completion since we're cleaning up
+                            else:
+                                asyncio.run(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
+                        except RuntimeError:  # No running event loop
+                            asyncio.run(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
+                else:
+                    config.close_pool()
+        self._configs.clear()
 
     @overload
-    def add_config(self, config: "SyncConfigT") -> "type[SyncConfigT]": ...
+    def add_config(self, config: "SyncConfigT") -> "Annotated[type[SyncConfigT], int]":  # pyright: ignore[reportInvalidTypeVarUse]
+        ...
 
     @overload
-    def add_config(self, config: "AsyncConfigT") -> "type[AsyncConfigT]": ...
+    def add_config(self, config: "AsyncConfigT") -> "Annotated[type[AsyncConfigT], int]":  # pyright: ignore[reportInvalidTypeVarUse]
+        ...
 
     def add_config(
         self,
         config: "Union[SyncConfigT, AsyncConfigT]",
     ) -> "Union[Annotated[type[SyncConfigT], int], Annotated[type[AsyncConfigT], int]]":  # pyright: ignore[reportInvalidTypeVarUse]
-        """Add a new configuration to the manager.
+        """Add a configuration instance to the registry.
+
+        Args:
+            config: The configuration instance to add.
 
         Returns:
-            A unique type key that can be used to retrieve the configuration later.
+            The type of the added configuration, annotated with its ID for potential use in type systems.
         """
-        key = Annotated[type(config), id(config)]  # type: ignore[valid-type]
-        self._configs[key] = config
-        return key  # type: ignore[return-value]  # pyright: ignore[reportReturnType]
+        config_type = type(config)
+        if config_type in self._configs:
+            logger.warning("Configuration for %s already exists. Overwriting.", config_type.__name__)
+        self._configs[config_type] = config
+        return config_type
 
     @overload
     def get_config(self, name: "type[SyncConfigT]") -> "SyncConfigT": ...
@@ -236,13 +102,16 @@ class SQLSpec:
         self,
         name: "Union[type[DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]], Any]",
     ) -> "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]":
-        """Retrieve a configuration by its type.
+        """Retrieve a configuration instance by its type or a key.
+
+        Args:
+            name: The type of the configuration or a key associated with it.
 
         Returns:
-            DatabaseConfigProtocol: The configuration instance for the given type.
+            The configuration instance.
 
         Raises:
-            KeyError: If no configuration is found for the given type.
+            KeyError: If the configuration is not found.
         """
         config = self._configs.get(name)
         if not config:
@@ -255,7 +124,7 @@ class SQLSpec:
         self,
         name: Union[
             "type[NoPoolSyncConfig[ConnectionT, DriverT]]",
-            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",  # pyright: ignore[reportInvalidTypeVarUse]
+            "type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
             "NoPoolSyncConfig[ConnectionT, DriverT]",
             "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
@@ -266,7 +135,7 @@ class SQLSpec:
         self,
         name: Union[
             "type[NoPoolAsyncConfig[ConnectionT, DriverT]]",
-            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",  # pyright: ignore[reportInvalidTypeVarUse]
+            "type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
             "NoPoolAsyncConfig[ConnectionT, DriverT]",
             "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
@@ -285,13 +154,13 @@ class SQLSpec:
             "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
     ) -> "Union[ConnectionT, Awaitable[ConnectionT]]":
-        """Create and return a new database connection from the specified configuration.
+        """Get a database connection for the specified configuration.
 
         Args:
-            name: The configuration type to use for creating the connection.
+            name: The configuration name or instance.
 
         Returns:
-            Either a connection instance or an awaitable that resolves to a connection instance.
+            A database connection or an awaitable yielding a connection.
         """
         if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
             config = name
@@ -334,26 +203,41 @@ class SQLSpec:
             "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
     ) -> "Union[DriverT, Awaitable[DriverT]]":
-        """Create and return a new database session from the specified configuration.
+        """Get a database session (driver adapter) for the specified configuration.
 
         Args:
-            name: The configuration type to use for creating the session.
+            name: The configuration name or instance.
 
         Returns:
-            Either a driver instance or an awaitable that resolves to a driver instance.
+            A driver adapter instance or an awaitable yielding one.
         """
         if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
             config = name
         else:
             config = self.get_config(name)
-        connection = self.get_connection(name)
-        if isinstance(connection, Awaitable):
 
-            async def _create_session() -> DriverT:
-                return cast("DriverT", config.driver_type(await connection))  # pyright: ignore
+        connection_obj = self.get_connection(name)
 
-            return _create_session()
-        return cast("DriverT", config.driver_type(connection))  # pyright: ignore
+        if isinstance(connection_obj, Awaitable):
+
+            async def _create_driver_async() -> "DriverT":
+                resolved_connection = await connection_obj
+                return cast(  # pyright: ignore
+                    "DriverT",
+                    config.driver_type(
+                        connection=resolved_connection,
+                        instrumentation_config=config.instrumentation,
+                        default_row_type=getattr(config, "default_row_type", None),
+                    ),
+                )
+
+            return _create_driver_async()
+
+        return config.driver_type(
+            connection=connection_obj,
+            instrumentation_config=config.instrumentation,
+            default_row_type=getattr(config, "default_row_type", None),
+        )
 
     @overload
     def provide_connection(
@@ -399,17 +283,19 @@ class SQLSpec:
         """Create and provide a database connection from the specified configuration.
 
         Args:
-            name: The configuration type to use for creating the connection.
-            *args: Positional arguments to pass to the configuration's provide_connection method.
-            **kwargs: Keyword arguments to pass to the configuration's provide_connection method.
+            name: The configuration name or instance.
+            *args: Positional arguments to pass to the config's provide_connection.
+            **kwargs: Keyword arguments to pass to the config's provide_connection.
+
 
         Returns:
-            Either a synchronous or asynchronous context manager that provides a database connection.
+            A sync or async context manager yielding a connection.
         """
         if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
             config = name
         else:
             config = self.get_config(name)
+
         return config.provide_connection(*args, **kwargs)
 
     @overload
@@ -456,12 +342,12 @@ class SQLSpec:
         """Create and provide a database session from the specified configuration.
 
         Args:
-            name: The configuration type to use for creating the session.
-            *args: Positional arguments to pass to the configuration's provide_session method.
-            **kwargs: Keyword arguments to pass to the configuration's provide_session method.
+            name: The configuration name or instance.
+            *args: Positional arguments to pass to the config's provide_session.
+            **kwargs: Keyword arguments to pass to the config's provide_session.
 
         Returns:
-            Either a synchronous or asynchronous context manager that provides a database session.
+            A sync or async context manager yielding a driver adapter instance.
         """
         if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
             config = name
@@ -473,17 +359,17 @@ class SQLSpec:
     def get_pool(
         self,
         name: "Union[type[Union[NoPoolSyncConfig[ConnectionT, DriverT], NoPoolAsyncConfig[ConnectionT, DriverT]]], NoPoolSyncConfig[ConnectionT, DriverT], NoPoolAsyncConfig[ConnectionT, DriverT]]",
-    ) -> "None": ...  # pyright: ignore[reportInvalidTypeVarUse]
+    ) -> "None": ...
     @overload
     def get_pool(
         self,
         name: "Union[type[SyncDatabaseConfig[ConnectionT, PoolT, DriverT]], SyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-    ) -> "type[PoolT]": ...  # pyright: ignore[reportInvalidTypeVarUse]
+    ) -> "type[PoolT]": ...
     @overload
     def get_pool(
         self,
         name: "Union[type[AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]],AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]]",
-    ) -> "Awaitable[type[PoolT]]": ...  # pyright: ignore[reportInvalidTypeVarUse]
+    ) -> "Awaitable[type[PoolT]]": ...
 
     def get_pool(
         self,
@@ -498,14 +384,13 @@ class SQLSpec:
             "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         ],
     ) -> "Union[type[PoolT], Awaitable[type[PoolT]], None]":
-        """Create and return a connection pool from the specified configuration.
+        """Get the connection pool for the specified configuration.
 
         Args:
-            name: The configuration type to use for creating the pool.
+            name: The configuration name or instance.
 
         Returns:
-            Either a pool instance, an awaitable that resolves to a pool instance, or None
-            if the configuration does not support connection pooling.
+            The connection pool, an awaitable yielding the pool, or None if not supported.
         """
         config = (
             name
@@ -554,10 +439,10 @@ class SQLSpec:
         """Close the connection pool for the specified configuration.
 
         Args:
-            name: The configuration type whose pool to close.
+            name: The configuration name or instance.
 
         Returns:
-            An awaitable if the configuration is async, otherwise None.
+            None, or an awaitable if closing an async pool.
         """
         if isinstance(name, (NoPoolSyncConfig, NoPoolAsyncConfig, SyncDatabaseConfig, AsyncDatabaseConfig)):
             config = name
@@ -566,206 +451,3 @@ class SQLSpec:
         if config.support_connection_pooling:
             return config.close_pool()
         return None
-
-
-class CommonDriverAttributes(Generic[ConnectionT]):
-    """Common attributes and methods for driver adapters."""
-
-    dialect: str
-    """The SQL dialect supported by the underlying database driver (e.g., 'postgres', 'mysql')."""
-    parameter_style: "ParameterStyle"
-    """The parameter style used by the driver (e.g., 'qmark', 'numeric', 'named')."""
-    connection: "ConnectionT"
-    """The connection to the underlying database."""
-    statement_config: "StatementConfig"
-    """Configuration for SQL statements, including validation and sanitization settings."""
-
-    __supports_arrow__: "ClassVar[bool]" = False
-    """Indicates if the driver supports Apache Arrow operations."""
-
-    @abstractmethod
-    def _get_placeholder_style(self) -> "ParameterStyle":
-        """Return the paramstyle expected by the driver (e.g., 'qmark', 'numeric', 'named')."""
-        raise NotImplementedError
-
-    def _connection(self, connection: "Optional[ConnectionT]" = None) -> "ConnectionT":
-        return connection if connection is not None else self.connection
-
-    @staticmethod
-    def returns_rows(expression: "Optional[exp.Expression]") -> bool:
-        """Determine if a SQL expression is expected to return rows.
-
-        Args:
-            expression: The parsed sqlglot expression to analyze
-
-        Returns:
-            True if the statement returns rows, False otherwise
-        """
-        if expression is None:
-            return False
-        if isinstance(expression, (exp.Select, exp.Show, exp.Describe, exp.Pragma, exp.With)):
-            return True
-        if isinstance(expression, exp.Command):
-            return True
-        if isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
-            return bool(expression.find(exp.Returning))
-        return False
-
-    @staticmethod
-    def check_not_found(item_or_none: "Optional[T]" = None) -> "T":
-        """Raise :exc:`sqlspec.exceptions.NotFoundError` if ``item_or_none`` is ``None``.
-
-        Args:
-            item_or_none: Item to be tested for existence.
-
-        Raises:
-            NotFoundError: If ``item_or_none`` is ``None``
-
-        Returns:
-            The item, if it exists.
-        """
-        if item_or_none is None:
-            msg = "No result found when one was expected"
-            raise NotFoundError(msg)
-        return item_or_none
-
-
-class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generic[ConnectionT]):
-    connection: "ConnectionT"
-
-    def __init__(self, connection: "ConnectionT", statement_config: "Optional[StatementConfig]" = None) -> None:
-        self.connection = connection
-        self.statement_config = statement_config if statement_config is not None else StatementConfig()
-
-    @abstractmethod
-    def execute(
-        self,
-        statement: "Statement",
-        parameters: Optional["StatementParameterType"] = None,
-        *filters: "StatementFilter",
-        connection: Optional["ConnectionT"] = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        **kwargs: Any,
-    ) -> "StatementResultType":
-        """Execute a SQL statement and return a StatementResult.
-
-        This is the unified method for all SQL operations (SELECT, INSERT, UPDATE, DELETE).
-        Use the StatementResult methods to extract the data you need:
-        - result.all() for all rows
-        - result.one() for exactly one row
-        - result.one_or_none() for zero or one row
-        - result.scalar() for a single value
-        - result.affected_rows for INSERT/UPDATE/DELETE count
-
-        For Arrow operations, drivers may return ArrowResult containing Apache Arrow tables.
-
-        Example usage:
-            # Regular operation returning SelectResult
-            result = driver.execute("SELECT * FROM users WHERE id = ?", [1])
-            user = result.one()
-
-            # Arrow operation (if supported by driver)
-            result = driver.execute("SELECT * FROM large_table", format="arrow")
-            if isinstance(result, ArrowResult):
-                df = result.to_pandas()
-        """
-        ...
-
-    @abstractmethod
-    def execute_many(
-        self,
-        statement: "Statement",
-        parameters: "Optional[Sequence[StatementParameterType]]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        **kwargs: Any,
-    ) -> StatementResultType:
-        """Execute a SQL statement with multiple parameter sets.
-
-        Useful for batch INSERT, UPDATE, or DELETE operations.
-        """
-        ...
-
-    @abstractmethod
-    def execute_script(
-        self,
-        statement: "Statement",
-        parameters: Optional[StatementParameterType] = None,
-        *filters: "StatementFilter",
-        connection: Optional[ConnectionT] = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        **kwargs: Any,
-    ) -> str:
-        """Execute a multi-statement SQL script.
-
-        Returns a string with execution results/output.
-        """
-        ...
-
-
-class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT], ABC, Generic[ConnectionT]):
-    connection: "ConnectionT"
-
-    def __init__(self, connection: "ConnectionT", statement_config: Optional[StatementConfig] = None) -> None:
-        self.connection = connection
-        self.statement_config = statement_config if statement_config is not None else StatementConfig()
-
-    @abstractmethod
-    async def execute(
-        self,
-        statement: "Statement",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        **kwargs: Any,
-    ) -> StatementResultType:
-        """Execute a SQL statement and return a StatementResult.
-
-        This is the unified method for all SQL operations (SELECT, INSERT, UPDATE, DELETE).
-        Use the StatementResult methods to extract the data you need:
-        - result.all() for all rows
-        - result.one() for exactly one row
-        - result.one_or_none() for zero or one row
-        - result.scalar() for a single value
-        - result.affected_rows for INSERT/UPDATE/DELETE count
-
-        For Arrow operations, drivers may return ArrowResult containing Apache Arrow tables.
-        """
-        ...
-
-    @abstractmethod
-    async def execute_many(
-        self,
-        statement: "Statement",
-        parameters: Optional[Sequence[StatementParameterType]] = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        **kwargs: Any,
-    ) -> StatementResultType:
-        """Execute a SQL statement with multiple parameter sets.
-
-        Useful for batch INSERT, UPDATE, or DELETE operations.
-        """
-        ...
-
-    @abstractmethod
-    async def execute_script(
-        self,
-        statement: "Statement",
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
-        **kwargs: Any,
-    ) -> str:
-        """Execute a multi-statement SQL script.
-
-        Returns a string with execution results/output.
-        """
-        ...
-
-
-DriverAdapterProtocol = Union[SyncDriverAdapterProtocol[ConnectionT], AsyncDriverAdapterProtocol[ConnectionT]]

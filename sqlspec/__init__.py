@@ -1,7 +1,9 @@
-from sqlspec import adapters, base, exceptions, extensions, typing, utils
+"""SQLSpec: Safe and elegant SQL query building for Python."""
+
+from sqlspec import adapters, base, exceptions, extensions, statement, typing, utils
 from sqlspec.__metadata__ import __version__
+from sqlspec._sql import sql
 from sqlspec.base import SQLSpec
-from sqlspec.sql import mixins
 
 __all__ = (
     "SQLSpec",
@@ -10,7 +12,8 @@ __all__ = (
     "base",
     "exceptions",
     "extensions",
-    "mixins",
+    "sql",
+    "statement",
     "typing",
     "utils",
 )

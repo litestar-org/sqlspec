@@ -24,13 +24,13 @@ from litestar.di import Provide
 from litestar.params import Dependency, Parameter
 from typing_extensions import NotRequired
 
-from sqlspec.sql.filters import (
-    BeforeAfter,
-    CollectionFilter,
+from sqlspec.statement.filters import (
+    BeforeAfterFilter,
     FilterTypes,
-    LimitOffset,
+    InCollectionFilter,
+    LimitOffsetFilter,
     NotInCollectionFilter,
-    OrderBy,
+    OrderByFilter,
     SearchFilter,
 )
 from sqlspec.utils.singleton import SingletonMeta
@@ -214,8 +214,8 @@ def _create_statement_filters(
 
         def provide_id_filter(  # pyright: ignore[reportUnknownParameterType]
             ids: Optional[list[str]] = Parameter(query="ids", default=None, required=False),
-        ) -> CollectionFilter:  # pyright: ignore[reportMissingTypeArgument]
-            return CollectionFilter(field_name=config.get("id_field", "id"), values=ids)
+        ) -> InCollectionFilter:  # pyright: ignore[reportMissingTypeArgument]
+            return InCollectionFilter(field_name=config.get("id_field", "id"), values=ids)
 
         filters[dep_defaults.ID_FILTER_DEPENDENCY_KEY] = Provide(provide_id_filter, sync_to_thread=False)  # pyright: ignore[reportUnknownArgumentType]
 
@@ -224,8 +224,8 @@ def _create_statement_filters(
         def provide_created_filter(
             before: DTorNone = Parameter(query="createdBefore", default=None, required=False),
             after: DTorNone = Parameter(query="createdAfter", default=None, required=False),
-        ) -> BeforeAfter:
-            return BeforeAfter("created_at", before, after)
+        ) -> BeforeAfterFilter:
+            return BeforeAfterFilter("created_at", before, after)
 
         filters[dep_defaults.CREATED_FILTER_DEPENDENCY_KEY] = Provide(provide_created_filter, sync_to_thread=False)
 
@@ -234,8 +234,8 @@ def _create_statement_filters(
         def provide_updated_filter(
             before: DTorNone = Parameter(query="updatedBefore", default=None, required=False),
             after: DTorNone = Parameter(query="updatedAfter", default=None, required=False),
-        ) -> BeforeAfter:
-            return BeforeAfter("updated_at", before, after)
+        ) -> BeforeAfterFilter:
+            return BeforeAfterFilter("updated_at", before, after)
 
         filters[dep_defaults.UPDATED_FILTER_DEPENDENCY_KEY] = Provide(provide_updated_filter, sync_to_thread=False)
 
@@ -249,8 +249,8 @@ def _create_statement_filters(
                 default=config.get("pagination_size", dep_defaults.DEFAULT_PAGINATION_SIZE),
                 required=False,
             ),
-        ) -> LimitOffset:
-            return LimitOffset(page_size, page_size * (current_page - 1))
+        ) -> LimitOffsetFilter:
+            return LimitOffsetFilter(page_size, page_size * (current_page - 1))
 
         filters[dep_defaults.LIMIT_OFFSET_FILTER_DEPENDENCY_KEY] = Provide(
             provide_limit_offset_pagination, sync_to_thread=False
@@ -298,8 +298,8 @@ def _create_statement_filters(
                 default=config.get("sort_order", "desc"),
                 required=False,
             ),
-        ) -> OrderBy:
-            return OrderBy(field_name=field_name, sort_order=sort_order)  # type: ignore[arg-type]
+        ) -> OrderByFilter:
+            return OrderByFilter(field_name=field_name, sort_order=sort_order)  # type: ignore[arg-type]
 
         filters[dep_defaults.ORDER_BY_FILTER_DEPENDENCY_KEY] = Provide(provide_order_by, sync_to_thread=False)
 
@@ -340,14 +340,14 @@ def _create_statement_filters(
 
             def create_in_filter_provider(  # pyright: ignore
                 field_name: FieldNameType,
-            ) -> Callable[..., Optional[CollectionFilter[field_def.type_hint]]]:  # type: ignore # pyright: ignore
+            ) -> Callable[..., Optional[InCollectionFilter[field_def.type_hint]]]:  # type: ignore # pyright: ignore
                 def provide_in_filter(  # pyright: ignore
                     values: Optional[list[field_name.type_hint]] = Parameter(  # type: ignore # pyright: ignore
                         query=camelize(f"{field_name.name}_in"), default=None, required=False
                     ),
-                ) -> Optional[CollectionFilter[field_name.type_hint]]:  # type: ignore # pyright: ignore
+                ) -> Optional[InCollectionFilter[field_name.type_hint]]:  # type: ignore # pyright: ignore
                     return (
-                        CollectionFilter[field_name.type_hint](field_name=field_name.name, values=values)  # type: ignore  # pyright: ignore
+                        InCollectionFilter[field_name.type_hint](field_name=field_name.name, values=values)  # type: ignore  # pyright: ignore
                         if values
                         else None
                     )
@@ -365,7 +365,7 @@ def _create_statement_filters(
     return filters
 
 
-def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., list[FilterTypes]]:  # noqa: PLR0915
+def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., list[FilterTypes]]:
     """Create a filter function based on the provided configuration.
 
     Args:
@@ -384,27 +384,27 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
             name="id_filter",
             kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
             default=Dependency(skip_validation=True),
-            annotation=CollectionFilter[cls],  # type: ignore[valid-type]
+            annotation=InCollectionFilter[cls],  # type: ignore[valid-type]
         )
-        annotations["id_filter"] = CollectionFilter[cls]  # type: ignore[valid-type]
+        annotations["id_filter"] = InCollectionFilter[cls]  # type: ignore[valid-type]
 
     if config.get("created_at"):
         parameters["created_filter"] = inspect.Parameter(
             name="created_filter",
             kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
             default=Dependency(skip_validation=True),
-            annotation=BeforeAfter,
+            annotation=BeforeAfterFilter,
         )
-        annotations["created_filter"] = BeforeAfter
+        annotations["created_filter"] = BeforeAfterFilter
 
     if config.get("updated_at"):
         parameters["updated_filter"] = inspect.Parameter(
             name="updated_filter",
             kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
             default=Dependency(skip_validation=True),
-            annotation=BeforeAfter,
+            annotation=BeforeAfterFilter,
         )
-        annotations["updated_filter"] = BeforeAfter
+        annotations["updated_filter"] = BeforeAfterFilter
 
     if config.get("search"):
         parameters["search_filter"] = inspect.Parameter(
@@ -420,18 +420,18 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
             name="limit_offset_filter",
             kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
             default=Dependency(skip_validation=True),
-            annotation=LimitOffset,
+            annotation=LimitOffsetFilter,
         )
-        annotations["limit_offset_filter"] = LimitOffset
+        annotations["limit_offset_filter"] = LimitOffsetFilter
 
     if config.get("sort_field"):
         parameters["order_by_filter"] = inspect.Parameter(
             name="order_by_filter",
             kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
             default=Dependency(skip_validation=True),
-            annotation=OrderBy,
+            annotation=OrderByFilter,
         )
-        annotations["order_by_filter"] = OrderBy
+        annotations["order_by_filter"] = OrderByFilter
 
     # Add parameters for not_in filters
     if not_in_fields := config.get("not_in_fields"):
@@ -453,9 +453,9 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
                 name=f"{field_def.name}_in_filter",
                 kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
                 default=Dependency(skip_validation=True),
-                annotation=CollectionFilter[field_def.type_hint],  # type: ignore
+                annotation=InCollectionFilter[field_def.type_hint],  # type: ignore
             )
-            annotations[f"{field_def.name}_in_filter"] = CollectionFilter[field_def.type_hint]  # type: ignore
+            annotations[f"{field_def.name}_in_filter"] = InCollectionFilter[field_def.type_hint]  # type: ignore
 
     def provide_filters(**kwargs: FilterTypes) -> list[FilterTypes]:
         """Provide filter dependencies based on configuration.
@@ -483,7 +483,7 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
         ):
             filters.append(search_filter)
         if (
-            (order_by := cast("Optional[OrderBy]", kwargs.get("order_by_filter")))
+            (order_by := cast("Optional[OrderByFilter]", kwargs.get("order_by_filter")))
             and order_by is not None  # pyright: ignore[reportUnnecessaryComparison]
             and order_by.field_name is not None  # pyright: ignore[reportUnnecessaryComparison]
         ):

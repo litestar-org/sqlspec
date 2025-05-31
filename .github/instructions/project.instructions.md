@@ -73,9 +73,9 @@ applyTo: '**/*.py'
     * Use type hints in docstrings where applicable.
     * Exceptions must be documented and described in the docstrings.
     * Args and Kwargs should be documented in the docstring, especially for public APIs.
-    * Use `:param` and `:return` directives for parameters and return values in docstrings, especially for public APIs.
+    * Use google style docstring directives for parameters and return values in docstrings, especially for public APIs.
     * Do not document the return type of it is None.  Only document the return type if it is not None.
-    * Use `:raises` directive to document exceptions that a function may raise.
+    * Use raises directive to document exceptions that a function may raise.
 
 12. **Project Documentation**:
     * Update or add documentation in the `docs/` directory as needed. This likely uses Sphinx.
@@ -87,12 +87,16 @@ applyTo: '**/*.py'
     * For components requiring configuration (like database adapters), follow existing patterns. For example, `sqlspec/adapters/bigquery/config/` and `sqlspec/adapters/psycopg/config/` suggest a pattern of dedicated config modules.
 
 14. **Error Handling**:
-    * Implement robust error handling. Define custom exceptions where appropriate.
+    * Implement robust error handling. Define custom exceptions where appropriate.  Errors are defined in `sqlspec/exceptions.py`.
+    * Assume that there will be a single wrapper for all exceptions, so ensure that exceptions are raised with sufficient context to be useful.  Do not needlessly catch and re-raise exceptions unless adding context or handling specific cases.
+    * Use `logging` for error reporting and debugging. Ensure that logs are meaningful and provide context.  Do not user f-string in log messages and do not use `print` statements for debugging or logging.
 
 15. **Avoid**:
     * Global variables where possible.
     * Overly complex comprehensions or one-liners that sacrifice readability.
     * Directly committing secrets or sensitive credentials. Use environment variables or configuration files (ignored by git) for such data.
+    * Do not needlessly assign variables for the sake of assignment or type hinting.  Only assign variables when they are used or needed for clarity.
+    * If the variable is only use once, please do not assign it to a variable.  Use the value directly in the expression or function call.
 
 ## Pre-commit Hooks & CI
 

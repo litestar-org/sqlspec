@@ -22,26 +22,26 @@ from google.cloud.bigquery import (
     ScalarQueryParameter,
 )
 
-from sqlspec.base import SyncDriverAdapterProtocol
+from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.exceptions import (
     ParameterStyleMismatchError,
     SQLSpecError,
 )
-from sqlspec.sql.mixins import (
+from sqlspec.statement.mixins import (
     ResultConverter,
     SQLTranslatorMixin,
     SyncArrowMixin,
     SyncParquetMixin,
 )
-from sqlspec.sql.parameters import ParameterStyle
-from sqlspec.sql.result import ArrowResult, ExecuteResult, SelectResult
-from sqlspec.sql.statement import SQLStatement, Statement, StatementConfig
-from sqlspec.typing import StatementParameterType
+from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
+from sqlspec.statement.sql import SQL, SQLConfig, Statement
+from sqlspec.typing import SQLParameterType
 
 if TYPE_CHECKING:
     from google.cloud.bigquery.table import Row as BigQueryRow
 
-    from sqlspec.sql.filters import StatementFilter
+    from sqlspec.statement.filters import StatementFilter
 
 
 __all__ = ("BigQueryConnection", "BigQueryDriver")
@@ -78,10 +78,8 @@ class BigQueryDriver(
     __supports_arrow__: ClassVar[bool] = True
     _default_query_job_config: Optional[QueryJobConfig]
 
-    def __init__(
-        self, connection: "BigQueryConnection", statement_config: Optional[StatementConfig] = None, **kwargs: Any
-    ) -> None:
-        super().__init__(connection=connection, statement_config=statement_config)
+    def __init__(self, connection: "BigQueryConnection", config: Optional[SQLConfig] = None, **kwargs: Any) -> None:
+        super().__init__(connection=connection, config=config)
 
         default_config_kwarg = kwargs.get("default_query_job_config")
         conn_default_config = getattr(connection, "default_query_job_config", None)
@@ -176,10 +174,10 @@ class BigQueryDriver(
     def execute(
         self,
         statement: "Statement",
-        parameters: Optional[StatementParameterType] = None,
+        parameters: Optional[SQLParameterType] = None,
         *filters: "StatementFilter",
         connection: Optional[BigQueryConnection] = None,
-        statement_config: Optional[StatementConfig] = None,
+        config: Optional[SQLConfig] = None,
         job_config: Optional[QueryJobConfig] = None,
         **kwargs: Any,
     ) -> "Union[SelectResult[dict[str, Any]], ExecuteResult[dict[str, Any]]]":
@@ -193,7 +191,7 @@ class BigQueryDriver(
             parameters: Parameters for the statement.
             *filters: Statement filters to apply (e.g., pagination, search filters).
             connection: Optional connection override.
-            statement_config: Optional statement configuration.
+            config: Optional statement configuration.
             job_config: Optional BigQuery job configuration.
             **kwargs: Additional keyword arguments.
 
@@ -236,10 +234,8 @@ class BigQueryDriver(
                 stmt_final_expression = None
         else:
             # Process with SQLStatement
-            config = statement_config or self.statement_config
-            stmt = SQLStatement(
-                statement, parameters, *filters, dialect=self.dialect, statement_config=config, **kwargs
-            )
+            config = config or self.config
+            stmt = SQL(statement, parameters, *filters, dialect=self.dialect, config=config, **kwargs)
             stmt.validate()
 
             final_sql_str = stmt.to_sql(placeholder_style=self._get_placeholder_style())
@@ -286,10 +282,10 @@ class BigQueryDriver(
     def execute_many(
         self,
         statement: "Statement",
-        parameters: Optional[Sequence[StatementParameterType]] = None,
+        parameters: Optional[Sequence[SQLParameterType]] = None,
         *filters: "StatementFilter",
         connection: Optional[BigQueryConnection] = None,
-        statement_config: Optional[StatementConfig] = None,
+        config: Optional[SQLConfig] = None,
         job_config: Optional[QueryJobConfig] = None,
         **kwargs: Any,
     ) -> "ExecuteResult[dict[str, Any]]":
@@ -302,7 +298,7 @@ class BigQueryDriver(
             parameters: Sequence of parameter sets.
             *filters: Statement filters to apply.
             connection: Optional connection override.
-            statement_config: Optional statement configuration.
+            config: Optional statement configuration.
             job_config: Optional BigQuery job configuration.
             **kwargs: Additional keyword arguments.
 
@@ -320,26 +316,26 @@ class BigQueryDriver(
             ... )
         """
         if not parameters:
-            config = statement_config or self.statement_config
-            stmt = SQLStatement(statement, None, *filters, dialect=self.dialect, statement_config=config, **kwargs)
+            config = config or self.config
+            stmt = SQL(statement, None, *filters, dialect=self.dialect, config=config, **kwargs)
             stmt.validate()
             return ExecuteResult(raw_result=cast("dict[str, Any]", {}), rows_affected=0, operation_type="EXECUTE")
 
         total_rows_affected = 0
         conn = self._connection(connection)
-        config = statement_config or self.statement_config
+        config = config or self.config
 
         # Create template statement
-        template_stmt = SQLStatement(statement, None, *filters, dialect=self.dialect, statement_config=config, **kwargs)
+        template_stmt = SQL(statement, None, *filters, dialect=self.dialect, config=config, **kwargs)
         template_stmt.validate()
         processed_sql_template = template_stmt.to_sql(placeholder_style=self._get_placeholder_style())
 
         for param_set in parameters:
-            item_stmt = SQLStatement(
+            item_stmt = SQL(
                 template_stmt.sql,
                 param_set,
                 dialect=self.dialect,
-                statement_config=replace(config or StatementConfig(), enable_validation=False),
+                config=replace(config or SQLConfig(), enable_validation=False),
             )
             item_params_dict = item_stmt.get_parameters(style=self._get_placeholder_style())
             if not isinstance(item_params_dict, dict):
@@ -369,10 +365,10 @@ class BigQueryDriver(
     def execute_script(
         self,
         statement: "Statement",
-        parameters: Optional[StatementParameterType] = None,
+        parameters: Optional[SQLParameterType] = None,
         *filters: "StatementFilter",
         connection: Optional[BigQueryConnection] = None,
-        statement_config: Optional[StatementConfig] = None,
+        config: Optional[SQLConfig] = None,
         job_config: Optional[QueryJobConfig] = None,
         **kwargs: Any,
     ) -> str:
@@ -387,14 +383,14 @@ class BigQueryDriver(
             parameters: Parameters for the script.
             *filters: Statement filters to apply.
             connection: Optional connection override.
-            statement_config: Optional statement configuration.
+            config: Optional statement configuration.
             job_config: Optional BigQuery job configuration.
             **kwargs: Additional keyword arguments.
 
         Returns:
             A string with execution results/output.
         """
-        config = statement_config or self.statement_config
+        config = config or self.config
 
         merged_params = parameters
         if kwargs:
@@ -403,7 +399,7 @@ class BigQueryDriver(
             elif isinstance(merged_params, dict):
                 merged_params = {**merged_params, **kwargs}
 
-        stmt = SQLStatement(statement, merged_params, *filters, dialect=self.dialect, statement_config=config)
+        stmt = SQL(statement, merged_params, *filters, dialect=self.dialect, config=config)
         stmt.validate()
         final_sql_script = stmt.to_sql(placeholder_style=ParameterStyle.STATIC)
 
@@ -414,10 +410,10 @@ class BigQueryDriver(
     def select_to_arrow(
         self,
         statement: "Statement",
-        parameters: Optional[StatementParameterType] = None,
+        parameters: Optional[SQLParameterType] = None,
         *filters: "StatementFilter",
         connection: Optional[BigQueryConnection] = None,
-        statement_config: Optional[StatementConfig] = None,
+        config: Optional[SQLConfig] = None,
         job_config: Optional[QueryJobConfig] = None,
         **kwargs: Any,
     ) -> "ArrowResult":
@@ -431,7 +427,7 @@ class BigQueryDriver(
             parameters: Parameters for the query.
             *filters: Statement filters to apply.
             connection: Optional connection override.
-            statement_config: Optional statement configuration.
+            config: Optional statement configuration.
             job_config: Optional BigQuery job configuration.
             **kwargs: Additional keyword arguments.
 
@@ -468,10 +464,8 @@ class BigQueryDriver(
                 raise TypeError(msg)
         else:
             # Process with SQLStatement
-            config = statement_config or self.statement_config
-            stmt = SQLStatement(
-                statement, parameters, *filters, dialect=self.dialect, statement_config=config, **kwargs
-            )
+            config = config or self.config
+            stmt = SQL(statement, parameters, *filters, dialect=self.dialect, config=config, **kwargs)
             stmt.validate()
 
             if not self.returns_rows(stmt.expression):
