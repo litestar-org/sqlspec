@@ -22,13 +22,36 @@ from sqlspec.config import (
 # Test Fixtures and Mock Classes
 
 
-class MockSyncConfig(NoPoolSyncConfig[Mock, Mock]):
+class MockDriver:
+    """Mock driver class for testing."""
+
+    def __init__(
+        self, connection: Any = None, instrumentation_config: Any = None, default_row_type: Any = None
+    ) -> None:
+        self.connection = connection
+        self.instrumentation_config = instrumentation_config
+        self.default_row_type = default_row_type
+
+
+class MockAsyncDriver:
+    """Mock async driver class for testing."""
+
+    def __init__(
+        self, connection: Any = None, instrumentation_config: Any = None, default_row_type: Any = None
+    ) -> None:
+        self.connection = connection
+        self.instrumentation_config = instrumentation_config
+        self.default_row_type = default_row_type
+
+
+class MockSyncConfig(NoPoolSyncConfig[Any, Any]):  # type: ignore[type-arg]
     """Mock sync configuration for testing."""
 
     def __init__(self, name: str = "MockSync") -> None:
         self.name = name
         self.connection_instance = Mock()
         self.driver_instance = Mock()
+        self.driver_type = MockDriver  # Add missing driver_type as a type
         super().__init__()
 
     @property
@@ -45,13 +68,14 @@ class MockSyncConfig(NoPoolSyncConfig[Mock, Mock]):
         return Mock()
 
 
-class MockAsyncConfig(NoPoolAsyncConfig[Mock, Mock]):
+class MockAsyncConfig(NoPoolAsyncConfig[Any, Any]):  # type: ignore[type-arg]
     """Mock async configuration for testing."""
 
     def __init__(self, name: str = "MockAsync") -> None:
         self.name = name
-        self.connection_instance = AsyncMock()
-        self.driver_instance = AsyncMock()
+        self.connection_instance = Mock()  # Use Mock instead of AsyncMock for instances
+        self.driver_instance = Mock()  # Use Mock instead of AsyncMock for instances
+        self.driver_type = MockAsyncDriver  # Add missing driver_type as a type
         super().__init__()
 
     @property
@@ -68,7 +92,7 @@ class MockAsyncConfig(NoPoolAsyncConfig[Mock, Mock]):
         return AsyncMock()
 
 
-class MockSyncPoolConfig(SyncDatabaseConfig[Mock, Mock, Mock]):
+class MockSyncPoolConfig(SyncDatabaseConfig[Any, Any, Any]):  # type: ignore[type-arg]
     """Mock sync configuration with pooling for testing."""
 
     def __init__(self, name: str = "MockSyncPool") -> None:
@@ -76,6 +100,7 @@ class MockSyncPoolConfig(SyncDatabaseConfig[Mock, Mock, Mock]):
         self.connection_instance = Mock()
         self.driver_instance = Mock()
         self.pool_instance = Mock()
+        self.driver_type = MockDriver  # Add missing driver_type as a type
         super().__init__()
 
     @property
@@ -98,14 +123,15 @@ class MockSyncPoolConfig(SyncDatabaseConfig[Mock, Mock, Mock]):
         pass
 
 
-class MockAsyncPoolConfig(AsyncDatabaseConfig[Mock, Mock, Mock]):
+class MockAsyncPoolConfig(AsyncDatabaseConfig[Any, Any, Any]):  # type: ignore[type-arg]
     """Mock async configuration with pooling for testing."""
 
     def __init__(self, name: str = "MockAsyncPool") -> None:
         self.name = name
-        self.connection_instance = AsyncMock()
-        self.driver_instance = AsyncMock()
-        self.pool_instance = AsyncMock()
+        self.connection_instance = Mock()  # Use Mock instead of AsyncMock for instances
+        self.driver_instance = Mock()  # Use Mock instead of AsyncMock for instances
+        self.pool_instance = Mock()  # Use Mock instead of AsyncMock for instances
+        self.driver_type = MockAsyncDriver  # Add missing driver_type as a type
         super().__init__()
 
     @property
@@ -308,7 +334,12 @@ def test_get_connection_logging() -> None:
     with patch("sqlspec.base.logger") as mock_logger:
         with patch.object(config, "create_connection", return_value=Mock()):
             sqlspec.get_connection(MockSyncConfig)
-            mock_logger.debug.assert_called_once()
+            # Should have two debug calls: one from get_config, one from get_connection
+            assert mock_logger.debug.call_count == 2
+            # Check that both expected calls were made
+            calls = mock_logger.debug.call_args_list
+            assert any("Retrieved configuration" in str(call) for call in calls)
+            assert any("Getting connection for config" in str(call) for call in calls)
 
 
 # Session Management Tests
@@ -321,12 +352,12 @@ def test_get_session_sync_basic() -> None:
     sqlspec.add_config(config)
 
     mock_connection = Mock()
-    mock_driver = Mock()
 
     with patch.object(config, "create_connection", return_value=mock_connection):
-        with patch.object(config, "driver_type", return_value=mock_driver):
-            session = sqlspec.get_session(MockSyncConfig)
-            assert session == mock_driver
+        session = sqlspec.get_session(MockSyncConfig)
+        # The session should be an instance of MockDriver
+        assert isinstance(session, MockDriver)
+        assert session.connection == mock_connection
 
 
 async def test_get_session_async_basic() -> None:
@@ -336,13 +367,13 @@ async def test_get_session_async_basic() -> None:
     sqlspec.add_config(config)
 
     mock_connection = AsyncMock()
-    mock_driver = AsyncMock()
 
     with patch.object(config, "create_connection", return_value=mock_connection):
-        with patch.object(config, "driver_type", return_value=mock_driver):
-            session_awaitable = sqlspec.get_session(MockAsyncConfig)
-            session = await session_awaitable
-            assert session == mock_driver
+        session_awaitable = sqlspec.get_session(MockAsyncConfig)
+        session = await session_awaitable
+        # The session should be an instance of MockAsyncDriver
+        assert isinstance(session, MockAsyncDriver)
+        assert session.connection == mock_connection
 
 
 def test_get_session_with_instance() -> None:
@@ -351,12 +382,12 @@ def test_get_session_with_instance() -> None:
     sqlspec = SQLSpec()
 
     mock_connection = Mock()
-    mock_driver = Mock()
 
     with patch.object(config, "create_connection", return_value=mock_connection):
-        with patch.object(config, "driver_type", return_value=mock_driver):
-            session = sqlspec.get_session(config)
-            assert session == mock_driver
+        session = sqlspec.get_session(config)
+        # The session should be an instance of MockDriver
+        assert isinstance(session, MockDriver)
+        assert session.connection == mock_connection
 
 
 def test_get_session_driver_instantiation() -> None:
@@ -442,7 +473,12 @@ def test_provide_session_logging() -> None:
     with patch("sqlspec.base.logger") as mock_logger:
         with patch.object(config, "provide_session", return_value=Mock()):
             sqlspec.provide_session(MockSyncConfig)
-            mock_logger.debug.assert_called_once()
+            # Should have two debug calls: one from get_config, one from provide_session
+            assert mock_logger.debug.call_count == 2
+            # Check that both expected calls were made
+            calls = mock_logger.debug.call_args_list
+            assert any("Retrieved configuration" in str(call) for call in calls)
+            assert any("Providing session context for config" in str(call) for call in calls)
 
 
 # Pool Management Tests
@@ -536,8 +572,12 @@ async def test_close_pool_async_with_pool() -> None:
     config = MockAsyncPoolConfig("test")  # pyright: ignore
     sqlspec.add_config(config)
 
+    # Create a proper coroutine function that returns None
+    async def mock_close_pool() -> None:
+        return None
+
     with patch.object(config, "close_pool") as mock_close:
-        mock_close.return_value = AsyncMock()
+        mock_close.return_value = mock_close_pool()
         result_awaitable = sqlspec.close_pool(MockAsyncPoolConfig)
         await result_awaitable
         mock_close.assert_called_once()
@@ -611,13 +651,29 @@ def test_cleanup_pools_running_event_loop() -> None:
 
     mock_loop = Mock()
     mock_loop.is_running.return_value = True
-    async_mock = AsyncMock()
 
-    with patch.object(config, "close_pool", return_value=async_mock):
+    # Create a proper coroutine function that returns None
+    async def mock_close_pool() -> None:
+        return None
+
+    # Create the coroutine but don't await it yet
+    close_pool_coro = mock_close_pool()
+
+    with patch.object(config, "close_pool", return_value=close_pool_coro):
         with patch("asyncio.get_running_loop", return_value=mock_loop):
             with patch("asyncio.ensure_future") as mock_ensure_future:
                 sqlspec._cleanup_pools()
-                mock_ensure_future.assert_called_once_with(async_mock, loop=mock_loop)
+                # Check that ensure_future was called with a coroutine
+                mock_ensure_future.assert_called_once()
+                args, kwargs = mock_ensure_future.call_args
+                assert kwargs.get("loop") == mock_loop
+                # The first argument should be a coroutine
+                import inspect
+
+                assert inspect.iscoroutine(args[0])
+
+    # Clean up the coroutine to avoid warnings
+    close_pool_coro.close()
 
 
 def test_cleanup_pools_clears_configs() -> None:
@@ -645,7 +701,11 @@ def test_thread_safety_add_config() -> None:
     results = []
 
     def add_config_worker(config_id: int) -> None:
-        config = MockSyncConfig(f"test_{config_id}")
+        # Create a unique config class for each thread to avoid overwrites
+        class UniqueConfig(MockSyncConfig):
+            pass
+
+        config = UniqueConfig(f"test_{config_id}")
         result = sqlspec.add_config(config)
         results.append((config_id, result))
 
@@ -775,8 +835,10 @@ async def test_concurrent_async_operations() -> None:
     # Run multiple concurrent operations
     results = await asyncio.gather(*[get_session_worker() for _ in range(10)])
 
+    # All results should be MockAsyncDriver instances
     assert len(results) == 10
-    # All should be successful (no exceptions raised)
+    for result in results:
+        assert isinstance(result, MockAsyncDriver)
 
 
 def test_instrumentation_config_integration() -> None:

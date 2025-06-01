@@ -217,16 +217,33 @@ class SQL:
         """Initialize a SQLStatement instance."""
         _existing_statement_data = _existing_statement_data or {}
         config = config or SQLConfig()
+
+        # Handle the case where the second positional argument might be a filter instead of parameters
+        actual_filters = list(filters)
+        actual_parameters = parameters
+
+        # If parameters looks like a StatementFilter, move it to filters
+        # Check if it has the append_to_statement method (duck typing for StatementFilter protocol)
+        if (
+            parameters is not None
+            and hasattr(parameters, "append_to_statement")
+            and callable(getattr(parameters, "append_to_statement", None))
+            and not isinstance(parameters, (dict, list, tuple, str, int, float, bool))
+        ):
+            # The "parameters" argument is actually a filter
+            actual_filters.insert(0, parameters)  # type: ignore[arg-type]  # We've checked it has append_to_statement
+            actual_parameters = None
+
         if isinstance(statement, SQL):
             self._copy_from_existing(
                 existing=statement,
-                parameters=parameters,
+                parameters=actual_parameters,
                 kwargs=kwargs,
                 dialect=dialect,
                 config=config,
             )
-            if filters:
-                self._apply_filters(filters)
+            if actual_filters:
+                self._apply_filters(actual_filters)
             return
 
         self._config: SQLConfig = _existing_statement_data.get("_config", config)
@@ -242,10 +259,10 @@ class SQL:
         self._analysis_result: Optional[StatementAnalysis] = _existing_statement_data.get("_analysis_result", None)
 
         if not _existing_statement_data:
-            self._initialize_statement(self._sql, parameters, kwargs)
+            self._initialize_statement(self._sql, actual_parameters, kwargs)
 
-        if filters:
-            self._apply_filters(filters)
+        if actual_filters:
+            self._apply_filters(actual_filters)
 
     def _copy_from_existing(
         self,
@@ -262,7 +279,7 @@ class SQL:
         self._builder_result_type = existing._builder_result_type
         self._analysis_result = existing._analysis_result
 
-        if parameters is not None or kwargs is not None:
+        if parameters is not None or (kwargs is not None and kwargs):
             current_sql_source = existing._sql
             self._initialize_statement(current_sql_source, parameters, kwargs)
         else:
@@ -305,26 +322,19 @@ class SQL:
                 self._config,  # Pass config for context to processors
             )
             self._parsed_expression = transformed_expr
-            self._validation_result = validation_res_from_pipeline
+
+            # Only set validation result if validation is enabled
+            if self._config.enable_validation:
+                self._validation_result = validation_res_from_pipeline
+            else:
+                self._validation_result = None
 
             # If SQL was an expression, update it with the transformed one
             if isinstance(self._sql, exp.Expression):
                 self._sql = self._parsed_expression
 
             # Handle strict mode for validation results from pipeline
-            # The pipeline itself doesn't raise; individual components might if they are validators
-            # and configured to do so with strict_mode from SQLConfig.
-            # However, SQLStatement should still check the final aggregated result.
             if self._validation_result is not None and not self._validation_result.is_safe and self._config.strict_mode:
-                # Check against the min_risk_to_raise of the *default* validator if no specific one is targeted.
-                # This part might need refinement if multiple validators with different min_risk levels are used.
-                # For now, assume the strict_mode check is sufficient based on the pipeline's output.
-                # Or, SQLValidator component within the pipeline should have already raised if its conditions were met.
-                # Let's rely on the SQLValidator component to raise if strict_mode is on.
-                # If it didn't raise, but the result is still unsafe, it means it was a lower risk or strict_mode was off for that validator.
-                # The pipeline aggregates, so if any validator configured to be strict fails, it raises.
-                # If no validator raises, but the final result is not safe, and strict_mode is ON for SQLConfig,
-                # then we should raise here based on *some* threshold. Default to SQLConfig's implied validator config.
                 default_validator_for_threshold = _default_validator()  # Get a default validator to check its min_risk
                 if (
                     default_validator_for_threshold.min_risk_to_raise is not None
@@ -349,7 +359,7 @@ class SQL:
                 ):
                     msg = f"SQL validation failed (parsing disabled): {', '.join(self._validation_result.issues)}"
                     raise SQLValidationError(msg, str(statement), self._validation_result.risk_level)
-        elif not self._parsed_expression:  # If parsing was disabled, ensure validation_result is None
+        else:  # If parsing or validation was disabled, ensure validation_result is None
             self._validation_result = None
 
     def _process_parameters(
@@ -1227,11 +1237,21 @@ class SQL:
         )
 
     def __hash__(self) -> int:
+        def make_hashable(obj: Any) -> Any:
+            """Convert unhashable types to hashable equivalents."""
+            if isinstance(obj, list):
+                return tuple(make_hashable(item) for item in obj)
+            if isinstance(obj, dict):
+                return tuple(sorted((k, make_hashable(v)) for k, v in obj.items()))
+            if isinstance(obj, set):
+                return tuple(sorted(make_hashable(item) for item in obj))
+            return obj
+
         hashable_params: tuple[Any, ...]
         if isinstance(self._merged_parameters, list):
             hashable_params = tuple(self._merged_parameters)
         elif isinstance(self._merged_parameters, dict):
-            hashable_params = tuple(sorted(self._merged_parameters.items()))
+            hashable_params = make_hashable(self._merged_parameters)
         elif isinstance(self._merged_parameters, tuple):
             hashable_params = self._merged_parameters
         elif self._merged_parameters is None:
@@ -1239,11 +1259,14 @@ class SQL:
         else:
             hashable_params = (self._merged_parameters,)
 
+        # Create a hashable representation of config by using its string representation
+        config_hash = hash(str(self._config))
+
         return hash(
             (
                 str(self._sql),
                 hashable_params,
                 self._dialect,
-                self._config,
+                config_hash,
             )
         )

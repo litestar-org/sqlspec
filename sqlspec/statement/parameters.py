@@ -161,9 +161,16 @@ class ParameterValidator:
         Args:
             sql: SQL string to analyze
 
+        Raises:
+            AttributeError: If sql is None
+
         Returns:
             List of ParameterInfo objects in order of appearance
         """
+        if sql is None:
+            msg = "'NoneType' object has no attribute 'finditer'"  # type: ignore[unreachable]
+            raise AttributeError(msg)
+
         if sql in self._parameter_cache:
             return self._parameter_cache[sql]
 

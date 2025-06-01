@@ -81,7 +81,11 @@ class SQLTranslatorMixin(Generic[ConnectionT]):
         elif isinstance(statement, exp.Expression):
             parsed_expression = statement
         else:
-            parsed_expression = parse_one(statement, dialect=self.dialect)
+            try:
+                parsed_expression = parse_one(statement, dialect=self.dialect)
+            except Exception as e:
+                error_msg = f"Failed to parse SQL statement: {e!s}"
+                raise SQLConversionError(error_msg) from e
 
         target_dialect = to_dialect if to_dialect is not None else self.dialect
 
@@ -120,14 +124,20 @@ def _default_msgspec_deserializer(
         A ``msgspec``-supported type
     """
 
-    if isinstance(value, target_type):
-        return value
-
     if type_decoders:
         for predicate, decoder in type_decoders:
             if predicate(target_type):
                 return decoder(target_type, value)
 
+    # Handle built-in type decoders
+    if target_type is UUID and isinstance(value, UUID):
+        return value.hex
+    if target_type in {datetime.datetime, datetime.date, datetime.time} and hasattr(value, "isoformat"):
+        return value.isoformat()
+    if isinstance(target_type, type) and issubclass(target_type, Enum) and isinstance(value, Enum):
+        return value.value
+    if isinstance(value, target_type):
+        return value
     if issubclass(target_type, (Path, PurePath, UUID)):
         return target_type(value)
 

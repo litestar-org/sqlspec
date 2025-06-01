@@ -70,6 +70,11 @@ class InstrumentationConfig:
     custom_tags: dict[str, str] = field(default_factory=dict)
     prometheus_latency_buckets: Optional[list[float]] = None
 
+    def __post_init__(self) -> None:
+        """Ensure custom_tags is properly isolated."""
+        if self.custom_tags is not None:
+            self.custom_tags = dict(self.custom_tags)
+
 
 @dataclass
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
@@ -300,6 +305,12 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         if self.instrumentation.log_pool_operations:
             logger.info("Database connection pool closed successfully", extra={"adapter": self.__class__.__name__})
 
+    def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
+        """Provide pool instance."""
+        if self.pool_instance is None:
+            self.pool_instance = self.create_pool()
+        return self.pool_instance
+
     def create_connection(self) -> ConnectionT:
         """Create connection with instrumentation."""
         raise NotImplementedError
@@ -375,6 +386,12 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
             logger.info(
                 "Async database connection pool closed successfully", extra={"adapter": self.__class__.__name__}
             )
+
+    async def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
+        """Provide pool instance."""
+        if self.pool_instance is None:
+            self.pool_instance = await self.create_pool()
+        return self.pool_instance
 
     async def create_connection(self) -> ConnectionT:
         """Create connection with instrumentation."""

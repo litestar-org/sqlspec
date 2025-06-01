@@ -51,7 +51,7 @@ def translator_mixin() -> SQLTranslatorMixin[Any]:
     """Create a SQLTranslatorMixin instance for testing."""
 
     class TestTranslator(SQLTranslatorMixin[Any]):
-        dialect = "postgresql"
+        dialect = "postgres"
 
     return TestTranslator()
 
@@ -59,11 +59,11 @@ def translator_mixin() -> SQLTranslatorMixin[Any]:
 @pytest.mark.parametrize(
     ("statement_input", "from_dialect", "to_dialect", "should_succeed"),
     [
-        ("SELECT * FROM users", "mysql", "postgresql", True),
-        ("SELECT `column` FROM `table`", "mysql", "postgresql", True),
-        ("SELECT TOP 10 * FROM users", "sqlserver", "postgresql", True),
+        ("SELECT * FROM users", "mysql", "postgres", True),
+        ("SELECT `column` FROM `table`", "mysql", "postgres", True),
+        ("SELECT TOP 10 * FROM users", "sqlserver", "postgres", True),
         (exp.Select().select(exp.Star()).from_("users"), None, "mysql", True),
-        ("INVALID SQL SYNTAX", "mysql", "postgresql", False),
+        ("INVALID SQL SYNTAX", "mysql", "postgres", False),
     ],
     ids=["mysql_to_postgres", "backticks_conversion", "top_to_limit", "expression_input", "invalid_sql"],
 )
@@ -78,7 +78,7 @@ def test_convert_to_dialect(
     if should_succeed:
         if isinstance(statement_input, str) and from_dialect:
             # Mock the dialect parsing
-            with patch("sqlglot.parse_one") as mock_parse:
+            with patch("sqlspec.statement.mixins.parse_one") as mock_parse:
                 mock_expr = Mock(spec=exp.Expression)
                 mock_expr.sql.return_value = f"-- Converted from {from_dialect} to {to_dialect}"
                 mock_parse.return_value = mock_expr
@@ -130,7 +130,7 @@ def test_convert_to_dialect_pretty_formatting(
     translator_mixin: SQLTranslatorMixin[Any], pretty: bool, expected_method_call: dict[str, Any]
 ) -> None:
     """Test pretty formatting parameter."""
-    with patch("sqlglot.parse_one") as mock_parse:
+    with patch("sqlspec.statement.mixins.parse_one") as mock_parse:
         mock_expr = Mock(spec=exp.Expression)
         mock_expr.sql.return_value = "SELECT * FROM users"
         mock_parse.return_value = mock_expr
@@ -279,7 +279,7 @@ def test_default_msgspec_deserializer_type_decoders(target_type: type, value: An
         # UUID needs special handling - test the hex conversion
         uuid_val = UUID(value)
         result = _default_msgspec_deserializer(target_type, uuid_val)
-        assert result.hex == expected_result
+        assert result == expected_result
     elif target_type in (datetime.datetime, datetime.date, datetime.time):
         result = _default_msgspec_deserializer(target_type, value)
         assert result == expected_result
@@ -471,19 +471,19 @@ def test_sql_translator_mixin_inheritance() -> None:
     """Test that SQLTranslatorMixin can be properly inherited."""
 
     class CombinedMixin(SQLTranslatorMixin[Any], SyncArrowMixin[Any]):
-        dialect = "postgresql"
+        dialect = "postgres"
 
     instance = CombinedMixin()
 
     # Should have both translator and arrow capabilities
     assert hasattr(instance, "convert_to_dialect")
     assert hasattr(instance, "select_to_arrow")
-    assert instance.dialect == "postgresql"
+    assert instance.dialect == "postgres"
 
 
 def test_result_converter_static_methods() -> None:
     """Test that ResultConverter static methods work independently."""
-    data = {"id": 1, "name": "test"}
+    data = {"id": 1, "name": "test", "email": "test@example.com"}
 
     # Should work without instantiation
     result = ResultConverter.to_schema(data)
@@ -494,6 +494,7 @@ def test_result_converter_static_methods() -> None:
     assert isinstance(result_dc, UserDataclass)
     assert result_dc.id == 1
     assert result_dc.name == "test"
+    assert result_dc.email == "test@example.com"
 
 
 @pytest.mark.parametrize(

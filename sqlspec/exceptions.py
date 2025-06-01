@@ -1,6 +1,6 @@
 from collections.abc import Generator
 from contextlib import contextmanager
-from enum import Enum, auto
+from enum import Enum
 from typing import Any, Optional
 
 __all__ = (
@@ -113,12 +113,12 @@ class SQLConversionError(SQLSpecError):
 class RiskLevel(Enum):
     """SQL risk assessment levels."""
 
-    SKIP = auto()
-    SAFE = auto()
-    LOW = auto()
-    MEDIUM = auto()
-    HIGH = auto()
-    CRITICAL = auto()
+    SKIP = 1
+    SAFE = 2
+    LOW = 3
+    MEDIUM = 4
+    HIGH = 5
+    CRITICAL = 6
 
     def __str__(self) -> str:
         """String representation.
@@ -127,6 +127,30 @@ class RiskLevel(Enum):
             Lowercase name of the style.
         """
         return self.name.lower()
+
+    def __lt__(self, other: "RiskLevel") -> bool:
+        """Less than comparison for ordering."""
+        if not isinstance(other, RiskLevel):
+            return NotImplemented
+        return self.value < other.value
+
+    def __le__(self, other: "RiskLevel") -> bool:
+        """Less than or equal comparison for ordering."""
+        if not isinstance(other, RiskLevel):
+            return NotImplemented
+        return self.value <= other.value
+
+    def __gt__(self, other: "RiskLevel") -> bool:
+        """Greater than comparison for ordering."""
+        if not isinstance(other, RiskLevel):
+            return NotImplemented
+        return self.value > other.value
+
+    def __ge__(self, other: "RiskLevel") -> bool:
+        """Greater than or equal comparison for ordering."""
+        if not isinstance(other, RiskLevel):
+            return NotImplemented
+        return self.value >= other.value
 
 
 class SQLValidationError(SQLSpecError):
@@ -138,8 +162,8 @@ class SQLValidationError(SQLSpecError):
     def __init__(self, message: str, sql: Optional[str] = None, risk_level: RiskLevel = RiskLevel.MEDIUM) -> None:
         """Initialize with SQL context and risk level."""
         detail_message = message
-        if sql:
-            detail_message = f"{message}\\nSQL: {sql}"
+        if sql is not None:
+            detail_message = f"{message}\nSQL: {sql}"
         super().__init__(detail=detail_message)
         self.sql = sql
         self.risk_level = risk_level
@@ -153,8 +177,8 @@ class SQLTransformationError(SQLSpecError):
     def __init__(self, message: str, sql: Optional[str] = None) -> None:
         """Initialize with SQL context and risk level."""
         detail_message = message
-        if sql:
-            detail_message = f"{message}\\nSQL: {sql}"
+        if sql is not None:
+            detail_message = f"{message}\nSQL: {sql}"
         super().__init__(detail=detail_message)
         self.sql = sql
 
@@ -201,8 +225,8 @@ class ParameterError(SQLSpecError):
     def __init__(self, message: str, sql: Optional[str] = None) -> None:
         """Initialize with optional SQL context."""
         detail_message = message
-        if sql:
-            detail_message = f"{message}\\nSQL: {sql}"
+        if sql is not None:
+            detail_message = f"{message}\nSQL: {sql}"
         super().__init__(detail=detail_message)
         self.sql = sql
 

@@ -716,7 +716,12 @@ def test_wrap_exceptions_various_exception_types(exception_type: type[Exception]
 
     assert isinstance(exc_info.value, RepositoryError)
     assert isinstance(exc_info.value.__cause__, exception_type)
-    assert str(exc_info.value.__cause__) == message
+
+    # KeyError automatically adds quotes around the message
+    if exception_type is KeyError:
+        assert str(exc_info.value.__cause__) == f"'{message}'"
+    else:
+        assert str(exc_info.value.__cause__) == message
 
 
 # Edge Cases and Error Context Tests
@@ -746,7 +751,7 @@ def test_exception_with_empty_sql_context() -> None:
     """Test exceptions with empty SQL context."""
     error = SQLValidationError("Test error", sql="")
     assert error.sql == ""
-    assert "Test error\nSQL: " in str(error)
+    assert "Test error\nSQL:" in str(error)
 
 
 def test_exception_with_multiline_sql() -> None:

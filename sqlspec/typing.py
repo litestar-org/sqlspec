@@ -360,6 +360,8 @@ def is_dataclass(obj: "Any") -> "TypeGuard[DataclassProtocol]":
     Returns:
         bool
     """
+    if isinstance(obj, type) and hasattr(obj, "__dataclass_fields__"):
+        return True
     return is_dataclass_instance(obj)
 
 
