@@ -163,13 +163,8 @@ class AiosqlSyncAdapter:
         # Execute using SQLSpec driver
         result = self.driver.execute(sql_obj, connection=conn, schema_type=record_class)
 
-        # Convert to generator as expected by aiosql
-        # Check if it's a SelectResult (has rows) or ExecuteResult
-        # Import here to avoid circular imports
-        from sqlspec.statement.result import SelectResult
-
-        if isinstance(result, SelectResult) and result.rows is not None:
-            yield from result.rows
+        if isinstance(result, SelectResult) and result.data is not None:
+            yield from result.data
 
     def select_one(
         self,
@@ -197,8 +192,8 @@ class AiosqlSyncAdapter:
 
         result = cast("SelectResult[DictRow]", self.driver.execute(sql_obj, connection=conn, schema_type=record_class))
 
-        if hasattr(result, "rows") and result.rows and isinstance(result, SelectResult):
-            return result.rows[0]
+        if hasattr(result, "rows") and result.data and isinstance(result, SelectResult):
+            return result.data[0]
         return None
 
     def select_value(
@@ -265,8 +260,8 @@ class AiosqlSyncAdapter:
                 self.result = result
 
             def fetchall(self) -> list[Any]:
-                if isinstance(result, SelectResult) and result.rows is not None:
-                    return list(result.rows)
+                if isinstance(result, SelectResult) and result.data is not None:
+                    return list(result.data)
                 return []
 
             def fetchone(self) -> Optional[Any]:
@@ -446,8 +441,8 @@ class AiosqlAsyncAdapter:
             "SelectResult[DictRow]", await self.driver.execute(sql_obj, connection=conn, schema_type=record_class)
         )
 
-        if hasattr(result, "rows") and result.rows is not None and isinstance(result, SelectResult):
-            return list(result.rows)
+        if hasattr(result, "data") and result.data is not None and isinstance(result, SelectResult):
+            return list(result.data)
         return []
 
     async def select_one(
@@ -484,8 +479,8 @@ class AiosqlAsyncAdapter:
             "SelectResult[DictRow]", await self.driver.execute(sql_obj, connection=conn, schema_type=record_class)
         )
 
-        if hasattr(result, "rows") and result.rows and isinstance(result, SelectResult):
-            return result.rows[0]
+        if hasattr(result, "data") and result.data and isinstance(result, SelectResult):
+            return result.data[0]
         return None
 
     async def select_value(
@@ -548,8 +543,8 @@ class AiosqlAsyncAdapter:
                 self.result = result
 
             async def fetchall(self) -> list[Any]:
-                if isinstance(result, SelectResult) and result.rows is not None:
-                    return list(result.rows)
+                if isinstance(result, SelectResult) and result.data is not None:
+                    return list(result.data)
                 return []
 
             async def fetchone(self) -> Optional[Any]:

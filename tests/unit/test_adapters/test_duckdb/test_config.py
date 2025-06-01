@@ -1,6 +1,6 @@
 """Unit tests for DuckDB configuration."""
 
-from typing import NoReturn
+from typing import TYPE_CHECKING
 from unittest.mock import Mock, patch
 
 import pytest
@@ -9,6 +9,9 @@ from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBConnectionConfig, DuckDB
 from sqlspec.adapters.duckdb.config import DuckDBExtensionConfig, DuckDBSecretConfig
 from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.sql import SQLConfig
+
+if TYPE_CHECKING:
+    from duckdb import DuckDBPyConnection
 
 
 def test_duckdb_connection_config_creation() -> None:
@@ -156,7 +159,7 @@ def test_duckdb_config_initialization() -> None:
     extensions = [DuckDBExtensionConfig(name="spatial")]
     secrets = [DuckDBSecretConfig(secret_type="openai", name="test", value={"key": "value"})]
 
-    def connection_hook(conn: Mock) -> None:
+    def connection_hook(conn: "DuckDBPyConnection") -> None:
         pass
 
     config = DuckDBConfig(
@@ -252,22 +255,6 @@ def test_duckdb_config_connection_creation_with_extensions(mock_connect: Mock) -
     mock_connect.assert_called_once()
     assert connection is mock_connection
 
-    # Verify extension installation and loading
-    [
-        # First extension: spatial
-        mock_connection.install_extension.call_args_list[0]
-        if mock_connection.install_extension.call_args_list
-        else None,
-        mock_connection.load_extension.call_args_list[0] if mock_connection.load_extension.call_args_list else None,
-        # Second extension: aws
-        mock_connection.install_extension.call_args_list[1]
-        if len(mock_connection.install_extension.call_args_list) > 1
-        else None,
-        mock_connection.load_extension.call_args_list[1]
-        if len(mock_connection.load_extension.call_args_list) > 1
-        else None,
-    ]
-
     # Verify install_extension calls
     assert mock_connection.install_extension.call_count == 2
     assert mock_connection.load_extension.call_count == 2
@@ -331,9 +318,10 @@ def test_duckdb_config_connection_creation_with_hook(mock_connect: Mock) -> None
 
     hook_called = False
 
-    def connection_hook(conn: Mock) -> None:
+    def connection_hook(conn: "DuckDBPyConnection") -> None:
         nonlocal hook_called
         hook_called = True
+        # In real usage, conn would be DuckDBPyConnection, but for testing we use Mock
         assert conn is mock_connection
 
     connection_config = DuckDBConnectionConfig(database=":memory:")
@@ -370,7 +358,7 @@ def test_duckdb_config_provide_connection(mock_connect: Mock) -> None:
 
 
 @patch("duckdb.connect")
-def test_duckdb_config_provide_connection_error_handling(mock_connect: Mock) -> NoReturn:
+def test_duckdb_config_provide_connection_error_handling(mock_connect: Mock) -> None:
     """Test DuckDB config provide_connection error handling."""
     mock_connection = Mock()
     mock_connect.return_value = mock_connection
@@ -564,7 +552,7 @@ def test_duckdb_config_hook_error_handling(mock_connect: Mock) -> None:
     mock_connection = Mock()
     mock_connect.return_value = mock_connection
 
-    def failing_hook(conn: Mock) -> None:
+    def failing_hook(conn: "DuckDBPyConnection") -> None:
         raise Exception("Hook failed")
 
     connection_config = DuckDBConnectionConfig(database=":memory:")

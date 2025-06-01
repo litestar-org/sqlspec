@@ -16,6 +16,16 @@ pytestmark = pytest.mark.anyio
 here = Path(__file__).parent
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Add custom pytest command line options."""
+    parser.addoption(
+        "--run-bigquery-tests",
+        action="store_true",
+        default=False,
+        help="Run BigQuery ADBC tests (requires valid GCP credentials)",
+    )
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"

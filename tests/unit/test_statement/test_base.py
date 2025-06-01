@@ -1,14 +1,15 @@
 from collections.abc import AsyncGenerator, Generator
-from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from typing import Annotated, Any
 
 import pytest
 from sqlglot import exp
 
-from sqlspec.base import CommonDriverAttributes, NoPoolAsyncConfig, NoPoolSyncConfig, SQLSpec, SyncDatabaseConfig
+from sqlspec.base import SQLSpec
+from sqlspec.config import NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
+from sqlspec.driver import CommonDriverAttributes
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.preprocessors import SQLValidator
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -65,16 +66,19 @@ class MockDatabaseConfig(SyncDatabaseConfig[MockConnection, MockPool, Any]):
     def close_pool(self) -> None:
         pass
 
-    def provide_pool(self, *args: Any, **kwargs: Any) -> AbstractContextManager[MockPool]:
-        @contextmanager
-        def _provide_pool() -> Generator[MockPool, None, None]:
-            pool = self.create_pool()
-            try:
-                yield pool
-            finally:
-                pool.close()
+    def _create_pool_impl(self) -> MockPool:
+        """Implementation for creating a pool."""
+        return MockPool()
 
-        return _provide_pool()
+    def _close_pool_impl(self) -> None:
+        """Implementation for closing a pool."""
+        pass
+
+    def provide_pool(self, *args: Any, **kwargs: Any) -> MockPool:
+        """Provide pool instance."""
+        if not self.pool_instance:
+            self.pool_instance = self.create_pool()
+        return self.pool_instance
 
     @contextmanager
     def provide_session(self, *args: Any, **kwargs: Any) -> Generator[MockConnection, None, None]:
@@ -118,12 +122,12 @@ class MockNonPoolConfig(NoPoolSyncConfig[MockConnection, Any]):
 class MockAsyncNonPoolConfig(NoPoolAsyncConfig[MockAsyncConnection, Any]):
     """Mock database configuration that doesn't support pooling."""
 
-    def create_connection(self) -> MockAsyncConnection:
+    async def create_connection(self) -> MockAsyncConnection:
         return MockAsyncConnection()
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[MockAsyncConnection, None]:
-        connection = self.create_connection()
+        connection = await self.create_connection()
         try:
             yield connection
         finally:
@@ -134,7 +138,7 @@ class MockAsyncNonPoolConfig(NoPoolAsyncConfig[MockAsyncConnection, Any]):
 
     @asynccontextmanager
     async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[MockAsyncConnection, None]:
-        connection = self.create_connection()
+        connection = await self.create_connection()
         try:
             yield connection
         finally:
@@ -195,7 +199,9 @@ def driver_attributes() -> CommonDriverAttributes[Any]:
 
     class TestDriverAttributes(CommonDriverAttributes[Any]):
         def __init__(self) -> None:
-            super().__init__()
+            # Create a mock connection for the test
+            mock_connection = MockConnection()
+            super().__init__(connection=mock_connection)
             self.dialect = "sqlite"
 
         def _get_placeholder_style(self) -> ParameterStyle:
@@ -289,12 +295,7 @@ def test_returns_rows(
     """
     try:
         # Create a permissive configuration for testing that allows DDL, risky DML, and UNION operations
-        test_validator = SQLValidator(
-            allow_ddl=True,
-            risky_dml=True,
-            allow_dangerous_functions=True,  # This should cover UNION and other potentially risky operations for testing purposes
-        )
-        test_config = SQLConfig(strict_mode=False, validator=test_validator)
+        test_config = SQLConfig(strict_mode=False)
         statement = SQL(sql, config=test_config)
         expression = statement.expression
         actual_returns_rows = driver_attributes.returns_rows(expression)
@@ -306,17 +307,16 @@ def test_returns_rows(
         pytest.fail(f"{description}: Failed to parse SQL '{sql}': {e}")
 
 
-def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAttributes) -> None:  # pyright: ignore
+def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAttributes[Any]) -> None:
     """Test that returns_rows handles invalid expressions gracefully."""
     # Test with None expression
-    result = driver_attributes.returns_rows(None)  # type: ignore[arg-type]
+    result = driver_attributes.returns_rows(None)
     assert result is False, "Should return False for None expression"
 
-    try:
-        # Create a permissive configuration for testing
-        test_validator = SQLValidator(allow_ddl=True, risky_dml=True, allow_dangerous_functions=True)
-        test_config = SQLConfig(strict_mode=False, validator=test_validator)
+    # Create a permissive configuration for testing
+    test_config = SQLConfig(strict_mode=False)
 
+    try:
         empty_stmt = SQL("", config=test_config)
         result = driver_attributes.returns_rows(empty_stmt.expression)
         # The result doesn't matter as much as not crashing
@@ -326,7 +326,7 @@ def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAtt
         pass
 
 
-def test_returns_rows_expression_types(driver_attributes: CommonDriverAttributes) -> None:  # pyright: ignore
+def test_returns_rows_expression_types(driver_attributes: CommonDriverAttributes[Any]) -> None:
     """Test specific sqlglot expression types to ensure comprehensive coverage."""
     select_expr = exp.Select()
     assert driver_attributes.returns_rows(select_expr) is True, "Select expression should return rows"
@@ -452,8 +452,8 @@ def test_connection_context(pool_config: MockDatabaseConfig, non_pool_config: Mo
 
 def test_pool_context(pool_config: MockDatabaseConfig) -> None:
     """Test pool context manager."""
-    with pool_config.provide_pool() as pool:
-        assert isinstance(pool, MockPool)
+    pool = pool_config.provide_pool()
+    assert isinstance(pool, MockPool)
 
 
 def test_connection_config_dict(pool_config: MockDatabaseConfig, non_pool_config: MockNonPoolConfig) -> None:

@@ -287,12 +287,12 @@ def test_multiple_concurrent_connections() -> None:
         # Verify tables don't exist in the other session
         try:
             session1.execute("SELECT id FROM session2_table")
-            assert False, "Should not be able to access other session's table"  # noqa: PT015
+            assert False, "Should not be able to access other session's table"
         except Exception:
             pass  # Expected
 
         try:
             session2.execute("SELECT id FROM session1_table")
-            assert False, "Should not be able to access other session's table"  # noqa: PT015
+            assert False, "Should not be able to access other session's table"
         except Exception:
             pass  # Expected

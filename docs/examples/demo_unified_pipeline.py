@@ -26,7 +26,7 @@ from sqlspec.statement.pipelines.validators import (
 )
 from sqlspec.statement.sql import SQLConfig
 
-__all__ = ("compare_approaches", "demo_complex_query", "demo_new_approach", "demo_old_approach", )
+__all__ = ("compare_approaches", "demo_complex_query", "demo_new_approach", "demo_old_approach")
 
 
 def demo_complex_query() -> str:

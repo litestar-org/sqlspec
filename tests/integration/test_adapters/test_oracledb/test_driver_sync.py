@@ -8,7 +8,7 @@ import pyarrow as pa
 import pytest
 from pytest_databases.docker.oracle import OracleService
 
-from sqlspec.adapters.oracledb import OracleSyncConfig, OracleSyncPoolConfig
+from sqlspec.adapters.oracledb import OraclePoolConfig, OracleSyncConfig
 from sqlspec.statement.result import ExecuteResult, SelectResult
 
 ParamStyle = Literal["positional_binds", "dict_binds"]
@@ -20,7 +20,7 @@ ParamStyle = Literal["positional_binds", "dict_binds"]
 def oracle_sync_session(oracle_23ai_service: OracleService) -> OracleSyncConfig:
     """Create an Oracle synchronous session."""
     return OracleSyncConfig(
-        pool_config=OracleSyncPoolConfig(
+        pool_config=OraclePoolConfig(
             host=oracle_23ai_service.host,
             port=oracle_23ai_service.port,
             service_name=oracle_23ai_service.service_name,
@@ -199,8 +199,8 @@ def test_sync_select_arrow(oracle_sync_session: OracleSyncConfig) -> None:
         select_sql = "SELECT name, id FROM test_table WHERE name = :1"
         if hasattr(driver, "select_to_arrow"):
             arrow_result = driver.select_to_arrow(select_sql, ("arrow_name",))
-            assert hasattr(arrow_result, "arrow_table")
-            arrow_table = arrow_result.arrow_table
+            assert hasattr(arrow_result, "data")
+            arrow_table = arrow_result.data
             assert isinstance(arrow_table, pa.Table)
             assert arrow_table.num_rows == 1
             assert arrow_table.num_columns == 2
