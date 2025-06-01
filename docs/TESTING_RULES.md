@@ -231,7 +231,7 @@ def singleton_test_class():
 @pytest.mark.sqlite
 @pytest.mark.bigquery
 
-# Driver-specific tests  
+# Driver-specific tests
 @pytest.mark.asyncpg
 @pytest.mark.psycopg
 @pytest.mark.aiomysql

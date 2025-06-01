@@ -13,13 +13,14 @@ if TYPE_CHECKING:
     from sqlspec.statement.sql import SQLConfig
 
 
-__all__ = ("AuditCommentAppender",)
+__all__ = ("TracingComment",)
 
 
-class AuditCommentAppender(ProcessorProtocol[exp.Expression]):
-    """Appends an audit trail comment to the SQL expression.
+class TracingComment(ProcessorProtocol[exp.Expression]):
+    """Appends a tracing comment to the SQL expression.
 
     The comment can include information like user ID, request ID, and timestamp.
+    This is used to trace the SQL statement through the system.
     """
 
     def __init__(

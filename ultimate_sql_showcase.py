@@ -46,6 +46,9 @@ from sqlspec import sql
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.extensions.aiosql import AiosqlLoader
 
+__all__ = ("Employee", "SalesData", "create_ultimate_database", "demo_aiosql_integration_ultimate", "demo_conclusion", "demo_header", "demo_new_sql_features", "demo_performance_showcase", "demo_recursive_cte_mastery", "demo_sql_injection_prevention", "demo_ultimate_complex_query", "demo_window_functions_mastery", "main", )
+
+
 console = Console()
 fake = Faker()
 

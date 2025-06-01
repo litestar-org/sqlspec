@@ -22,9 +22,14 @@ if TYPE_CHECKING:
     from sqlspec.statement.sql import SQLConfig, Statement
 
 __all__ = (
+    "AnalysisResult",
     "ProcessorProtocol",
+    "SQLAnalysis",
+    "SQLTransformation",
+    "SQLTransformer",
     "SQLValidation",
     "SQLValidator",
+    "TransformationResult",
     "TransformerPipeline",
     "UsesExpression",
     "ValidationResult",
@@ -300,3 +305,162 @@ class ValidationResult:
 
     def __bool__(self) -> bool:
         return self.is_safe
+
+
+class TransformationResult:
+    """Result of SQL transformation with detailed information."""
+
+    __slots__ = (
+        "expression",
+        "modified",
+        "notes",
+    )
+
+    def __init__(
+        self,
+        expression: exp.Expression,
+        modified: bool,
+        notes: "Optional[list[str]]" = None,
+    ) -> None:
+        self.expression = expression
+        self.modified = modified
+        self.notes = notes if notes is not None else []
+
+    def __bool__(self) -> bool:
+        return self.modified
+
+
+class SQLTransformer(ProcessorProtocol[exp.Expression], ABC):
+    """Base class for SQL transformers that implement ProcessorProtocol.
+
+    This provides a bridge between the old SQLTransformation pattern and
+    the new ProcessorProtocol pipeline architecture.
+    """
+
+    def process(
+        self,
+        expression: exp.Expression,
+        dialect: "Optional[DialectType]" = None,
+        config: "Optional[SQLConfig]" = None,
+    ) -> "tuple[exp.Expression, Optional[ValidationResult]]":
+        """Process the expression using the transform method.
+
+        Args:
+            expression: The SQL expression to transform.
+            dialect: The SQL dialect.
+            config: The SQL configuration.
+
+        Returns:
+            A tuple containing the transformed expression and None for ValidationResult.
+        """
+        from sqlspec.statement.sql import SQLConfig
+
+        active_config = config if config is not None else SQLConfig()
+
+        if not active_config.enable_transformations:
+            return expression, None
+
+        try:
+            result = self.transform(expression, dialect, active_config)
+            return result.expression, None
+        except Exception as e:
+            # If transformation fails, return original expression
+            logger.warning("Transformation failed: %s", e)
+            return expression, None
+
+    @abstractmethod
+    def transform(
+        self,
+        expression: exp.Expression,
+        dialect: "DialectType",
+        config: "SQLConfig",
+        **kwargs: Any,
+    ) -> TransformationResult:
+        """Transform the SQL expression.
+
+        Args:
+            expression: The SQL expression to transform.
+            dialect: The SQL dialect.
+            config: The SQL configuration.
+            kwargs: Additional keyword arguments.
+
+        Returns:
+            A TransformationResult.
+        """
+        raise NotImplementedError
+
+
+class AnalysisResult:
+    """Result of SQL analysis with detailed metrics and insights."""
+
+    __slots__ = (
+        "issues",
+        "metrics",
+        "notes",
+        "warnings",
+    )
+
+    def __init__(
+        self,
+        metrics: "Optional[dict[str, Any]]" = None,
+        warnings: "Optional[list[str]]" = None,
+        issues: "Optional[list[str]]" = None,
+        notes: "Optional[list[str]]" = None,
+    ) -> None:
+        self.metrics = metrics if metrics is not None else {}
+        self.warnings = warnings if warnings is not None else []
+        self.issues = issues if issues is not None else []
+        self.notes = notes if notes is not None else []
+
+    def __bool__(self) -> bool:
+        return len(self.issues) == 0
+
+
+class SQLTransformation(ABC):
+    """Abstract base class for SQL transformations."""
+
+    @abstractmethod
+    def transform(
+        self,
+        expression: exp.Expression,
+        dialect: DialectType,
+        config: "SQLConfig",
+        **kwargs: Any,
+    ) -> TransformationResult:
+        """Transform the SQL expression.
+
+        Args:
+            expression: The SQL expression to transform.
+            dialect: The SQL dialect.
+            config: The SQL configuration.
+            kwargs: Additional keyword arguments.
+
+        Returns:
+            A TransformationResult.
+        """
+        raise NotImplementedError
+
+
+class SQLAnalysis(ABC):
+    """Abstract base class for SQL analysis."""
+
+    @abstractmethod
+    def analyze(
+        self,
+        expression: exp.Expression,
+        dialect: DialectType,
+        config: "SQLConfig",
+        **kwargs: Any,
+    ) -> AnalysisResult:
+        """Analyze the SQL expression.
+
+        Args:
+            expression: The SQL expression to analyze.
+            dialect: The SQL dialect.
+            config: The SQL configuration.
+            kwargs: Additional keyword arguments.
+
+        Returns:
+            An AnalysisResult.
+        """
+        raise NotImplementedError

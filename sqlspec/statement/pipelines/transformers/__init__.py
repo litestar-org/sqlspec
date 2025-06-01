@@ -1,23 +1,19 @@
 """SQL  Transformers for the processing pipeline."""
 
-from sqlspec.statement.pipelines.transformers._audit_comment_appender import AuditCommentAppender
-from sqlspec.statement.pipelines.transformers._column_pruner import ColumnPruner
-from sqlspec.statement.pipelines.transformers._comment_remover import CommentRemover
-from sqlspec.statement.pipelines.transformers._force_where_clause import ForceWhereClause
-from sqlspec.statement.pipelines.transformers._hint_remover import HintRemover
-from sqlspec.statement.pipelines.transformers._join_optimizer import JoinOptimizer
+from sqlspec.statement.pipelines.transformers._hints import HintRemover
 from sqlspec.statement.pipelines.transformers._literal_parameterizer import ParameterizeLiterals
-from sqlspec.statement.pipelines.transformers._predicate_pushdown import PredicatePushdown
+from sqlspec.statement.pipelines.transformers._normalize_whitespace import NormalizeWhitespace
+from sqlspec.statement.pipelines.transformers._remove_comments import CommentRemover
 from sqlspec.statement.pipelines.transformers._star_expander import StarExpander
+from sqlspec.statement.pipelines.transformers._tracer import TracingComment
+from sqlspec.statement.pipelines.transformers._unused_column import RemoveUnusedColumns
 
 __all__ = (
-    "AuditCommentAppender",
-    "ColumnPruner",
     "CommentRemover",
-    "ForceWhereClause",
     "HintRemover",
-    "JoinOptimizer",
+    "NormalizeWhitespace",
     "ParameterizeLiterals",
-    "PredicatePushdown",
+    "RemoveUnusedColumns",
     "StarExpander",
+    "TracingComment",
 )

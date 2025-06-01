@@ -12,19 +12,16 @@ from sqlspec.statement.pipelines.base import (
     ValidationResult,
 )
 from sqlspec.statement.pipelines.transformers import (
-    AuditCommentAppender,
-    ColumnPruner,
     CommentRemover,
-    ForceWhereClause,
     HintRemover,
-    JoinOptimizer,
     ParameterizeLiterals,
-    PredicatePushdown,
+    RemoveUnusedColumns,
     StarExpander,
+    TracingComment,
 )
 from sqlspec.statement.pipelines.validators import (
-    InjectionValidator,
     PreventDDL,
+    PreventInjection,
     RiskyDML,
     RiskyProceduralCode,
     SuspiciousComments,
@@ -33,17 +30,13 @@ from sqlspec.statement.pipelines.validators import (
 )
 
 __all__ = (
-    "AuditCommentAppender",
-    "ColumnPruner",
     "CommentRemover",
-    "ForceWhereClause",
     "HintRemover",
-    "InjectionValidator",
-    "JoinOptimizer",
     "ParameterizeLiterals",
-    "PredicatePushdown",
     "PreventDDL",
+    "PreventInjection",
     "ProcessorProtocol",
+    "RemoveUnusedColumns",
     "RiskyDML",
     "RiskyProceduralCode",
     "SQLValidation",
@@ -54,6 +47,7 @@ __all__ = (
     "SuspiciousComments",
     "SuspiciousKeywords",
     "TautologyConditions",
+    "TracingComment",
     "TransformerPipeline",
     "UsesExpression",
     "ValidationResult",

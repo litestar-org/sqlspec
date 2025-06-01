@@ -13,10 +13,10 @@ if TYPE_CHECKING:
     from sqlspec.statement.sql import SQLConfig
 
 
-__all__ = ("ColumnPruner",)
+__all__ = ("RemoveUnusedColumns",)
 
 
-class ColumnPruner(ProcessorProtocol[exp.Expression]):
+class RemoveUnusedColumns(ProcessorProtocol[exp.Expression]):
     """Removes unused columns from SELECT statements.
 
     This is an optimization that can reduce data transfer and processing.
