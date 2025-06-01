@@ -10,7 +10,7 @@ from sqlspec.statement.builder._delete import DeleteBuilder
 from sqlspec.statement.builder._insert import InsertBuilder
 from sqlspec.statement.builder._merge import MergeBuilder
 from sqlspec.statement.builder._select import SelectBuilder
-from sqlspec.statement.builder._update import UpdateBuilder
+from sqlspec.statement.builder._update import UpdateBuilder, update
 
 __all__ = (
     "DeleteBuilder",
@@ -22,4 +22,5 @@ __all__ = (
     "SelectBuilder",
     "UpdateBuilder",
     "WhereClauseMixin",
+    "update",
 )

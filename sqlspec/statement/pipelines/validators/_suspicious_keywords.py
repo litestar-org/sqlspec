@@ -37,6 +37,9 @@ class SuspiciousKeywords(SQLValidation):
         allow_system_functions: Whether to allow system functions like SLEEP, BENCHMARK.
         allow_file_operations: Whether to allow file operations like INTO OUTFILE.
         allow_introspection: Whether to allow database introspection queries.
+        check_system_functions: Whether to explicitly check for system functions.
+        check_file_operations: Whether to explicitly check for file operations.
+        check_database_introspection: Whether to explicitly check for database introspection.
     """
 
     def __init__(
@@ -46,11 +49,18 @@ class SuspiciousKeywords(SQLValidation):
         allow_system_functions: bool = False,
         allow_file_operations: bool = False,
         allow_introspection: bool = False,
+        check_system_functions: bool = True,
+        check_file_operations: bool = True,
+        check_database_introspection: bool = True,
     ) -> None:
         super().__init__(risk_level, min_risk_to_raise)
         self.allow_system_functions = allow_system_functions
         self.allow_file_operations = allow_file_operations
         self.allow_introspection = allow_introspection
+        # New parameters for explicit checking control
+        self.check_system_functions = check_system_functions
+        self.check_file_operations = check_file_operations
+        self.check_database_introspection = check_database_introspection
 
     def validate(
         self,
@@ -64,13 +74,15 @@ class SuspiciousKeywords(SQLValidation):
         warnings: list[str] = []
 
         # Check function calls for system functions
-        self._check_function_calls(expression, issues, warnings)
+        if self.check_system_functions:
+            self._check_function_calls(expression, issues, warnings)
 
         # Check table references for system schemas
-        self._check_table_references(expression, issues, warnings)
+        if self.check_database_introspection:
+            self._check_table_references(expression, issues, warnings)
 
         # Check for file operations in SQL text
-        if not self.allow_file_operations:
+        if self.check_file_operations:
             self._check_file_operations(expression, dialect, issues)
 
         if issues:
@@ -107,13 +119,22 @@ class SuspiciousKeywords(SQLValidation):
             return
 
         for table_expr in expression.find_all(exp.Table):
-            table_name = str(table_expr.this).lower() if table_expr.this else ""
+            # Get the full table name including database/schema qualifier
+            full_table_name = ""
+
+            if table_expr.db:
+                full_table_name = f"{table_expr.db}.{table_expr.this}".lower()
+            elif table_expr.catalog:
+                full_table_name = f"{table_expr.catalog}.{table_expr.this}".lower()
+            else:
+                full_table_name = str(table_expr.this).lower() if table_expr.this else ""
 
             # System schema access
             system_schemas = [
                 "information_schema",
                 "mysql.user",
                 "mysql.db",
+                "mysql.proc",
                 "performance_schema",
                 "pg_catalog",
                 "pg_stat_",
@@ -127,8 +148,8 @@ class SuspiciousKeywords(SQLValidation):
             ]
 
             for schema in system_schemas:
-                if schema in table_name:
-                    issues.append(f"System schema access detected: {table_name}")
+                if schema in full_table_name or full_table_name.startswith(schema):
+                    issues.append(f"System schema access detected: {full_table_name}")
                     break
 
     def _check_file_operations(self, expression: exp.Expression, dialect: DialectType, issues: list[str]) -> None:

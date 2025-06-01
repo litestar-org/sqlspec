@@ -155,11 +155,14 @@ class InsertBuilder(QueryBuilder[ExecuteResult]):
         self._columns = list(columns)
         insert_expr = self._get_insert_expression()
 
-        # Set the schema with column identifiers
-        if self._columns:
+        # Set the schema with column identifiers, but preserve the table
+        if self._columns and self._table:
             column_identifiers = [exp.to_identifier(c) for c in self._columns]
-            schema = exp.Schema(expressions=column_identifiers)
+            schema = exp.Schema(this=exp.to_table(self._table), expressions=column_identifiers)
             insert_expr.set("this", schema)
+        elif self._table:
+            # If no columns specified but table is set, just use the table
+            insert_expr.set("this", exp.to_table(self._table))
 
         return self
 

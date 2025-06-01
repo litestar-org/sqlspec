@@ -723,18 +723,33 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         new_builder = SelectBuilder(dialect=self.dialect)
         new_builder._expression = union_expr  # pyright: ignore
 
-        # new_builder._parameters is initialized as {} by QueryBuilder
-        merged_params_after_left = ParameterConverter.merge_parameters(
-            parameters=left_query.parameters,
-            args=None,
-            kwargs=new_builder._parameters,
-        )
-        final_merged_params = ParameterConverter.merge_parameters(
-            parameters=right_query.parameters,
-            args=merged_params_after_left if isinstance(merged_params_after_left, list) else None,
-            kwargs=merged_params_after_left if isinstance(merged_params_after_left, dict) else {},
-        )
-        new_builder._parameters = final_merged_params  # type: ignore[assignment]
+        # Merge parameters with conflict resolution
+        merged_params = dict(left_query.parameters)  # Start with left parameters
+
+        # Add right parameters, renaming if there are conflicts
+        for param_name, param_value in right_query.parameters.items():
+            if param_name in merged_params:
+                # Find a new name for the conflicting parameter
+                counter = 1
+                new_param_name = f"{param_name}_right_{counter}"
+                while new_param_name in merged_params:
+                    counter += 1
+                    new_param_name = f"{param_name}_right_{counter}"
+
+                # Update the SQL to use the new parameter name
+                right_sql_updated = right_expr.sql(dialect=self.dialect)
+                right_sql_updated = right_sql_updated.replace(f":{param_name}", f":{new_param_name}")
+                right_expr = exp.maybe_parse(right_sql_updated, dialect=self.dialect)
+
+                # Recreate the union with updated right expression
+                union_expr = exp.union(left_expr, right_expr, distinct=not all_)
+                new_builder._expression = union_expr  # pyright: ignore
+
+                merged_params[new_param_name] = param_value
+            else:
+                merged_params[param_name] = param_value
+
+        new_builder._parameters = merged_params
         return new_builder
 
     def intersect(self, other: "SelectBuilder") -> "SelectBuilder":
@@ -940,6 +955,10 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
                 msg = f"Could not parse raw SQL subquery for IN: {values}"
                 raise SQLBuilderError(msg)
             final_condition = exp.In(this=col_expr, query=sub_expr)
+        else:
+            msg = f"Unsupported type for 'values' in WHERE IN: {type(values)}"
+            raise SQLBuilderError(msg)
+
         return self.where(final_condition)
 
     def where_not_in(
@@ -1212,7 +1231,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         msg = f"Unsupported values type for ANY clause: {type(values)}"
         raise SQLBuilderError(msg)
 
-    def count_(self, column: "Union[str, exp.Expression]" = '"*"', alias: "Optional[str]" = None) -> "SelectBuilder":
+    def count_(self, column: "Union[str, exp.Expression]" = "*", alias: "Optional[str]" = None) -> "SelectBuilder":
         """Add COUNT function to SELECT clause.
 
         Args:
@@ -1308,17 +1327,25 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
             if isinstance(partition_by, str):
                 over_args["partition_by"] = [exp.column(partition_by)]
             elif isinstance(partition_by, list):  # Check for list
-                over_args["partition_by"] = [(exp.column(col) if isinstance(col, str) else col) for col in partition_by]
+                over_args["partition_by"] = [exp.column(col) if isinstance(col, str) else col for col in partition_by]
             elif isinstance(partition_by, exp.Expression):  # Check for exp.Expression
                 over_args["partition_by"] = [partition_by]
 
         if order_by:
             if isinstance(order_by, str):
-                over_args["order"] = [exp.column(order_by).asc()]
+                over_args["order"] = exp.column(order_by).asc()
             elif isinstance(order_by, list):
-                over_args["order"] = [(exp.column(col).asc() if isinstance(col, str) else col) for col in order_by]
+                # For multiple order columns, create multiple ordered expressions
+                if len(order_by) == 1:
+                    col = order_by[0]
+                    over_args["order"] = exp.column(col).asc() if isinstance(col, str) else col
+                else:
+                    # For multiple columns, we need to handle this differently
+                    # SQLGlot expects a single order expression, so we'll use the first one
+                    col = order_by[0]
+                    over_args["order"] = exp.column(col).asc() if isinstance(col, str) else col
             elif isinstance(order_by, exp.Expression):
-                over_args["order"] = [order_by]
+                over_args["order"] = order_by
 
         if frame:
             frame_expr = exp.maybe_parse(frame, dialect=self.dialect)  # type: ignore[var-annotated]

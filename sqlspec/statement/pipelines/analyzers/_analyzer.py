@@ -123,13 +123,12 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         Returns:
             Tuple of (unchanged expression, None) - this processor doesn't validate
         """
-        # Perform analysis and store result
-        # The analysis result should be accessible via the SQL statement object
-        analysis = self.analyze_expression(expression)
+        # Perform analysis and cache it internally
+        # The analysis result can be accessed via analyze_expression method
+        _ = self.analyze_expression(expression)
 
-        # Store analysis in expression metadata if possible
-        if hasattr(expression, "_sqlspec_analysis"):
-            expression._sqlspec_analysis = analysis
+        # Note: SQLGlot expressions are immutable, so we can't store metadata directly
+        # The analysis result should be accessed via the analyzer instance
 
         return expression, None
 

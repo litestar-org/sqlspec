@@ -12,6 +12,7 @@ from sqlspec.statement.pipelines.base import SQLValidation, ValidationResult
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
+    from sqlspec.statement.pipelines.base import AnalysisResult
     from sqlspec.statement.sql import SQLConfig
 
 __all__ = ("ExcessiveJoins",)
@@ -204,3 +205,65 @@ class ExcessiveJoins(SQLValidation):
                 max_depth = max(max_depth, nested_depth)
 
         return max_depth
+
+    def validate_with_analysis(
+        self,
+        expression: exp.Expression,
+        analysis: AnalysisResult,
+        dialect: DialectType,
+        config: SQLConfig,
+        **kwargs: Any,
+    ) -> ValidationResult:
+        """Validate using pre-computed analysis results for efficiency.
+
+        Args:
+            expression: The SQL expression to validate
+            analysis: Pre-computed analysis results
+            dialect: The SQL dialect
+            config: The SQL configuration
+            kwargs: Additional keyword arguments
+
+        Returns:
+            ValidationResult with join-related issues and warnings
+        """
+        issues: list[str] = []
+        warnings: list[str] = []
+
+        # Use pre-computed join analysis
+        join_count = analysis.metrics.get("join_count", 0)
+        join_types = analysis.metrics.get("join_types", {})
+        cartesian_risk = analysis.metrics.get("cartesian_risk", 0)
+
+        # Check for excessive joins
+        if join_count > self.max_joins:
+            issues.append(
+                f"Excessive joins detected: {join_count} joins exceed limit of {self.max_joins}. "
+                f"Join breakdown: {self._format_join_counts(join_types)}"
+            )
+        elif join_count > self.warn_threshold:
+            warnings.append(
+                f"High number of joins detected: {join_count} joins. "
+                f"Consider optimizing query structure. Join breakdown: {self._format_join_counts(join_types)}"
+            )
+
+        # Check for cartesian product risks
+        if cartesian_risk > 0:
+            if join_count > self.max_joins:
+                issues.append(f"Cartesian product risk detected: {cartesian_risk} risky join patterns")
+            else:
+                warnings.append(f"Potential cartesian product risk: {cartesian_risk} risky join patterns")
+
+        # Determine final result
+        if issues:
+            return ValidationResult(
+                is_safe=False,
+                risk_level=self.risk_level,
+                issues=issues,
+                warnings=warnings,
+            )
+
+        return ValidationResult(
+            is_safe=True,
+            risk_level=RiskLevel.SAFE if not warnings else RiskLevel.LOW,
+            warnings=warnings,
+        )

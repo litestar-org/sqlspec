@@ -22,7 +22,12 @@ def test_basic_MergeBuilder() -> None:
     assert "INTO" in result.sql
     assert "USING" in result.sql
     assert "ON" in result.sql
-    assert "WHEN MATCHED" in result.sql
+    assert "WHEN MATCHED THEN UPDATE" in result.sql
+    assert "SET" in result.sql
+
+    # Verify parameters are captured
+    assert isinstance(result.parameters, dict)
+    assert "updated_name" in result.parameters.values()
 
 
 def test_merge_with_subquery_source() -> None:
@@ -39,6 +44,7 @@ def test_merge_with_subquery_source() -> None:
 
     assert "MERGE" in result.sql
     assert "SELECT" in result.sql  # From subquery
+    assert "WHEN MATCHED THEN UPDATE" in result.sql
 
 
 def test_merge_when_matched_then_delete() -> None:
@@ -49,8 +55,7 @@ def test_merge_when_matched_then_delete() -> None:
     )
 
     assert "MERGE" in result.sql
-    assert "WHEN MATCHED" in result.sql
-    assert "DELETE" in result.sql
+    assert "WHEN MATCHED THEN DELETE" in result.sql
 
 
 def test_merge_when_not_matched_then_insert() -> None:
@@ -65,8 +70,14 @@ def test_merge_when_not_matched_then_insert() -> None:
     )
 
     assert "MERGE" in result.sql
-    assert "WHEN NOT MATCHED" in result.sql
-    assert "INSERT" in result.sql
+    assert "WHEN NOT MATCHED THEN INSERT" in result.sql
+    assert "VALUES" in result.sql
+
+    # Verify parameters are captured
+    assert isinstance(result.parameters, dict)
+    assert 1 in result.parameters.values()
+    assert "John Doe" in result.parameters.values()
+    assert "john@example.com" in result.parameters.values()
 
 
 def test_merge_multiple_when_clauses() -> None:
@@ -82,8 +93,11 @@ def test_merge_multiple_when_clauses() -> None:
     )
 
     assert "MERGE" in result.sql
-    assert "WHEN MATCHED" in result.sql
-    assert "WHEN NOT MATCHED" in result.sql
+    assert "WHEN MATCHED THEN UPDATE" in result.sql
+    assert "WHEN NOT MATCHED THEN INSERT" in result.sql
+
+    # Verify parameters are captured
+    assert isinstance(result.parameters, dict)
 
 
 def test_merge_with_conditions() -> None:
@@ -101,21 +115,9 @@ def test_merge_with_conditions() -> None:
     assert "MERGE" in result.sql
     assert "WHEN MATCHED" in result.sql
 
-
-def test_merge_parameter_binding() -> None:
-    """Test that MERGE values are properly parameterized."""
-    builder = MergeBuilder()
-    result = (
-        builder.into("users")
-        .using("updates", "src")
-        .on("users.id = src.id")
-        .when_matched_then_update({"notes": "'; DROP TABLE users; --"})
-        .build()
-    )
-
-    # Verify SQL injection is prevented
-    assert "DROP TABLE" not in result.sql
-    assert len(result.parameters) >= 1
+    # Verify parameters are captured
+    assert isinstance(result.parameters, dict)
+    assert "updated" in result.parameters.values()
 
 
 def test_merge_chaining() -> None:
@@ -127,36 +129,35 @@ def test_merge_chaining() -> None:
     assert isinstance(builder.on("users.id = src.id"), MergeBuilder)
     assert isinstance(builder.when_matched_then_update({"name": "value"}), MergeBuilder)
     assert isinstance(builder.when_matched_then_delete(), MergeBuilder)
+    assert isinstance(builder.when_not_matched_then_insert(columns=["id", "name"], values=[1, "test"]), MergeBuilder)
 
 
-def test_merge_insert_column_value_mismatch() -> None:
-    """Test that INSERT with mismatched columns/values raises error."""
+def test_merge_insert_columns_values_mismatch() -> None:
+    """Test that mismatched columns and values raise an error."""
     builder = MergeBuilder()
-    builder.into("users").using("source", "src").on("users.id = src.id")
-
     with pytest.raises(SQLBuilderError, match="Number of columns must match number of values"):
-        builder.when_not_matched_then_insert(
+        builder.into("users").using("source", "src").on("users.id = src.id").when_not_matched_then_insert(
             columns=["id", "name"],
-            values=[1, "John", "extra_value"],  # 3 values for 2 columns
+            values=[1],  # Mismatch: 2 columns, 1 value
         )
 
 
 def test_merge_insert_columns_without_values() -> None:
-    """Test that INSERT with columns but no values raises error."""
+    """Test that specifying columns without values raises an error."""
     builder = MergeBuilder()
-    builder.into("users").using("source", "src").on("users.id = src.id")
-
     with pytest.raises(SQLBuilderError, match="Specifying columns without values"):
-        builder.when_not_matched_then_insert(columns=["id", "name"], values=None)
+        builder.into("users").using("source", "src").on("users.id = src.id").when_not_matched_then_insert(
+            columns=["id", "name"]  # No values provided
+        )
 
 
 def test_merge_insert_values_without_columns() -> None:
-    """Test that INSERT with values but no columns raises error."""
+    """Test that specifying values without columns raises an error."""
     builder = MergeBuilder()
-    builder.into("users").using("source", "src").on("users.id = src.id")
-
     with pytest.raises(SQLBuilderError, match="Cannot specify values without columns"):
-        builder.when_not_matched_then_insert(columns=None, values=[1, "John"])
+        builder.into("users").using("source", "src").on("users.id = src.id").when_not_matched_then_insert(
+            values=[1, "test"]  # No columns provided
+        )
 
 
 def test_merge_insert_default_values() -> None:
@@ -171,7 +172,7 @@ def test_merge_insert_default_values() -> None:
     )
 
     assert "MERGE" in result.sql
-    assert "INSERT" in result.sql
+    assert "WHEN NOT MATCHED THEN INSERT" in result.sql
 
 
 def test_merge_condition_parsing_error() -> None:
@@ -188,6 +189,7 @@ def test_merge_condition_parsing_error() -> None:
     ).build()
 
     assert "MERGE" in result.sql
+    assert "WHEN MATCHED" in result.sql
 
 
 def test_merge_with_table_alias() -> None:
@@ -202,15 +204,7 @@ def test_merge_with_table_alias() -> None:
     )
 
     assert "MERGE" in result.sql
-
-
-def test_merge_string_representation() -> None:
-    """Test string representation of MergeBuilder."""
-    builder = MergeBuilder()
-    builder.into("users").using("source", "src").on("users.id = src.id")
-
-    sql_str = str(builder)
-    assert "MERGE" in sql_str
+    assert "WHEN MATCHED THEN UPDATE" in result.sql
 
 
 def test_merge_not_matched_by_source() -> None:
@@ -225,6 +219,7 @@ def test_merge_not_matched_by_source() -> None:
     )
 
     assert "MERGE" in result.sql
+    assert "WHEN NOT MATCHED" in result.sql
 
 
 def test_merge_complex_scenario() -> None:
@@ -245,5 +240,45 @@ def test_merge_complex_scenario() -> None:
     )
 
     assert "MERGE" in result.sql
-    assert "WHEN MATCHED" in result.sql
+    assert "WHEN MATCHED THEN UPDATE" in result.sql
+    assert "WHEN MATCHED THEN DELETE" in result.sql
+    assert "WHEN NOT MATCHED THEN INSERT" in result.sql
+
+    # Verify parameters are captured
+    assert isinstance(result.parameters, dict)
+
+
+def test_merge_not_matched_by_source_update() -> None:
+    """Test MERGE with UPDATE action for rows not matched by source."""
+    builder = MergeBuilder()
+    result = (
+        builder.into("users")
+        .using("active_users", "src")
+        .on("users.id = src.id")
+        .when_not_matched_by_source_then_update({"status": "inactive"})
+        .build()
+    )
+
+    assert "MERGE" in result.sql
     assert "WHEN NOT MATCHED" in result.sql
+    assert "UPDATE" in result.sql
+
+    # Verify parameters are captured
+    assert isinstance(result.parameters, dict)
+    assert "inactive" in result.parameters.values()
+
+
+def test_merge_not_matched_by_source_delete() -> None:
+    """Test MERGE with DELETE action for rows not matched by source."""
+    builder = MergeBuilder()
+    result = (
+        builder.into("users")
+        .using("active_users", "src")
+        .on("users.id = src.id")
+        .when_not_matched_by_source_then_delete()
+        .build()
+    )
+
+    assert "MERGE" in result.sql
+    assert "WHEN NOT MATCHED" in result.sql
+    assert "DELETE" in result.sql

@@ -1,8 +1,11 @@
 """Function-based tests for base pipeline functionality."""
 
+from typing import Any, Optional
+
 import pytest
 import sqlglot
 from sqlglot import exp
+from sqlglot.dialects.dialect import DialectType
 
 from sqlspec.exceptions import RiskLevel
 from sqlspec.statement.pipelines.base import (
@@ -174,7 +177,9 @@ def test_sql_validator_add_validator() -> None:
         def __init__(self) -> None:
             super().__init__(RiskLevel.MEDIUM)
 
-        def validate(self, expression, dialect, config, **kwargs):
+        def validate(
+            self, expression: exp.Expression, dialect: DialectType, config: SQLConfig, **kwargs: Any
+        ) -> ValidationResult:
             return ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
 
     mock_validation = MockValidation()
@@ -193,6 +198,7 @@ def test_sql_validator_process_with_disabled_validation() -> None:
     result_expression, validation_result = validator.process(expression, "mysql", config)
 
     assert result_expression is expression
+    assert validation_result is not None
     assert validation_result.is_safe
     assert validation_result.risk_level == RiskLevel.SKIP
 
@@ -227,12 +233,15 @@ def test_transformer_pipeline_execute_with_mock_components() -> None:
 
     # Create mock processor
     class MockProcessor:
-        def process(self, expression, dialect=None, config=None):
+        def process(
+            self, expression: exp.Expression, dialect: Optional[DialectType] = None, config: Optional[SQLConfig] = None
+        ) -> tuple[exp.Expression, ValidationResult]:
             # Return modified expression and no validation issues
             return expression, ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
 
     pipeline = TransformerPipeline()
-    pipeline.components = [MockProcessor()]
+    # Use a list to avoid assignment issues
+    pipeline.components = [MockProcessor()]  # type: ignore
 
     config = SQLConfig()
     expression = sqlglot.parse_one("SELECT 1", read="mysql")
@@ -251,7 +260,9 @@ def test_sql_validation_abstract_base() -> None:
         def __init__(self) -> None:
             super().__init__(RiskLevel.MEDIUM, RiskLevel.HIGH)
 
-        def validate(self, expression, dialect, config, **kwargs):
+        def validate(
+            self, expression: exp.Expression, dialect: DialectType, config: SQLConfig, **kwargs: Any
+        ) -> ValidationResult:
             return ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
 
     validation = ConcreteValidation()
@@ -272,7 +283,9 @@ def test_sql_transformation_abstract_base() -> None:
 
     # Create a concrete implementation
     class ConcreteTransformation(SQLTransformation):
-        def transform(self, expression, dialect, config, **kwargs):
+        def transform(
+            self, expression: exp.Expression, dialect: DialectType, config: SQLConfig, **kwargs: Any
+        ) -> TransformationResult:
             return TransformationResult(expression=expression, modified=False)
 
     transformation = ConcreteTransformation()
@@ -291,7 +304,9 @@ def test_sql_analysis_abstract_base() -> None:
 
     # Create a concrete implementation
     class ConcreteAnalysis(SQLAnalysis):
-        def analyze(self, expression, dialect, config, **kwargs):
+        def analyze(
+            self, expression: exp.Expression, dialect: DialectType, config: SQLConfig, **kwargs: Any
+        ) -> AnalysisResult:
             return AnalysisResult(metrics={"test": 1})
 
     analysis = ConcreteAnalysis()
@@ -349,20 +364,28 @@ def test_transformer_pipeline_validation_aggregation() -> None:
 
     # Create mock processors that return validation results
     class MockValidatingProcessor:
-        def __init__(self, is_safe, risk_level, issues=None, warnings=None) -> None:
+        def __init__(
+            self,
+            is_safe: bool,
+            risk_level: RiskLevel,
+            issues: Optional[list[str]] = None,
+            warnings: Optional[list[str]] = None,
+        ) -> None:
             self.is_safe = is_safe
             self.risk_level = risk_level
             self.issues = issues or []
             self.warnings = warnings or []
 
-        def process(self, expression, dialect=None, config=None):
+        def process(
+            self, expression: exp.Expression, dialect: Optional[DialectType] = None, config: Optional[SQLConfig] = None
+        ) -> tuple[exp.Expression, ValidationResult]:
             validation_result = ValidationResult(
                 is_safe=self.is_safe, risk_level=self.risk_level, issues=self.issues, warnings=self.warnings
             )
             return expression, validation_result
 
     pipeline = TransformerPipeline()
-    pipeline.components = [
+    pipeline.components = [  # type: ignore
         MockValidatingProcessor(True, RiskLevel.SAFE, warnings=["Warning 1"]),
         MockValidatingProcessor(False, RiskLevel.MEDIUM, issues=["Issue 1"]),
         MockValidatingProcessor(True, RiskLevel.LOW, warnings=["Warning 2"]),
@@ -371,7 +394,7 @@ def test_transformer_pipeline_validation_aggregation() -> None:
     config = SQLConfig()
     expression = sqlglot.parse_one("SELECT 1", read="mysql")
 
-    result_expression, validation_result = pipeline.execute(expression, "mysql", config)
+    _, validation_result = pipeline.execute(expression, "mysql", config)
 
     # Should aggregate all validation results
     assert not validation_result.is_safe  # Any component with issues makes it unsafe
@@ -399,7 +422,9 @@ def test_sql_validator_validate_convenience_method() -> None:
         def __init__(self) -> None:
             super().__init__(RiskLevel.MEDIUM)
 
-        def validate(self, expression, dialect, config, **kwargs):
+        def validate(
+            self, expression: exp.Expression, dialect: DialectType, config: SQLConfig, **kwargs: Any
+        ) -> ValidationResult:
             return ValidationResult(is_safe=False, risk_level=RiskLevel.MEDIUM, issues=["Mock issue"])
 
     validator = SQLValidator()
@@ -435,11 +460,13 @@ def test_pipeline_base_classes_inheritance() -> None:
 
     # Test extending SQLValidation
     class CustomValidation(SQLValidation):
-        def __init__(self, custom_param=None) -> None:
+        def __init__(self, custom_param: Optional[str] = None) -> None:
             super().__init__(RiskLevel.MEDIUM)
             self.custom_param = custom_param
 
-        def validate(self, expression, dialect, config, **kwargs):
+        def validate(
+            self, expression: exp.Expression, dialect: DialectType, config: SQLConfig, **kwargs: Any
+        ) -> ValidationResult:
             # Custom validation logic
             if self.custom_param == "strict":
                 return ValidationResult(is_safe=False, risk_level=RiskLevel.HIGH, issues=["Strict mode"])
@@ -447,13 +474,17 @@ def test_pipeline_base_classes_inheritance() -> None:
 
     # Test extending SQLTransformation
     class CustomTransformation(SQLTransformation):
-        def transform(self, expression, dialect, config, **kwargs):
+        def transform(
+            self, expression: exp.Expression, dialect: DialectType, config: SQLConfig, **kwargs: Any
+        ) -> TransformationResult:
             # Custom transformation logic
             return TransformationResult(expression=expression, modified=True, notes=["Custom transformation applied"])
 
     # Test extending SQLAnalysis
     class CustomAnalysis(SQLAnalysis):
-        def analyze(self, expression, dialect, config, **kwargs):
+        def analyze(
+            self, expression: exp.Expression, dialect: DialectType, config: SQLConfig, **kwargs: Any
+        ) -> AnalysisResult:
             # Custom analysis logic
             return AnalysisResult(metrics={"custom_metric": 42}, notes=["Custom analysis completed"])
 

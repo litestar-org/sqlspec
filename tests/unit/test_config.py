@@ -945,5 +945,5 @@ def test_config_type_validation() -> None:
     assert isinstance(async_config, NoPoolAsyncConfig)
 
     # Test that sync and async configs are different
-    assert type(sync_config) != type(async_config)
+    assert type(sync_config) is not type(async_config)
     assert sync_config.is_async != async_config.is_async

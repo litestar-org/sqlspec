@@ -208,8 +208,8 @@ class QueryBuilder(ABC, Generic[ResultT]):
                 processed_expression = final_expression
                 for alias, cte_node in self._with_ctes.items():
                     processed_expression = processed_expression.with_(  # type: ignore[attr-defined]
-                        alias,
-                        asis=cte_node.args["this"],
+                        cte_node.args["this"],  # The SELECT expression
+                        as_=alias,  # The alias
                         copy=False,
                     )
                 final_expression = processed_expression
@@ -255,6 +255,18 @@ class QueryBuilder(ABC, Generic[ResultT]):
             _builder_result_type=self._expected_result_type,  # Property already returns type
         )
 
+    def __str__(self) -> str:
+        """Return the SQL string representation of the query.
+
+        Returns:
+            str: The SQL string for this query.
+        """
+        try:
+            return self.build().sql
+        except Exception:
+            # Fallback to default representation if build fails
+            return super().__str__()
+
     @property
     def dialect_name(self) -> Optional[str]:
         """Returns the name of the dialect, if set."""
@@ -265,6 +277,9 @@ class QueryBuilder(ABC, Generic[ResultT]):
                 return self.dialect.__name__.lower()
             if isinstance(self.dialect, Dialect):
                 return type(self.dialect).__name__.lower()
+            # Handle case where dialect might have a __name__ attribute
+            if hasattr(self.dialect, "__name__"):
+                return self.dialect.__name__.lower()
         return None
 
 

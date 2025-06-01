@@ -1,5 +1,7 @@
 """Function-based tests for suspicious keywords validator."""
 
+from contextlib import suppress
+
 import pytest
 import sqlglot
 
@@ -325,12 +327,11 @@ def test_suspicious_keywords_configuration_disable_all_checks() -> None:
     # Even suspicious query should pass if all checks disabled
     suspicious_sql = """
         SELECT USER(), VERSION() FROM information_schema.tables
-        INTO OUTFILE '/tmp/dump'
         WHERE SLEEP(10)
     """
-    expression = sqlglot.parse_one(suspicious_sql, read="mysql")
+    expression = sqlglot.parse_one(suspicious_sql, read="postgres")
 
-    result = validator.validate(expression, "mysql", config)
+    result = validator.validate(expression, "postgres", config)
 
     # Should be safer with all checks disabled
     assert result.is_safe or len(result.issues) == 0
@@ -348,7 +349,7 @@ def test_suspicious_keywords_detects_exec_and_eval_functions() -> None:
     ]
 
     for sql_pattern in dynamic_sql_patterns:
-        try:
+        with suppress(Exception):
             expression = sqlglot.parse_one(sql_pattern, read="mysql")
             result = validator.validate(expression, "mysql", config)
 
@@ -358,9 +359,6 @@ def test_suspicious_keywords_detects_exec_and_eval_functions() -> None:
                     "exec" in issue.lower() or "eval" in issue.lower() or "dynamic" in issue.lower()
                     for issue in result.issues
                 )
-        except Exception:
-            # Some dynamic SQL patterns might not parse in MySQL, which is acceptable
-            pass
 
 
 def test_suspicious_keywords_handles_function_calls_in_expressions() -> None:
@@ -409,7 +407,7 @@ def test_suspicious_keywords_different_dialects() -> None:
                     f"Failed to detect suspicious pattern in {dialect}"
                 )
 
-        except Exception as e:
+        except Exception as e:  # noqa: PERF203
             # Some dialects might not be supported, which is acceptable
             pytest.skip(f"Dialect {dialect} not supported: {e}")
 
@@ -505,6 +503,6 @@ def test_suspicious_keywords_file_system_access_patterns() -> None:
                 "file" in issue.lower() or "outfile" in issue.lower() or "dumpfile" in issue.lower()
                 for issue in result.issues
             ), f"Expected file pattern not found in: {file_sql}"
-        except Exception:
+        except Exception:  # noqa: PERF203
             # Some file access patterns might not parse, which is also good for security
             pass

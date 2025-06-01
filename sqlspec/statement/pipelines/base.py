@@ -31,6 +31,7 @@ __all__ = (
     "SQLValidator",
     "TransformationResult",
     "TransformerPipeline",
+    "UnifiedProcessor",
     "UsesExpression",
     "ValidationResult",
 )
@@ -150,7 +151,7 @@ class TransformerPipeline:
 
         for component in self.components:
             current_expression, validation_result_component = component.process(current_expression, dialect, config)
-            if validation_result_component:
+            if validation_result_component is not None:
                 aggregated_issues.extend(validation_result_component.issues)
                 aggregated_warnings.extend(validation_result_component.warnings)
                 if validation_result_component.risk_level.value > overall_risk_level.value:
@@ -159,7 +160,7 @@ class TransformerPipeline:
                     final_is_safe = False
 
         return current_expression, ValidationResult(
-            is_safe=final_is_safe and not aggregated_issues,
+            is_safe=final_is_safe,
             risk_level=overall_risk_level,
             issues=aggregated_issues,
             warnings=aggregated_warnings,
@@ -216,7 +217,7 @@ class SQLValidator(ProcessorProtocol[exp.Expression]):
         dialect: "Optional[DialectType]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "tuple[exp.Expression, Optional[ValidationResult]]":
+    ) -> "tuple[exp.Expression, ValidationResult]":
         """Process the SQL expression through all configured validators.
 
         Args:
@@ -265,7 +266,7 @@ class SQLValidator(ProcessorProtocol[exp.Expression]):
         expression_to_validate = UsesExpression.get_expression(sql, dialect=dialect)
 
         _, validation_result = self.process(expression_to_validate, dialect, current_config)
-        return validation_result or ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
+        return validation_result
 
 
 class ValidationResult:
@@ -289,8 +290,8 @@ class ValidationResult:
     ) -> None:
         self.is_safe = is_safe
         self.risk_level = risk_level
-        self.issues = issues if issues is not None else []
-        self.warnings = warnings if warnings is not None else []
+        self.issues = list(issues) if issues is not None else []
+        self.warnings = list(warnings) if warnings is not None else []
         self.transformed_sql = transformed_sql  # Though likely not used by validators
 
     def merge(self, other: "ValidationResult") -> None:
@@ -464,3 +465,333 @@ class SQLAnalysis(ABC):
             An AnalysisResult.
         """
         raise NotImplementedError
+
+
+class UnifiedProcessor(ProcessorProtocol[exp.Expression]):
+    """Unified processor that combines analysis, transformation, and validation.
+
+    This processor performs analysis once and shares the results with all
+    transformers and validators to avoid redundant parsing and processing.
+    """
+
+    def __init__(
+        self,
+        analyzers: "Optional[Sequence[SQLAnalysis]]" = None,
+        transformers: "Optional[Sequence[SQLTransformer]]" = None,
+        validators: "Optional[Sequence[SQLValidation]]" = None,
+        cache_analysis: bool = True,
+    ) -> None:
+        """Initialize the unified processor.
+
+        Args:
+            analyzers: List of analysis components to run
+            transformers: List of transformation components to run
+            validators: List of validation components to run
+            cache_analysis: Whether to cache analysis results
+        """
+        self.analyzers = list(analyzers) if analyzers else []
+        self.transformers = list(transformers) if transformers else []
+        self.validators = list(validators) if validators else []
+        self.cache_analysis = cache_analysis
+        self._analysis_cache: dict[str, AnalysisResult] = {}
+
+    def process(
+        self,
+        expression: exp.Expression,
+        dialect: "Optional[DialectType]" = None,
+        config: "Optional[SQLConfig]" = None,
+    ) -> "tuple[exp.Expression, Optional[ValidationResult]]":
+        """Process the expression through unified analysis, transformation, and validation.
+
+        Args:
+            expression: The SQL expression to process
+            dialect: The SQL dialect
+            config: The SQL configuration
+
+        Returns:
+            Tuple of (transformed expression, validation result)
+        """
+        from sqlspec.statement.sql import SQLConfig
+
+        active_config = config if config is not None else SQLConfig()
+
+        # Step 1: Perform unified analysis once
+        analysis_result = self._perform_unified_analysis(expression, dialect, active_config)
+
+        # Step 2: Apply transformations (if enabled)
+        current_expression = expression
+        if active_config.enable_transformations:
+            current_expression = self._apply_transformations(
+                current_expression, analysis_result, dialect, active_config
+            )
+
+        # Step 3: Apply validations (if enabled)
+        validation_result = None
+        if active_config.enable_validation:
+            validation_result = self._apply_validations(current_expression, analysis_result, dialect, active_config)
+
+        return current_expression, validation_result
+
+    def _perform_unified_analysis(
+        self,
+        expression: exp.Expression,
+        dialect: "Optional[DialectType]",
+        config: "SQLConfig",
+    ) -> AnalysisResult:
+        """Perform comprehensive analysis once and cache results."""
+        # Check cache first
+        cache_key = expression.sql() if self.cache_analysis else None
+        if cache_key and cache_key in self._analysis_cache:
+            return self._analysis_cache[cache_key]
+
+        # Perform comprehensive analysis
+        analysis = AnalysisResult()
+
+        # Basic structural analysis
+        analysis.metrics.update(self._analyze_structure(expression))
+
+        # Join analysis (shared by multiple validators)
+        analysis.metrics.update(self._analyze_joins(expression))
+
+        # Subquery analysis
+        analysis.metrics.update(self._analyze_subqueries(expression))
+
+        # Function analysis
+        analysis.metrics.update(self._analyze_functions(expression))
+
+        # Table and column analysis
+        analysis.metrics.update(self._analyze_tables_and_columns(expression))
+
+        # Complexity scoring
+        analysis.metrics["complexity_score"] = self._calculate_complexity_score(analysis.metrics)
+
+        # Run custom analyzers
+        for analyzer in self.analyzers:
+            try:
+                custom_result = analyzer.analyze(expression, dialect, config)
+                analysis.metrics.update(custom_result.metrics)
+                analysis.warnings.extend(custom_result.warnings)
+                analysis.issues.extend(custom_result.issues)
+                analysis.notes.extend(custom_result.notes)
+            except Exception as e:
+                logger.warning("Analysis component failed: %s", e)
+                analysis.warnings.append(f"Analysis component failed: {e}")
+
+        # Cache the result
+        if cache_key:
+            self._analysis_cache[cache_key] = analysis
+
+        return analysis
+
+    def _apply_transformations(
+        self,
+        expression: exp.Expression,
+        analysis: AnalysisResult,
+        dialect: "Optional[DialectType]",
+        config: "SQLConfig",
+    ) -> exp.Expression:
+        """Apply transformations using shared analysis results."""
+        current_expression = expression
+
+        for transformer in self.transformers:
+            try:
+                # Pass analysis results to transformer if it supports it
+                transform_with_analysis = getattr(transformer, "transform_with_analysis", None)
+                if transform_with_analysis is not None:
+                    result = transform_with_analysis(current_expression, analysis, dialect, config)
+                else:
+                    result = transformer.transform(current_expression, dialect, config)
+
+                if result.modified:
+                    current_expression = result.expression
+
+            except Exception as e:
+                logger.warning("Transformation component failed: %s", e)
+
+        return current_expression
+
+    def _apply_validations(
+        self,
+        expression: exp.Expression,
+        analysis: AnalysisResult,
+        dialect: "Optional[DialectType]",
+        config: "SQLConfig",
+    ) -> ValidationResult:
+        """Apply validations using shared analysis results."""
+        aggregated_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
+
+        for validator in self.validators:
+            try:
+                # Pass analysis results to validator if it supports it
+                validate_with_analysis = getattr(validator, "validate_with_analysis", None)
+                if validate_with_analysis is not None:
+                    result = validate_with_analysis(expression, analysis, dialect, config)
+                else:
+                    result = validator.validate(expression, dialect, config)
+
+                aggregated_result.merge(result)
+
+            except Exception as e:
+                logger.warning("Validation component failed: %s", e)
+                aggregated_result.warnings.append(f"Validation component failed: {e}")
+
+        return aggregated_result
+
+    def _analyze_structure(self, expression: exp.Expression) -> dict[str, Any]:
+        """Analyze basic SQL structure."""
+        return {
+            "statement_type": type(expression).__name__,
+            "has_subqueries": bool(expression.find(exp.Subquery)),
+            "has_cte": bool(expression.find(exp.CTE)),
+            "has_window_functions": bool(expression.find(exp.Window)),
+            "has_aggregates": bool(expression.find(exp.AggFunc)),
+        }
+
+    def _analyze_joins(self, expression: exp.Expression) -> dict[str, Any]:
+        """Comprehensive join analysis shared by multiple components."""
+        joins = list(expression.find_all(exp.Join))
+        join_count = len(joins)
+
+        join_types = {}
+        cross_joins = 0
+        joins_without_conditions = 0
+
+        for join in joins:
+            # Analyze join type
+            join_type = self._get_join_type(join)
+            join_types[join_type] = join_types.get(join_type, 0) + 1
+
+            # Check for cross joins
+            if join_type == "CROSS":
+                cross_joins += 1
+
+            # Check for joins without conditions
+            if not join.on and not join.using and join_type != "CROSS":
+                joins_without_conditions += 1
+
+        # Analyze potential cartesian products
+        cartesian_risk = cross_joins + joins_without_conditions
+
+        return {
+            "join_count": join_count,
+            "join_types": join_types,
+            "cross_joins": cross_joins,
+            "joins_without_conditions": joins_without_conditions,
+            "cartesian_risk": cartesian_risk,
+        }
+
+    def _analyze_subqueries(self, expression: exp.Expression) -> dict[str, Any]:
+        """Analyze subquery complexity."""
+        subqueries = list(expression.find_all(exp.Subquery))
+        subquery_count = len(subqueries)
+
+        max_depth = self._calculate_subquery_depth(expression)
+        correlated_count = self._count_correlated_subqueries(subqueries)
+
+        return {
+            "subquery_count": subquery_count,
+            "max_subquery_depth": max_depth,
+            "correlated_subquery_count": correlated_count,
+        }
+
+    def _analyze_functions(self, expression: exp.Expression) -> dict[str, Any]:
+        """Analyze function usage."""
+        functions = list(expression.find_all(exp.Func))
+        function_count = len(functions)
+
+        function_types = {}
+        expensive_functions = 0
+
+        expensive_func_names = {"regexp", "regex", "like", "concat_ws", "group_concat"}
+
+        for func in functions:
+            func_name = func.name.lower() if func.name else "unknown"
+            function_types[func_name] = function_types.get(func_name, 0) + 1
+
+            if func_name in expensive_func_names:
+                expensive_functions += 1
+
+        return {
+            "function_count": function_count,
+            "function_types": function_types,
+            "expensive_functions": expensive_functions,
+        }
+
+    def _analyze_tables_and_columns(self, expression: exp.Expression) -> dict[str, Any]:
+        """Analyze table and column usage."""
+        tables = []
+        for table in expression.find_all(exp.Table):
+            if table.name and table.name not in tables:
+                tables.append(table.name)
+
+        columns = []
+        for column in expression.find_all(exp.Column):
+            if column.name and column.name not in columns:
+                columns.append(column.name)
+
+        return {
+            "table_count": len(tables),
+            "tables": tables,
+            "column_count": len(columns),
+            "columns": columns,
+        }
+
+    def _calculate_complexity_score(self, metrics: dict[str, Any]) -> int:
+        """Calculate overall complexity score from metrics."""
+        score = 0
+
+        # Join complexity
+        score += metrics.get("join_count", 0) * 3
+        score += metrics.get("cartesian_risk", 0) * 20
+
+        # Subquery complexity
+        score += metrics.get("subquery_count", 0) * 5
+        score += metrics.get("max_subquery_depth", 0) * 10
+        score += metrics.get("correlated_subquery_count", 0) * 8
+
+        # Function complexity
+        score += metrics.get("function_count", 0) * 1
+        score += metrics.get("expensive_functions", 0) * 5
+
+        return score
+
+    def _get_join_type(self, join: exp.Join) -> str:
+        """Determine the type of join."""
+        if join.side and join.side.upper() == "LEFT":
+            return "LEFT"
+        if join.side and join.side.upper() == "RIGHT":
+            return "RIGHT"
+        if join.side and join.side.upper() == "FULL":
+            return "FULL"
+        if join.kind and join.kind.upper() == "CROSS":
+            return "CROSS"
+        if not join.on and not join.using:
+            return "CROSS"  # Implicit cross join
+        return "INNER"
+
+    def _calculate_subquery_depth(self, expression: exp.Expression, current_depth: int = 0) -> int:
+        """Calculate maximum subquery nesting depth."""
+        max_depth = current_depth
+
+        for subquery in expression.find_all(exp.Subquery):
+            if subquery.parent == expression:  # Direct child
+                depth = self._calculate_subquery_depth(subquery, current_depth + 1)
+                max_depth = max(max_depth, depth)
+
+        return max_depth
+
+    def _count_correlated_subqueries(self, subqueries: list[exp.Subquery]) -> int:
+        """Count correlated subqueries (simplified heuristic)."""
+        correlated_count = 0
+
+        for subquery in subqueries:
+            # Simple heuristic: check for EXISTS patterns
+            subquery_sql = subquery.sql().lower()
+            if any(keyword in subquery_sql for keyword in ["exists", "not exists"]):
+                correlated_count += 1
+
+        return correlated_count
+
+    def clear_cache(self) -> None:
+        """Clear the analysis cache."""
+        self._analysis_cache.clear()

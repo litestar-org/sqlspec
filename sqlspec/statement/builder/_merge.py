@@ -90,7 +90,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         Returns:
             A new sqlglot Merge expression with empty clauses.
         """
-        return exp.Merge(this=None, using=None, on=None, expressions=[])
+        return exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
 
     def into(self, table: str | exp.Expression, alias: str | None = None) -> Self:
         """Set the target table for the MERGE operation (INTO clause).
@@ -180,35 +180,51 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         self._expression.set("on", condition_expr)
         return self
 
-    def _create_when_clause(
-        self,
-        action: exp.Expression,
-        matched: bool,
-        by_source: bool | None = None,
-        condition: str | exp.Expression | None = None,
-    ) -> exp.When:
-        """Helper to create a WHEN clause expression for sqlglot Merge.
+    def _add_when_clause(self, when_clause: exp.When) -> None:
+        """Helper to add a WHEN clause to the MERGE statement.
 
         Args:
-            action: The action to perform (e.g., exp.Update, exp.Delete, exp.Insert).
-            matched: Whether this WHEN clause is for matched rows.
-            by_source: If True, condition is "WHEN NOT MATCHED BY SOURCE", otherwise "WHEN NOT MATCHED BY TARGET".
+            when_clause: The WHEN clause to add.
+        """
+        if not isinstance(self._expression, exp.Merge):
+            self._expression = self._create_base_expression()
+
+        # Get or create the whens object
+        whens = self._expression.args.get("whens")
+        if not whens:
+            whens = exp.Whens(expressions=[])
+            self._expression.set("whens", whens)
+
+        # Add the when clause to the whens expressions using SQLGlot's append method
+        whens.append("expressions", when_clause)
+
+    def when_matched_then_update(
+        self, set_values: dict[str, Any], condition: str | exp.Expression | None = None
+    ) -> Self:
+        """Define the UPDATE action for matched rows.
+
+        Args:
+            set_values: A dictionary of column names and their new values to set.
+                        The values will be parameterized.
             condition: An optional additional condition for this specific action.
 
         Returns:
-            The constructed WHEN clause expression.
-
-        Raises:
-            SQLBuilderError: If the condition is not a valid expression or string.
+            The current builder instance for method chaining.
         """
-        when_args: dict[str, Any] = {"then": action}
+        update_expressions: list[exp.EQ] = []
+        for col, val in set_values.items():
+            param_name = self._add_parameter(val)
+            update_expressions.append(
+                exp.EQ(
+                    this=exp.column(col),
+                    expression=exp.var(param_name),
+                )
+            )
 
-        if matched:
-            when_args["matched"] = True
-        else:
-            when_args["matched"] = False
-            if by_source is not None:
-                when_args["source"] = by_source
+        when_args: dict[str, Any] = {
+            "matched": True,
+            "then": exp.Update(expressions=update_expressions),
+        }
 
         if condition:
             condition_expr: exp.Expression
@@ -225,39 +241,8 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
                 raise SQLBuilderError(msg)
             when_args["this"] = condition_expr
 
-        return exp.When(**when_args)
-
-    def when_matched_then_update(
-        self, set_values: dict[str, Any], condition: str | exp.Expression | None = None
-    ) -> Self:
-        """Define the UPDATE action for matched rows.
-
-        Args:
-            set_values: A dictionary of column names and their new values to set.
-                        The values will be parameterized.
-            condition: An optional additional condition for this specific action.
-
-        Returns:
-            The current builder instance for method chaining.
-        """
-        if not isinstance(self._expression, exp.Merge):
-            self._expression = self._create_base_expression()
-
-        update_expressions: list[exp.Set] = []
-        for col, val in set_values.items():
-            param_name = self._add_parameter(val)
-            update_expressions.append(
-                exp.Set(
-                    this=exp.column(col),
-                    expression=exp.var(param_name),
-                )
-            )
-
-        self._expression.args.setdefault("expressions", []).append(
-            self._create_when_clause(
-                action=exp.Update(expressions=update_expressions), matched=True, condition=condition
-            )
-        )
+        when_clause = exp.When(**when_args)
+        self._add_when_clause(when_clause)
         return self
 
     def when_matched_then_delete(self, condition: str | exp.Expression | None = None) -> Self:
@@ -269,13 +254,28 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         Returns:
             The current builder instance for method chaining.
         """
-        if not isinstance(self._expression, exp.Merge):
-            self._expression = self._create_base_expression()
+        when_args: dict[str, Any] = {
+            "matched": True,
+            "then": exp.Delete(),
+        }
 
-        delete_action: exp.Delete = exp.Delete()
+        if condition:
+            condition_expr: exp.Expression
+            if isinstance(condition, str):
+                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)
+                if not parsed_cond:
+                    msg = f"Could not parse WHEN clause condition: {condition}"
+                    raise SQLBuilderError(msg)
+                condition_expr = parsed_cond
+            elif isinstance(condition, exp.Expression):
+                condition_expr = condition
+            else:
+                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
+                raise SQLBuilderError(msg)
+            when_args["this"] = condition_expr
 
-        when_clause: exp.When = self._create_when_clause(action=delete_action, matched=True, condition=condition)
-        self._expression.args.setdefault("expressions", []).append(when_clause)
+        when_clause = exp.When(**when_args)
+        self._add_when_clause(when_clause)
         return self
 
     def when_not_matched_then_insert(
@@ -302,10 +302,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
             SQLBuilderError: If columns and values are provided but do not match in length,
                              or if columns are provided without values.
         """
-        if not isinstance(self._expression, exp.Merge):
-            self._expression = self._create_base_expression()
-
-        insert_action_args: dict[str, Any] = {}
+        insert_args: dict[str, Any] = {}
         if columns and values:
             if len(columns) != len(values):
                 msg = "Number of columns must match number of values for INSERT."
@@ -316,25 +313,43 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
                 param_name = self._add_parameter(val)
                 parameterized_values.append(exp.var(param_name))
 
-            insert_action_args["this"] = exp.Schema(expressions=[exp.column(c) for c in columns])
-            insert_action_args["expression"] = exp.Values(expressions=[exp.Tuple(expressions=parameterized_values)])
+            insert_args["this"] = exp.Tuple(expressions=[exp.column(c) for c in columns])
+            insert_args["expression"] = exp.Tuple(expressions=parameterized_values)
         elif columns and not values:
             msg = "Specifying columns without values for INSERT action is complex and not fully supported yet. Consider providing full expressions."
             raise SQLBuilderError(msg)
         elif not columns and not values:
+            # INSERT DEFAULT VALUES case
             pass
         else:
             msg = "Cannot specify values without columns for INSERT action."
             raise SQLBuilderError(msg)
 
-        self._expression.args.setdefault("expressions", []).append(
-            self._create_when_clause(
-                action=exp.Insert(**insert_action_args),
-                matched=False,
-                by_source=not by_target if by_target is not None else None,
-                condition=condition,
-            )
-        )
+        when_args: dict[str, Any] = {
+            "matched": False,
+            "then": exp.Insert(**insert_args),
+        }
+
+        if not by_target:
+            when_args["source"] = True
+
+        if condition:
+            condition_expr: exp.Expression
+            if isinstance(condition, str):
+                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)
+                if not parsed_cond:
+                    msg = f"Could not parse WHEN clause condition: {condition}"
+                    raise SQLBuilderError(msg)
+                condition_expr = parsed_cond
+            elif isinstance(condition, exp.Expression):
+                condition_expr = condition
+            else:
+                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
+                raise SQLBuilderError(msg)
+            when_args["this"] = condition_expr
+
+        when_clause = exp.When(**when_args)
+        self._add_when_clause(when_clause)
         return self
 
     def when_not_matched_by_source_then_update(
@@ -351,24 +366,39 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         Returns:
             The current builder instance for method chaining.
         """
-        if not isinstance(self._expression, exp.Merge):
-            self._expression = self._create_base_expression()
-
-        update_expressions: list[exp.Set] = []
+        update_expressions: list[exp.EQ] = []
         for col, val in set_values.items():
             param_name = self._add_parameter(val)
             update_expressions.append(
-                exp.Set(
+                exp.EQ(
                     this=exp.column(col),
                     expression=exp.var(param_name),
                 )
             )
 
-        self._expression.args.setdefault("expressions", []).append(
-            self._create_when_clause(
-                action=exp.Update(expressions=update_expressions), matched=False, by_source=True, condition=condition
-            )
-        )
+        when_args: dict[str, Any] = {
+            "matched": False,
+            "source": True,
+            "then": exp.Update(expressions=update_expressions),
+        }
+
+        if condition:
+            condition_expr: exp.Expression
+            if isinstance(condition, str):
+                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)
+                if not parsed_cond:
+                    msg = f"Could not parse WHEN clause condition: {condition}"
+                    raise SQLBuilderError(msg)
+                condition_expr = parsed_cond
+            elif isinstance(condition, exp.Expression):
+                condition_expr = condition
+            else:
+                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
+                raise SQLBuilderError(msg)
+            when_args["this"] = condition_expr
+
+        when_clause = exp.When(**when_args)
+        self._add_when_clause(when_clause)
         return self
 
     def when_not_matched_by_source_then_delete(self, condition: str | exp.Expression | None = None) -> Self:
@@ -382,13 +412,27 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         Returns:
             The current builder instance for method chaining.
         """
-        if not isinstance(self._expression, exp.Merge):
-            self._expression = self._create_base_expression()
+        when_args: dict[str, Any] = {
+            "matched": False,
+            "source": True,
+            "then": exp.Delete(),
+        }
 
-        delete_action: exp.Delete = exp.Delete()
+        if condition:
+            condition_expr: exp.Expression
+            if isinstance(condition, str):
+                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)
+                if not parsed_cond:
+                    msg = f"Could not parse WHEN clause condition: {condition}"
+                    raise SQLBuilderError(msg)
+                condition_expr = parsed_cond
+            elif isinstance(condition, exp.Expression):
+                condition_expr = condition
+            else:
+                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
+                raise SQLBuilderError(msg)
+            when_args["this"] = condition_expr
 
-        when_clause: exp.When = self._create_when_clause(
-            action=delete_action, matched=False, by_source=True, condition=condition
-        )
-        self._expression.args.setdefault("expressions", []).append(when_clause)
+        when_clause = exp.When(**when_args)
+        self._add_when_clause(when_clause)
         return self

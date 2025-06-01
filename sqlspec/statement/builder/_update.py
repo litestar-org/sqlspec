@@ -13,13 +13,13 @@ from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder._base import QueryBuilder, WhereClauseMixin
+from sqlspec.statement.builder._base import QueryBuilder, SafeQuery, WhereClauseMixin
 from sqlspec.statement.result import ExecuteResult
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder._select import SelectBuilder
 
-__all__ = ("UpdateBuilder",)
+__all__ = ("UpdateBuilder", "update")
 
 logger = logging.getLogger("sqlspec")
 
@@ -270,3 +270,55 @@ class UpdateBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
         self._expression.args["joins"].append(join_expr)
 
         return self
+
+    def build(self) -> SafeQuery:
+        """Build the UPDATE query with validation.
+
+        Returns:
+            SafeQuery: The built query with SQL and parameters.
+
+        Raises:
+            SQLBuilderError: If no table is set or expression is not an UPDATE.
+        """
+        if self._expression is None:
+            msg = "UPDATE expression not initialized."
+            raise SQLBuilderError(msg)
+
+        if not isinstance(self._expression, exp.Update):
+            msg = "No UPDATE expression to build or expression is of the wrong type."
+            raise SQLBuilderError(msg)
+
+        if self._table is None:
+            msg = "UPDATE statement requires a table to be set using .table() method."
+            raise SQLBuilderError(msg)
+
+        return super().build()
+
+
+def update(table_name: str, alias: "Optional[str]" = None) -> UpdateBuilder:
+    """Create an UpdateBuilder with the table already set.
+
+    This is a convenience function for creating UPDATE statements.
+
+    Args:
+        table_name: The name of the table to update.
+        alias: Optional alias for the table.
+
+    Returns:
+        UpdateBuilder: A new UpdateBuilder instance with the table set.
+
+    Example:
+        ```python
+        # Using the convenience function
+        query = update("users").set("name", "John").where("id = 1")
+
+        # Equivalent to:
+        query = (
+            UpdateBuilder()
+            .table("users")
+            .set("name", "John")
+            .where("id = 1")
+        )
+        ```
+    """
+    return UpdateBuilder().table(table_name, alias)

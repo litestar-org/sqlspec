@@ -97,10 +97,10 @@ class TautologyConditions(SQLValidation):
 
         # Check for identical expressions (column = column, etc.)
         if self._expressions_identical(left, right):
-            # For = and >=, <=: always true
-            # For <>, !=: always false (contradiction)
-            # For < and >: always false (contradiction)
-            return isinstance(comparison, (exp.EQ, exp.LTE, exp.GTE))
+            # For = and >=, <=: always true (tautology)
+            # For <>, !=: always false (contradiction, but still suspicious)
+            # For < and >: always false (contradiction, but still suspicious)
+            return isinstance(comparison, (exp.EQ, exp.LTE, exp.GTE, exp.NEQ, exp.LT, exp.GT))
 
         # Check for literal tautologies
         if isinstance(left, exp.Literal) and isinstance(right, exp.Literal):
@@ -138,12 +138,14 @@ class TautologyConditions(SQLValidation):
         """Check if literal comparison is a tautology."""
         # Same value comparisons
         if str(left.this) == str(right.this) and left.is_string == right.is_string:
-            return isinstance(comparison, (exp.EQ, exp.LTE, exp.GTE))
+            # Both tautologies (always true) and contradictions (always false) are suspicious
+            return isinstance(comparison, (exp.EQ, exp.LTE, exp.GTE, exp.NEQ))
 
         # Common injection patterns
         if left.is_string and right.is_string:
             # 'a' = 'a', '' = '', etc.
-            return str(left.this) == str(right.this) and isinstance(comparison, (exp.EQ, exp.LTE, exp.GTE))
+            if str(left.this) == str(right.this):
+                return isinstance(comparison, (exp.EQ, exp.LTE, exp.GTE, exp.NEQ))
 
         if not left.is_string and not right.is_string:
             try:
@@ -152,11 +154,8 @@ class TautologyConditions(SQLValidation):
                 right_val = float(str(right.this))
 
                 if left_val == right_val:
-                    return isinstance(comparison, (exp.EQ, exp.LTE, exp.GTE))
-
-                # Check for obvious false conditions
-                if isinstance(comparison, (exp.NEQ)) and left_val == right_val:
-                    return True  # This is a contradiction, also suspicious
+                    # Both tautologies (always true) and contradictions (always false) are suspicious
+                    return isinstance(comparison, (exp.EQ, exp.LTE, exp.GTE, exp.NEQ))
 
             except (ValueError, TypeError):
                 pass

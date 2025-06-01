@@ -377,11 +377,14 @@ def test_query_builder_build_expression_not_initialized() -> None:
 def test_query_builder_build_sql_generation_error(mock_logger: Mock, test_builder: TestQueryBuilder) -> None:
     """Test build method handles SQL generation errors."""
     # Mock the expression to raise an error during SQL generation
-    test_builder._expression.sql = Mock(side_effect=Exception("SQL generation failed"))  # pyright: ignore
+    test_builder._expression = Mock()
+    test_builder._expression.copy.return_value = test_builder._expression
+    test_builder._expression.sql.side_effect = Exception("SQL generation failed")
 
     with pytest.raises(SQLBuilderError, match="Error generating SQL"):
         test_builder.build()
 
+    # Verify that the error was logged
     mock_logger.exception.assert_called_once()
 
 

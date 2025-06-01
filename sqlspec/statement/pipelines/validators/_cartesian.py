@@ -12,6 +12,7 @@ from sqlspec.statement.pipelines.base import SQLValidation, ValidationResult
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
+    from sqlspec.statement.pipelines.base import AnalysisResult
     from sqlspec.statement.sql import SQLConfig
 
 __all__ = ("CartesianProductDetector",)
@@ -43,7 +44,7 @@ class CartesianProductDetector(SQLValidation):
         self,
         risk_level: RiskLevel = RiskLevel.HIGH,
         min_risk_to_raise: RiskLevel | None = RiskLevel.HIGH,
-        allow_explicit_cross_joins: bool = False,
+        allow_explicit_cross_joins: bool = True,
         max_table_product_size: int = 1000000,  # 1M rows
     ) -> None:
         super().__init__(risk_level, min_risk_to_raise)
@@ -112,7 +113,9 @@ class CartesianProductDetector(SQLValidation):
                 continue
 
             # Check if join lacks ON or USING clause
-            if not join.on and not join.using:
+            on_condition = join.args.get("on")
+            using_clause = join.args.get("using")
+            if not on_condition and not using_clause:
                 table_name = self._get_table_name(join.this) if join.this else "unknown"
                 issues.append(
                     f"JOIN without ON or USING clause detected for table '{table_name}'. "
@@ -124,9 +127,8 @@ class CartesianProductDetector(SQLValidation):
     ) -> None:
         """Check for potentially insufficient join conditions."""
         for join in expression.find_all(exp.Join):
-            if hasattr(join, "on") and join.on:
-                # Analyze the join condition - join.on should be an Expression
-                condition = join.on
+            condition = join.args.get("on")
+            if condition:
                 join_condition_analysis = self._analyze_join_condition(condition)
 
                 if join_condition_analysis["has_literals_only"]:
@@ -149,11 +151,12 @@ class CartesianProductDetector(SQLValidation):
         # as implicit joins. We'll check for multiple tables in FROM with weak WHERE conditions.
 
         for select in expression.find_all(exp.Select):
-            if not hasattr(select, "from_") or not select.from_:
+            # Get the actual FROM clause object, not the method
+            from_clause = select.args.get("from")
+            if not from_clause:
                 continue
 
             # Count tables in FROM clause
-            from_clause = select.from_
             tables = self._get_tables_from_from_clause(from_clause)
 
             if len(tables) > 1:
@@ -237,14 +240,14 @@ class CartesianProductDetector(SQLValidation):
 
         return analysis
 
-    def _get_tables_from_from_clause(self, from_clause: Any) -> list[str]:
+    def _get_tables_from_from_clause(self, from_clause: exp.From) -> list[str]:
         """Extract table names from FROM clause."""
         tables = []
 
         if not from_clause:
             return tables
 
-        # Get all table expressions
+        # Get all table expressions from the FROM clause
         for table in from_clause.find_all(exp.Table):
             if table.this:
                 tables.append(str(table.this))
@@ -280,3 +283,76 @@ class CartesianProductDetector(SQLValidation):
             return self.max_table_product_size + 1  # Exceed threshold
 
         return 0  # Safe estimate
+
+    def validate_with_analysis(
+        self,
+        expression: exp.Expression,
+        analysis: AnalysisResult,
+        dialect: DialectType,
+        config: SQLConfig,
+        **kwargs: Any,
+    ) -> ValidationResult:
+        """Validate using pre-computed analysis results for efficiency.
+
+        Args:
+            expression: The SQL expression to validate
+            analysis: Pre-computed analysis results
+            dialect: The SQL dialect
+            config: The SQL configuration
+            kwargs: Additional keyword arguments
+
+        Returns:
+            ValidationResult with cartesian product issues and warnings
+        """
+        issues: list[str] = []
+        warnings: list[str] = []
+
+        # Use pre-computed analysis results
+        cross_joins = analysis.metrics.get("cross_joins", 0)
+        joins_without_conditions = analysis.metrics.get("joins_without_conditions", 0)
+        cartesian_risk = analysis.metrics.get("cartesian_risk", 0)
+
+        # Check for explicit cross joins
+        if cross_joins > 0:
+            if not self.allow_explicit_cross_joins:
+                issues.append(
+                    f"Explicit CROSS JOIN detected ({cross_joins} occurrences). This will create a cartesian product."
+                )
+            else:
+                warnings.append(
+                    f"Explicit CROSS JOIN detected ({cross_joins} occurrences). "
+                    "Ensure this is intentional as it creates cartesian products."
+                )
+
+        # Check for joins without conditions
+        if joins_without_conditions > 0:
+            issues.append(
+                f"Joins without proper conditions detected ({joins_without_conditions}). "
+                "This creates implicit cartesian products."
+            )
+
+        # Additional cartesian risk analysis
+        if cartesian_risk > 2:
+            issues.append(
+                f"High cartesian product risk detected (risk score: {cartesian_risk}). "
+                "Multiple patterns that may result in cartesian products."
+            )
+        elif cartesian_risk > 0:
+            warnings.append(
+                f"Potential cartesian product risk (risk score: {cartesian_risk}). Review join conditions carefully."
+            )
+
+        # Determine final result
+        if issues:
+            return ValidationResult(
+                is_safe=False,
+                risk_level=self.risk_level,
+                issues=issues,
+                warnings=warnings,
+            )
+
+        return ValidationResult(
+            is_safe=True,
+            risk_level=RiskLevel.SAFE if not warnings else RiskLevel.LOW,
+            warnings=warnings,
+        )

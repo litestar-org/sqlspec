@@ -337,7 +337,7 @@ def test_remove_comments_unicode_comments() -> None:
 
     # Should preserve SQL structure
     assert "SELECT" in cleaned_sql.upper()
-    assert "FROM users" in cleaned_sql.upper()
+    assert "FROM USERS" in cleaned_sql.upper()
 
 
 def test_remove_comments_edge_case_sql_strings() -> None:
@@ -361,7 +361,7 @@ def test_remove_comments_edge_case_sql_strings() -> None:
 
         # String literals should be preserved
         assert "SELECT" in cleaned_sql.upper()
-        assert "FROM users" in cleaned_sql.upper()
+        assert "FROM USERS" in cleaned_sql.upper()
 
 
 def test_remove_comments_idempotent_operation() -> None:
@@ -411,7 +411,7 @@ def test_remove_comments_preserves_whitespace_structure() -> None:
     # Should preserve essential structure
     assert "name" in cleaned_sql
     assert "email" in cleaned_sql
-    assert "FROM users" in cleaned_sql.upper()
+    assert "FROM USERS" in cleaned_sql.upper()
     assert "WHERE" in cleaned_sql.upper()
 
 
@@ -421,7 +421,7 @@ def test_remove_comments_different_dialects() -> None:
     config = SQLConfig()
 
     # Test with different dialects
-    dialects_to_test = ["mysql", "postgresql", "sqlite"]
+    dialects_to_test = ["mysql", "postgres", "sqlite", "oracle"]
     test_sql = "SELECT * FROM users /* comment */ WHERE id = 1 -- line comment"
 
     for dialect in dialects_to_test:
@@ -435,7 +435,7 @@ def test_remove_comments_different_dialects() -> None:
             cleaned_sql = result.expression.sql(dialect=dialect)
             assert len(cleaned_sql.strip()) > 0, f"Empty output for dialect {dialect}"
 
-        except Exception as e:
+        except Exception as e:  # noqa: PERF203
             # Some dialects might not be supported, which is acceptable
             pytest.skip(f"Dialect {dialect} not supported: {e}")
 

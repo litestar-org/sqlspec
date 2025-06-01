@@ -286,14 +286,21 @@ def test_insert_values_from_dicts_validates_against_existing_columns() -> None:
 
 
 # INSERT from SELECT tests
-def test_insert_from_select_basic(mock_select_builder: Mock) -> None:
+def test_insert_from_select_basic() -> None:
     """Test basic INSERT from SELECT statement."""
-    builder = InsertBuilder().into("users_backup").from_select(mock_select_builder)
+    from sqlspec.statement.builder import SelectBuilder
+
+    # Use a real SelectBuilder instead of a mock
+    select_builder = SelectBuilder().select("id", "name").from_("temp_users").where(("active", True))
+
+    builder = InsertBuilder().into("users_backup").from_select(select_builder)
     query = builder.build()
 
     assert "INSERT INTO users_backup" in query.sql
-    # Parameters from SELECT should be merged
+    assert "SELECT" in query.sql
     assert isinstance(query.parameters, dict)
+    # Should have the parameter from the WHERE clause
+    assert True in query.parameters.values()
 
 
 def test_insert_from_select_merges_parameters(mock_select_builder: Mock) -> None:
@@ -316,6 +323,7 @@ def test_insert_from_select_validates_select_expression() -> None:
     """Test that from_select() validates SELECT builder has valid expression."""
     builder = InsertBuilder().into("users_backup")
     invalid_select = Mock(spec=SelectBuilder)
+    invalid_select._parameters = {}
     invalid_select._expression = None
 
     with pytest.raises(SQLBuilderError, match="must have a valid SELECT expression"):

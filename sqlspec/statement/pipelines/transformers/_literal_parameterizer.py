@@ -187,3 +187,30 @@ class ParameterizeLiterals(ProcessorProtocol[exp.Expression]):
             return exp.Placeholder(this=f"${self._parameter_counter}")
         # Default to question mark
         return exp.Placeholder()
+
+    def get_parameters(self) -> list[Any]:
+        """Get the list of extracted parameters from the last processing operation.
+
+        Returns:
+            List of parameter values extracted during the last process() call.
+        """
+        return self.extracted_parameters.copy()
+
+    def get_parameterized_query(self, expression: exp.Expression, dialect: str) -> tuple[str, list[Any]]:
+        """Convenience method to get both parameterized SQL and parameters.
+
+        Args:
+            expression: The SQL expression to parameterize.
+            dialect: The SQL dialect to use for SQL generation.
+
+        Returns:
+            Tuple of (parameterized_sql, parameters_list).
+        """
+        parameterized_expr, _ = self.process(expression)
+        parameterized_sql = parameterized_expr.sql(dialect=dialect)
+        return parameterized_sql, self.get_parameters()
+
+    def clear_parameters(self) -> None:
+        """Clear the extracted parameters list."""
+        self.extracted_parameters = []
+        self._parameter_counter = 0

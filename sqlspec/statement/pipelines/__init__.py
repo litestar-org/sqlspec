@@ -8,6 +8,7 @@ from sqlspec.statement.pipelines.base import (
     SQLValidation,
     SQLValidator,
     TransformerPipeline,
+    UnifiedProcessor,
     UsesExpression,
     ValidationResult,
 )
@@ -45,6 +46,7 @@ __all__ = (
     "TautologyConditions",
     "TracingComment",
     "TransformerPipeline",
+    "UnifiedProcessor",
     "UsesExpression",
     "ValidationResult",
     "analyzers",

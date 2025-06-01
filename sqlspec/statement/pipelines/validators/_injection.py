@@ -21,6 +21,7 @@ BYPASS_AUTHENTICATION_PATTERN = re.compile(r"(admin|administrator)\s*['\"]?\s*(?
 UNION_INJECTION_PATTERN = re.compile(
     r"UNION\s+(?:ALL\s+)?SELECT.*(?:NULL|0x\w+|CHAR\(|CHR\()", re.IGNORECASE | re.DOTALL
 )
+TRIGGER_LITERAL_LENGTH = 100
 
 
 class PreventInjection(SQLValidation):
@@ -90,6 +91,10 @@ class PreventInjection(SQLValidation):
         binding_warnings = self._check_parameter_binding_anomalies(expression)
         warnings.extend(binding_warnings)
 
+        # 6. Check for basic injection patterns that should always fail
+        basic_issues = self._check_basic_injection_patterns(expression, dialect)
+        issues.extend(basic_issues)
+
         if issues:
             return ValidationResult(is_safe=False, risk_level=self.risk_level, issues=issues, warnings=warnings)
 
@@ -123,9 +128,50 @@ class PreventInjection(SQLValidation):
                     if null_count > len(select_exprs) // 2:  # More than half are NULLs
                         issues.append("UNION SELECT with excessive NULL padding detected (injection technique)")
 
+                # Check for suspicious column patterns in UNION SELECT
+                if select_exprs:
+                    # Look for patterns like selecting from sensitive tables
+                    for expr in select_exprs:
+                        if isinstance(expr, exp.Column):
+                            col_name = str(expr.this).lower() if expr.this else ""
+                            # Common sensitive column names
+                            if any(
+                                sensitive in col_name for sensitive in ["password", "hash", "secret", "token", "key"]
+                            ):
+                                issues.append(f"UNION SELECT accessing sensitive column: {col_name}")
+
+                # Check for admin/system table access
+                for table in select_expr.find_all(exp.Table):
+                    table_name = str(table.this).lower() if table.this else ""
+                    if any(admin_table in table_name for admin_table in ["admin", "user", "auth", "credential"]):
+                        issues.append(f"UNION query targeting administrative table: {table_name}")
+
+        # Additional check: Look for UNION with different column counts (injection indicator)
+        if union_count > 0:
+            # Get the main SELECT and compare with UNION SELECT column counts
+            main_select = None
+            if isinstance(expression, exp.Select):
+                main_select = expression
+            elif hasattr(expression, "this") and isinstance(expression.this, exp.Select):
+                main_select = expression.this
+
+            if main_select and main_select.expressions:
+                main_col_count = len(main_select.expressions)
+
+                for union_expr in expression.find_all(exp.Union):
+                    if hasattr(union_expr, "expression") and isinstance(union_expr.expression, exp.Select):
+                        union_select = union_expr.expression
+                        if union_select.expressions:
+                            union_col_count = len(union_select.expressions)
+                            if union_col_count != main_col_count:
+                                issues.append(
+                                    f"UNION column count mismatch: main({main_col_count}) vs union({union_col_count})"
+                                )
+
         return issues
 
-    def _check_stacked_queries(self, expression: exp.Expression, dialect: DialectType) -> list[str]:
+    @staticmethod
+    def _check_stacked_queries(expression: exp.Expression, dialect: DialectType) -> list[str]:
         """Check for stacked query injection patterns."""
         issues = []
 
@@ -136,17 +182,24 @@ class PreventInjection(SQLValidation):
 
         # Check if the expression contains multiple top-level statements
         # This might indicate successful injection of additional statements
+        # Note: We need to be careful not to flag legitimate SELECT with multiple columns
         if isinstance(expression, (exp.Union, exp.Except, exp.Intersect)):
             # These can be legitimate, but check their structure
             pass
+        elif isinstance(expression, exp.Select):
+            # For SELECT statements, multiple expressions in the expressions list is normal (columns)
+            # We should not flag this as stacked queries
+            pass
         elif hasattr(expression, "expressions") and len(expression.expressions or []) > 1:
-            # Multiple expressions at top level might indicate stacked queries
+            # Only flag if this is not a SELECT statement and has multiple expressions
+            # This could indicate multiple statements injected at the top level
             expr_types = [type(expr).__name__ for expr in expression.expressions[:3]]  # First 3 for brevity
             issues.append(f"Multiple top-level expressions detected: {', '.join(expr_types)}")
 
         return issues
 
-    def _check_suspicious_literals(self, expression: exp.Expression) -> list[str]:
+    @staticmethod
+    def _check_suspicious_literals(expression: exp.Expression) -> list[str]:
         """Check for suspicious patterns in string literals that might indicate injection."""
         issues = []
 
@@ -164,23 +217,27 @@ class PreventInjection(SQLValidation):
                     issues.append(f"Authentication bypass pattern in literal: '{literal_value[:50]}...'")
 
                 # Check for encoded payloads
-                if len(literal_value) > 100 and all(c.isalnum() or c in "+/=" for c in literal_value):
+                if len(literal_value) > TRIGGER_LITERAL_LENGTH and all(
+                    c.isalnum() or c in "+/=" for c in literal_value
+                ):
                     issues.append(f"Potential base64 encoded payload in literal: '{literal_value[:50]}...'")
 
         return issues
 
-    def _check_comment_evasion(self, expression: exp.Expression, dialect: DialectType) -> list[str]:
+    @staticmethod
+    def _check_comment_evasion(expression: exp.Expression, dialect: DialectType) -> list[str]:
         """Check for comment-based evasion techniques specific to injection."""
-        issues = []
 
         # Get SQL representation to check for comment-based evasion
         sql_text = expression.sql(dialect=dialect)
 
         # MySQL version-specific comments used for injection
         mysql_version_comments = re.findall(r"/\*!\d{5}([^*]+)\*/", sql_text, re.IGNORECASE)
-        for comment_content in mysql_version_comments:
-            if any(keyword in comment_content.upper() for keyword in ["UNION", "SELECT", "OR"]):
-                issues.append(f"MySQL version comment contains injection keywords: {comment_content[:50]}...")
+        issues = [
+            f"MySQL version comment contains injection keywords: {comment_content[:50]}..."
+            for comment_content in mysql_version_comments
+            if any(keyword in comment_content.upper() for keyword in ["UNION", "SELECT", "OR"])
+        ]
 
         # Check for comments that split SQL keywords (evasion technique)
         keyword_split_pattern = re.compile(r"(?:UN/\*\*/ION|SEL/\*\*/ECT|WH/\*\*/ERE)", re.IGNORECASE)
@@ -189,14 +246,14 @@ class PreventInjection(SQLValidation):
 
         return issues
 
-    def _check_parameter_binding_anomalies(self, expression: exp.Expression) -> list[str]:
+    @staticmethod
+    def _check_parameter_binding_anomalies(expression: exp.Expression) -> list[str]:
         """Check for anomalies in parameter binding that might indicate injection."""
         warnings = []
 
         # Count placeholders vs actual parameters
         placeholder_count = len(list(expression.find_all(exp.Placeholder)))
 
-        # This is a basic check - in a real implementation, you'd compare with actual parameters
         if placeholder_count == 0:
             # Check if there are suspicious WHERE clauses without parameters
             for where_clause in expression.find_all(exp.Where):
@@ -206,3 +263,17 @@ class PreventInjection(SQLValidation):
                     warnings.append("WHERE clause with comparisons but no parameter placeholders")
 
         return warnings
+
+    @staticmethod
+    def _check_basic_injection_patterns(expression: exp.Expression, dialect: DialectType) -> list[str]:
+        """Check for basic injection patterns that should always fail."""
+        issues = []
+
+        # Convert to SQL and check for basic injection patterns
+        sql_text = expression.sql(dialect=dialect)
+
+        # Check for basic SQL injection patterns
+        if re.search(r"(\'|--|\#|\/\*).*?(SELECT|UNION|INSERT|UPDATE|DELETE|DROP|ALTER)", sql_text, re.IGNORECASE):
+            issues.append("Basic SQL injection pattern detected")
+
+        return issues
