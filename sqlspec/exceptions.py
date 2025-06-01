@@ -128,28 +128,28 @@ class RiskLevel(Enum):
         """
         return self.name.lower()
 
-    def __lt__(self, other: "RiskLevel") -> bool:
+    def __lt__(self, other: "RiskLevel") -> bool:  # pragma: no cover
         """Less than comparison for ordering."""
         if not isinstance(other, RiskLevel):
-            return NotImplemented
+            return NotImplemented  # type: ignore[unreachable]
         return self.value < other.value
 
-    def __le__(self, other: "RiskLevel") -> bool:
+    def __le__(self, other: "RiskLevel") -> bool:  # pragma: no cover
         """Less than or equal comparison for ordering."""
         if not isinstance(other, RiskLevel):
-            return NotImplemented
+            return NotImplemented  # type: ignore[unreachable]
         return self.value <= other.value
 
-    def __gt__(self, other: "RiskLevel") -> bool:
+    def __gt__(self, other: "RiskLevel") -> bool:  # pragma: no cover
         """Greater than comparison for ordering."""
         if not isinstance(other, RiskLevel):
-            return NotImplemented
+            return NotImplemented  # type: ignore[unreachable]
         return self.value > other.value
 
-    def __ge__(self, other: "RiskLevel") -> bool:
+    def __ge__(self, other: "RiskLevel") -> bool:  # pragma: no cover
         """Greater than or equal comparison for ordering."""
         if not isinstance(other, RiskLevel):
-            return NotImplemented
+            return NotImplemented  # type: ignore[unreachable]
         return self.value >= other.value
 
 

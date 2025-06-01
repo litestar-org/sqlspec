@@ -292,7 +292,7 @@ class DeleteBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
 
             # Get the subquery SQL
             sub_sql_obj = subquery.build()
-            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect_name)
+            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect_name)  # type: ignore[var-annotated]
         else:
             sub_expr = exp.maybe_parse(subquery, dialect=self.dialect_name)
 
@@ -321,7 +321,7 @@ class DeleteBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
 
             # Get the subquery SQL
             sub_sql_obj = subquery.build()
-            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect_name)
+            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect_name)  # type: ignore[var-annotated]
         else:
             sub_expr = exp.maybe_parse(subquery, dialect=self.dialect_name)
 

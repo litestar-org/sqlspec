@@ -63,7 +63,7 @@ class ParameterStyle(str, Enum):
     """Parameter style enumeration with string values."""
 
     NONE = "none"
-    STATIC = "static"  # Note: STATIC style is defined but not currently used in detection logic.
+    STATIC = "static"
     QMARK = "qmark"
     NUMERIC = "numeric"
     NAMED_COLON = "named_colon"

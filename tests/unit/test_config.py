@@ -18,6 +18,10 @@ from sqlspec.config import (
     NoPoolSyncConfig,
     SyncDatabaseConfig,
 )
+from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.typing import DictRow
 
 # Test Fixtures and Mock Classes
 
@@ -66,13 +70,39 @@ class MockAsyncPool:
         self.closed = True
 
 
-class MockDriver:
+class MockDriver(SyncDriverAdapterProtocol[MockConnection, DictRow]):
     """Mock driver for testing."""
 
-    def __init__(self, connection: Any, instrumentation_config: Any = None, default_row_type: Any = None) -> None:
-        self.connection = connection
-        self.instrumentation_config = instrumentation_config
-        self.default_row_type = default_row_type
+    dialect = "mock"
+    parameter_style = ParameterStyle.QMARK
+
+    def __init__(
+        self, connection: MockConnection, instrumentation_config: Any = None, default_row_type: Any = None
+    ) -> None:
+        super().__init__(connection, None, instrumentation_config, default_row_type)
+
+    def _get_placeholder_style(self) -> ParameterStyle:
+        return ParameterStyle.QMARK
+
+    def _execute_impl(
+        self,
+        statement: SQL,
+        parameters: Any = None,
+        connection: MockConnection | None = None,
+        config: SQLConfig | None = None,
+        is_many: bool = False,
+        is_script: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        return Mock()
+
+    def _wrap_select_result(
+        self, statement: SQL, raw_driver_result: Any, schema_type: type | None = None, **kwargs: Any
+    ) -> Mock:
+        return Mock()
+
+    def _wrap_execute_result(self, statement: SQL, raw_driver_result: Any, **kwargs: Any) -> Mock:
+        return Mock()
 
     def execute(self, *args: Any, **kwargs: Any) -> Any:
         """Mock execute method."""
@@ -83,13 +113,39 @@ class MockDriver:
         return Mock()
 
 
-class MockAsyncDriver:
+class MockAsyncDriver(AsyncDriverAdapterProtocol[MockAsyncConnection, DictRow]):
     """Mock async driver for testing."""
 
-    def __init__(self, connection: Any, instrumentation_config: Any = None, default_row_type: Any = None) -> None:
-        self.connection = connection
-        self.instrumentation_config = instrumentation_config
-        self.default_row_type = default_row_type
+    dialect = "mock_async"
+    parameter_style = ParameterStyle.QMARK
+
+    def __init__(
+        self, connection: MockAsyncConnection, instrumentation_config: Any = None, default_row_type: Any = None
+    ) -> None:
+        super().__init__(connection, None, instrumentation_config, default_row_type)
+
+    def _get_placeholder_style(self) -> ParameterStyle:
+        return ParameterStyle.QMARK
+
+    async def _execute_impl(
+        self,
+        statement: SQL,
+        parameters: Any = None,
+        connection: MockAsyncConnection | None = None,
+        config: SQLConfig | None = None,
+        is_many: bool = False,
+        is_script: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        return AsyncMock()
+
+    async def _wrap_select_result(
+        self, statement: SQL, raw_driver_result: Any, schema_type: type | None = None, **kwargs: Any
+    ) -> AsyncMock:
+        return AsyncMock()
+
+    async def _wrap_execute_result(self, statement: SQL, raw_driver_result: Any, **kwargs: Any) -> AsyncMock:
+        return AsyncMock()
 
     async def execute(self, *args: Any, **kwargs: Any) -> Any:
         """Mock async execute method."""
@@ -100,8 +156,8 @@ class MockAsyncDriver:
         return AsyncMock()
 
 
-class TestSyncConfig(NoPoolSyncConfig[MockConnection, MockDriver]):  # type: ignore[type-arg]
-    """Test sync configuration without pooling."""
+class MockSyncConfig(NoPoolSyncConfig[MockConnection, MockDriver]):
+    """Mock sync configuration without pooling."""
 
     connection_type = MockConnection
     driver_type = MockDriver
@@ -124,8 +180,8 @@ class TestSyncConfig(NoPoolSyncConfig[MockConnection, MockDriver]):  # type: ign
         return Mock()
 
 
-class TestAsyncConfig(NoPoolAsyncConfig[MockAsyncConnection, MockAsyncDriver]):  # type: ignore[type-arg]
-    """Test async configuration without pooling."""
+class MockAsyncConfig(NoPoolAsyncConfig[MockAsyncConnection, MockAsyncDriver]):
+    """Mock async configuration without pooling."""
 
     connection_type = MockAsyncConnection
     driver_type = MockAsyncDriver
@@ -148,8 +204,8 @@ class TestAsyncConfig(NoPoolAsyncConfig[MockAsyncConnection, MockAsyncDriver]): 
         return AsyncMock()
 
 
-class TestSyncPoolConfig(SyncDatabaseConfig[MockConnection, MockPool, MockDriver]):  # type: ignore[type-arg]
-    """Test sync configuration with pooling."""
+class MockSyncPoolConfig(SyncDatabaseConfig[MockConnection, MockPool, MockDriver]):
+    """Mock sync configuration with pooling."""
 
     connection_type = MockConnection
     driver_type = MockDriver
@@ -182,8 +238,8 @@ class TestSyncPoolConfig(SyncDatabaseConfig[MockConnection, MockPool, MockDriver
             self._pool = None
 
 
-class TestAsyncPoolConfig(AsyncDatabaseConfig[MockAsyncConnection, MockAsyncPool, MockAsyncDriver]):  # type: ignore[type-arg]
-    """Test async configuration with pooling."""
+class MockAsyncPoolConfig(AsyncDatabaseConfig[MockAsyncConnection, MockAsyncPool, MockAsyncDriver]):
+    """Mock async configuration with pooling."""
 
     connection_type = MockAsyncConnection
     driver_type = MockAsyncDriver
@@ -323,7 +379,7 @@ def test_instrumentation_config_prometheus_buckets() -> None:
 
 def test_no_pool_sync_config_basic() -> None:
     """Test basic NoPoolSyncConfig functionality."""
-    config = TestSyncConfig()
+    config = MockSyncConfig()
 
     assert config.__is_async__ is False
     assert config.__supports_connection_pooling__ is False
@@ -334,7 +390,7 @@ def test_no_pool_sync_config_basic() -> None:
 
 def test_no_pool_sync_config_connection_creation() -> None:
     """Test NoPoolSyncConfig connection creation."""
-    config = TestSyncConfig()
+    config = MockSyncConfig()
     connection = config.create_connection()
 
     assert isinstance(connection, MockConnection)
@@ -343,11 +399,11 @@ def test_no_pool_sync_config_connection_creation() -> None:
 
 def test_no_pool_sync_config_pool_operations() -> None:
     """Test NoPoolSyncConfig pool operations return None."""
-    config = TestSyncConfig()
+    config = MockSyncConfig()
 
-    assert config.create_pool() is None
-    assert config.close_pool() is None
-    assert config.provide_pool() is None
+    assert config.create_pool() is None  # type: ignore[func-returns-value]
+    assert config.close_pool() is None  # type: ignore[func-returns-value]
+    assert config.provide_pool() is None  # type: ignore[func-returns-value]
 
 
 def test_no_pool_sync_config_instrumentation() -> None:
@@ -357,7 +413,7 @@ def test_no_pool_sync_config_instrumentation() -> None:
         enable_opentelemetry=True,
     )
 
-    config = TestSyncConfig()
+    config = MockSyncConfig()
     config.instrumentation = custom_instrumentation
 
     assert config.instrumentation.service_name == "test_service"
@@ -366,7 +422,7 @@ def test_no_pool_sync_config_instrumentation() -> None:
 
 def test_no_pool_sync_config_instrument_sync_operation() -> None:
     """Test NoPoolSyncConfig sync operation instrumentation."""
-    config = TestSyncConfig()
+    config = MockSyncConfig()
     mock_func = Mock(return_value="test_result")
 
     result = config.instrument_sync_operation(
@@ -385,7 +441,7 @@ def test_no_pool_sync_config_instrument_sync_operation() -> None:
 
 def test_no_pool_sync_config_instrument_sync_operation_with_exception() -> None:
     """Test NoPoolSyncConfig sync operation instrumentation with exception."""
-    config = TestSyncConfig()
+    config = MockSyncConfig()
     mock_func = Mock(side_effect=ValueError("Test error"))
 
     with pytest.raises(ValueError, match="Test error"):
@@ -403,7 +459,7 @@ def test_no_pool_sync_config_instrument_sync_operation_with_exception() -> None:
 
 def test_no_pool_async_config_basic() -> None:
     """Test basic NoPoolAsyncConfig functionality."""
-    config = TestAsyncConfig()
+    config = MockAsyncConfig()
 
     assert config.__is_async__ is True
     assert config.__supports_connection_pooling__ is False
@@ -414,7 +470,7 @@ def test_no_pool_async_config_basic() -> None:
 
 async def test_no_pool_async_config_connection_creation() -> None:
     """Test NoPoolAsyncConfig connection creation."""
-    config = TestAsyncConfig()
+    config = MockAsyncConfig()
     connection = await config.create_connection()
 
     assert isinstance(connection, MockAsyncConnection)
@@ -423,16 +479,16 @@ async def test_no_pool_async_config_connection_creation() -> None:
 
 async def test_no_pool_async_config_pool_operations() -> None:
     """Test NoPoolAsyncConfig pool operations return None."""
-    config = TestAsyncConfig()
+    config = MockAsyncConfig()
 
-    assert await config.create_pool() is None
-    assert await config.close_pool() is None
-    assert config.provide_pool() is None
+    assert await config.create_pool() is None  # type: ignore[func-returns-value]
+    assert await config.close_pool() is None  # type: ignore[func-returns-value]
+    assert config.provide_pool() is None  # type: ignore[func-returns-value]
 
 
 async def test_no_pool_async_config_instrument_async_operation() -> None:
     """Test NoPoolAsyncConfig async operation instrumentation."""
-    config = TestAsyncConfig()
+    config = MockAsyncConfig()
     mock_func = AsyncMock(return_value="async_result")
 
     result = await config.instrument_async_operation(
@@ -451,7 +507,7 @@ async def test_no_pool_async_config_instrument_async_operation() -> None:
 
 async def test_no_pool_async_config_instrument_async_operation_with_exception() -> None:
     """Test NoPoolAsyncConfig async operation instrumentation with exception."""
-    config = TestAsyncConfig()
+    config = MockAsyncConfig()
     mock_func = AsyncMock(side_effect=RuntimeError("Async test error"))
 
     with pytest.raises(RuntimeError, match="Async test error"):
@@ -469,7 +525,7 @@ async def test_no_pool_async_config_instrument_async_operation_with_exception() 
 
 def test_sync_database_config_basic() -> None:
     """Test basic SyncDatabaseConfig functionality."""
-    config = TestSyncPoolConfig()
+    config = MockSyncPoolConfig()
 
     assert config.__is_async__ is False
     assert config.__supports_connection_pooling__ is True
@@ -479,7 +535,7 @@ def test_sync_database_config_basic() -> None:
 
 def test_sync_database_config_pool_creation() -> None:
     """Test SyncDatabaseConfig pool creation."""
-    config = TestSyncPoolConfig()
+    config = MockSyncPoolConfig()
 
     with patch("sqlspec.config.logger") as mock_logger:
         pool = config.create_pool()
@@ -495,7 +551,7 @@ def test_sync_database_config_pool_creation() -> None:
 
 def test_sync_database_config_pool_closure() -> None:
     """Test SyncDatabaseConfig pool closure."""
-    config = TestSyncPoolConfig()
+    config = MockSyncPoolConfig()
 
     # Create pool first
     pool = config.create_pool()
@@ -507,14 +563,14 @@ def test_sync_database_config_pool_closure() -> None:
         assert pool.closed
 
         # Check logging
-        mock_logger.info.assert_called()
+        mock_logger.info.assert_called()  # type: ignore[unreachable]
         log_calls = [str(call) for call in mock_logger.info.call_args_list]
         assert any("Closing database connection pool" in call for call in log_calls)
 
 
 def test_sync_database_config_pool_metrics() -> None:
     """Test SyncDatabaseConfig with pool metrics."""
-    config = TestSyncPoolConfig()
+    config = MockSyncPoolConfig()
 
     # Mock metrics
     mock_counter = Mock()
@@ -539,7 +595,7 @@ def test_sync_database_config_pool_metrics() -> None:
 def test_sync_database_config_instrumentation_logging() -> None:
     """Test SyncDatabaseConfig with different instrumentation settings."""
     # Test with logging disabled
-    config = TestSyncPoolConfig()
+    config = MockSyncPoolConfig()
     config.instrumentation = InstrumentationConfig(log_pool_operations=False)
 
     with patch("sqlspec.config.logger") as mock_logger:
@@ -554,7 +610,7 @@ def test_sync_database_config_instrumentation_logging() -> None:
 
 def test_async_database_config_basic() -> None:
     """Test basic AsyncDatabaseConfig functionality."""
-    config = TestAsyncPoolConfig()
+    config = MockAsyncPoolConfig()
 
     assert config.__is_async__ is True
     assert config.__supports_connection_pooling__ is True
@@ -564,7 +620,7 @@ def test_async_database_config_basic() -> None:
 
 async def test_async_database_config_pool_creation() -> None:
     """Test AsyncDatabaseConfig pool creation."""
-    config = TestAsyncPoolConfig()
+    config = MockAsyncPoolConfig()
 
     with patch("sqlspec.config.logger") as mock_logger:
         pool = await config.create_pool()
@@ -580,7 +636,7 @@ async def test_async_database_config_pool_creation() -> None:
 
 async def test_async_database_config_pool_closure() -> None:
     """Test AsyncDatabaseConfig pool closure."""
-    config = TestAsyncPoolConfig()
+    config = MockAsyncPoolConfig()
 
     # Create pool first
     pool = await config.create_pool()
@@ -592,14 +648,14 @@ async def test_async_database_config_pool_closure() -> None:
         assert pool.closed
 
         # Check logging
-        mock_logger.info.assert_called()
+        mock_logger.info.assert_called()  # type: ignore[unreachable]
         log_calls = [str(call) for call in mock_logger.info.call_args_list]
         assert any("Closing async database connection pool" in call for call in log_calls)
 
 
 async def test_async_database_config_pool_metrics() -> None:
     """Test AsyncDatabaseConfig with pool metrics."""
-    config = TestAsyncPoolConfig()
+    config = MockAsyncPoolConfig()
 
     # Mock metrics
     mock_counter = Mock()
@@ -623,7 +679,7 @@ async def test_async_database_config_pool_metrics() -> None:
 
 async def test_async_database_config_concurrent_pool_operations() -> None:
     """Test AsyncDatabaseConfig with concurrent pool operations."""
-    config = TestAsyncPoolConfig()
+    config = MockAsyncPoolConfig()
 
     # Test concurrent pool creation (should be safe)
     pools = await asyncio.gather(
@@ -661,8 +717,8 @@ def test_generic_pool_config_as_dataclass() -> None:
 
 def test_database_config_protocol_hash() -> None:
     """Test DatabaseConfigProtocol hash implementation."""
-    config1 = TestSyncConfig()
-    config2 = TestSyncConfig()
+    config1 = MockSyncConfig()
+    config2 = MockSyncConfig()
 
     # Hash should be based on object id
     assert hash(config1) == id(config1)
@@ -672,10 +728,10 @@ def test_database_config_protocol_hash() -> None:
 
 def test_database_config_protocol_properties() -> None:
     """Test DatabaseConfigProtocol property access."""
-    sync_config = TestSyncConfig()
-    async_config = TestAsyncConfig()
-    sync_pool_config = TestSyncPoolConfig()
-    async_pool_config = TestAsyncPoolConfig()
+    sync_config = MockSyncConfig()
+    async_config = MockAsyncConfig()
+    sync_pool_config = MockSyncPoolConfig()
+    async_pool_config = MockAsyncPoolConfig()
 
     assert sync_config.is_async is False
     assert async_config.is_async is True
@@ -691,10 +747,10 @@ def test_database_config_protocol_properties() -> None:
 @pytest.mark.parametrize(
     ("config_class", "expected_async", "expected_pooling"),
     [
-        (TestSyncConfig, False, False),
-        (TestAsyncConfig, True, False),
-        (TestSyncPoolConfig, False, True),
-        (TestAsyncPoolConfig, True, True),
+        (MockSyncConfig, False, False),
+        (MockAsyncConfig, True, False),
+        (MockSyncPoolConfig, False, True),
+        (MockAsyncPoolConfig, True, True),
     ],
     ids=["sync_no_pool", "async_no_pool", "sync_pool", "async_pool"],
 )
@@ -719,20 +775,20 @@ def test_config_connection_config_dict() -> None:
         "user": "test_user",
     }
 
-    config = TestSyncConfig(connection_params)
+    config = MockSyncConfig(connection_params)
     assert config.connection_config_dict == connection_params
 
 
 def test_config_connection_config_dict_empty() -> None:
     """Test connection_config_dict with empty parameters."""
-    config = TestSyncConfig()
+    config = MockSyncConfig()
     assert config.connection_config_dict == {}
 
 
 def test_config_connection_config_dict_modification() -> None:
     """Test that connection_config_dict modifications don't affect original."""
     original_params = {"host": "localhost", "port": 5432}
-    config = TestSyncConfig(original_params)
+    config = MockSyncConfig(original_params)
 
     config_dict = config.connection_config_dict
     config_dict["new_key"] = "new_value"
@@ -747,7 +803,7 @@ def test_config_connection_config_dict_modification() -> None:
 
 def test_sync_config_create_pool_exception_handling() -> None:
     """Test SyncDatabaseConfig pool creation exception handling."""
-    config = TestSyncPoolConfig()
+    config = MockSyncPoolConfig()
 
     with patch.object(config, "_create_pool_impl", side_effect=Exception("Pool creation failed")):
         with pytest.raises(Exception, match="Pool creation failed"):
@@ -756,7 +812,7 @@ def test_sync_config_create_pool_exception_handling() -> None:
 
 async def test_async_config_create_pool_exception_handling() -> None:
     """Test AsyncDatabaseConfig pool creation exception handling."""
-    config = TestAsyncPoolConfig()
+    config = MockAsyncPoolConfig()
 
     with patch.object(config, "_create_pool_impl", side_effect=Exception("Async pool creation failed")):
         with pytest.raises(Exception, match="Async pool creation failed"):
@@ -765,7 +821,7 @@ async def test_async_config_create_pool_exception_handling() -> None:
 
 def test_sync_config_close_pool_exception_handling() -> None:
     """Test SyncDatabaseConfig pool closure exception handling."""
-    config = TestSyncPoolConfig()
+    config = MockSyncPoolConfig()
 
     with patch.object(config, "_close_pool_impl", side_effect=Exception("Pool closure failed")):
         with pytest.raises(Exception, match="Pool closure failed"):
@@ -774,7 +830,7 @@ def test_sync_config_close_pool_exception_handling() -> None:
 
 async def test_async_config_close_pool_exception_handling() -> None:
     """Test AsyncDatabaseConfig pool closure exception handling."""
-    config = TestAsyncPoolConfig()
+    config = MockAsyncPoolConfig()
 
     with patch.object(config, "_close_pool_impl", side_effect=Exception("Async pool closure failed")):
         with pytest.raises(Exception, match="Async pool closure failed"):
@@ -786,7 +842,7 @@ async def test_async_config_close_pool_exception_handling() -> None:
 
 def test_config_instrumentation_operation_success() -> None:
     """Test configuration instrumentation for successful operations."""
-    config = TestSyncConfig()
+    config = MockSyncConfig()
     config.instrumentation = InstrumentationConfig(log_queries=True)
 
     mock_func = Mock(return_value="success")
@@ -806,7 +862,7 @@ def test_config_instrumentation_operation_success() -> None:
 
 async def test_async_config_instrumentation_operation_success() -> None:
     """Test async configuration instrumentation for successful operations."""
-    config = TestAsyncConfig()
+    config = MockAsyncConfig()
     config.instrumentation = InstrumentationConfig(log_queries=True)
 
     mock_func = AsyncMock(return_value="async_success")
@@ -826,7 +882,7 @@ async def test_async_config_instrumentation_operation_success() -> None:
 
 def test_config_instrumentation_logging_disabled() -> None:
     """Test configuration instrumentation with logging disabled."""
-    config = TestSyncConfig()
+    config = MockSyncConfig()
     config.instrumentation = InstrumentationConfig(log_queries=False)
 
     mock_func = Mock(return_value="success")
@@ -846,7 +902,7 @@ def test_config_instrumentation_logging_disabled() -> None:
 
 def test_config_instrumentation_exception_logging() -> None:
     """Test configuration instrumentation exception logging."""
-    config = TestSyncConfig()
+    config = MockSyncConfig()
     config.instrumentation = InstrumentationConfig(log_queries=True)
 
     mock_func = Mock(side_effect=ValueError("Test exception"))
@@ -878,7 +934,7 @@ def test_config_large_custom_tags() -> None:
 
 async def test_config_concurrent_pool_creation_and_closure() -> None:
     """Test concurrent pool creation and closure operations."""
-    config = TestAsyncPoolConfig()
+    config = MockAsyncPoolConfig()
 
     async def create_and_close() -> MockAsyncPool:
         pool = await config.create_pool()
@@ -892,7 +948,7 @@ async def test_config_concurrent_pool_creation_and_closure() -> None:
 
 def test_config_instrumentation_performance() -> None:
     """Test instrumentation performance with many operations."""
-    config = TestSyncConfig()
+    config = MockSyncConfig()
     mock_func = Mock(return_value="result")
 
     # Run many instrumented operations
@@ -925,7 +981,7 @@ def test_config_with_real_instrumentation_config() -> None:
         slow_query_threshold_ms=100.0,
     )
 
-    config = TestSyncPoolConfig()
+    config = MockSyncPoolConfig()
     config.instrumentation = instrumentation
 
     assert config.instrumentation.service_name == "integration_test"
@@ -935,8 +991,8 @@ def test_config_with_real_instrumentation_config() -> None:
 
 def test_config_type_validation() -> None:
     """Test configuration type relationships."""
-    sync_config = TestSyncConfig()
-    async_config = TestAsyncConfig()
+    sync_config = MockSyncConfig()
+    async_config = MockAsyncConfig()
 
     # Test type hierarchy
     assert isinstance(sync_config, DatabaseConfigProtocol)
@@ -945,5 +1001,5 @@ def test_config_type_validation() -> None:
     assert isinstance(async_config, NoPoolAsyncConfig)
 
     # Test that sync and async configs are different
-    assert type(sync_config) is not type(async_config)
+    assert type(sync_config) is not type(async_config)  # type: ignore[comparison-overlap]
     assert sync_config.is_async != async_config.is_async

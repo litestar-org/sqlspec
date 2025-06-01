@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Generic, Optional, TypedDict, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Generic, Optional, TypedDict, TypeVar, Union, cast
 
 from sqlspec.typing import ArrowTable
 
@@ -130,7 +130,7 @@ class SelectResult(StatementResult[T]):
         Returns:
             The rows in the result set.
         """
-        return self.data
+        return cast("T", self.data)
 
     def get_first(self) -> "Optional[T]":
         """Get the first row from the result.

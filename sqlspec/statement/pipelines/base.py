@@ -363,11 +363,12 @@ class SQLTransformer(ProcessorProtocol[exp.Expression], ABC):
 
         try:
             result = self.transform(expression, dialect, active_config)
-            return result.expression, None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # If transformation fails, return original expression
             logger.warning("Transformation failed: %s", e)
             return expression, None
+        else:
+            return result.expression, None
 
     @abstractmethod
     def transform(
@@ -567,21 +568,32 @@ class UnifiedProcessor(ProcessorProtocol[exp.Expression]):
 
         # Run custom analyzers
         for analyzer in self.analyzers:
-            try:
-                custom_result = analyzer.analyze(expression, dialect, config)
-                analysis.metrics.update(custom_result.metrics)
-                analysis.warnings.extend(custom_result.warnings)
-                analysis.issues.extend(custom_result.issues)
-                analysis.notes.extend(custom_result.notes)
-            except Exception as e:
-                logger.warning("Analysis component failed: %s", e)
-                analysis.warnings.append(f"Analysis component failed: {e}")
+            self._run_single_analyzer(analyzer, expression, dialect, config, analysis)
 
         # Cache the result
         if cache_key:
             self._analysis_cache[cache_key] = analysis
 
         return analysis
+
+    @staticmethod
+    def _run_single_analyzer(
+        analyzer: "SQLAnalysis",
+        expression: exp.Expression,
+        dialect: "Optional[DialectType]",
+        config: "SQLConfig",
+        analysis: AnalysisResult,
+    ) -> None:
+        """Run a single analyzer and update the analysis result."""
+        try:
+            custom_result = analyzer.analyze(expression, dialect, config)
+            analysis.metrics.update(custom_result.metrics)
+            analysis.warnings.extend(custom_result.warnings)
+            analysis.issues.extend(custom_result.issues)
+            analysis.notes.extend(custom_result.notes)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Analysis component failed: %s", e)
+            analysis.warnings.append(f"Analysis component failed: {e}")
 
     def _apply_transformations(
         self,
@@ -594,21 +606,35 @@ class UnifiedProcessor(ProcessorProtocol[exp.Expression]):
         current_expression = expression
 
         for transformer in self.transformers:
-            try:
-                # Pass analysis results to transformer if it supports it
-                transform_with_analysis = getattr(transformer, "transform_with_analysis", None)
-                if transform_with_analysis is not None:
-                    result = transform_with_analysis(current_expression, analysis, dialect, config)
-                else:
-                    result = transformer.transform(current_expression, dialect, config)
-
-                if result.modified:
-                    current_expression = result.expression
-
-            except Exception as e:
-                logger.warning("Transformation component failed: %s", e)
+            current_expression = self._run_single_transformer(
+                transformer, current_expression, analysis, dialect, config
+            )
 
         return current_expression
+
+    @staticmethod
+    def _run_single_transformer(
+        transformer: "SQLTransformer",
+        expression: exp.Expression,
+        analysis: AnalysisResult,
+        dialect: "Optional[DialectType]",
+        config: "SQLConfig",
+    ) -> exp.Expression:
+        """Run a single transformer and return the transformed expression."""
+        try:
+            # Pass analysis results to transformer if it supports it
+            transform_with_analysis = getattr(transformer, "transform_with_analysis", None)
+            if transform_with_analysis is not None:
+                result = transform_with_analysis(expression, analysis, dialect, config)
+            else:
+                result = transformer.transform(expression, dialect, config)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Transformation component failed: %s", e)
+            return expression
+        else:
+            if result.modified:
+                return result.expression
+            return expression
 
     def _apply_validations(
         self,
@@ -621,23 +647,36 @@ class UnifiedProcessor(ProcessorProtocol[exp.Expression]):
         aggregated_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
 
         for validator in self.validators:
-            try:
-                # Pass analysis results to validator if it supports it
-                validate_with_analysis = getattr(validator, "validate_with_analysis", None)
-                if validate_with_analysis is not None:
-                    result = validate_with_analysis(expression, analysis, dialect, config)
-                else:
-                    result = validator.validate(expression, dialect, config)
-
-                aggregated_result.merge(result)
-
-            except Exception as e:
-                logger.warning("Validation component failed: %s", e)
-                aggregated_result.warnings.append(f"Validation component failed: {e}")
+            self._run_single_validator(validator, expression, analysis, dialect, config, aggregated_result)
 
         return aggregated_result
 
-    def _analyze_structure(self, expression: exp.Expression) -> dict[str, Any]:
+    @staticmethod
+    def _run_single_validator(
+        validator: "SQLValidation",
+        expression: exp.Expression,
+        analysis: AnalysisResult,
+        dialect: "Optional[DialectType]",
+        config: "SQLConfig",
+        aggregated_result: ValidationResult,
+    ) -> None:
+        """Run a single validator and update the aggregated result."""
+        try:
+            # Pass analysis results to validator if it supports it
+            validate_with_analysis = getattr(validator, "validate_with_analysis", None)
+            if validate_with_analysis is not None:
+                result = validate_with_analysis(expression, analysis, dialect, config)
+            else:
+                result = validator.validate(expression, dialect, config)
+
+            aggregated_result.merge(result)
+
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Validation component failed: %s", e)
+            aggregated_result.warnings.append(f"Validation component failed: {e}")
+
+    @staticmethod
+    def _analyze_structure(expression: exp.Expression) -> dict[str, Any]:
         """Analyze basic SQL structure."""
         return {
             "statement_type": type(expression).__name__,
@@ -694,7 +733,8 @@ class UnifiedProcessor(ProcessorProtocol[exp.Expression]):
             "correlated_subquery_count": correlated_count,
         }
 
-    def _analyze_functions(self, expression: exp.Expression) -> dict[str, Any]:
+    @staticmethod
+    def _analyze_functions(expression: exp.Expression) -> dict[str, Any]:
         """Analyze function usage."""
         functions = list(expression.find_all(exp.Func))
         function_count = len(functions)
@@ -717,7 +757,8 @@ class UnifiedProcessor(ProcessorProtocol[exp.Expression]):
             "expensive_functions": expensive_functions,
         }
 
-    def _analyze_tables_and_columns(self, expression: exp.Expression) -> dict[str, Any]:
+    @staticmethod
+    def _analyze_tables_and_columns(expression: exp.Expression) -> dict[str, Any]:
         """Analyze table and column usage."""
         tables = []
         for table in expression.find_all(exp.Table):
@@ -736,7 +777,8 @@ class UnifiedProcessor(ProcessorProtocol[exp.Expression]):
             "columns": columns,
         }
 
-    def _calculate_complexity_score(self, metrics: dict[str, Any]) -> int:
+    @staticmethod
+    def _calculate_complexity_score(metrics: dict[str, Any]) -> int:
         """Calculate overall complexity score from metrics."""
         score = 0
 
@@ -755,7 +797,8 @@ class UnifiedProcessor(ProcessorProtocol[exp.Expression]):
 
         return score
 
-    def _get_join_type(self, join: exp.Join) -> str:
+    @staticmethod
+    def _get_join_type(join: exp.Join) -> str:
         """Determine the type of join."""
         if join.side and join.side.upper() == "LEFT":
             return "LEFT"
@@ -780,7 +823,8 @@ class UnifiedProcessor(ProcessorProtocol[exp.Expression]):
 
         return max_depth
 
-    def _count_correlated_subqueries(self, subqueries: list[exp.Subquery]) -> int:
+    @staticmethod
+    def _count_correlated_subqueries(subqueries: list[exp.Subquery]) -> int:
         """Count correlated subqueries (simplified heuristic)."""
         correlated_count = 0
 

@@ -6,6 +6,7 @@ import json
 from collections.abc import Generator
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -24,7 +25,7 @@ def temp_fixtures_dir() -> Generator[Path, None, None]:
         test_data = {"name": "test", "value": 42, "nested": {"key": "value"}}
         (fixtures_path / "test_fixture.json").write_text(json.dumps(test_data))
 
-        empty_data = {}
+        empty_data: dict[str, Any] = {}
         (fixtures_path / "empty_fixture.json").write_text(json.dumps(empty_data))
 
         complex_data = {

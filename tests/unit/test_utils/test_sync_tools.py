@@ -362,7 +362,7 @@ def test_run_await_async_integration() -> None:
         return x * 2
 
     async_version = async_(original_sync_func)
-    back_to_sync = run_(async_version)  # type: ignore[arg-type]
+    back_to_sync = run_(async_version)  # type: ignore[var-annotated]
 
     assert back_to_sync(21) == 42
 
@@ -375,7 +375,7 @@ async def test_ensure_async_await_integration() -> None:
         return x * 3
 
     # Convert back to sync using await_
-    sync_version = await_(sync_func, raise_sync_error=False)  # type: ignore[arg-type]
+    sync_version = await_(sync_func, raise_sync_error=False)  # type: ignore[var-annotated]
     assert sync_version(14) == 42
 
 
@@ -454,7 +454,7 @@ async def test_error_handling_in_complex_scenarios() -> None:
 
     # Convert to async, then back to sync
     async_version = async_(sync_func_with_error)
-    sync_version = run_(async_version)  # type: ignore[arg-type]
+    sync_version = run_(async_version)  # type: ignore[var-annotated]
 
     # Test success case
     assert sync_version(False) == "success"

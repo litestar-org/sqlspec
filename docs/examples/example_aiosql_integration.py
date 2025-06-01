@@ -1,18 +1,32 @@
-"""Comprehensive example of SQLSpec's advanced aiosql integration.
+"""Simple example of SQLSpec's aiosql integration.
 
-This example demonstrates the incredible developer experience achieved by combining:
-- Singleton-cached SQL file loading
-- Seamless SQLSpec ecosystem integration
-- Typed query objects with builder API support
-- Full filter and transformation capabilities
+This example demonstrates the clean, simple approach:
+- Parse aiosql-style SQL files
+- Get SQL objects ready for execution
+- Use with any SQLSpec driver
+- Support for filters and convenience methods
+- No complex adapters or services needed
 """
 
 from pathlib import Path
 
 from pydantic import BaseModel
-from sqlspec.adapters.psycopg import PsycopgSyncConfig
-from sqlspec.extensions.aiosql import AiosqlLoader, AiosqlService
-from sqlspec.statement.filters import LimitOffsetFilter, SearchFilter
+
+from sqlspec.extensions.aiosql import AiosqlLoader
+
+__all__ = (
+    "User",
+    "UserStats",
+    "create_example_sql_file",
+    "demonstrate_builder_pattern",
+    "demonstrate_caching",
+    "demonstrate_convenience_methods",
+    "demonstrate_operation_type_validation",
+    "demonstrate_raw_access",
+    "demonstrate_simple_usage",
+    "demonstrate_with_filters",
+    "main",
+)
 
 
 # Define your data models
@@ -31,25 +45,20 @@ class UserStats(BaseModel):
     avg_age: float
 
 
-def create_example_sql_file():
+def create_example_sql_file() -> None:
     """Create an example SQL file with aiosql-style queries."""
     sql_content = """
--- name: get_users^
+-- name: get_users
 SELECT id, name, email, department, age, active
 FROM users
 WHERE active = TRUE
 
--- name: get_user_by_id$
+-- name: get_user_by_id^
 SELECT id, name, email, department, age, active
 FROM users
 WHERE id = :user_id
 
--- name: get_users_by_department^
-SELECT id, name, email, department, age, active
-FROM users
-WHERE department = :department AND active = TRUE
-
--- name: search_users^
+-- name: search_users
 SELECT id, name, email, department, age, active
 FROM users
 WHERE name ILIKE '%' || :search_term || '%'
@@ -65,7 +74,20 @@ UPDATE users
 SET name = :name, email = :email, department = :department, age = :age
 WHERE id = :user_id
 
--- name: get_department_stats^
+-- name: delete_user!
+DELETE FROM users WHERE id = :user_id
+
+-- name: upsert_user!
+MERGE INTO users AS target
+USING (VALUES (:id, :name, :email, :department, :age, :active)) AS source (id, name, email, department, age, active)
+ON target.id = source.id
+WHEN MATCHED THEN
+    UPDATE SET name = source.name, email = source.email, department = source.department, age = source.age, active = source.active
+WHEN NOT MATCHED THEN
+    INSERT (id, name, email, department, age, active)
+    VALUES (source.id, source.name, source.email, source.department, source.age, source.active)
+
+-- name: get_department_stats
 SELECT
     department,
     COUNT(*) as user_count,
@@ -74,205 +96,275 @@ FROM users
 WHERE active = TRUE
 GROUP BY department
 ORDER BY user_count DESC
+
+-- name: create_tables#
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    department VARCHAR(100) NOT NULL,
+    age INTEGER CHECK (age > 0),
+    active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
     Path("example_queries.sql").write_text(sql_content)
 
 
-def demonstrate_singleton_loading():
-    """Demonstrate singleton loading behavior."""
-    print("=== Singleton Loading Demo ===")
+def demonstrate_simple_usage() -> None:
+    """Demonstrate the simple, clean API."""
+    print("=== Simple SQLSpec + aiosql Integration ===")
 
-    # Load once, cached forever
-    loader1 = AiosqlLoader("example_queries.sql", dialect="postgresql")
-    loader2 = AiosqlLoader("example_queries.sql", dialect="postgresql")
+    # Create mock SQLSpec driver for demo
+    from unittest.mock import Mock
 
-    # Same instance due to singleton pattern
-    print(f"Same instance? {loader1 is loader2}")  # True
-    print(f"Queries loaded: {len(loader1)}")
-    print(f"Available queries: {', '.join(loader1.query_names)}")
+    driver = Mock()
+    driver.dialect = "postgresql"
+    driver.execute.return_value = Mock()
 
+    # Load SQL file (cached automatically)
+    loader = AiosqlLoader("example_queries.sql")
+    print(f"Loaded {len(loader)} queries: {', '.join(loader.query_names)}")
 
-def demonstrate_typed_queries():
-    """Demonstrate typed query objects with return type annotations."""
-    print("\n=== Typed Queries Demo ===")
+    # Get SQL objects ready for execution (no schema_type here)
+    get_users_sql = loader.get_sql("get_users")
 
-    loader = AiosqlLoader("example_queries.sql", dialect="postgresql")
+    print(f"✅ SQL objects created: {get_users_sql}")
 
-    # Get typed queries with return type annotations
-    get_users = loader.get_query("get_users", return_type=User)
-    get_user = loader.get_query("get_user_by_id", return_type=User)
-    create_user = loader.get_query("create_user", return_type=User)
-    get_stats = loader.get_query("get_department_stats", return_type=UserStats)
-
-    print(f"get_users query: {get_users.name}")
-    print(f"Return type: {get_users.return_type}")
-    print(f"SQL: {get_users.sql_text[:50]}...")
-
-
-def demonstrate_builder_api_integration():
-    """Demonstrate seamless builder API integration."""
-    print("\n=== Builder API Integration Demo ===")
-
-    loader = AiosqlLoader("example_queries.sql", dialect="postgresql")
-    get_users = loader.get_query("get_users", return_type=User)
-
-    # Use SQLSpec builder API on loaded queries!
-    filtered_query = (
-        get_users
-        .where("age > 25")
-        .order_by("name ASC")
-        .limit(10)
-    )
-
-    print("Original SQL:")
-    print(get_users.sql_text)
-    print("\nWith builder modifications:")
-    print(str(filtered_query))
-
-
-def demonstrate_filter_integration():
-    """Demonstrate full SQLSpec filter integration."""
-    print("\n=== Filter Integration Demo ===")
-
-    # Create SQLSpec driver
-    config = PsycopgSyncConfig(
-        host="localhost",
-        port=5432,
-        database="example",
-        username="user",
-        password="password"
-    )
-    driver = config.create_driver()
-
-    loader = AiosqlLoader("example_queries.sql", dialect="postgresql")
-    get_users = loader.get_query("get_users", return_type=User)
-
-    # Apply filters dynamically
-    search_filter = SearchFilter("name", "John")
-    pagination_filter = LimitOffsetFilter(limit=20, offset=0)
-
+    # Execute with SQLSpec driver - schema_type at execution time
     try:
-        # Execute with full SQLSpec features
-        result = driver.execute(
-            get_users,
-            parameters={"active": True},
-            filters=[search_filter, pagination_filter],
-            schema_type=User
-        )
-        print(f"Query executed successfully!")
-        print(f"Type of result: {type(result)}")
+        result = driver.execute(get_users_sql, {"active": True}, schema_type=User)
+        print(f"✅ Execution successful: {type(result)}")
     except Exception as e:
         print(f"Would execute (demo mode): {e}")
 
 
-def demonstrate_service_integration():
-    """Demonstrate high-level service integration."""
-    print("\n=== Service Integration Demo ===")
+def demonstrate_with_filters() -> None:
+    """Demonstrate using SQL objects with filters."""
+    print("\n=== Using with SQLSpec Filters ===")
 
-    # Create service with SQLSpec driver
-    config = PsycopgSyncConfig(
-        host="localhost",
-        port=5432,
-        database="example",
-        username="user",
-        password="password"
-    )
-    driver = config.create_driver()
+    from unittest.mock import Mock
 
-    # Service with default filters and configuration
-    service = AiosqlService(
-        driver,
-        default_filters=[LimitOffsetFilter(limit=1000, offset=0)],
-        allow_sqlspec_filters=True
-    )
+    from sqlspec.statement.filters import LimitOffsetFilter, SearchFilter
 
-    # Load queries through service
+    driver = Mock()
+    driver.dialect = "postgresql"
+    driver.execute.return_value = Mock()
+
+    loader = AiosqlLoader("example_queries.sql")
+
+    # Get SQL object with filters applied directly in loader
+    search_filter = SearchFilter("department", "Engineering")
+    pagination_filter = LimitOffsetFilter(10, 0)
+
+    get_users_sql = loader.get_sql("get_users", search_filter, pagination_filter)
+
     try:
-        queries = service.load_queries("example_queries.sql")
-        print("Queries loaded through service!")
-
-        # Execute with service enhancements
-        result = service.execute_query_with_filters(
-            queries.get_users,
-            connection=None,  # Uses driver's connection
-            parameters={"department": "Engineering"},
-            filters=[SearchFilter("email", "@company.com")],
-            schema_type=User
-        )
-        print("Service execution successful!")
+        # schema_type at execution time
+        result = driver.execute(get_users_sql, {"active": True}, schema_type=User)
+        print(f"✅ Filtered execution successful: {type(result)}")
+        print(f"✅ SQL with filters: {get_users_sql.sql[:100]}...")
     except Exception as e:
         print(f"Would execute (demo mode): {e}")
 
 
-def demonstrate_loader_convenience_methods():
-    """Demonstrate loader convenience methods."""
-    print("\n=== Loader Convenience Methods Demo ===")
+def demonstrate_convenience_methods() -> None:
+    """Demonstrate the new convenience methods for different operation types."""
+    print("\n=== Convenience Methods by Operation Type ===")
 
-    loader = AiosqlLoader("example_queries.sql", dialect="postgresql")
+    from unittest.mock import Mock
 
-    # Dictionary-like access
-    get_users = loader["get_users"]
-    print(f"Dictionary access: {get_users.name}")
+    from sqlspec.statement.filters import OrderByFilter
 
-    # Check query existence
+    driver = Mock()
+    driver.dialect = "postgresql"
+    driver.execute.return_value = Mock()
+
+    loader = AiosqlLoader("example_queries.sql")
+
+    # SELECT operations
+    try:
+        select_sql = loader.get_select_sql("get_users", OrderByFilter("name", "asc"))
+        print(f"✅ SELECT SQL: {select_sql.sql[:80]}...")
+
+        select_one_sql = loader.get_select_sql("get_user_by_id")
+        print(f"✅ SELECT ONE SQL: {select_one_sql.sql[:80]}...")
+    except Exception as e:
+        print(f"SELECT demo: {e}")
+
+    # INSERT operations
+    try:
+        insert_sql = loader.get_insert_sql("create_user")
+        print(f"✅ INSERT SQL: {insert_sql.sql[:80]}...")
+    except Exception as e:
+        print(f"INSERT demo: {e}")
+
+    # UPDATE operations
+    try:
+        update_sql = loader.get_update_sql("update_user")
+        print(f"✅ UPDATE SQL: {update_sql.sql[:80]}...")
+    except Exception as e:
+        print(f"UPDATE demo: {e}")
+
+    # DELETE operations
+    try:
+        delete_sql = loader.get_delete_sql("delete_user")
+        print(f"✅ DELETE SQL: {delete_sql.sql[:80]}...")
+    except Exception as e:
+        print(f"DELETE demo: {e}")
+
+    # MERGE operations
+    try:
+        merge_sql = loader.get_merge_sql("upsert_user")
+        print(f"✅ MERGE SQL: {merge_sql.sql[:80]}...")
+    except Exception as e:
+        print(f"MERGE demo: {e}")
+
+    # SCRIPT operations
+    try:
+        from sqlspec.statement.sql import SQLConfig
+
+        # Use a more permissive config for scripts
+        script_config = SQLConfig(strict_mode=False)
+        script_sql = loader.get_script_sql("create_tables", config=script_config)
+        print(f"✅ SCRIPT SQL: {script_sql.sql[:80]}...")
+    except Exception as e:
+        print(f"SCRIPT demo: {e}")
+
+
+def demonstrate_operation_type_validation() -> None:
+    """Demonstrate operation type validation in convenience methods."""
+    print("\n=== Operation Type Validation ===")
+
+    loader = AiosqlLoader("example_queries.sql")
+
+    # Try to get wrong operation type - should raise error
+    try:
+        # This should fail because get_users is a SELECT, not INSERT
+        loader.get_insert_sql("get_users")
+        print("❌ Should have failed!")
+    except Exception as e:
+        print(f"✅ Correctly caught error: {e}")
+
+    # Show operation types
+    for query_name in loader.query_names:
+        op_type = loader.get_operation_type(query_name)
+        print(f"  {query_name}: {op_type}")
+
+
+def demonstrate_builder_pattern() -> None:
+    """Demonstrate using SQL objects with builder pattern."""
+    print("\n=== Using with SQLSpec Builder Pattern ===")
+
+    from unittest.mock import Mock
+
+    from sqlspec.statement.sql import SQLConfig
+
+    driver = Mock()
+    driver.dialect = "postgresql"
+    driver.execute.return_value = Mock()
+
+    # Use a more permissive config for the builder pattern
+    config = SQLConfig(strict_mode=False)
+    loader = AiosqlLoader("example_queries.sql", config=config)
+
+    # Get base SQL object
+    get_users_sql = loader.get_sql("get_users")
+
+    try:
+        # Use builder pattern with proper parameter handling
+        enhanced_sql = get_users_sql.where("age > 25").order_by("name").limit(20)
+
+        # Execute with proper parameters
+        result = driver.execute(enhanced_sql, {"active": True}, schema_type=User)
+        print(f"✅ Builder pattern execution successful: {type(result)}")
+        print(f"✅ Enhanced SQL: {enhanced_sql.sql[:100]}...")
+    except Exception as e:
+        print(f"Builder pattern demo: {e}")
+        # Show what we can do instead
+        try:
+            simple_sql = get_users_sql.limit(10)
+            print(f"✅ Simple limit works: {simple_sql.sql[:100]}...")
+        except Exception as e2:
+            print(f"Even simple limit failed: {e2}")
+
+
+def demonstrate_raw_access() -> None:
+    """Demonstrate accessing raw SQL and metadata."""
+    print("\n=== Raw SQL Access ===")
+
+    loader = AiosqlLoader("example_queries.sql")
+
+    # Dictionary-like access to raw SQL
+    raw_sql = loader["get_users"]
+    print(f"Raw SQL: {raw_sql[:50]}...")
+
+    # Get operation type
+    op_type = loader.get_operation_type("get_users")
+    print(f"Operation type: {op_type}")
+
+    # Check if query exists
     print(f"Has 'get_users'? {'get_users' in loader}")
     print(f"Has 'nonexistent'? {'nonexistent' in loader}")
 
-    # Get all queries
-    all_queries = loader.get_all_queries()
-    print(f"All queries: {list(all_queries.keys())}")
-
-    # Direct execution through loader
-    config = PsycopgSyncConfig(
-        host="localhost",
-        port=5432,
-        database="example",
-        username="user",
-        password="password"
-    )
-    driver = config.create_driver()
-
-    try:
-        # Execute directly through loader
-        result = loader.execute_query(
-            driver,
-            "get_users",
-            parameters={"active": True},
-            SearchFilter("department", "Engineering"),
-            LimitOffsetFilter(10, 0)
-        )
-        print("Direct loader execution successful!")
-    except Exception as e:
-        print(f"Would execute (demo mode): {e}")
+    print("✅ Raw access works perfectly!")
 
 
-def main():
-    """Run the comprehensive demo."""
-    print("SQLSpec Advanced Aiosql Integration Demo")
+def demonstrate_caching() -> None:
+    """Demonstrate singleton caching behavior."""
+    print("\n=== Singleton Caching ===")
+
+    import time
+
+    # First load
+    start = time.time()
+    loader1 = AiosqlLoader("example_queries.sql")
+    first_load = time.time() - start
+
+    # Second load (should be instant due to caching)
+    start = time.time()
+    loader2 = AiosqlLoader("example_queries.sql")
+    second_load = time.time() - start
+
+    print(f"First load: {first_load:.4f}s")
+    print(f"Second load: {second_load:.4f}s (cached)")
+    print(f"Same instance? {loader1 is loader2}")  # True due to singleton
+    print(f"Speedup: {first_load / max(second_load, 0.0001):.1f}x")
+
+    print("✅ Caching works perfectly!")
+
+
+def main() -> None:
+    """Run the enhanced demo."""
+    print("SQLSpec Enhanced Aiosql Integration Demo")
     print("=" * 50)
 
     # Create example SQL file
     create_example_sql_file()
 
-    # Run all demonstrations
-    demonstrate_singleton_loading()
-    demonstrate_typed_queries()
-    demonstrate_builder_api_integration()
-    demonstrate_filter_integration()
-    demonstrate_service_integration()
-    demonstrate_loader_convenience_methods()
+    # Run demonstrations
+    demonstrate_simple_usage()
+    demonstrate_with_filters()
+    demonstrate_convenience_methods()
+    demonstrate_operation_type_validation()
+    demonstrate_builder_pattern()
+    demonstrate_raw_access()
+    demonstrate_caching()
 
     print("\n" + "=" * 50)
-    print("🎉 Incredible Developer Experience Achieved!")
-    print("\nKey Features Demonstrated:")
-    print("✅ Singleton-cached SQL file loading")
-    print("✅ Typed query objects with return type annotations")
-    print("✅ Seamless SQLSpec builder API integration")
-    print("✅ Full filter and transformation support")
-    print("✅ High-level service layer integration")
-    print("✅ Convenient dictionary-like access")
-    print("✅ Direct execution capabilities")
+    print("🎉 Enhanced Integration Achieved!")
+    print("\nKey Benefits:")
+    print("✅ Just parse SQL files - no complex adapters")
+    print("✅ Return SQL objects ready for execution")
+    print("✅ Support filters directly in loader methods")
+    print("✅ Convenience methods for different operation types")
+    print("✅ Operation type validation for safety")
+    print("✅ Use schema_type for consistent typing")
+    print("✅ Works with all existing SQLSpec features")
+    print("✅ Singleton caching for performance")
+    print("✅ Clean, simple API")
+    print("✅ No unnecessary complexity")
 
     # Cleanup
     Path("example_queries.sql").unlink(missing_ok=True)

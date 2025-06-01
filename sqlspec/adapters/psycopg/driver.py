@@ -69,6 +69,9 @@ class PsycopgSyncDriver(
     ) -> Any:
         with instrument_operation(self, "psycopg_execute", "database"):
             conn = self._connection(connection)
+            if config is not None and config != statement.config:
+                statement = statement.copy(config=config)
+
             final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
 
             final_exec_params: Union[dict[str, Any], list[dict[str, Any]], None] = None

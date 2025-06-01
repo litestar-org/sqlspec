@@ -385,10 +385,10 @@ def test_transformer_pipeline_validation_aggregation() -> None:
             return expression, validation_result
 
     pipeline = TransformerPipeline()
-    pipeline.components = [  # type: ignore
-        MockValidatingProcessor(True, RiskLevel.SAFE, warnings=["Warning 1"]),
-        MockValidatingProcessor(False, RiskLevel.MEDIUM, issues=["Issue 1"]),
-        MockValidatingProcessor(True, RiskLevel.LOW, warnings=["Warning 2"]),
+    pipeline.components = [  # type: ignore[list-item]
+        MockValidatingProcessor(True, RiskLevel.SAFE, warnings=["Warning 1"]),  # type: ignore[list-item]
+        MockValidatingProcessor(False, RiskLevel.MEDIUM, issues=["Issue 1"]),  # type: ignore[list-item]
+        MockValidatingProcessor(True, RiskLevel.LOW, warnings=["Warning 2"]),  # type: ignore[list-item]
     ]
 
     config = SQLConfig()

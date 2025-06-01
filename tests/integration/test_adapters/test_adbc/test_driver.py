@@ -258,8 +258,8 @@ def test_adbc_duckdb_data_types(adbc_duckdb_session: AdbcDriver) -> None:
         )
     """
     result = adbc_duckdb_session.execute(insert_sql)
-    assert isinstance(result, ExecuteResult)
-    assert result.rows_affected == 1
+    assert isinstance(result, ExecuteResult)  # type: ignore[unreachable]
+    assert result.rows_affected == 1  # type: ignore[unreachable]
 
     # Query and verify data types
     select_result = adbc_duckdb_session.execute("SELECT * FROM data_types_test")
@@ -555,7 +555,7 @@ def test_adbc_postgresql_execute_script(adbc_postgresql_session: AdbcDriver) -> 
 
     result = adbc_postgresql_session.execute_script(script)
     # Script execution typically returns a status string
-    assert isinstance(result, str) or result is None
+    assert isinstance(result, str) or result is None  # type: ignore[unreachable]
 
     # Verify script effects
     select_result = adbc_postgresql_session.execute(
@@ -767,8 +767,8 @@ def test_adbc_postgresql_schema_operations(adbc_postgresql_session: AdbcDriver) 
     insert_result = adbc_postgresql_session.execute(
         "INSERT INTO schema_test (description) VALUES ($1)", ("test description",)
     )
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # Verify table structure
     info_result = adbc_postgresql_session.execute("""

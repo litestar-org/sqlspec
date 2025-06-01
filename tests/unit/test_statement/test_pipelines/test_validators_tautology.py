@@ -110,7 +110,9 @@ def test_tautology_mathematical_constants_configurable() -> None:
     ],
     ids=["numeric_eq", "string_eq", "column_self", "boolean_eq", "numeric_neq"],
 )
-def test_tautology_detects_various_tautology_patterns(tautology_sql, expected_pattern, description) -> None:
+def test_tautology_detects_various_tautology_patterns(
+    tautology_sql: str, expected_pattern: str, description: str
+) -> None:
     """Test detection of various tautological patterns."""
     validator = TautologyConditions()
     config = SQLConfig()
@@ -180,7 +182,7 @@ def test_tautology_max_depth_configuration() -> None:
     ],
     ids=["numeric_eq", "string_eq", "numeric_neq", "column_gte", "numeric_gt", "column_literal"],
 )
-def test_tautology_operator_specific_detection(operator, left, right, should_detect) -> None:
+def test_tautology_operator_specific_detection(operator: str, left: str, right: str, should_detect: bool) -> None:
     """Test tautology detection for specific operators and operands."""
     validator = TautologyConditions()
     config = SQLConfig()

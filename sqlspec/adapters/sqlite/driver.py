@@ -6,6 +6,8 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any, ClassVar, Optional, Union, cast
 
+from typing_extensions import TypeAlias
+
 from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.statement.mixins import ResultConverter, SQLTranslatorMixin
@@ -19,7 +21,7 @@ __all__ = ("SqliteConnection", "SqliteDriver")
 
 logger = logging.getLogger("sqlspec")
 
-SqliteConnection = sqlite3.Connection
+SqliteConnection: TypeAlias = sqlite3.Connection
 
 
 class SqliteDriver(
@@ -78,6 +80,9 @@ class SqliteDriver(
     ) -> Any:
         with instrument_operation(self, "sqlite_execute", "database"):
             conn = self._connection(connection)
+            if config is not None and config != statement.config:
+                statement = statement.copy(config=config)
+
             final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
 
             final_exec_params: Union[tuple[Any, ...], list[tuple[Any, ...]], None] = None

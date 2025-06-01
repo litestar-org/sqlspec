@@ -13,5 +13,5 @@ def test_connection(bigquery_session: BigQueryConfig) -> None:
     with bigquery_session.provide_session() as driver:
         result = driver.execute("SELECT 1 as one")
         assert isinstance(result, SelectResult)
-        assert result.rows is not None
-        assert result.rows == [{"one": 1}]
+        assert result.data is not None
+        assert result.data == [{"one": 1}]

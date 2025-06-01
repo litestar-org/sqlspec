@@ -183,7 +183,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
     @property
     def connection_type(self) -> type[AsyncmyConnection]:  # type: ignore[override]
         """Return the connection type."""
-        return Connection
+        return Connection  # type: ignore[no-any-return]
 
     @property
     def driver_type(self) -> type[AsyncmyDriver]:  # type: ignore[override]

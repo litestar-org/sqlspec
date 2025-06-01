@@ -377,9 +377,9 @@ except ImportError:
     aiosql = _AiosqlShim()  # type: ignore[assignment]
 
     # Placeholder types for aiosql protocols
-    AiosqlParamType = Union[dict[str, Any], list[Any], tuple[Any, ...], None]  # pyright: ignore[reportConstantRedefinition]
+    AiosqlParamType = Union[dict[str, Any], list[Any], tuple[Any, ...], None]  # type: ignore[misc]
 
-    class AiosqlSQLOperationType(Enum):
+    class AiosqlSQLOperationType(Enum):  # type: ignore[no-redef]
         """Enumeration of aiosql operation types."""
 
         INSERT_RETURNING = 0

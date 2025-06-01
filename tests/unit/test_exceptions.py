@@ -639,7 +639,7 @@ def test_specialized_inheritance() -> None:
         ExtraParameterError("test"),
     ]
 
-    for exception in parameter_exceptions:
+    for exception in parameter_exceptions:  # type: ignore[assignment]
         assert isinstance(exception, ParameterError)
 
     # Validation exceptions should inherit from SQLValidationError
@@ -648,7 +648,7 @@ def test_specialized_inheritance() -> None:
         UnsafeSQLError("test"),
     ]
 
-    for exception in validation_exceptions:
+    for exception in validation_exceptions:  # type: ignore[assignment]
         assert isinstance(exception, SQLValidationError)
 
 

@@ -62,7 +62,7 @@ def test_singleton_different_classes_different_instances() -> None:
     first_instance = FirstClass()
     second_instance = SecondClass()
 
-    assert first_instance is not second_instance
+    assert first_instance is not second_instance  # type: ignore[comparison-overlap]
     assert first_instance.name == "first"
     assert second_instance.name == "second"
 
@@ -132,7 +132,7 @@ def test_singleton_thread_safety() -> None:
             # Add small delay to increase chance of race condition
             time.sleep(0.001)
 
-    instances = []
+    instances: list[ThreadTestClass] = []
 
     def create_instance() -> ThreadTestClass:
         return ThreadTestClass()

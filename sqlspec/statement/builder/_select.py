@@ -62,7 +62,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         if self._expression is None:
             self._expression = exp.Select()
         if not isinstance(self._expression, exp.Select):
-            msg = "Cannot add select columns to a non-SELECT expression."
+            msg = "Cannot add select columns to a non-SELECT expression."  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         for column in columns:
@@ -89,7 +89,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         if self._expression is None:
             self._expression = exp.Select()
         if not isinstance(self._expression, exp.Select):
-            msg = "Cannot add from to a non-SELECT expression."
+            msg = "Cannot add from to a non-SELECT expression."  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         from_expr: exp.Expression
@@ -103,7 +103,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
             current_params = self._parameters
             merged_params = ParameterConverter.merge_parameters(
                 parameters=subquery.parameters,
-                args=current_params if isinstance(current_params, list) else None,
+                args=current_params if isinstance(current_params, list) else None,  # type: ignore[unreachable]
                 kwargs=current_params if isinstance(current_params, dict) else {},
             )
             self._parameters = merged_params  # type: ignore[assignment]
@@ -137,7 +137,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         if self._expression is None:
             self._expression = exp.Select()
         if not isinstance(self._expression, exp.Select):
-            msg = "Cannot add join to a non-SELECT expression."
+            msg = "Cannot add join to a non-SELECT expression."  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         table_expr: exp.Expression
@@ -151,7 +151,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
             current_params = self._parameters
             merged_params = ParameterConverter.merge_parameters(
                 parameters=subquery.parameters,
-                args=current_params if isinstance(current_params, list) else None,
+                args=current_params if isinstance(current_params, list) else None,  # type: ignore[unreachable]
                 kwargs=current_params if isinstance(current_params, dict) else {},
             )
             self._parameters = merged_params  # type: ignore[assignment]
@@ -270,7 +270,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         if self._expression is None:
             self._expression = exp.Select()
         if not isinstance(self._expression, exp.Select):
-            msg = "Cannot add cross join to a non-SELECT expression."
+            msg = "Cannot add cross join to a non-SELECT expression."  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         table_expr: exp.Expression
@@ -284,7 +284,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
             current_params = self._parameters
             merged_params = ParameterConverter.merge_parameters(
                 parameters=subquery.parameters,
-                args=current_params if isinstance(current_params, list) else None,
+                args=current_params if isinstance(current_params, list) else None,  # type: ignore[unreachable]
                 kwargs=current_params if isinstance(current_params, dict) else {},
             )
             self._parameters = merged_params  # type: ignore[assignment]
@@ -331,13 +331,13 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         if self._expression is None:
             self._expression = exp.Select()
         if not isinstance(self._expression, exp.Select):
-            msg = "Cannot add pivot to a non-SELECT expression."
+            msg = "Cannot add pivot to a non-SELECT expression."  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         # Parse the aggregate expression
         agg_expr: exp.Expression
         if isinstance(aggregate_expr, str):
-            parsed_agg = exp.maybe_parse(aggregate_expr, dialect=self.dialect)
+            parsed_agg = exp.maybe_parse(aggregate_expr, dialect=self.dialect)  # type: ignore[var-annotated]
             if not parsed_agg:
                 msg = f"Could not parse aggregate expression: {aggregate_expr}"
                 raise SQLBuilderError(msg)
@@ -418,7 +418,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         if self._expression is None:
             self._expression = exp.Select()
         if not isinstance(self._expression, exp.Select):
-            msg = "Cannot add unpivot to a non-SELECT expression."
+            msg = "Cannot add unpivot to a non-SELECT expression."  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         # Create column expressions for the UNPIVOT
@@ -476,7 +476,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         if self._expression is None:
             self._expression = exp.Select()
         if not isinstance(self._expression, exp.Select):
-            msg = "Cannot add WITH clause to a non-SELECT expression."
+            msg = "Cannot add WITH clause to a non-SELECT expression."  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         cte_expr: Optional[exp.Expression]
@@ -488,7 +488,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
             current_params = self._parameters
             merged_params = ParameterConverter.merge_parameters(
                 parameters=built_query.parameters,
-                args=current_params if isinstance(current_params, list) else None,
+                args=current_params if isinstance(current_params, list) else None,  # type: ignore[unreachable]
                 kwargs=current_params if isinstance(current_params, dict) else {},
             )
             self._parameters = merged_params  # type: ignore[assignment]
@@ -496,10 +496,10 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
             cte_expr = exp.maybe_parse(query, dialect=self.dialect)
 
         if not cte_expr:
-            msg = f"Could not parse CTE query: {query}"
+            msg = f"Could not parse CTE query: {query}"  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
-        cte_alias_expr = exp.alias_(cte_expr, name)
+        cte_alias_expr = exp.alias_(cte_expr, name)  # type: ignore[var-annotated]
         if columns:
             cte_alias_expr = exp.alias_(cte_expr, name, table=columns)
 
@@ -531,7 +531,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         if self._expression is None:
             self._expression = exp.Select()
         if not isinstance(self._expression, exp.Select):
-            msg = "Cannot add where to a non-SELECT expression."
+            msg = "Cannot add where to a non-SELECT expression."  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         condition_expr: exp.Expression
@@ -575,7 +575,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         if self._expression is None:
             self._expression = exp.Select()
         if not isinstance(self._expression, exp.Select):
-            msg = "Cannot add GROUP BY to a non-SELECT expression."
+            msg = "Cannot add GROUP BY to a non-SELECT expression."  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         if rollup and columns:
@@ -605,7 +605,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         if self._expression is None:
             self._expression = exp.Select()
         if not isinstance(self._expression, exp.Select):
-            msg = "Cannot add HAVING to a non-SELECT expression."
+            msg = "Cannot add HAVING to a non-SELECT expression."  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         having_expr = exp.condition(condition) if isinstance(condition, str) else condition
@@ -622,7 +622,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
             SelectBuilder: The current builder instance for method chaining.
         """
         if not isinstance(self._expression, exp.Select):
-            msg = "Limit can only be applied to a SELECT expression."
+            msg = "Limit can only be applied to a SELECT expression."  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
         self._expression = self._expression.limit(exp.Literal.number(count), copy=False)
         return self
@@ -640,7 +640,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
             SelectBuilder: The current builder instance for method chaining.
         """
         if not isinstance(self._expression, exp.Select):
-            msg = "Offset can only be applied to a SELECT expression."
+            msg = "Offset can only be applied to a SELECT expression."  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
         self._expression = self._expression.offset(exp.Literal.number(value), copy=False)
         return self
@@ -659,7 +659,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
             SelectBuilder: The current builder instance for method chaining.
         """
         if not isinstance(self._expression, exp.Select):
-            msg = "Order by can only be applied to a SELECT expression."
+            msg = "Order by can only be applied to a SELECT expression."  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         current_expr = self._expression
@@ -684,7 +684,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         if self._expression is None:
             self._expression = exp.Select()
         if not isinstance(self._expression, exp.Select):
-            msg = "Cannot add DISTINCT to a non-SELECT expression."
+            msg = "Cannot add DISTINCT to a non-SELECT expression."  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         if not columns:
@@ -716,12 +716,12 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         right_expr = exp.maybe_parse(right_query.sql, dialect=self.dialect)  # type: ignore[var-annotated]
 
         if not left_expr or not right_expr:
-            msg = "Could not parse queries for UNION operation"
+            msg = "Could not parse queries for UNION operation"  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         union_expr = exp.union(left_expr, right_expr, distinct=not all_)
         new_builder = SelectBuilder(dialect=self.dialect)
-        new_builder._expression = union_expr  # pyright: ignore
+        new_builder._expression = union_expr  # type: ignore[assignment]
 
         # Merge parameters with conflict resolution
         merged_params = dict(left_query.parameters)  # Start with left parameters
@@ -743,7 +743,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
 
                 # Recreate the union with updated right expression
                 union_expr = exp.union(left_expr, right_expr, distinct=not all_)
-                new_builder._expression = union_expr  # pyright: ignore
+                new_builder._expression = union_expr  # type: ignore[assignment]
 
                 merged_params[new_param_name] = param_value
             else:
@@ -771,12 +771,12 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         right_expr = exp.maybe_parse(right_query.sql, dialect=self.dialect)  # type: ignore[var-annotated]
 
         if not left_expr or not right_expr:
-            msg = "Could not parse queries for INTERSECT operation"
+            msg = "Could not parse queries for INTERSECT operation"  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         intersect_expr = exp.intersect(left_expr, right_expr, distinct=True)
         new_builder = SelectBuilder(dialect=self.dialect)
-        new_builder._expression = intersect_expr  # pyright: ignore
+        new_builder._expression = intersect_expr  # type: ignore[assignment]
 
         merged_params_after_left = ParameterConverter.merge_parameters(
             parameters=left_query.parameters,
@@ -814,7 +814,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
             raise SQLBuilderError(msg)
 
         new_builder = SelectBuilder(dialect=self.dialect)
-        new_builder._expression = exp.except_(left_expr, right_expr)  # pyright: ignore
+        new_builder._expression = exp.except_(left_expr, right_expr)  # type: ignore[assignment]
 
         merged_params_after_left = ParameterConverter.merge_parameters(
             parameters=left_query.parameters,
@@ -843,12 +843,12 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         """
         if isinstance(subquery, SelectBuilder):
             sub_sql_obj = subquery.build()
-            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect)
+            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect)  # type: ignore[var-annotated]
 
             current_params = self._parameters
             merged_params = ParameterConverter.merge_parameters(
                 parameters=sub_sql_obj.parameters,
-                args=current_params if isinstance(current_params, list) else None,
+                args=current_params if isinstance(current_params, list) else None,  # type: ignore[unreachable]
                 kwargs=current_params if isinstance(current_params, dict) else {},
             )
             self._parameters = merged_params  # type: ignore[assignment]
@@ -876,12 +876,12 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         """
         if isinstance(subquery, SelectBuilder):
             sub_sql_obj = subquery.build()
-            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect)
+            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect)  # type: ignore[var-annotated]
 
             current_params = self._parameters
             merged_params = ParameterConverter.merge_parameters(
                 parameters=sub_sql_obj.parameters,
-                args=current_params if isinstance(current_params, list) else None,
+                args=current_params if isinstance(current_params, list) else None,  # type: ignore[unreachable]
                 kwargs=current_params if isinstance(current_params, dict) else {},
             )
             self._parameters = merged_params  # type: ignore[assignment]
@@ -930,7 +930,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
                 msg = "Subquery for IN produced an empty SQL string."
                 raise SQLBuilderError(msg)
 
-            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect)
+            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect)  # type: ignore[var-annotated]
             if not sub_expr:
                 msg = f"Could not parse subquery for IN: {values}"
                 raise SQLBuilderError(msg)
@@ -940,7 +940,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
             current_params = self._parameters
             merged_params = ParameterConverter.merge_parameters(
                 parameters=sub_sql_obj.parameters,
-                args=current_params if isinstance(current_params, list) else None,
+                args=current_params if isinstance(current_params, list) else None,  # type: ignore[unreachable]
                 kwargs=current_params if isinstance(current_params, dict) else {},
             )
             if merged_params is not None:
@@ -952,11 +952,11 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
                 raise SQLBuilderError(msg)
             sub_expr = exp.maybe_parse(values, dialect=self.dialect)
             if not sub_expr:
-                msg = f"Could not parse raw SQL subquery for IN: {values}"
+                msg = f"Could not parse raw SQL subquery for IN: {values}"  # type: ignore[unreachable]
                 raise SQLBuilderError(msg)
-            final_condition = exp.In(this=col_expr, query=sub_expr)
+            final_condition = exp.In(this=col_expr, query=sub_expr)  # type: ignore[unreachable]
         else:
-            msg = f"Unsupported type for 'values' in WHERE IN: {type(values)}"
+            msg = f"Unsupported type for 'values' in WHERE IN: {type(values)}"  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         return self.where(final_condition)
@@ -996,7 +996,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
                 msg = "Subquery for NOT IN produced an empty SQL string."
                 raise SQLBuilderError(msg)
 
-            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect)
+            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect)  # type: ignore[var-annotated]
             if not sub_expr:
                 msg = f"Could not parse subquery for NOT IN: {values}"
                 raise SQLBuilderError(msg)
@@ -1006,7 +1006,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
             current_params = self._parameters
             merged_params = ParameterConverter.merge_parameters(
                 parameters=sub_sql_obj.parameters,
-                args=current_params if isinstance(current_params, list) else None,
+                args=current_params if isinstance(current_params, list) else None,  # type: ignore[unreachable]
                 kwargs=current_params if isinstance(current_params, dict) else {},
             )
             if merged_params is not None:
@@ -1018,9 +1018,9 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
                 raise SQLBuilderError(msg)
             sub_expr = exp.maybe_parse(values, dialect=self.dialect)
             if not sub_expr:
-                msg = f"Could not parse raw SQL subquery for NOT IN: {values}"
+                msg = f"Could not parse raw SQL subquery for NOT IN: {values}"  # type: ignore[unreachable]
                 raise SQLBuilderError(msg)
-            final_condition = exp.Not(this=exp.In(this=col_expr, query=sub_expr))
+            final_condition = exp.Not(this=exp.In(this=col_expr, query=sub_expr))  # type: ignore[unreachable]
         else:
             msg = f"Unsupported type for 'values' in WHERE NOT IN: {type(values)}"  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
@@ -1132,7 +1132,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
                 msg = "Subquery for ANY produced an empty SQL string."
                 raise SQLBuilderError(msg)
 
-            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect)
+            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect)  # type: ignore[var-annotated]
             if not sub_expr:
                 msg = f"Could not parse subquery for ANY: {values}"
                 raise SQLBuilderError(msg)
@@ -1143,7 +1143,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
             current_params = self._parameters
             merged_params = ParameterConverter.merge_parameters(
                 parameters=sub_sql_obj.parameters,
-                args=current_params if isinstance(current_params, list) else None,
+                args=current_params if isinstance(current_params, list) else None,  # type: ignore[unreachable]
                 kwargs=current_params if isinstance(current_params, dict) else {},
             )
             if merged_params is not None:
@@ -1158,12 +1158,12 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
                 raise SQLBuilderError(msg)
             sub_expr = exp.maybe_parse(values, dialect=self.dialect)
             if not sub_expr:
-                msg = f"Could not parse raw SQL for ANY: {values}"
+                msg = f"Could not parse raw SQL for ANY: {values}"  # type: ignore[unreachable]
                 raise SQLBuilderError(msg)
-            any_condition = exp.EQ(this=col_expr, expression=exp.Any(this=sub_expr))
+            any_condition = exp.EQ(this=col_expr, expression=exp.Any(this=sub_expr))  # type: ignore[unreachable]
             return self.where(any_condition)
 
-        msg = f"Unsupported values type for ANY clause: {type(values)}"
+        msg = f"Unsupported values type for ANY clause: {type(values)}"  # type: ignore[unreachable]
         raise SQLBuilderError(msg)
 
     def where_not_any(
@@ -1197,7 +1197,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
                 msg = "Subquery for NOT ANY produced an empty SQL string."
                 raise SQLBuilderError(msg)
 
-            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect)
+            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect)  # type: ignore[var-annotated]
             if not sub_expr:
                 msg = f"Could not parse subquery for NOT ANY: {values}"
                 raise SQLBuilderError(msg)
@@ -1223,12 +1223,12 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
                 raise SQLBuilderError(msg)
             sub_expr = exp.maybe_parse(values, dialect=self.dialect)
             if not sub_expr:
-                msg = f"Could not parse raw SQL for NOT ANY: {values}"
+                msg = f"Could not parse raw SQL for NOT ANY: {values}"  # type: ignore[unreachable]
                 raise SQLBuilderError(msg)
-            not_any_condition = exp.Not(this=exp.EQ(this=col_expr, expression=exp.Any(this=sub_expr)))
+            not_any_condition = exp.Not(this=exp.EQ(this=col_expr, expression=exp.Any(this=sub_expr)))  # type: ignore[unreachable]
             return self.where(not_any_condition)
 
-        msg = f"Unsupported values type for ANY clause: {type(values)}"
+        msg = f"Unsupported values type for ANY clause: {type(values)}"  # type: ignore[unreachable]
         raise SQLBuilderError(msg)
 
     def count_(self, column: "Union[str, exp.Expression]" = "*", alias: "Optional[str]" = None) -> "SelectBuilder":
@@ -1309,7 +1309,7 @@ class SelectBuilder(QueryBuilder[SelectResult[DictRow]]):
         if self._expression is None:
             self._expression = exp.Select()
         if not isinstance(self._expression, exp.Select):
-            msg = "Cannot add window function to a non-SELECT expression."
+            msg = "Cannot add window function to a non-SELECT expression."  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         func_expr_parsed: exp.Expression

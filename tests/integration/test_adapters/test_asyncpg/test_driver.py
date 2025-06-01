@@ -47,8 +47,8 @@ async def test_asyncpg_basic_crud(asyncpg_session: AsyncpgDriver) -> None:
     insert_result = await asyncpg_session.execute(
         "INSERT INTO test_table (name, value) VALUES ($1, $2)", ("test_name", 42)
     )
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # SELECT
     select_result = await asyncpg_session.execute("SELECT name, value FROM test_table WHERE name = $1", ("test_name",))
@@ -144,7 +144,7 @@ async def test_asyncpg_execute_script(asyncpg_session: AsyncpgDriver) -> None:
 
     result = await asyncpg_session.execute_script(script)
     # Script execution typically returns a status string
-    assert isinstance(result, str) or result is None
+    assert isinstance(result, str) or result is None  # type: ignore[unreachable]
 
     # Verify script effects
     select_result = await asyncpg_session.execute(
@@ -351,8 +351,8 @@ async def test_asyncpg_schema_operations(asyncpg_session: AsyncpgDriver) -> None
     insert_result = await asyncpg_session.execute(
         "INSERT INTO schema_test (description) VALUES ($1)", ("test description",)
     )
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # Verify table structure
     info_result = await asyncpg_session.execute("""

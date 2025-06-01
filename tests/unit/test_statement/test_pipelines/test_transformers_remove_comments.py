@@ -1,5 +1,7 @@
 """Function-based tests for comment removal transformer."""
 
+from typing import Any
+
 import pytest
 import sqlglot
 
@@ -233,7 +235,9 @@ def test_remove_comments_mixed_comment_types() -> None:
     ],
     ids=["strict_line", "selective_block", "preserve_hints", "preserve_mysql"],
 )
-def test_remove_comments_various_configurations(sql_input, config_params, description) -> None:
+def test_remove_comments_various_configurations(
+    sql_input: str, config_params: dict[str, Any], description: str
+) -> None:
     """Test comment removal with various configurations."""
     transformer = CommentRemover(**config_params)
     config = SQLConfig()
@@ -435,7 +439,7 @@ def test_remove_comments_different_dialects() -> None:
             cleaned_sql = result.expression.sql(dialect=dialect)
             assert len(cleaned_sql.strip()) > 0, f"Empty output for dialect {dialect}"
 
-        except Exception as e:  # noqa: PERF203
+        except Exception as e:
             # Some dialects might not be supported, which is acceptable
             pytest.skip(f"Dialect {dialect} not supported: {e}")
 

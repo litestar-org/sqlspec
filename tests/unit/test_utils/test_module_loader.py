@@ -7,13 +7,13 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from sqlspec.base import SyncDatabaseConfig
+from sqlspec.config import SyncDatabaseConfig
 from sqlspec.utils.module_loader import import_string, module_to_os_path
 
 
 def test_import_string_basic_functionality() -> None:
     """Test basic import_string functionality."""
-    cls = import_string("sqlspec.base.SyncDatabaseConfig")
+    cls = import_string("sqlspec.config.SyncDatabaseConfig")
     assert type(cls) is type(SyncDatabaseConfig)
 
 
@@ -32,7 +32,7 @@ def test_import_string_module_not_found() -> None:
 def test_import_string_non_existing_attribute() -> None:
     """Test import_string with non-existent attributes."""
     with pytest.raises(ImportError):
-        import_string("sqlspec.base.GenericDatabaseConfig.extra.module")
+        import_string("sqlspec.base.AsyncDatabaseConfig.extra")
 
 
 def test_import_string_builtin_modules() -> None:
@@ -43,7 +43,7 @@ def test_import_string_builtin_modules() -> None:
 
     # Test built-in type
     list_type = import_string("builtins.list")
-    assert list_type == list
+    assert list_type is list
 
     # Test standard library
     path_class = import_string("pathlib.Path")

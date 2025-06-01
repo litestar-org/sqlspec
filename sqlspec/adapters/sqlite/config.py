@@ -116,7 +116,7 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
         except Exception as e:
             logger.exception("Failed to create SQLite connection", extra={"adapter": "sqlite", "error": str(e)})
             raise
-        return connection
+        return connection  # type: ignore[no-any-return]
 
     @contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[SqliteConnection, None, None]":

@@ -62,10 +62,10 @@ async def test_provide_session_context_manager(psqlpy_config: PsqlpyConfig) -> N
         # Test a simple query within the session
         result = await driver.execute("SELECT 'test'")
         assert isinstance(result, SelectResult)
-        assert result.rows is not None
-        assert len(result.rows) == 1
+        assert result.data is not None
+        assert len(result.data) == 1
         assert result.column_names is not None
-        val = result.rows[0][result.column_names[0]]
+        val = result.data[0][result.column_names[0]]
         assert val == "test"
 
     # After exiting context, connection should be released/closed (handled by config)

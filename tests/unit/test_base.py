@@ -148,7 +148,7 @@ class MockAsyncPoolConfig(AsyncDatabaseConfig[Any, Any, Any]):  # type: ignore[t
         return AsyncMock()
 
     async def _create_pool_impl(self) -> Mock:
-        return self.pool_instance  # pyright: ignore
+        return self.pool_instance  # type: ignore[return-value]
 
     async def _close_pool_impl(self) -> None:
         pass
@@ -426,7 +426,7 @@ def test_provide_connection_sync() -> None:
     with patch.object(config, "provide_connection", return_value=mock_cm):
         result = sqlspec.provide_connection(MockSyncConfig)
         assert result == mock_cm
-        config.provide_connection.assert_called_once_with()  # pyright: ignore
+        config.provide_connection.assert_called_once_with()  # type: ignore[attr-defined]
 
 
 def test_provide_connection_with_args() -> None:
@@ -450,7 +450,7 @@ def test_provide_session_sync() -> None:
     with patch.object(config, "provide_session", return_value=mock_cm):
         result = sqlspec.provide_session(MockSyncConfig)
         assert result == mock_cm
-        config.provide_session.assert_called_once_with()  # pyright: ignore
+        config.provide_session.assert_called_once_with()  # type: ignore[attr-defined]
 
 
 def test_provide_session_with_instance() -> None:
@@ -504,7 +504,7 @@ def test_get_pool_sync_with_pool() -> None:
     with patch.object(config, "create_pool", return_value=mock_pool):
         result = sqlspec.get_pool(MockSyncPoolConfig)
         assert result == mock_pool
-        config.create_pool.assert_called_once()  # pyright: ignore
+        config.create_pool.assert_called_once()  # type: ignore[attr-defined]
 
 
 async def test_get_pool_async_with_pool() -> None:
@@ -518,7 +518,7 @@ async def test_get_pool_async_with_pool() -> None:
         result_awaitable = sqlspec.get_pool(MockAsyncPoolConfig)
         result = await result_awaitable
         assert result == mock_pool
-        config.create_pool.assert_called_once()  # pyright: ignore
+        config.create_pool.assert_called_once()  # type: ignore[attr-defined]
 
 
 def test_get_pool_with_instance() -> None:
@@ -756,7 +756,7 @@ def test_get_config_with_none() -> None:
     sqlspec = SQLSpec()
 
     with pytest.raises(KeyError):
-        sqlspec.get_config(None)  # type: ignore[arg-type]
+        sqlspec.get_config(None)  # type: ignore[arg-type,call-overload]
 
 
 def test_configuration_replacement() -> None:
@@ -818,7 +818,7 @@ def test_large_number_of_configs() -> None:
 
     # Verify all configs can be retrieved
     for config_class, original_config in configs:
-        retrieved = sqlspec.get_config(config_class)
+        retrieved = sqlspec.get_config(config_class)  # type: ignore[var-annotated]
         assert retrieved is original_config
 
 

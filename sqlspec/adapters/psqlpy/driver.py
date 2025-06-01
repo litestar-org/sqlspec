@@ -72,6 +72,9 @@ class PsqlpyDriver(
     ) -> Any:
         async with instrument_operation_async(self, "psqlpy_execute", "database"):
             conn = self._connection(connection)
+            if config is not None and config != statement.config:
+                statement = statement.copy(config=config)
+
             final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
 
             if self.instrumentation_config.log_queries:
@@ -104,7 +107,7 @@ class PsqlpyDriver(
                 if isinstance(single_params, (list, tuple)):
                     final_exec_params = list(single_params)
                 elif single_params is not None:
-                    final_exec_params = [single_params]
+                    final_exec_params = [single_params]  # type: ignore[list-item]
 
             if self.instrumentation_config.log_parameters and final_exec_params:
                 logger.debug("Psqlpy query parameters: %s", final_exec_params)
@@ -173,16 +176,15 @@ class PsqlpyDriver(
                 operation_type = str(statement.expression.key).upper()
 
             if isinstance(raw_driver_result, str):
-                execute_data = {
-                    "rows_affected": 0,
-                    "last_inserted_id": None,
-                    "inserted_ids": [],
-                    "returning_data": None,
-                    "operation_type": operation_type or "SCRIPT",
-                }
                 return ExecuteResult(
                     statement=statement,
-                    data=execute_data,
+                    data={
+                        "rows_affected": 0,
+                        "last_inserted_id": None,
+                        "inserted_ids": [],
+                        "returning_data": None,
+                        "operation_type": operation_type or "SCRIPT",
+                    },
                     rows_affected=0,
                     operation_type=operation_type or "SCRIPT",
                 )
@@ -198,16 +200,15 @@ class PsqlpyDriver(
             if self.instrumentation_config.log_results_count:
                 logger.debug("Psqlpy execute operation affected %d rows", rows_affected)
 
-            execute_data = {
-                "rows_affected": rows_affected,
-                "last_inserted_id": None,
-                "inserted_ids": [],
-                "returning_data": None,
-                "operation_type": operation_type,
-            }
             return ExecuteResult(
                 statement=statement,
-                data=execute_data,
+                data={
+                    "rows_affected": rows_affected,
+                    "last_inserted_id": None,
+                    "inserted_ids": [],
+                    "returning_data": None,
+                    "operation_type": operation_type,
+                },
                 rows_affected=rows_affected,
                 operation_type=operation_type,
             )

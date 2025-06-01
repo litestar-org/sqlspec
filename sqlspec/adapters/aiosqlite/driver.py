@@ -77,6 +77,8 @@ class AiosqliteDriver(
     ) -> Any:
         async with instrument_operation_async(self, "aiosqlite_execute", "database"):
             conn = self._connection(connection)
+            if config is not None and config != statement.config:
+                statement = statement.copy(config=config)
 
             if is_script:
                 final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
@@ -175,16 +177,15 @@ class AiosqliteDriver(
                 operation_type = str(statement.expression.key).upper()
 
             if isinstance(raw_driver_result, str):
-                execute_data = {
-                    "rows_affected": 0,
-                    "last_inserted_id": None,
-                    "inserted_ids": [],
-                    "returning_data": None,
-                    "operation_type": operation_type or "SCRIPT",
-                }
                 return ExecuteResult(
                     statement=statement,
-                    data=execute_data,
+                    data={
+                        "rows_affected": 0,
+                        "last_inserted_id": None,
+                        "inserted_ids": [],
+                        "returning_data": None,
+                        "operation_type": operation_type or "SCRIPT",
+                    },
                     rows_affected=0,
                     operation_type=operation_type or "SCRIPT",
                 )
@@ -195,16 +196,15 @@ class AiosqliteDriver(
             if self.instrumentation_config.log_results_count:
                 logger.debug("Aiosqlite execute operation affected %d rows", rows_affected)
 
-            execute_data = {
-                "rows_affected": rows_affected,
-                "last_inserted_id": None,
-                "inserted_ids": [],
-                "returning_data": None,
-                "operation_type": operation_type,
-            }
             return ExecuteResult(
                 statement=statement,
-                data=execute_data,
+                data={
+                    "rows_affected": rows_affected,
+                    "last_inserted_id": None,
+                    "inserted_ids": [],
+                    "returning_data": None,
+                    "operation_type": operation_type,
+                },
                 rows_affected=rows_affected,
                 operation_type=operation_type,
             )

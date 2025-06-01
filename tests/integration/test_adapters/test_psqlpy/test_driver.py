@@ -88,8 +88,8 @@ async def test_select_param_styles(psqlpy_config: PsqlpyConfig, params: Any, sty
     insert_sql = "INSERT INTO test_table (name) VALUES (?)"
     async with psqlpy_config.provide_session() as driver:
         insert_result = await driver.execute(insert_sql, ("test_name",))
-        assert isinstance(insert_result, ExecuteResult)
-        assert insert_result.rows_affected == 1
+        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
         # Prepare select SQL based on style
         if style == "tuple_binds":
@@ -113,8 +113,8 @@ async def test_insert_update_delete(psqlpy_config: PsqlpyConfig) -> None:
         # Insert
         insert_sql = "INSERT INTO test_table (name) VALUES (?)"
         insert_result = await driver.execute(insert_sql, ("initial_name",))
-        assert isinstance(insert_result, ExecuteResult)
-        assert insert_result.rows_affected == 1
+        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
         # Verify Insert
         select_sql = "SELECT name FROM test_table WHERE name = ?"
@@ -255,8 +255,8 @@ async def test_scalar_parameter_handling(psqlpy_config: PsqlpyConfig) -> None:
     async with psqlpy_config.provide_session() as driver:
         # Insert a record
         insert_result = await driver.execute("INSERT INTO test_table (name) VALUES (?)", "single_param")
-        assert isinstance(insert_result, ExecuteResult)
-        assert insert_result.rows_affected == 1
+        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
         # Verify the record exists with scalar parameter
         select_result = await driver.execute("SELECT * FROM test_table WHERE name = ?", "single_param")
@@ -286,8 +286,8 @@ async def test_question_mark_in_edge_cases(psqlpy_config: PsqlpyConfig) -> None:
     async with psqlpy_config.provide_session() as driver:
         # Insert a record
         insert_result = await driver.execute("INSERT INTO test_table (name) VALUES (?)", "edge_case_test")
-        assert isinstance(insert_result, ExecuteResult)
-        assert insert_result.rows_affected == 1
+        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
         # Test question mark in a string literal - should not be treated as a parameter
         result = await driver.execute("SELECT * FROM test_table WHERE name = ? AND '?' = '?'", "edge_case_test")
@@ -417,8 +417,8 @@ async def test_update_operation(psqlpy_config: PsqlpyConfig) -> None:
     async with psqlpy_config.provide_session() as driver:
         # Insert a record first
         insert_result = await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("original_name",))
-        assert isinstance(insert_result, ExecuteResult)
-        assert insert_result.rows_affected == 1
+        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
         # Update the record
         update_result = await driver.execute("UPDATE test_table SET name = ? WHERE id = ?", ("updated_name", 1))
@@ -437,13 +437,13 @@ async def test_delete_operation(psqlpy_config: PsqlpyConfig) -> None:
     async with psqlpy_config.provide_session() as driver:
         # Insert a record first
         insert_result = await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("to_delete",))
-        assert isinstance(insert_result, ExecuteResult)
-        assert insert_result.rows_affected == 1
+        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
         # Delete the record
         delete_result = await driver.execute("DELETE FROM test_table WHERE id = ?", (1,))
-        assert isinstance(delete_result, ExecuteResult)
-        assert delete_result.rows_affected == 1
+        assert isinstance(delete_result, ExecuteResult)  # type: ignore[unreachable]
+        assert delete_result.rows_affected == 1  # type: ignore[unreachable]
 
         # Verify the deletion
         select_result = await driver.execute("SELECT COUNT(*) as count FROM test_table")

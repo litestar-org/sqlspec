@@ -48,8 +48,8 @@ def test_psycopg_basic_crud(psycopg_session: PsycopgSyncDriver) -> None:
     """Test basic CRUD operations."""
     # INSERT
     insert_result = psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("test_name", 42))
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # SELECT
     select_result = psycopg_session.execute("SELECT name, value FROM test_table WHERE name = %s", ("test_name",))
@@ -346,8 +346,8 @@ def test_psycopg_schema_operations(psycopg_session: PsycopgSyncDriver) -> None:
 
     # Insert data into new table
     insert_result = psycopg_session.execute("INSERT INTO schema_test (description) VALUES (%s)", ("test description",))
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # Verify table structure
     info_result = psycopg_session.execute("""

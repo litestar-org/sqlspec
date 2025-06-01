@@ -1,3 +1,4 @@
+# ruff: noqa: BLE001
 import asyncio
 import atexit
 import logging
@@ -274,7 +275,7 @@ class SQLSpec:
             default_row_type=getattr(config, "default_row_type", None),
         )
         logger.debug("Created sync driver session for config: %s", config_name)
-        return driver
+        return cast("DriverT", driver)  # pyright: ignore
 
     @overload
     def provide_connection(

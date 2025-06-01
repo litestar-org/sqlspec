@@ -191,7 +191,7 @@ class UpdateBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
         elif isinstance(table, exp.Expression):
             table_expr = exp.alias_(table, alias) if alias else table
         else:
-            msg = f"Unsupported table type for FROM clause: {type(table)}"
+            msg = f"Unsupported table type for FROM clause: {type(table)}"  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         if self._expression.args.get("from") is None:

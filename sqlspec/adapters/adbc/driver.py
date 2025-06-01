@@ -129,6 +129,9 @@ class AdbcDriver(
     ) -> Any:
         with instrument_operation(self, "adbc_execute", "database"):
             conn = self._connection(connection)
+            if config is not None and config != statement.config:
+                statement = statement.copy(config=config)
+
             final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
 
             final_exec_params: Optional[list[Any]] = None
@@ -160,10 +163,8 @@ class AdbcDriver(
                     cursor.execute(script_sql)
                     status_message = "SCRIPT EXECUTED"
                     if hasattr(cursor, "statusmessage"):
-                        try:
+                        with contextlib.suppress(Exception):
                             status_message = getattr(cursor, "statusmessage", "SCRIPT EXECUTED")
-                        except Exception:  # noqa: BLE001
-                            pass  # Fall back to default message
                     return status_message
                 if is_many:
                     cursor.executemany(final_sql, cast("list[list[Any]]", final_exec_params))
@@ -216,16 +217,15 @@ class AdbcDriver(
                 operation_type = str(statement.expression.key).upper()
 
             if isinstance(raw_driver_result, str):
-                execute_data = {
-                    "rows_affected": 0,
-                    "last_inserted_id": None,
-                    "inserted_ids": [],
-                    "returning_data": None,
-                    "operation_type": operation_type or "SCRIPT",
-                }
                 return ExecuteResult(
                     statement=statement,
-                    data=execute_data,
+                    data={
+                        "rows_affected": 0,
+                        "last_inserted_id": None,
+                        "inserted_ids": [],
+                        "returning_data": None,
+                        "operation_type": operation_type or "SCRIPT",
+                    },
                     rows_affected=0,
                     operation_type=operation_type or "SCRIPT",
                 )
@@ -236,16 +236,15 @@ class AdbcDriver(
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)
 
-            execute_data = {
-                "rows_affected": rows_affected,
-                "last_inserted_id": None,
-                "inserted_ids": [],
-                "returning_data": None,
-                "operation_type": operation_type,
-            }
             return ExecuteResult(
                 statement=statement,
-                data=execute_data,
+                data={
+                    "rows_affected": rows_affected,
+                    "last_inserted_id": None,
+                    "inserted_ids": [],
+                    "returning_data": None,
+                    "operation_type": operation_type,
+                },
                 rows_affected=rows_affected,
                 operation_type=operation_type,
             )

@@ -99,7 +99,9 @@ def test_prevent_injection_detects_mysql_version_comment_injection() -> None:
     ],
     ids=["or_injection", "auth_bypass", "union_select"],
 )
-def test_prevent_injection_detects_various_injection_patterns(malicious_payload, expected_pattern, description) -> None:
+def test_prevent_injection_detects_various_injection_patterns(
+    malicious_payload: str, expected_pattern: str, description: str
+) -> None:
     """Test detection of various SQL injection patterns."""
     validator = PreventInjection()
     config = SQLConfig()

@@ -150,18 +150,33 @@ class AiosqlSyncAdapter:
             query_name: Name of the query
             sql: SQL string
             parameters: Query parameters
-            record_class: Optional record class for result mapping
+            record_class: Deprecated - use schema_type in driver.execute instead
 
         Yields:
             Query result rows
+
+        Note:
+            record_class parameter is ignored. Use schema_type in driver.execute
+            or _sqlspec_schema_type in parameters for type mapping.
         """
+        if record_class is not None:
+            logger.warning(
+                "record_class parameter is deprecated and ignored. "
+                "Use schema_type in driver.execute or _sqlspec_schema_type in parameters."
+            )
+
         cleaned_params, filters = self._extract_sqlspec_filters(parameters)
 
+        # Check for schema_type in parameters
+        schema_type = None
+        if isinstance(cleaned_params, dict):
+            schema_type = cleaned_params.pop("_sqlspec_schema_type", None)
+
         # Create SQL object and apply filters
-        sql_obj = SQL(sql, *filters, parameters=cleaned_params, dialect=self.driver.dialect)
+        sql_obj = SQL(sql, cleaned_params, *filters, dialect=self.driver.dialect)
 
         # Execute using SQLSpec driver
-        result = self.driver.execute(sql_obj, connection=conn, schema_type=record_class)
+        result = self.driver.execute(sql_obj, connection=conn, schema_type=schema_type)
 
         if isinstance(result, SelectResult) and result.data is not None:
             yield from result.data
@@ -181,16 +196,33 @@ class AiosqlSyncAdapter:
             query_name: Name of the query
             sql: SQL string
             parameters: Query parameters
-            record_class: Optional record class for result mapping
+            record_class: Deprecated - use schema_type in driver.execute instead
 
         Returns:
             First result row or None
+
+        Note:
+            record_class parameter is ignored. Use schema_type in driver.execute
+            or _sqlspec_schema_type in parameters for type mapping.
         """
+        if record_class is not None:
+            logger.warning(
+                "record_class parameter is deprecated and ignored. "
+                "Use schema_type in driver.execute or _sqlspec_schema_type in parameters."
+            )
+
         cleaned_params, filters = self._extract_sqlspec_filters(parameters)
 
-        sql_obj = SQL(sql, *filters, parameters=cleaned_params, dialect=self.driver.dialect)
+        # Check for schema_type in parameters
+        schema_type = None
+        if isinstance(cleaned_params, dict):
+            schema_type = cleaned_params.pop("_sqlspec_schema_type", None)
 
-        result = cast("SelectResult[DictRow]", self.driver.execute(sql_obj, connection=conn, schema_type=record_class))
+        sql_obj = SQL(sql, parameters=cleaned_params, dialect=self.driver.dialect)
+        for filter_obj in filters:
+            sql_obj = sql_obj.append_filter(filter_obj)
+
+        result = cast("SelectResult[DictRow]", self.driver.execute(sql_obj, connection=conn, schema_type=schema_type))
 
         if hasattr(result, "rows") and result.data and isinstance(result, SelectResult):
             return result.data[0]
@@ -426,19 +458,34 @@ class AiosqlAsyncAdapter:
             query_name: Name of the query
             sql: SQL string
             parameters: Query parameters
-            record_class: Optional record class for result mapping
+            record_class: Deprecated - use schema_type in driver.execute instead
 
         Returns:
             List of query result rows
+
+        Note:
+            record_class parameter is ignored. Use schema_type in driver.execute
+            or _sqlspec_schema_type in parameters for type mapping.
         """
+        if record_class is not None:
+            logger.warning(
+                "record_class parameter is deprecated and ignored. "
+                "Use schema_type in driver.execute or _sqlspec_schema_type in parameters."
+            )
+
         cleaned_params, filters = self._extract_sqlspec_filters(parameters)
+
+        # Check for schema_type in parameters
+        schema_type = None
+        if isinstance(cleaned_params, dict):
+            schema_type = cleaned_params.pop("_sqlspec_schema_type", None)
 
         sql_obj = SQL(sql, parameters=cleaned_params, dialect=self.driver.dialect)
         for filter_obj in filters:
             sql_obj = sql_obj.append_filter(filter_obj)
 
         result = cast(
-            "SelectResult[DictRow]", await self.driver.execute(sql_obj, connection=conn, schema_type=record_class)
+            "SelectResult[DictRow]", await self.driver.execute(sql_obj, connection=conn, schema_type=schema_type)
         )
 
         if hasattr(result, "data") and result.data is not None and isinstance(result, SelectResult):
@@ -460,12 +507,27 @@ class AiosqlAsyncAdapter:
             query_name: Name of the query
             sql: SQL string
             parameters: Query parameters
-            record_class: Optional record class for result mapping
+            record_class: Deprecated - use schema_type in driver.execute instead
 
         Returns:
             First result row or None
+
+        Note:
+            record_class parameter is ignored. Use schema_type in driver.execute
+            or _sqlspec_schema_type in parameters for type mapping.
         """
+        if record_class is not None:
+            logger.warning(
+                "record_class parameter is deprecated and ignored. "
+                "Use schema_type in driver.execute or _sqlspec_schema_type in parameters."
+            )
+
         cleaned_params, filters = self._extract_sqlspec_filters(parameters)
+
+        # Check for schema_type in parameters
+        schema_type = None
+        if isinstance(cleaned_params, dict):
+            schema_type = cleaned_params.pop("_sqlspec_schema_type", None)
 
         from sqlspec.statement.filters import LimitOffsetFilter
 
@@ -476,7 +538,7 @@ class AiosqlAsyncAdapter:
             sql_obj = sql_obj.append_filter(filter_obj)
 
         result = cast(
-            "SelectResult[DictRow]", await self.driver.execute(sql_obj, connection=conn, schema_type=record_class)
+            "SelectResult[DictRow]", await self.driver.execute(sql_obj, connection=conn, schema_type=schema_type)
         )
 
         if hasattr(result, "data") and result.data and isinstance(result, SelectResult):

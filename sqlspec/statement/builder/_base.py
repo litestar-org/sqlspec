@@ -184,7 +184,7 @@ class QueryBuilder(ABC, Generic[ResultT]):
         elif isinstance(query, exp.Select):
             cte_select_expression = query.copy()
         else:
-            msg = (
+            msg = (  # type: ignore[unreachable]
                 f"Invalid query type for CTE: {type(query).__name__}. Must be QueryBuilder, str, or sqlglot.exp.Select."
             )
             self._raise_sql_builder_error(msg)
@@ -207,7 +207,7 @@ class QueryBuilder(ABC, Generic[ResultT]):
             if hasattr(final_expression, "with_") and callable(getattr(final_expression, "with_", None)):
                 processed_expression = final_expression
                 for alias, cte_node in self._with_ctes.items():
-                    processed_expression = processed_expression.with_(  # type: ignore[attr-defined]
+                    processed_expression = processed_expression.with_(  # pyright: ignore
                         cte_node.args["this"],  # The SELECT expression
                         as_=alias,  # The alias
                         copy=False,
@@ -263,7 +263,7 @@ class QueryBuilder(ABC, Generic[ResultT]):
         """
         try:
             return self.build().sql
-        except Exception:
+        except Exception:  # noqa: BLE001
             # Fallback to default representation if build fails
             return super().__str__()
 
@@ -278,8 +278,8 @@ class QueryBuilder(ABC, Generic[ResultT]):
             if isinstance(self.dialect, Dialect):
                 return type(self.dialect).__name__.lower()
             # Handle case where dialect might have a __name__ attribute
-            if hasattr(self.dialect, "__name__"):
-                return self.dialect.__name__.lower()
+            if hasattr(self.dialect, "__name__"):  # type: ignore[unreachable]
+                return self.dialect.__name__.lower()  # type: ignore[unreachable]
         return None
 
 
@@ -309,7 +309,7 @@ class WhereClauseMixin:
         _, param_name = self.add_parameter(value)  # type: ignore[attr-defined]
         col_expr = exp.column(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.eq(exp.var(param_name))
-        return self.where(condition)  # type: ignore[attr-defined]
+        return self.where(condition)  # type: ignore[attr-defined, no-any-return]
 
     def where_between(
         self,
@@ -332,7 +332,7 @@ class WhereClauseMixin:
 
         col_expr = exp.column(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.between(exp.var(low_param), exp.var(high_param))
-        return self.where(condition)  # type: ignore[attr-defined]
+        return self.where(condition)  # type: ignore[attr-defined, no-any-return]
 
     def where_like(self, column: Union[str, exp.Column], pattern: str) -> "Self":
         """Add a LIKE condition to the WHERE clause.
@@ -347,7 +347,7 @@ class WhereClauseMixin:
         _, param_name = self.add_parameter(pattern)  # type: ignore[attr-defined]
         col_expr = exp.column(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.like(exp.var(param_name))
-        return self.where(condition)  # type: ignore[attr-defined]
+        return self.where(condition)  # type: ignore[attr-defined, no-any-return]
 
     def where_not_like(self, column: Union[str, exp.Column], pattern: str) -> "Self":
         """Add a NOT LIKE condition to the WHERE clause.
@@ -362,7 +362,7 @@ class WhereClauseMixin:
         _, param_name = self.add_parameter(pattern)  # type: ignore[attr-defined]
         col_expr = exp.column(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.like(exp.var(param_name)).not_()
-        return self.where(condition)  # type: ignore[attr-defined]
+        return self.where(condition)  # type: ignore[attr-defined, no-any-return]
 
     def where_is_null(self, column: Union[str, exp.Column]) -> "Self":
         """Add an IS NULL condition to the WHERE clause.
@@ -375,7 +375,7 @@ class WhereClauseMixin:
         """
         col_expr = exp.column(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.is_(exp.null())
-        return self.where(condition)  # type: ignore[attr-defined]
+        return self.where(condition)  # type: ignore[attr-defined, no-any-return]
 
     def where_is_not_null(self, column: Union[str, exp.Column]) -> "Self":
         """Add an IS NOT NULL condition to the WHERE clause.
@@ -388,7 +388,7 @@ class WhereClauseMixin:
         """
         col_expr = exp.column(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.is_(exp.null()).not_()
-        return self.where(condition)  # type: ignore[attr-defined]
+        return self.where(condition)  # type: ignore[attr-defined, no-any-return]
 
     def where_exists(self, subquery: Union[str, Any]) -> "Self":
         """Add a WHERE EXISTS clause.
@@ -411,7 +411,7 @@ class WhereClauseMixin:
 
             # Get the subquery SQL
             sub_sql_obj = subquery.build()  # type: ignore[attr-defined]
-            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect_name)  # type: ignore[attr-defined]
+            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect_name)  # type: ignore[attr-defined,var-annotated]
         else:
             sub_expr = exp.maybe_parse(str(subquery), dialect=self.dialect_name)  # type: ignore[attr-defined]
 
@@ -420,7 +420,7 @@ class WhereClauseMixin:
             raise SQLBuilderError(msg)
 
         exists_expr = exp.Exists(this=sub_expr)
-        return self.where(exists_expr)  # type: ignore[attr-defined]
+        return self.where(exists_expr)  # type: ignore[attr-defined, no-any-return]
 
     def where_not_exists(self, subquery: Union[str, Any]) -> "Self":
         """Add a WHERE NOT EXISTS clause.
@@ -443,7 +443,7 @@ class WhereClauseMixin:
 
             # Get the subquery SQL
             sub_sql_obj = subquery.build()  # type: ignore[attr-defined]
-            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect_name)  # type: ignore[attr-defined]
+            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect_name)  # type: ignore[attr-defined,var-annotated]
         else:
             sub_expr = exp.maybe_parse(str(subquery), dialect=self.dialect_name)  # type: ignore[attr-defined]
 
@@ -452,4 +452,4 @@ class WhereClauseMixin:
             raise SQLBuilderError(msg)
 
         not_exists_expr = exp.Not(this=exp.Exists(this=sub_expr))
-        return self.where(not_exists_expr)  # type: ignore[attr-defined]
+        return self.where(not_exists_expr)  # type: ignore[attr-defined, no-any-return]

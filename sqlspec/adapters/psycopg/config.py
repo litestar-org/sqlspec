@@ -261,7 +261,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         """
         conn_dict = {k: v for k, v in self.connection_config.items() if v is not Empty}
         conn_dict["row_factory"] = DictRow
-        return connect(**conn_dict)  # type: ignore[return-value]
+        return connect(**conn_dict)  # type: ignore[return-value,arg-type]
 
     @contextlib.contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[PsycopgSyncConnection, None, None]":
@@ -278,7 +278,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             with self.pool_instance.connection() as conn:
                 yield conn  # type: ignore[misc]
         else:
-            conn = self.create_connection()
+            conn = self.create_connection()  # type: ignore[assignment]
             try:
                 yield conn
             finally:

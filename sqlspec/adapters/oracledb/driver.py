@@ -81,6 +81,9 @@ class OracleSyncDriver(
     ) -> Any:
         with instrument_operation(self, "oracle_execute", "database"):
             conn = self._connection(connection)
+            if config is not None and config != statement.config:
+                statement = statement.copy(config=config)
+
             final_sql: str
             final_driver_params: Union[dict[str, Any], list[dict[str, Any]], None] = None
 
@@ -308,6 +311,9 @@ class OracleAsyncDriver(
     ) -> Any:
         async with instrument_operation_async(self, "oracle_async_execute", "database"):
             conn = self._connection(connection)
+            if config is not None and config != statement.config:
+                statement = statement.copy(config=config)
+
             final_sql: str
             final_driver_params: Union[dict[str, Any], list[dict[str, Any]], None] = None
 

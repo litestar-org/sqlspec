@@ -2,8 +2,10 @@
 
 from sqlspec import adapters, base, exceptions, extensions, statement, typing, utils
 from sqlspec.__metadata__ import __version__
-from sqlspec._sql import sql
+from sqlspec._sql import SQLFactory
 from sqlspec.base import SQLSpec
+
+sql = SQLFactory()
 
 __all__ = (
     "SQLSpec",

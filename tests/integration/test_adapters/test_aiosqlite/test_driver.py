@@ -39,8 +39,8 @@ async def test_aiosqlite_basic_crud(aiosqlite_session: AiosqliteDriver) -> None:
     insert_result = await aiosqlite_session.execute(
         "INSERT INTO test_table (name, value) VALUES (?, ?)", ("test_name", 42)
     )
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # SELECT
     select_result = await aiosqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name",))
@@ -136,7 +136,7 @@ async def test_aiosqlite_execute_script(aiosqlite_session: AiosqliteDriver) -> N
 
     result = await aiosqlite_session.execute_script(script)
     # Script execution typically returns a status string
-    assert isinstance(result, str) or result is None
+    assert isinstance(result, str) or result is None  # type: ignore[unreachable]
 
     # Verify script effects
     select_result = await aiosqlite_session.execute(
@@ -220,8 +220,8 @@ async def test_aiosqlite_data_types(aiosqlite_session: AiosqliteDriver) -> None:
         "INSERT INTO data_types_test (text_col, integer_col, real_col, blob_col, null_col) VALUES (?, ?, ?, ?, ?)",
         test_data,
     )
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # Retrieve and verify data
     select_result = await aiosqlite_session.execute(
@@ -324,14 +324,14 @@ async def test_aiosqlite_schema_operations(aiosqlite_session: AiosqliteDriver) -
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    assert isinstance(create_result, str) or create_result is None
+    assert isinstance(create_result, str) or create_result is None  # type: ignore[unreachable]
 
     # Insert data into new table
     insert_result = await aiosqlite_session.execute(
         "INSERT INTO schema_test (description) VALUES (?)", ("test description",)
     )
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # Verify table structure
     pragma_result = await aiosqlite_session.execute("PRAGMA table_info(schema_test)")

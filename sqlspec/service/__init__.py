@@ -3,7 +3,7 @@ from typing import (
     TypeVar,
 )
 
-from sqlspec.base import DriverT
+from sqlspec.config import DriverT
 from sqlspec.service._util import ResultConverter, find_filter
 from sqlspec.service.pagination import OffsetPagination
 from sqlspec.statement.filters import FilterTypeT, LimitOffsetFilter, StatementFilter

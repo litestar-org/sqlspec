@@ -26,12 +26,17 @@ StatementResultType = Union["StatementResult[dict[str, Any]]", "StatementResult[
 
 
 __all__ = (
+    "AsyncConfigT",
     "AsyncDatabaseConfig",
+    "ConfigT",
     "DatabaseConfigProtocol",
+    "DriverT",
     "GenericPoolConfig",
     "InstrumentationConfig",
     "NoPoolAsyncConfig",
     "NoPoolSyncConfig",
+    "StatementResultType",
+    "SyncConfigT",
     "SyncDatabaseConfig",
 )
 

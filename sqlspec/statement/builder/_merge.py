@@ -5,11 +5,9 @@ This module provides a fluent interface for building SQL queries safely,
 with automatic parameter binding and validation.
 """
 
-from __future__ import annotations
-
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from sqlglot import exp
 from typing_extensions import Self
@@ -41,12 +39,10 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
             .into("target_table")
             .using("source_table", "src")
             .on("target_table.id = src.id")
-            .when_matched_then_update(
-                {
-                    "name": "src.name",
-                    "updated_at": "NOW()",
-                }
-            )
+            .when_matched_then_update({
+                "name": "src.name",
+                "updated_at": "NOW()",
+            })
             .when_not_matched_then_insert(
                 columns=["id", "name", "created_at"],
                 values=["src.id", "src.name", "NOW()"],
@@ -76,7 +72,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
     """
 
     @property
-    def _expected_result_type(self) -> type[ExecuteResult]:
+    def _expected_result_type(self) -> "type[ExecuteResult]":
         """Return the expected result type for this builder.
 
         Returns:
@@ -84,7 +80,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         """
         return ExecuteResult
 
-    def _create_base_expression(self) -> exp.Merge:
+    def _create_base_expression(self) -> "exp.Merge":
         """Create a base MERGE expression.
 
         Returns:
@@ -92,7 +88,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         """
         return exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
 
-    def into(self, table: str | exp.Expression, alias: str | None = None) -> Self:
+    def into(self, table: "Union[str, exp.Expression]", alias: "Optional[str]" = None) -> "Self":
         """Set the target table for the MERGE operation (INTO clause).
 
         Args:
@@ -108,7 +104,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         self._expression.set("this", exp.to_table(table, alias=alias) if isinstance(table, str) else table)
         return self
 
-    def using(self, source: str | exp.Expression | SelectBuilder, alias: str | None = None) -> Self:
+    def using(self, source: "Union[str, exp.Expression, SelectBuilder]", alias: "Optional[str]" = None) -> "Self":
         """Set the source data for the MERGE operation (USING clause).
 
         Args:
@@ -142,13 +138,13 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
             if alias:
                 source_expr = exp.alias_(source_expr, alias)
         else:
-            msg = f"Unsupported source type for USING clause: {type(source)}"
+            msg = f"Unsupported source type for USING clause: {type(source)}"  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         self._expression.set("using", source_expr)
         return self
 
-    def on(self, condition: str | exp.Expression) -> Self:
+    def on(self, condition: "Union[str, exp.Expression]") -> "Self":
         """Set the join condition for the MERGE operation (ON clause).
 
         Args:
@@ -166,7 +162,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
 
         condition_expr: exp.Expression
         if isinstance(condition, str):
-            parsed_condition = exp.maybe_parse(condition, dialect=self.dialect)
+            parsed_condition = exp.maybe_parse(condition, dialect=self.dialect)  # type: ignore[var-annotated]
             if not parsed_condition:
                 msg = f"Could not parse ON condition: {condition}"
                 raise SQLBuilderError(msg)
@@ -174,7 +170,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         elif isinstance(condition, exp.Expression):
             condition_expr = condition
         else:
-            msg = f"Unsupported condition type for ON clause: {type(condition)}"
+            msg = f"Unsupported condition type for ON clause: {type(condition)}"  # type: ignore[unreachable]
             raise SQLBuilderError(msg)
 
         self._expression.set("on", condition_expr)
@@ -199,14 +195,17 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         whens.append("expressions", when_clause)
 
     def when_matched_then_update(
-        self, set_values: dict[str, Any], condition: str | exp.Expression | None = None
-    ) -> Self:
+        self, set_values: "dict[str, Any]", condition: "Optional[Union[str, exp.Expression]]" = None
+    ) -> "Self":
         """Define the UPDATE action for matched rows.
 
         Args:
             set_values: A dictionary of column names and their new values to set.
                         The values will be parameterized.
             condition: An optional additional condition for this specific action.
+
+        Raises:
+            SQLBuilderError: If the condition type is unsupported.
 
         Returns:
             The current builder instance for method chaining.
@@ -229,7 +228,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)
+                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)  # type: ignore[var-annotated]
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -237,7 +236,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
             elif isinstance(condition, exp.Expression):
                 condition_expr = condition
             else:
-                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
+                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"  # type: ignore[unreachable]
                 raise SQLBuilderError(msg)
             when_args["this"] = condition_expr
 
@@ -245,11 +244,14 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         self._add_when_clause(when_clause)
         return self
 
-    def when_matched_then_delete(self, condition: str | exp.Expression | None = None) -> Self:
+    def when_matched_then_delete(self, condition: "Optional[Union[str, exp.Expression]]" = None) -> "Self":
         """Define the DELETE action for matched rows.
 
         Args:
             condition: An optional additional condition for this specific action.
+
+        Raises:
+            SQLBuilderError: If the condition type is unsupported.
 
         Returns:
             The current builder instance for method chaining.
@@ -262,7 +264,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)
+                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)  # type: ignore[var-annotated]
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -270,7 +272,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
             elif isinstance(condition, exp.Expression):
                 condition_expr = condition
             else:
-                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
+                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"  # type: ignore[unreachable]
                 raise SQLBuilderError(msg)
             when_args["this"] = condition_expr
 
@@ -280,11 +282,11 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
 
     def when_not_matched_then_insert(
         self,
-        columns: list[str] | None = None,
-        values: list[Any] | None = None,
-        condition: str | exp.Expression | None = None,
+        columns: "Optional[list[str]]" = None,
+        values: "Optional[list[Any]]" = None,
+        condition: "Optional[Union[str, exp.Expression]]" = None,
         by_target: bool = True,
-    ) -> Self:
+    ) -> "Self":
         """Define the INSERT action for rows not matched.
 
         Args:
@@ -336,7 +338,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)
+                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)  # type: ignore[var-annotated]
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -344,7 +346,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
             elif isinstance(condition, exp.Expression):
                 condition_expr = condition
             else:
-                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
+                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"  # type: ignore[unreachable]
                 raise SQLBuilderError(msg)
             when_args["this"] = condition_expr
 
@@ -353,8 +355,8 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         return self
 
     def when_not_matched_by_source_then_update(
-        self, set_values: dict[str, Any], condition: str | exp.Expression | None = None
-    ) -> Self:
+        self, set_values: "dict[str, Any]", condition: "Optional[Union[str, exp.Expression]]" = None
+    ) -> "Self":
         """Define the UPDATE action for rows not matched by source.
 
         This is useful for handling rows that exist in the target but not in the source.
@@ -362,6 +364,9 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         Args:
             set_values: A dictionary of column names and their new values to set.
             condition: An optional additional condition for this specific action.
+
+        Raises:
+            SQLBuilderError: If the condition type is unsupported.
 
         Returns:
             The current builder instance for method chaining.
@@ -385,7 +390,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)
+                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)  # type: ignore[var-annotated]
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -393,7 +398,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
             elif isinstance(condition, exp.Expression):
                 condition_expr = condition
             else:
-                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
+                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"  # type: ignore[unreachable]
                 raise SQLBuilderError(msg)
             when_args["this"] = condition_expr
 
@@ -401,13 +406,18 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         self._add_when_clause(when_clause)
         return self
 
-    def when_not_matched_by_source_then_delete(self, condition: str | exp.Expression | None = None) -> Self:
+    def when_not_matched_by_source_then_delete(
+        self, condition: "Optional[Union[str, exp.Expression]]" = None
+    ) -> "Self":
         """Define the DELETE action for rows not matched by source.
 
         This is useful for cleaning up rows that exist in the target but not in the source.
 
         Args:
             condition: An optional additional condition for this specific action.
+
+        Raises:
+            SQLBuilderError: If the condition type is unsupported.
 
         Returns:
             The current builder instance for method chaining.
@@ -421,7 +431,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)
+                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)  # type: ignore[var-annotated]
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -429,7 +439,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
             elif isinstance(condition, exp.Expression):
                 condition_expr = condition
             else:
-                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
+                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"  # type: ignore[unreachable]
                 raise SQLBuilderError(msg)
             when_args["this"] = condition_expr
 

@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
@@ -69,6 +70,8 @@ class AsyncpgDriver(
     ) -> Any:
         async with instrument_operation_async(self, "asyncpg_execute", "database"):
             conn = self._connection(connection)
+            if config is not None and config != statement.config:
+                statement = statement.copy(config=config)
 
             if is_script:
                 final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)

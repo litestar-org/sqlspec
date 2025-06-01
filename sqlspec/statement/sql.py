@@ -16,15 +16,15 @@ If placeholder_style is not specified, the method falls back to dialect-based lo
 
 import logging
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
-import sqlglot  # Restore
+import sqlglot
 from sqlglot import exp
-from sqlglot.errors import ParseError as SQLGlotParseError  # Restore
+from sqlglot.errors import ParseError as SQLGlotParseError
 
 from sqlspec.exceptions import (
-    ParameterError,  # Restore
-    RiskLevel,  # Restore
+    ParameterError,
+    RiskLevel,
     SQLParsingError,
     SQLSpecError,
     SQLTransformationError,
@@ -55,7 +55,6 @@ __all__ = (
 
 logger = logging.getLogger("sqlspec")
 
-# Define a type for SQL input
 Statement = Union[str, exp.Expression, "SQL"]
 
 
@@ -134,12 +133,10 @@ class SQLConfig:
             if self.enable_transformations:
                 from sqlspec.statement.pipelines.transformers import CommentRemover, ParameterizeLiterals
 
-                components_to_use.extend(
-                    [
-                        CommentRemover(),
-                        ParameterizeLiterals(),
-                    ]
-                )
+                components_to_use.extend([
+                    CommentRemover(),
+                    ParameterizeLiterals(),
+                ])
 
             # Add default validator if validation is enabled
             if self.enable_validation:
@@ -551,7 +548,7 @@ class SQL:
         if self._parsed_expression:
             pipeline_analysis = getattr(self._parsed_expression, "_sqlspec_analysis", None)
             if pipeline_analysis:
-                return pipeline_analysis
+                return cast("StatementAnalysis", pipeline_analysis)
         return self._analysis_result
 
     def to_sql(
@@ -1262,11 +1259,9 @@ class SQL:
         # Create a hashable representation of config by using its string representation
         config_hash = hash(str(self._config))
 
-        return hash(
-            (
-                str(self._sql),
-                hashable_params,
-                self._dialect,
-                config_hash,
-            )
-        )
+        return hash((
+            str(self._sql),
+            hashable_params,
+            self._dialect,
+            config_hash,
+        ))

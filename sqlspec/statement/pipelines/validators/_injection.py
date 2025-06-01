@@ -208,7 +208,19 @@ class PreventInjection(SQLValidation):
                 literal_value = str(literal.this)
 
                 # Check for SQL keywords in string literals (possible injection)
-                sql_keywords = ["SELECT", "UNION", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER"]
+                sql_keywords = {
+                    "SELECT",
+                    "UNION",
+                    "INSERT",
+                    "UPDATE",
+                    "DELETE",
+                    "DROP",
+                    "ALTER",
+                    "SHOW",
+                    "DESCRIBE",
+                    "BEGIN",
+                    "DECLARE",
+                }
                 if any(keyword.lower() in literal_value.lower() for keyword in sql_keywords):
                     issues.append(f"SQL keywords found in string literal: '{literal_value[:50]}...'")
 
@@ -258,7 +270,7 @@ class PreventInjection(SQLValidation):
             # Check if there are suspicious WHERE clauses without parameters
             for where_clause in expression.find_all(exp.Where):
                 where_sql = where_clause.sql()
-                if any(op in where_sql for op in ["=", "LIKE", "IN"]) and "NULL" not in where_sql:
+                if any(op in where_sql for op in ("=", "LIKE", "IN")) and "NULL" not in where_sql:
                     # WHERE clause with comparison but no parameters - suspicious
                     warnings.append("WHERE clause with comparisons but no parameter placeholders")
 

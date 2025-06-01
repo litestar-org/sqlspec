@@ -55,8 +55,8 @@ def test_sqlite_file_database_connection() -> None:
             """)
 
             insert_result = session.execute("INSERT INTO test_table (name) VALUES (?)", ("test_name",))
-            assert isinstance(insert_result, ExecuteResult)
-            assert insert_result.rows_affected == 1
+            assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+            assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
             # Verify data persists
             select_result = session.execute("SELECT name FROM test_table")

@@ -129,8 +129,8 @@ def test_select_value(duckdb_session: DuckDBDriver, params: Any, style: ParamSty
         insert_sql = "INSERT INTO test_table (name, id) VALUES (:name, :id)"
 
     insert_result = duckdb_session.execute(insert_sql, params)
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # Test select value
     if style == "tuple_binds":
@@ -232,8 +232,8 @@ def test_update_operation(duckdb_session: DuckDBDriver) -> None:
     """Test UPDATE operations."""
     # Insert a record first
     insert_result = duckdb_session.execute("INSERT INTO test_table (name, id) VALUES (?, ?)", ("original_name", 42))
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # Update the record
     update_result = duckdb_session.execute("UPDATE test_table SET name = ? WHERE id = ?", ("updated_name", 42))
@@ -252,8 +252,8 @@ def test_delete_operation(duckdb_session: DuckDBDriver) -> None:
     """Test DELETE operations."""
     # Insert a record first
     insert_result = duckdb_session.execute("INSERT INTO test_table (name, id) VALUES (?, ?)", ("to_delete", 99))
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # Delete the record
     delete_result = duckdb_session.execute("DELETE FROM test_table WHERE id = ?", (99,))
@@ -433,10 +433,10 @@ def test_duckdb_schema_operations(duckdb_session: DuckDBDriver) -> None:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    assert isinstance(create_result, ExecuteResult)
+    assert isinstance(create_result, ExecuteResult)  # type: ignore[unreachable]
 
     # Test ALTER TABLE
-    alter_result = duckdb_session.execute("ALTER TABLE schema_test ADD COLUMN email TEXT")
+    alter_result = duckdb_session.execute("ALTER TABLE schema_test ADD COLUMN email TEXT")  # type: ignore[unreachable]
     assert isinstance(alter_result, ExecuteResult)
 
     # Test CREATE INDEX
@@ -686,8 +686,8 @@ def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> No
     update_result = duckdb_session.execute("UPDATE result_methods_test SET value = value * 2 WHERE category = 'A'")
 
     # Test ExecuteResult methods
-    assert isinstance(update_result, ExecuteResult)
-    assert update_result.get_affected_count() == 2
+    assert isinstance(update_result, ExecuteResult)  # type: ignore[unreachable]
+    assert update_result.get_affected_count() == 2  # type: ignore[unreachable]
     assert update_result.was_updated()
     assert not update_result.was_inserted()
     assert not update_result.was_deleted()

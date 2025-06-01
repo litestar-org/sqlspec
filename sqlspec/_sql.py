@@ -8,6 +8,7 @@ This module provides the `sql` factory object for easy SQL construction:
 import logging
 from typing import TYPE_CHECKING, Any, Optional, Union
 
+import sqlglot
 from sqlglot import exp
 from sqlglot.dialects.dialect import DialectType
 
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
         UpdateBuilder,
     )
 
-__all__ = ("sql",)
+__all__ = ("SQLFactory",)
 
 logger = logging.getLogger("sqlspec")
 
@@ -250,10 +251,8 @@ class SQLFactory:
         """Parse SQL string and populate INSERT builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
-            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
+            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
             if parsed_expr is None:
-                import sqlglot
-
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Insert):
@@ -269,20 +268,17 @@ class SQLFactory:
 
             # For other statement types, just return the builder as-is
             logger.warning("Cannot create INSERT from %s statement", type(parsed_expr).__name__)
-            return builder
 
         except Exception as e:  # noqa: BLE001
             logger.warning("Failed to parse INSERT SQL, falling back to traditional mode: %s", e)
-            return builder
+        return builder
 
     def _populate_select_from_sql(self, builder: "SelectBuilder", sql_string: str) -> "SelectBuilder":
         """Parse SQL string and populate SELECT builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
-            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
+            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
             if parsed_expr is None:
-                import sqlglot
-
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Select):
@@ -291,20 +287,17 @@ class SQLFactory:
                 return builder
 
             logger.warning("Cannot create SELECT from %s statement", type(parsed_expr).__name__)
-            return builder
 
         except Exception as e:  # noqa: BLE001
             logger.warning("Failed to parse SELECT SQL, falling back to traditional mode: %s", e)
-            return builder
+        return builder
 
     def _populate_update_from_sql(self, builder: "UpdateBuilder", sql_string: str) -> "UpdateBuilder":
         """Parse SQL string and populate UPDATE builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
-            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
-            if parsed_expr is None:
-                import sqlglot
-
+            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
+            if parsed_expr is None:  # type: ignore[var-annotated]
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Update):
@@ -313,20 +306,17 @@ class SQLFactory:
                 return builder
 
             logger.warning("Cannot create UPDATE from %s statement", type(parsed_expr).__name__)
-            return builder
 
         except Exception as e:  # noqa: BLE001
             logger.warning("Failed to parse UPDATE SQL, falling back to traditional mode: %s", e)
-            return builder
+        return builder
 
     def _populate_delete_from_sql(self, builder: "DeleteBuilder", sql_string: str) -> "DeleteBuilder":
         """Parse SQL string and populate DELETE builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
-            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
-            if parsed_expr is None:
-                import sqlglot
-
+            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
+            if parsed_expr is None:  # type: ignore[var-annotated]
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Delete):
@@ -335,20 +325,17 @@ class SQLFactory:
                 return builder
 
             logger.warning("Cannot create DELETE from %s statement", type(parsed_expr).__name__)
-            return builder
 
         except Exception as e:  # noqa: BLE001
             logger.warning("Failed to parse DELETE SQL, falling back to traditional mode: %s", e)
-            return builder
+        return builder
 
     def _populate_merge_from_sql(self, builder: "MergeBuilder", sql_string: str) -> "MergeBuilder":
         """Parse SQL string and populate MERGE builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
-            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
-            if parsed_expr is None:
-                import sqlglot
-
+            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
+            if parsed_expr is None:  # type: ignore[var-annotated]
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Merge):
@@ -357,11 +344,10 @@ class SQLFactory:
                 return builder
 
             logger.warning("Cannot create MERGE from %s statement", type(parsed_expr).__name__)
-            return builder
 
         except Exception as e:  # noqa: BLE001
             logger.warning("Failed to parse MERGE SQL, falling back to traditional mode: %s", e)
-            return builder
+        return builder
 
     # ===================
     # Column References
@@ -544,7 +530,7 @@ class SQLFactory:
                     columns = [exp.column(col) for col in column_set]
                     set_expressions.append(exp.Tuple(expressions=columns))
             else:
-                set_expressions.append(exp.column(column_set))
+                set_expressions.append(exp.column(column_set))  # type: ignore[unreachable]
 
         return exp.GroupingSets(expressions=set_expressions)
 
@@ -575,7 +561,7 @@ class SQLFactory:
             return exp.Any(this=exp.Array(expressions=literals))
         if isinstance(values, str):
             # Parse as SQL
-            parsed = exp.maybe_parse(values)
+            parsed = exp.maybe_parse(values)  # type: ignore[var-annotated]
             if parsed:
                 return exp.Any(this=parsed)
             return exp.Any(this=exp.Literal.string(values))
@@ -713,7 +699,7 @@ class SQLFactory:
             elif isinstance(search_val, (int, float)):
                 search_expr = exp.Literal.number(search_val)
             elif isinstance(search_val, exp.Expression):
-                search_expr = search_val
+                search_expr = search_val  # type: ignore[assignment]
             else:
                 search_expr = exp.Literal.string(str(search_val))
 
@@ -723,7 +709,7 @@ class SQLFactory:
             elif isinstance(result_val, (int, float)):
                 result_expr = exp.Literal.number(result_val)
             elif isinstance(result_val, exp.Expression):
-                result_expr = result_val
+                result_expr = result_val  # type: ignore[assignment]
             else:
                 result_expr = exp.Literal.string(str(result_val))
 
@@ -915,7 +901,7 @@ class SQLFactory:
         elif isinstance(substitute_value, (int, float)):
             sub_expr = exp.Literal.number(substitute_value)
         elif isinstance(substitute_value, exp.Expression):
-            sub_expr = substitute_value
+            sub_expr = substitute_value  # type: ignore[assignment]
         else:
             sub_expr = exp.Literal.string(str(substitute_value))
 
@@ -1063,14 +1049,14 @@ class CaseExpressionBuilder:
         Returns:
             Self for method chaining.
         """
-        cond_expr = exp.maybe_parse(condition) or exp.column(condition) if isinstance(condition, str) else condition
+        cond_expr = exp.maybe_parse(condition) or exp.column(condition) if isinstance(condition, str) else condition  # type: ignore[unreachable]
 
         if isinstance(value, str):
             val_expr = exp.Literal.string(value)
         elif isinstance(value, (int, float)):
             val_expr = exp.Literal.number(value)
         elif isinstance(value, exp.Expression):
-            val_expr = value
+            val_expr = value  # type: ignore[assignment]
         else:
             val_expr = exp.Literal.string(str(value))
 
@@ -1104,6 +1090,3 @@ class CaseExpressionBuilder:
             Complete CASE expression.
         """
         return exp.Case(ifs=self._conditions, default=self._default)
-
-
-sql = SQLFactory()

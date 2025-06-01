@@ -36,8 +36,8 @@ def test_sqlite_basic_crud(sqlite_session: SqliteDriver) -> None:
     """Test basic CRUD operations."""
     # INSERT
     insert_result = sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("test_name", 42))
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # SELECT
     select_result = sqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name",))
@@ -131,7 +131,7 @@ def test_sqlite_execute_script(sqlite_session: SqliteDriver) -> None:
 
     result = sqlite_session.execute_script(script)
     # Script execution typically returns a status string
-    assert isinstance(result, str) or result is None
+    assert isinstance(result, str) or result is None  # type: ignore[unreachable]
 
     # Verify script effects
     select_result = sqlite_session.execute(
@@ -214,8 +214,8 @@ def test_sqlite_data_types(sqlite_session: SqliteDriver) -> None:
         "INSERT INTO data_types_test (text_col, integer_col, real_col, blob_col, null_col) VALUES (?, ?, ?, ?, ?)",
         test_data,
     )
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # Retrieve and verify data
     select_result = sqlite_session.execute(
@@ -313,12 +313,12 @@ def test_sqlite_schema_operations(sqlite_session: SqliteDriver) -> None:
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    assert isinstance(create_result, str) or create_result is None
+    assert isinstance(create_result, str) or create_result is None  # type: ignore[unreachable]
 
     # Insert data into new table
     insert_result = sqlite_session.execute("INSERT INTO schema_test (description) VALUES (?)", ("test description",))
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # Verify table structure
     pragma_result = sqlite_session.execute("PRAGMA table_info(schema_test)")

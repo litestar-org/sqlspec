@@ -1,24 +1,13 @@
-"""AioSQL extension for SQLSpec.
+"""SQLSpec aiosql integration for loading SQL files.
 
-This extension provides integration between aiosql query loaders and SQLSpec drivers,
-enabling users to load SQL queries from files while leveraging SQLSpec's advanced
-features like filters, instrumentation, and validation.
+This module provides a simple way to load aiosql-style SQL files and use them
+with SQLSpec drivers. It focuses on just the file parsing functionality,
+returning SQL objects that work with existing SQLSpec execution.
 """
 
-from sqlspec.extensions.aiosql.adapter import (
-    AiosqlAsyncAdapter,
-    AiosqlService,
-    AiosqlSyncAdapter,
-)
-from sqlspec.extensions.aiosql.loader import (
-    AiosqlLoader,
-    AiosqlQuery,
-)
+from sqlspec.extensions.aiosql.loader import AiosqlLoader, SqlFileParseError
 
 __all__ = (
-    "AiosqlAsyncAdapter",
     "AiosqlLoader",
-    "AiosqlQuery",
-    "AiosqlService",
-    "AiosqlSyncAdapter",
+    "SqlFileParseError",
 )

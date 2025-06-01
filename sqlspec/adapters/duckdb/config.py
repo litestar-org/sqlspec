@@ -276,8 +276,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                 # All other parameters are DuckDB configuration settings
                 duckdb_settings[key] = value
 
-        # Merge user config with our settings
-        existing_config = connection_params.get("config", {})
+        existing_config: dict[str, Any] = connection_params.get("config", {})
         if duckdb_settings:
             existing_config.update(duckdb_settings)
             connection_params["config"] = existing_config
@@ -322,15 +321,16 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                     connection.load_extension(ext_name)
 
                     if self.instrumentation.log_pool_operations:
-                        logger.debug(f"Loaded DuckDB extension: {ext_name}", extra={"adapter": "duckdb"})
+                        logger.debug("Loaded DuckDB extension: %s", ext_name, extra={"adapter": "duckdb"})
 
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     if self.instrumentation.log_pool_operations and ext_name:
                         logger.warning(
-                            f"Failed to load DuckDB extension: {ext_name}", extra={"adapter": "duckdb", "error": str(e)}
+                            "Failed to load DuckDB extension: %s",
+                            ext_name,
+                            extra={"adapter": "duckdb", "error": str(e)},
                         )
 
-            # Create secrets for AI/API integrations
             for secret_config in self.secrets:
                 secret_name = None
                 try:
@@ -361,12 +361,13 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                         connection.execute(sql)
 
                         if self.instrumentation.log_pool_operations:
-                            logger.debug(f"Created DuckDB secret: {secret_name}", extra={"adapter": "duckdb"})
+                            logger.debug("Created DuckDB secret: %s", secret_name, extra={"adapter": "duckdb"})
 
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     if self.instrumentation.log_pool_operations and secret_name:
                         logger.warning(
-                            f"Failed to create DuckDB secret: {secret_name}",
+                            "Failed to create DuckDB secret: %s",
+                            secret_name,
                             extra={"adapter": "duckdb", "error": str(e)},
                         )
 
@@ -376,15 +377,14 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                     self.on_connection_create(connection)
                     if self.instrumentation.log_pool_operations:
                         logger.debug("Executed connection creation hook", extra={"adapter": "duckdb"})
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     if self.instrumentation.log_pool_operations:
                         logger.warning("Connection creation hook failed", extra={"adapter": "duckdb", "error": str(e)})
-
-            return connection
 
         except Exception as e:
             logger.exception("Failed to create DuckDB connection", extra={"adapter": "duckdb", "error": str(e)})
             raise
+        return connection
 
     @contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[DuckDBConnection, None, None]":

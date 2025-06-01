@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import operator
 from collections.abc import Generator
 from typing import Any, Literal
 
@@ -45,8 +46,8 @@ def test_bigquery_basic_crud(bigquery_session: BigQueryDriver, bigquery_service:
     insert_result = bigquery_session.execute(
         f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", (1, "test_name", 42)
     )
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # SELECT
     select_result = bigquery_session.execute(f"SELECT name, value FROM {table_name} WHERE name = ?", ("test_name",))
@@ -146,7 +147,7 @@ def test_bigquery_execute_script(bigquery_session: BigQueryDriver, bigquery_serv
 
     result = bigquery_session.execute_script(script)
     # Script execution typically returns a status string
-    assert isinstance(result, str) or result is None
+    assert isinstance(result, str) or result is None  # type: ignore[unreachable]
 
     # Verify script effects
     select_result = bigquery_session.execute(
@@ -350,8 +351,8 @@ def test_bigquery_schema_operations(bigquery_session: BigQueryDriver, bigquery_s
         f"INSERT INTO `{bigquery_service.project}.{bigquery_service.dataset}.schema_test` (id, description) VALUES (?, ?)",
         (1, "test description"),
     )
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # Verify table structure using INFORMATION_SCHEMA
     info_result = bigquery_session.execute(f"""
@@ -536,5 +537,5 @@ def test_bigquery_analytical_functions(bigquery_session: BigQueryDriver, bigquer
     product_a_rows = [row for row in window_result.data if row["name"] == "Product A"]
     assert len(product_a_rows) == 2
     # Highest value should have row_num = 1
-    highest_a = max(product_a_rows, key=lambda x: x["value"])
+    highest_a = max(product_a_rows, key=operator.itemgetter("value"))
     assert highest_a["row_num"] == 1

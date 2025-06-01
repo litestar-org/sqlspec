@@ -307,6 +307,9 @@ class BigQueryDriver(
         Returns:
             QueryJob for regular queries or string for script execution.
         """
+        if config is not None and config != statement.config:
+            statement = statement.copy(config=config)
+
         # Handle pre-formatted BigQuery parameters
         if (
             isinstance(parameters, (list, tuple))

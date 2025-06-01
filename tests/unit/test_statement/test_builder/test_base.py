@@ -43,7 +43,7 @@ class TestWhereClauseMixin(WhereClauseMixin):
     """Test class implementing WhereClauseMixin for testing purposes."""
 
     def __init__(self) -> None:
-        self._parameters = {}
+        self._parameters: dict[str, Any] = {}
         self._parameter_counter = 0
         self.dialect_name = None
 
@@ -279,7 +279,7 @@ def test_query_builder_with_cte_invalid_query_type(test_builder: TestQueryBuilde
     invalid_query = 42  # Invalid type
 
     with pytest.raises(SQLBuilderError, match="Invalid query type for CTE"):
-        test_builder.with_cte(alias, invalid_query)  # pyright: ignore
+        test_builder.with_cte(alias, invalid_query)  # type: ignore[arg-type]
 
 
 def test_query_builder_with_cte_invalid_string_query(test_builder: TestQueryBuilder) -> None:

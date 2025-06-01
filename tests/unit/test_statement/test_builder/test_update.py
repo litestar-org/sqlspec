@@ -143,8 +143,8 @@ def test_update_table_method_resets_expression_if_not_update() -> None:
     builder._expression = exp.Select().select("column").from_("some_table")  # Set a non-Update expression
     # Calling table should replace the Select expression with an Update expression
     builder.table("users")
-    assert isinstance(builder._expression, exp.Update)
-    assert builder._expression.this.name == "users"
+    assert isinstance(builder._expression, exp.Update)  # type: ignore[unreachable]
+    assert builder._expression.this.name == "users"  # type: ignore[unreachable]
 
 
 def test_update_string_representation() -> None:

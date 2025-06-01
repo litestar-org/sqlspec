@@ -212,11 +212,11 @@ def test_to_schema_invalid_schema_types(sample_dict_data: dict[str, Any]) -> Non
     """Test to_schema with invalid schema types."""
     # Test with string type (invalid)
     with pytest.raises(SQLSpecError, match="should be a valid Dataclass"):
-        ResultConverter.to_schema(sample_dict_data, schema_type=str)  # type: ignore[arg-type]
+        ResultConverter.to_schema(sample_dict_data, schema_type=str)  # type: ignore[type-var]
 
     # Test with int type (invalid)
     with pytest.raises(SQLSpecError, match="should be a valid Dataclass"):
-        ResultConverter.to_schema(sample_dict_data, schema_type=int)  # type: ignore[arg-type]
+        ResultConverter.to_schema(sample_dict_data, schema_type=int)  # type: ignore[type-var]
 
 
 def test_to_schema_msgspec_struct_mock(sample_dict_data: dict[str, Any]) -> None:
@@ -229,7 +229,7 @@ def test_to_schema_msgspec_struct_mock(sample_dict_data: dict[str, Any]) -> None
         mock_schema_type = Mock()
         mock_convert.return_value = Mock()
 
-        result = ResultConverter.to_schema(sample_dict_data, schema_type=mock_schema_type)  # type: ignore[arg-type]
+        result = ResultConverter.to_schema(sample_dict_data, schema_type=mock_schema_type)  # type: ignore[arg-type,var-annotated]
 
         assert mock_convert.called
         assert result is mock_convert.return_value
@@ -247,7 +247,7 @@ def test_to_schema_pydantic_model_mock(sample_dict_data: dict[str, Any]) -> None
         mock_type_adapter.validate_python.return_value = Mock()
         mock_adapter.return_value = mock_type_adapter
 
-        result = ResultConverter.to_schema(sample_dict_data, schema_type=mock_schema_type)  # type: ignore[arg-type]
+        result = ResultConverter.to_schema(sample_dict_data, schema_type=mock_schema_type)  # type: ignore[arg-type,var-annotated]
 
         mock_adapter.assert_called_once_with(mock_schema_type)
         mock_type_adapter.validate_python.assert_called_once_with(sample_dict_data, from_attributes=True)
@@ -323,7 +323,7 @@ def test_default_msgspec_deserializer_custom_decoders() -> None:
     """Test with custom type decoders."""
 
     def custom_predicate(target_type: type) -> bool:
-        return target_type == str
+        return target_type is str
 
     def custom_decoder(target_type: type, value: Any) -> str:
         return f"CUSTOM:{value}"

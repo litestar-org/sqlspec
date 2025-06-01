@@ -273,7 +273,7 @@ def test_insert_values_from_dicts_validates_consistent_keys() -> None:
     builder = InsertBuilder().into("users")
 
     with pytest.raises(SQLBuilderError, match="Dictionary at index.*do not match"):
-        builder.values_from_dicts(inconsistent_data)
+        builder.values_from_dicts(inconsistent_data)  # type: ignore[arg-type]
 
 
 def test_insert_values_from_dicts_validates_against_existing_columns() -> None:

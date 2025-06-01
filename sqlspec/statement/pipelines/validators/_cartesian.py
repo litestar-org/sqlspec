@@ -1,3 +1,4 @@
+# ruff: noqa: ARG004
 """Validator to detect cartesian products in SQL queries."""
 
 from __future__ import annotations
@@ -240,21 +241,16 @@ class CartesianProductDetector(SQLValidation):
 
         return analysis
 
-    def _get_tables_from_from_clause(self, from_clause: exp.From) -> list[str]:
+    @staticmethod
+    def _get_tables_from_from_clause(from_clause: exp.From) -> list[str]:
         """Extract table names from FROM clause."""
-        tables = []
 
         if not from_clause:
-            return tables
+            return []
+        return [str(table.this) for table in from_clause.find_all(exp.Table) if table.this]
 
-        # Get all table expressions from the FROM clause
-        for table in from_clause.find_all(exp.Table):
-            if table.this:
-                tables.append(str(table.this))
-
-        return tables
-
-    def _check_where_for_table_correlation(self, where_clause: exp.Where, tables: list[str]) -> bool:
+    @staticmethod
+    def _check_where_for_table_correlation(where_clause: exp.Where, tables: list[str]) -> bool:
         """Check if WHERE clause properly correlates tables."""
         if not where_clause.this:
             return False

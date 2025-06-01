@@ -494,7 +494,7 @@ def test_multiple_configs(
     pool2 = sql_spec.get_pool(second_pool_type)
 
     assert isinstance(pool1, MockPool)
-    assert isinstance(pool2, MockPool)
+    assert isinstance(pool2, MockPool)  # type: ignore[unreachable]
     assert pool1 is not pool2
 
 

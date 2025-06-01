@@ -384,7 +384,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         async with instrument_operation_async(self, "oracle_async_create_connection", "database"):
             import oracledb
 
-            return await oracledb.connect_async(**{k: v for k, v in self.connection_config.items() if v is not Empty})
+            return await oracledb.connect_async(**{k: v for k, v in self.connection_config.items() if v is not Empty})  # type: ignore[no-any-return]
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[OracleAsyncConnection, None]:

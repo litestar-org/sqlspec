@@ -212,7 +212,11 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict."""
+        """Return the connection configuration as a dict.
+
+        Raises:
+            ImproperConfigurationError: If the configuration is invalid.
+        """
         # Merge connection_config into pool_config, with pool_config taking precedence
         merged_config = {**self.connection_config, **self.pool_config}
         config = {k: v for k, v in merged_config.items() if v is not Empty}

@@ -49,8 +49,8 @@ async def test_asyncmy_basic_crud(asyncmy_session: AsyncmyDriver) -> None:
     insert_result = await asyncmy_session.execute(
         "INSERT INTO test_table (name, value) VALUES (%s, %s)", ("test_name", 42)
     )
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # SELECT
     select_result = await asyncmy_session.execute("SELECT name, value FROM test_table WHERE name = %s", ("test_name",))
@@ -146,7 +146,7 @@ async def test_asyncmy_execute_script(asyncmy_session: AsyncmyDriver) -> None:
 
     result = await asyncmy_session.execute_script(script)
     # Script execution typically returns a status string
-    assert isinstance(result, str) or result is None
+    assert isinstance(result, str) or result is None  # type: ignore[unreachable]
 
     # Verify script effects
     select_result = await asyncmy_session.execute(
@@ -353,8 +353,8 @@ async def test_asyncmy_schema_operations(asyncmy_session: AsyncmyDriver) -> None
     insert_result = await asyncmy_session.execute(
         "INSERT INTO schema_test (description) VALUES (%s)", ("test description",)
     )
-    assert isinstance(insert_result, ExecuteResult)
-    assert insert_result.rows_affected == 1
+    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
     # Verify table structure
     info_result = await asyncmy_session.execute("""
@@ -484,10 +484,10 @@ async def test_asyncmy_mysql_specific_features(asyncmy_session: AsyncmyDriver) -
     """,
         (1, "test", 1),
     )
-    assert isinstance(update_result, ExecuteResult)
+    assert isinstance(update_result, ExecuteResult)  # type: ignore[unreachable]
 
     # Verify the update
-    verify_result = await asyncmy_session.execute("SELECT counter FROM unique_test WHERE id = %s", (1,))
+    verify_result = await asyncmy_session.execute("SELECT counter FROM unique_test WHERE id = %s", (1,))  # type: ignore[unreachable]
     assert isinstance(verify_result, SelectResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["counter"] == 2

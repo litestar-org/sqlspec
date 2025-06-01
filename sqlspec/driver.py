@@ -34,14 +34,14 @@ from sqlspec.typing import (
     ConnectionT,
     Counter,  # pyright: ignore
     DictRow,
-    Gauge,  # type: ignore
-    Histogram,  # type: ignore
-    ModelDTOT,  # type: ignore
+    Gauge,  # pyright: ignore
+    Histogram,  # pyright: ignore
+    ModelDTOT,  # pyright: ignore
     SQLParameterType,
-    Status,  # type: ignore
-    StatusCode,  # type: ignore
+    Status,  # pyright: ignore
+    StatusCode,  # pyright: ignore
     T,
-    Tracer,  # type: ignore
+    Tracer,  # pyright: ignore
 )
 from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
 
@@ -130,9 +130,9 @@ class CommonDriverAttributes(ABC, Generic[ConnectionT, DefaultRowT]):
 
     def _setup_opentelemetry(self) -> None:
         """Set up OpenTelemetry tracer with proper service naming."""
-        if trace is None:  # pragma: no cover
-            logger.warning("OpenTelemetry not installed, skipping OpenTelemetry setup.")
-            return  # pragma: no cover
+        if trace is None:
+            logger.warning("OpenTelemetry not installed, skipping OpenTelemetry setup.")  # type: ignore[unreachable]
+            return
         self._tracer = trace.get_tracer(  # type: ignore[assignment]
             self.instrumentation_config.service_name,
             # __version__ # Consider adding version here if available
@@ -659,18 +659,14 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         **kwargs: Any,
     ) -> str:
         with instrument_operation(self, "execute_script", "database"):
-            final_script_content = statement.sql if isinstance(statement, SQL) else statement
-
-            sql_placeholder_for_script = SQL(
-                final_script_content,
-                *filters,
-                parameters=parameters,
-                dialect=self.dialect,
-                config=config_override or self.config,
-            )
-
             script_output = self._execute_impl(
-                statement=sql_placeholder_for_script,
+                statement=SQL(
+                    statement,
+                    parameters,
+                    *filters,
+                    dialect=self.dialect,
+                    config=config_override or self.config,
+                ),
                 parameters=parameters,
                 connection=self._connection(connection),
                 config=config_override or self.config,
@@ -899,14 +895,14 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         **kwargs: Any,
     ) -> str:
         async with instrument_operation_async(self, "execute_script", "database"):
-            final_script_content = statement.sql if isinstance(statement, SQL) else statement
-
-            sql_placeholder_for_script = SQL(
-                final_script_content, parameters=parameters, dialect=self.dialect, config=config_override or self.config
-            )
-
             script_output = await self._execute_impl(
-                statement=sql_placeholder_for_script,
+                statement=SQL(
+                    statement,
+                    parameters,
+                    *filters,
+                    dialect=self.dialect,
+                    config=config_override or self.config,
+                ),
                 parameters=parameters,
                 connection=self._connection(connection),
                 config=config_override or self.config,

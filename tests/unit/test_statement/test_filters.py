@@ -200,7 +200,7 @@ def test_on_before_after_filter_no_conditions() -> None:
 def test_in_collection_filter_application(values: Any, expected_behavior: str) -> None:
     """Test InCollectionFilter with different value types."""
     statement = SQL("SELECT * FROM users")
-    filter_obj = InCollectionFilter("status", values)
+    filter_obj = InCollectionFilter[str](field_name="status", values=values)
 
     result = filter_obj.append_to_statement(statement)
 
@@ -223,7 +223,7 @@ def test_in_collection_filter_parameter_generation() -> None:
     """Test InCollectionFilter parameter generation."""
     statement = SQL("SELECT * FROM products")
     values = ["electronics", "clothing", "books"]
-    filter_obj = InCollectionFilter("category", values)
+    filter_obj = InCollectionFilter[str](field_name="category", values=values)
 
     result = filter_obj.append_to_statement(statement)
 
@@ -241,7 +241,7 @@ def test_in_collection_filter_parameter_generation() -> None:
 def test_in_collection_filter_unique_parameter_names() -> None:
     """Test that InCollectionFilter generates unique parameter names."""
     statement = SQL("SELECT * FROM products WHERE price > :min_price", min_price=10)
-    filter_obj = InCollectionFilter("category", ["electronics", "clothing"])
+    filter_obj = InCollectionFilter[str](field_name="category", values=["electronics", "clothing"])
 
     result = filter_obj.append_to_statement(statement)
 
@@ -266,7 +266,7 @@ def test_in_collection_filter_unique_parameter_names() -> None:
 def test_not_in_collection_filter_application(values: Any, should_add_condition: bool) -> None:
     """Test NotInCollectionFilter application."""
     statement = SQL("SELECT * FROM users")
-    filter_obj = NotInCollectionFilter("status", values)
+    filter_obj = NotInCollectionFilter[str](field_name="status", values=values)
 
     result = filter_obj.append_to_statement(statement)
 
@@ -283,7 +283,7 @@ def test_not_in_collection_filter_application(values: Any, should_add_condition:
 def test_not_in_collection_filter_parameter_prefix() -> None:
     """Test NotInCollectionFilter uses correct parameter prefix."""
     statement = SQL("SELECT * FROM users")
-    filter_obj = NotInCollectionFilter("status", ["banned", "deleted"])
+    filter_obj = NotInCollectionFilter[str](field_name="status", values=["banned", "deleted"])
 
     result = filter_obj.append_to_statement(statement)
 
@@ -304,7 +304,7 @@ def test_not_in_collection_filter_parameter_prefix() -> None:
 def test_any_collection_filter_application(values: Any, expected_behavior: str) -> None:
     """Test AnyCollectionFilter application."""
     statement = SQL("SELECT * FROM users")
-    filter_obj = AnyCollectionFilter("tags", values)
+    filter_obj = AnyCollectionFilter[str](field_name="tags", values=values)
 
     result = filter_obj.append_to_statement(statement)
 
@@ -322,7 +322,7 @@ def test_any_collection_filter_application(values: Any, expected_behavior: str) 
 def test_any_collection_filter_parameter_prefix() -> None:
     """Test AnyCollectionFilter uses correct parameter prefix."""
     statement = SQL("SELECT * FROM posts")
-    filter_obj = AnyCollectionFilter("tags", ["python", "sql", "database"])
+    filter_obj = AnyCollectionFilter[str](field_name="tags", values=["python", "sql", "database"])
 
     result = filter_obj.append_to_statement(statement)
 
@@ -343,7 +343,7 @@ def test_any_collection_filter_parameter_prefix() -> None:
 def test_not_any_collection_filter_application(values: Any, should_add_condition: bool) -> None:
     """Test NotAnyCollectionFilter application."""
     statement = SQL("SELECT * FROM users")
-    filter_obj = NotAnyCollectionFilter("forbidden_tags", values)
+    filter_obj = NotAnyCollectionFilter[str](field_name="forbidden_tags", values=values)
 
     result = filter_obj.append_to_statement(statement)
 
@@ -360,7 +360,7 @@ def test_not_any_collection_filter_application(values: Any, should_add_condition
 def test_not_any_collection_filter_parameter_prefix() -> None:
     """Test NotAnyCollectionFilter uses correct parameter prefix."""
     statement = SQL("SELECT * FROM posts")
-    filter_obj = NotAnyCollectionFilter("blocked_tags", ["spam", "inappropriate"])
+    filter_obj = NotAnyCollectionFilter[str](field_name="blocked_tags", values=["spam", "inappropriate"])
 
     result = filter_obj.append_to_statement(statement)
 

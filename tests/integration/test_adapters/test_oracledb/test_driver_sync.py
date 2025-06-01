@@ -112,8 +112,8 @@ def test_sync_select(oracle_sync_session: OracleSyncConfig, params: Any, style: 
             select_params = (params["name"],)
 
         insert_result = driver.execute(insert_sql, insert_params)
-        assert isinstance(insert_result, ExecuteResult)
-        assert insert_result.rows_affected == 1
+        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
         select_result = driver.execute(select_sql, select_params)
         assert isinstance(select_result, SelectResult)
@@ -156,8 +156,8 @@ def test_sync_select_value(oracle_sync_session: OracleSyncConfig, params: Any, s
         setup_params_tuple = (setup_value,)
         insert_sql_setup = "INSERT INTO test_table (name) VALUES (:1)"
         insert_result = driver.execute(insert_sql_setup, setup_params_tuple)
-        assert isinstance(insert_result, ExecuteResult)
-        assert insert_result.rows_affected == 1
+        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
         # Select a literal value using Oracle's DUAL table
         select_sql = "SELECT 'test_value' FROM dual"
@@ -192,8 +192,8 @@ def test_sync_select_arrow(oracle_sync_session: OracleSyncConfig) -> None:
         # Insert test record using positional binds
         insert_sql = "INSERT INTO test_table (name) VALUES (:1)"
         insert_result = driver.execute(insert_sql, ("arrow_name",))
-        assert isinstance(insert_result, ExecuteResult)
-        assert insert_result.rows_affected == 1
+        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
+        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
 
         # Select and verify with Arrow support if available
         select_sql = "SELECT name, id FROM test_table WHERE name = :1"

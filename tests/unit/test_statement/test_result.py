@@ -18,6 +18,7 @@ from sqlspec.statement.result import (
     SelectResult,
     StatementResult,
 )
+from sqlspec.typing import DictRow
 
 
 def test_statement_result_is_abstract() -> None:
@@ -35,7 +36,7 @@ def test_statement_result_metadata_methods() -> None:
             return True
 
         def get_data(self) -> str:
-            return self.data
+            return self.data  # type: ignore[no-any-return]
 
     result = ConcreteResult(statement="test", data="test_data", metadata={"key1": "value1"})
 
@@ -72,7 +73,7 @@ def basic_select_result(sample_rows: list[dict[str, Any]]) -> SelectResult[list[
 
 def test_select_result_initialization(sample_rows: list[dict[str, Any]]) -> None:
     """Test SelectResult initialization with various parameters."""
-    result = SelectResult(
+    result = SelectResult[dict[str, Any]](
         statement="SELECT * FROM users",
         data=sample_rows,
         column_names=["id", "name", "email"],
@@ -96,7 +97,7 @@ def test_select_result_is_success(basic_select_result: SelectResult[list[dict[st
     assert basic_select_result.is_success() is True
 
     # Test with None data
-    empty_result = SelectResult(statement="SELECT * FROM empty", data=None)  # type: ignore[arg-type]
+    empty_result = SelectResult[DictRow](statement="SELECT * FROM empty", data=None)
     assert empty_result.is_success() is False
 
 
@@ -109,7 +110,7 @@ def test_select_result_get_data(basic_select_result: SelectResult[list[dict[str,
 
 def test_select_result_get_first(sample_rows: list[dict[str, Any]]) -> None:
     """Test get_first method."""
-    result = SelectResult(statement="SELECT * FROM users", data=sample_rows)
+    result = SelectResult[DictRow](statement="SELECT * FROM users", data=sample_rows)
     first_row = result.get_first()
 
     assert first_row == sample_rows[0]
@@ -117,7 +118,7 @@ def test_select_result_get_first(sample_rows: list[dict[str, Any]]) -> None:
         assert first_row["name"] == "Alice"
 
     # Test with empty data
-    empty_result = SelectResult(statement="SELECT * FROM empty", data=[])
+    empty_result = SelectResult[DictRow](statement="SELECT * FROM empty", data=[])
     assert empty_result.get_first() is None
 
 
@@ -126,7 +127,7 @@ def test_select_result_get_count(basic_select_result: SelectResult[list[dict[str
     assert basic_select_result.get_count() == 3
 
     # Test with empty data
-    empty_result = SelectResult(statement="SELECT * FROM empty", data=[])
+    empty_result = SelectResult[DictRow](statement="SELECT * FROM empty", data=[])
     assert empty_result.get_count() == 0
 
 
@@ -135,7 +136,7 @@ def test_select_result_is_empty(basic_select_result: SelectResult[list[dict[str,
     assert basic_select_result.is_empty() is False
 
     # Test with empty data
-    empty_result = SelectResult(statement="SELECT * FROM empty", data=[])
+    empty_result = SelectResult[DictRow](statement="SELECT * FROM empty", data=[])
     assert empty_result.is_empty() is True
 
 
@@ -150,7 +151,7 @@ def test_select_result_is_empty(basic_select_result: SelectResult[list[dict[str,
 )
 def test_select_result_row_operations(rows: list[dict[str, Any]], expected_count: int, expected_empty: bool) -> None:
     """Test row operations with different row counts."""
-    result = SelectResult(statement="SELECT * FROM test", data=rows)
+    result = SelectResult[DictRow](statement="SELECT * FROM test", data=rows)
 
     assert result.get_count() == expected_count
     assert result.is_empty() == expected_empty
