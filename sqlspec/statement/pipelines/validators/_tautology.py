@@ -142,10 +142,9 @@ class TautologyConditions(SQLValidation):
             return isinstance(comparison, (exp.EQ, exp.LTE, exp.GTE, exp.NEQ))
 
         # Common injection patterns
-        if left.is_string and right.is_string:
-            # 'a' = 'a', '' = '', etc.
-            if str(left.this) == str(right.this):
-                return isinstance(comparison, (exp.EQ, exp.LTE, exp.GTE, exp.NEQ))
+        # 'a' = 'a', '' = '', etc.
+        if left.is_string and right.is_string and str(left.this) == str(right.this):
+            return isinstance(comparison, (exp.EQ, exp.LTE, exp.GTE, exp.NEQ))
 
         if not left.is_string and not right.is_string:
             try:

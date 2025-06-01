@@ -137,7 +137,7 @@ def test_insert_values_multiple_rows() -> None:
     assert "INSERT INTO users" in query.sql
     assert "VALUES" in query.sql
     assert isinstance(query.parameters, dict)
-    assert len(query.parameters) == 4  # 2 values × 2 rows
+    assert len(query.parameters) == 4
 
 
 def test_insert_values_without_columns() -> None:
@@ -482,7 +482,7 @@ def test_insert_large_number_of_values() -> None:
     query = builder.build()
 
     assert "INSERT INTO users" in query.sql
-    assert len(query.parameters) == 200  # 100 rows × 2 columns
+    assert len(query.parameters) == 200
 
 
 def test_insert_very_long_string_value() -> None:
@@ -510,7 +510,7 @@ def test_insert_full_method_chaining() -> None:
 
     assert "INSERT INTO users" in query.sql
     assert "VALUES" in query.sql
-    assert len(query.parameters) == 6  # 3 columns × 2 rows
+    assert len(query.parameters) == 6
 
 
 def test_insert_mixed_value_methods() -> None:
@@ -525,7 +525,7 @@ def test_insert_mixed_value_methods() -> None:
     query = builder.build()
 
     assert "INSERT INTO users" in query.sql
-    assert len(query.parameters) == 4  # 2 columns × 2 rows
+    assert len(query.parameters) == 4
 
 
 # Expression type validation

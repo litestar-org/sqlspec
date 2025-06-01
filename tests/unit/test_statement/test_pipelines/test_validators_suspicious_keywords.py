@@ -109,7 +109,9 @@ def test_suspicious_keywords_detects_load_file_functions() -> None:
     ],
     ids=["sleep_timing", "dumpfile_export", "schema_info", "system_info", "mysql_system"],
 )
-def test_suspicious_keywords_various_suspicious_patterns(sql_query, expected_pattern, description) -> None:
+def test_suspicious_keywords_various_suspicious_patterns(
+    sql_query: str, expected_pattern: str, description: str
+) -> None:
     """Test detection of various suspicious keyword patterns."""
     validator = SuspiciousKeywords()
     config = SQLConfig()
@@ -185,12 +187,12 @@ def test_suspicious_keywords_configuration_database_introspection() -> None:
     result_without = validator_without_intro.validate(expression, "mysql", config)
 
     # With introspection checks should be more restrictive
-    intro_issues_with = len([
-        i for i in result_with.issues if "introspection" in i.lower() or "information_schema" in i.lower()
-    ])
-    intro_issues_without = len([
-        i for i in result_without.issues if "introspection" in i.lower() or "information_schema" in i.lower()
-    ])
+    intro_issues_with = len(
+        [i for i in result_with.issues if "introspection" in i.lower() or "information_schema" in i.lower()]
+    )
+    intro_issues_without = len(
+        [i for i in result_without.issues if "introspection" in i.lower() or "information_schema" in i.lower()]
+    )
 
     assert intro_issues_with >= intro_issues_without
 

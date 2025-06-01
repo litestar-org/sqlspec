@@ -133,10 +133,12 @@ class SQLConfig:
             if self.enable_transformations:
                 from sqlspec.statement.pipelines.transformers import CommentRemover, ParameterizeLiterals
 
-                components_to_use.extend([
-                    CommentRemover(),
-                    ParameterizeLiterals(),
-                ])
+                components_to_use.extend(
+                    [
+                        CommentRemover(),
+                        ParameterizeLiterals(),
+                    ]
+                )
 
             # Add default validator if validation is enabled
             if self.enable_validation:
@@ -1259,9 +1261,11 @@ class SQL:
         # Create a hashable representation of config by using its string representation
         config_hash = hash(str(self._config))
 
-        return hash((
-            str(self._sql),
-            hashable_params,
-            self._dialect,
-            config_hash,
-        ))
+        return hash(
+            (
+                str(self._sql),
+                hashable_params,
+                self._dialect,
+                config_hash,
+            )
+        )

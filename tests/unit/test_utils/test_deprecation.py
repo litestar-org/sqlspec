@@ -1,3 +1,4 @@
+# ruff: noqa: FURB118
 """Tests for sqlspec.utils.deprecation module."""
 
 from __future__ import annotations
@@ -129,7 +130,7 @@ def test_warn_deprecation_pending_warning() -> None:
 
         assert len(warning_list) == 1
         warning = warning_list[0]
-        assert warning.category == PendingDeprecationWarning
+        assert warning.category is PendingDeprecationWarning
         message = str(warning.message)
         assert "Call to function awaiting deprecation 'future_deprecated'" in message
 
@@ -247,7 +248,7 @@ def test_deprecated_decorator_pending() -> None:
 
         assert len(warning_list) == 1
         warning = warning_list[0]
-        assert warning.category == PendingDeprecationWarning
+        assert warning.category is PendingDeprecationWarning
 
 
 def test_deprecated_decorator_preserves_function_metadata() -> None:

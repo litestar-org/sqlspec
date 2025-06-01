@@ -245,18 +245,29 @@ except ImportError:
     # Define shims for when opentelemetry is not installed
 
     class Span:  # type: ignore[no-redef]
-        def set_attribute(self, key: str, value: Any) -> None: ...
+        def set_attribute(self, key: str, value: Any) -> None:
+            return None
+
         def record_exception(
             self,
             exception: "Exception",
             attributes: "Optional[Mapping[str, Any]]" = None,
             timestamp: Optional[int] = None,
             escaped: bool = False,
-        ) -> None: ...
-        def set_status(self, status: Any, description: Optional[str] = None) -> None: ...
-        def end(self, end_time: Optional[int] = None) -> None: ...
-        def __enter__(self) -> "Span": ...
-        def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None: ...
+        ) -> None:
+            return None
+
+        def set_status(self, status: Any, description: Optional[str] = None) -> None:
+            return None
+
+        def end(self, end_time: Optional[int] = None) -> None:
+            return None
+
+        def __enter__(self) -> "Span":
+            return self
+
+        def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+            return None
 
     class Tracer:  # type: ignore[no-redef]
         def start_span(
@@ -314,15 +325,24 @@ except ImportError:
             unit: str = "",
             registry: Any = None,
             ejemplar_fn: Any = None,
-        ) -> None: ...  # Simplified
+        ) -> None:
+            return None
+
         def labels(self, *labelvalues: str, **labelkwargs: str) -> "_MetricInstance":
             return _MetricInstance()
 
     class _MetricInstance:
-        def inc(self, amount: float = 1) -> None: ...
-        def dec(self, amount: float = 1) -> None: ...
-        def set(self, value: float) -> None: ...
-        def observe(self, amount: float) -> None: ...
+        def inc(self, amount: float = 1) -> None:
+            return None
+
+        def dec(self, amount: float = 1) -> None:
+            return None
+
+        def set(self, value: float) -> None:
+            return None
+
+        def observe(self, amount: float) -> None:
+            return None
 
     class Counter(_Metric):  # type: ignore[no-redef]
         def labels(self, *labelvalues: str, **labelkwargs: str) -> _MetricInstance:

@@ -125,11 +125,11 @@ def test_risk_level_string_representation() -> None:
 
 def test_risk_level_ordering() -> None:
     """Test RiskLevel ordering."""
-    assert RiskLevel.SKIP < RiskLevel.SAFE  # type: ignore[operator]
-    assert RiskLevel.SAFE < RiskLevel.LOW  # type: ignore[operator]
-    assert RiskLevel.LOW < RiskLevel.MEDIUM  # type: ignore[operator]
-    assert RiskLevel.MEDIUM < RiskLevel.HIGH  # type: ignore[operator]
-    assert RiskLevel.HIGH < RiskLevel.CRITICAL  # type: ignore[operator]
+    assert RiskLevel.SKIP < RiskLevel.SAFE
+    assert RiskLevel.SAFE < RiskLevel.LOW
+    assert RiskLevel.LOW < RiskLevel.MEDIUM
+    assert RiskLevel.MEDIUM < RiskLevel.HIGH
+    assert RiskLevel.HIGH < RiskLevel.CRITICAL
 
 
 @pytest.mark.parametrize(

@@ -26,8 +26,8 @@ from sqlspec.statement.parameters import (
 
 def test_parameter_style_values() -> None:
     """Test ParameterStyle enum values."""
-    assert ParameterStyle.NONE == "none"  # type: ignore[unreachable, comparison-overlap]
-    assert ParameterStyle.STATIC == "static"  # type: ignore[unreachable, comparison-overlap]
+    assert ParameterStyle.NONE == "none"
+    assert ParameterStyle.STATIC == "static"
     assert ParameterStyle.QMARK == "qmark"
     assert ParameterStyle.NUMERIC == "numeric"
     assert ParameterStyle.NAMED_COLON == "named_colon"

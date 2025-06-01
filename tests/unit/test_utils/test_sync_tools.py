@@ -362,7 +362,7 @@ def test_run_await_async_integration() -> None:
         return x * 2
 
     async_version = async_(original_sync_func)
-    back_to_sync = run_(async_version)  # type: ignore[var-annotated]
+    back_to_sync = run_(async_version)  # type: ignore[var-annotated,arg-type]
 
     assert back_to_sync(21) == 42
 

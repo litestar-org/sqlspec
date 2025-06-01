@@ -390,7 +390,7 @@ class ArrowResult(StatementResult[ArrowTable]):
         if self.data is None:
             msg = "No Arrow table available for this result"
             raise ValueError(msg)
-        return self.data
+        return self.data  # type: ignore[no-any-return]
 
     def column_names(self) -> "list[str]":
         """Get the column names from the Arrow table.
