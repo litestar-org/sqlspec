@@ -42,13 +42,8 @@ class CommentRemover(SQLTransformer):
     - Removes line comments (-- comment)
     - Removes block comments (/* comment */)
     - Preserves string literals that contain comment-like patterns
-    - Preserves Oracle-style hints (/*+ hint */) since hints have their own remover
+    - Preserves hints (/*+ hint */) since hints have their own remover
     - Handles MySQL version-specific comments based on configuration
-
-    Removing comments helps with:
-    - Security: Eliminates comment-based injection vectors
-    - Performance: Reduces query size and parsing overhead
-    - Normalization: Creates consistent queries for caching
 
     Args:
         enabled: Whether comment removal is enabled.

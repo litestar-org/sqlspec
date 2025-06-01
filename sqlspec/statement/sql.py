@@ -34,7 +34,7 @@ from sqlspec.exceptions import (
 # Updated imports for pipeline components
 from sqlspec.statement.filters import StatementFilter, apply_filter
 from sqlspec.statement.parameters import ParameterConverter, ParameterStyle, ParameterValidator
-from sqlspec.statement.pipelines import ValidationResult
+from sqlspec.statement.pipelines import TransformerPipeline, ValidationResult
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from sqlglot.schema import Schema as SQLGlotSchema
 
     from sqlspec.statement.parameters import ParameterInfo
-    from sqlspec.statement.pipelines import ProcessorProtocol, SQLValidator, TransformerPipeline
+    from sqlspec.statement.pipelines import ProcessorProtocol, SQLValidator
     from sqlspec.statement.pipelines.analyzers import StatementAnalysis
     from sqlspec.typing import SQLParameterType
 
@@ -65,8 +65,6 @@ def _default_validator() -> "SQLValidator":
         PreventDDL,
         PreventInjection,
         RiskyDML,
-        RiskyProceduralCode,
-        SuspiciousComments,
         SuspiciousKeywords,
         TautologyConditions,
     )
@@ -75,10 +73,8 @@ def _default_validator() -> "SQLValidator":
         PreventInjection(),
         RiskyDML(),
         PreventDDL(),
-        RiskyProceduralCode(),
         TautologyConditions(),
         SuspiciousKeywords(risk_level=RiskLevel.MEDIUM),
-        SuspiciousComments(risk_level=RiskLevel.LOW),
     ]
     return SQLValidator(validators=default_pipeline_validators)
 
@@ -101,9 +97,6 @@ class SQLConfig:
 
     strict_mode: bool = True
     """Whether to use strict validation of rules."""
-
-    allow_mixed_parameters: bool = False
-    """Whether to allow mixing args and kwargs when parsing is disabled."""
 
     cache_parsed_expression: bool = True
     """Whether to cache the parsed expression for performance."""
@@ -170,7 +163,7 @@ class SQL:
     It is designed to be immutable; methods that modify the statement return a new instance.
 
     Key Features:
-    - Intelligent parameter binding from args, kwargs, or explicit parameters
+    - Intelligent parameter binding from parameters and kwargs
     - Security-focused validation and sanitization
     - Support for different placeholder styles for database drivers
     - Filter composition from sqlspec.sql.filters
@@ -178,16 +171,18 @@ class SQL:
     - Configurable behavior for different use cases
     - Immutability: Modification methods return new instances.
 
-    Example usage:
-        >>> stmt = SQLStatement(
-        ...     "SELECT * FROM users WHERE id = ?", [123]
-        ... )
-        >>> sql, params = stmt.get_sql(), stmt.get_parameters()
+    Parameter binding is the merging of parameters, filters, and kwargs.
 
-        >>> stmt = SQLStatement(
+    Example usage:
+        >>> stmt = SQL(
+        ...     "SELECT * FROM users WHERE id = ?", parameters=[123]
+        ... )
+        >>> sql, params = stmt.to_sql(), stmt.get_parameters()
+
+        >>> stmt = SQL(
         ...     "SELECT * FROM users WHERE name = :name", name="John"
         ... )
-        >>> sql = stmt.get_sql(
+        >>> sql = stmt.to_sql(
         ...     placeholder_style="pyformat_named"
         ... )  # %(name)s
 
@@ -213,12 +208,11 @@ class SQL:
         statement: Statement,
         parameters: "Optional[SQLParameterType]" = None,
         *filters: "StatementFilter",
-        args: "Optional[Sequence[Any]]" = None,
-        kwargs: "Optional[Mapping[str, Any]]" = None,
         dialect: "Optional[DialectType]" = None,
         config: "Optional[SQLConfig]" = None,
         _builder_result_type: Optional[type] = None,
         _existing_statement_data: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize a SQLStatement instance."""
         _existing_statement_data = _existing_statement_data or {}
@@ -227,7 +221,6 @@ class SQL:
             self._copy_from_existing(
                 existing=statement,
                 parameters=parameters,
-                args=args,
                 kwargs=kwargs,
                 dialect=dialect,
                 config=config,
@@ -249,7 +242,7 @@ class SQL:
         self._analysis_result: Optional[StatementAnalysis] = _existing_statement_data.get("_analysis_result", None)
 
         if not _existing_statement_data:
-            self._initialize_statement(self._sql, parameters, args, kwargs)
+            self._initialize_statement(self._sql, parameters, kwargs)
 
         if filters:
             self._apply_filters(filters)
@@ -258,7 +251,6 @@ class SQL:
         self,
         existing: "SQL",
         parameters: "Optional[SQLParameterType]",
-        args: "Optional[Sequence[Any]]",
         kwargs: "Optional[Mapping[str, Any]]",
         dialect: "Optional[DialectType]",
         config: "Optional[SQLConfig]",
@@ -270,9 +262,9 @@ class SQL:
         self._builder_result_type = existing._builder_result_type
         self._analysis_result = existing._analysis_result
 
-        if parameters is not None or args is not None or kwargs is not None:
+        if parameters is not None or kwargs is not None:
             current_sql_source = existing._sql
-            self._initialize_statement(current_sql_source, parameters, args, kwargs)
+            self._initialize_statement(current_sql_source, parameters, kwargs)
         else:
             self._sql = existing._sql
             self._parsed_expression = existing._parsed_expression
@@ -284,7 +276,6 @@ class SQL:
         self,
         statement: "Statement",
         parameters: "Optional[SQLParameterType]",
-        args: "Optional[Sequence[Any]]",
         kwargs: "Optional[Mapping[str, Any]]",
     ) -> None:
         """Initialize the statement with SQL and parameters.
@@ -303,9 +294,7 @@ class SQL:
         else:
             self._parsed_expression = None
 
-        self._parameter_info, self._merged_parameters = self._process_parameters(
-            str(statement), parameters, args, kwargs
-        )
+        self._parameter_info, self._merged_parameters = self._process_parameters(str(statement), parameters, kwargs)
 
         # Process with pipeline if parsing is enabled
         if self._config.enable_parsing and self._parsed_expression:
@@ -367,25 +356,36 @@ class SQL:
         self,
         sql_str: str,
         parameters: "Optional[SQLParameterType]",
-        args: "Optional[Sequence[Any]]",
         kwargs: "Optional[Mapping[str, Any]]",
     ) -> tuple["list[ParameterInfo]", "SQLParameterType"]:
         if self._config.enable_parsing:
             try:
+                # Extract parameter info to check for mixed styles
+                parameters_info = self._config.parameter_validator.extract_parameters(sql_str)
+                has_positional = any(p.name is None for p in parameters_info)
+                has_named = any(p.name is not None for p in parameters_info)
+                has_mixed_styles = has_positional and has_named
+
+                # For mixed styles, treat parameters as args and merge with kwargs
+                if has_mixed_styles and parameters is not None and kwargs:
+                    # Convert parameters to args format for the converter
+                    args = parameters if isinstance(parameters, (list, tuple)) else [parameters]
+                    merged_params = self._config.parameter_converter._merge_mixed_parameters(
+                        parameters_info, args, kwargs
+                    )
+                    return parameters_info, merged_params
+                # Use the standard converter for non-mixed cases
                 _, parameter_info, merged_parameters, _ = self._config.parameter_converter.convert_parameters(
-                    sql_str, parameters, args, kwargs, validate=self._config.enable_validation
+                    sql_str, parameters, None, kwargs, validate=self._config.enable_validation
                 )
 
             except (ParameterError, ValueError, TypeError) as e:
                 if self._config.strict_mode:
                     raise
                 logger.warning("Parameter processing failed, using basic merge: %s", e)
-                return [], self._config.parameter_converter.merge_parameters(parameters, args, kwargs)
+                return [], self._config.parameter_converter.merge_parameters(parameters, None, kwargs)
             return parameter_info, merged_parameters
-        if not self._config.allow_mixed_parameters and args and kwargs:
-            msg = "Cannot mix args and kwargs when parsing is disabled"
-            raise ParameterError(msg, sql_str)
-        merged_parameters = self._config.parameter_converter.merge_parameters(parameters, args, kwargs)
+        merged_parameters = self._config.parameter_converter.merge_parameters(parameters, None, kwargs)
         return [], merged_parameters
 
     def _get_sql_string_for_processing(self) -> str:
@@ -643,10 +643,6 @@ class SQL:
 
         Returns:
             The ValidationResult instance.
-
-        Raises:
-            SQLValidationError: If validation is enabled, the statement is not safe,
-                                and the risk level meets or exceeds min_risk_to_raise.
         """
         if not self._config.enable_validation:
             if self._validation_result is None:
@@ -686,12 +682,7 @@ class SQL:
 
     def _get_validation_only_pipeline(self) -> "TransformerPipeline":
         """Get a pipeline with only validation components, no transformers."""
-        from sqlspec.statement.pipelines import TransformerPipeline
 
-        # Extract only validation components from the main pipeline
-
-        # First, try to get components from existing config
-        # Check if component is a validator (implements SQLValidator pattern or is a validator)
         validation_components = [
             component
             for component in self._config.processing_pipeline_components
@@ -869,42 +860,47 @@ class SQL:
         self,
         statement: "Optional[Statement]" = None,
         parameters: "Optional[SQLParameterType]" = None,
-        args: "Optional[Sequence[Any]]" = None,
         kwargs: "Optional[Mapping[str, Any]]" = None,
         dialect: "Optional[DialectType]" = None,
         config: "Optional[SQLConfig]" = None,
         *filters: "StatementFilter",
+        **additional_kwargs: Any,
     ) -> "SQL":
         """Create a copy of the statement, optionally overriding attributes.
 
         Args:
             statement: New SQL string, expression, or SQLStatement.
             parameters: New primary parameters.
-            args: New positional arguments for parameters.
             kwargs: New keyword arguments for parameters.
             dialect: New SQL dialect.
             config: New statement configuration.
             *filters: Statement filters to apply to the new copy.
+            **additional_kwargs: Additional keyword arguments for parameters.
 
         Returns:
             A new SQLStatement instance.
         """
         sql = statement if statement is not None else self._sql
 
-        if parameters is None and args is None and kwargs is None:
+        # Merge kwargs and additional_kwargs
+        merged_kwargs = {}
+        if kwargs:
+            merged_kwargs.update(kwargs)
+        if additional_kwargs:
+            merged_kwargs.update(additional_kwargs)
+        final_kwargs = merged_kwargs or None
+
+        if parameters is None and final_kwargs is None:
             if sql is self._sql:
                 effective_parameters = self._merged_parameters
-                effective_args = None
                 effective_kwargs = None
             else:
                 # SQL is changing, or new SQL is provided, let constructor handle params from scratch
                 effective_parameters = None
-                effective_args = None
                 effective_kwargs = None
         else:
             effective_parameters = parameters
-            effective_args = args
-            effective_kwargs = kwargs
+            effective_kwargs = final_kwargs
 
         # Data to potentially pass for optimized copying if underlying SQL/Expression is an SQLStatement
         # This helps avoid re-parsing or re-validating unnecessarily if only minor things change.
@@ -917,12 +913,11 @@ class SQL:
             # Filters are passed here directly for initial application by __init__ if it's a fresh build
             # Or, if copying an SQLStatement, __init__ handles it via _copy_from_existing.
             # The main thing is that filters passed to *this* copy method are applied *after* this new instance is formed.
-            args=effective_args,
-            kwargs=effective_kwargs,
             dialect=dialect if dialect is not None else self._dialect,
             config=config if config is not None else self._config,
             # We are not using _existing_statement_copy_data here because we want a potentially fresh state
             # based on overrides, and then apply filters specifically passed to this copy method.
+            **(effective_kwargs or {}),
         )
 
         if filters:

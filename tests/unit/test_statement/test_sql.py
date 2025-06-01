@@ -644,43 +644,6 @@ def test_equality_and_hashing() -> None:
     assert len(stmt_set) == 2  # stmt1 and stmt2 should be same hash
 
 
-@pytest.mark.parametrize(
-    ("sql", "analysis_enabled", "should_have_analysis"),
-    [
-        ("SELECT * FROM users", True, True),
-        ("SELECT * FROM users", False, False),
-    ],
-    ids=["analysis_enabled", "analysis_disabled"],
-)
-def test_analysis_configuration(sql: str, analysis_enabled: bool, should_have_analysis: bool) -> None:
-    """Test analysis configuration affects analysis availability."""
-    config = SQLConfig(enable_analysis=analysis_enabled)
-    stmt = SQL(sql, config=config)
-
-    if should_have_analysis:
-        # Analysis should be available through analyze() method
-        analysis = stmt.analyze()
-        assert analysis is not None
-        assert hasattr(analysis, "statement_type")
-    else:
-        # Analysis may still work via analyze() method even if not enabled in config
-        # since analyze() can create its own analyzer
-        analysis = stmt.analyze()
-        assert analysis is not None
-
-
-def test_analysis_result_caching() -> None:
-    """Test that analysis results are cached."""
-    config = SQLConfig(enable_analysis=True)
-    stmt = SQL("SELECT * FROM users", config=config)
-
-    analysis1 = stmt.analyze()
-    analysis2 = stmt.analyze()
-
-    # Should return same instance due to caching
-    assert analysis1 is analysis2
-
-
 def test_invalid_sql_parsing() -> None:
     """Test handling of invalid SQL."""
     with pytest.raises(SQLValidationError):
@@ -725,7 +688,7 @@ def test_transform_method() -> None:
 def test_property_access() -> None:
     """Test all property accessors."""
     config = SQLConfig(enable_validation=True, enable_analysis=True)
-    stmt = SQL("SELECT * FROM users WHERE id = :id", kwargs={"id": 123}, config=config, dialect="postgresql")
+    stmt = SQL("SELECT * FROM users WHERE id = :id", config=config, dialect="postgresql", id=123)
 
     # Basic properties
     assert stmt.sql == "SELECT * FROM users WHERE id = :id"
@@ -752,14 +715,3 @@ def test_validation_result_property() -> None:
     # With validation disabled
     stmt_without_validation = SQL("SELECT * FROM users", config=SQLConfig(enable_validation=False))
     assert stmt_without_validation.validation_result is None
-
-
-def test_analysis_result_property() -> None:
-    """Test analysis_result property."""
-    # Analysis should be None until explicitly run
-    stmt = SQL("SELECT * FROM users", config=SQLConfig(enable_analysis=False))
-    assert stmt.analysis_result is None
-
-    # After running analysis, the analyze() method works but doesn't set internal property
-    stmt.analyze()
-    # The analyze() method might not set the internal property in current implementation

@@ -133,7 +133,9 @@ def is_dataclass_instance(obj: Any) -> TypeGuard[DataclassProtocol]:
     Returns:
         True if the object is a dataclass instance.
     """
-    return hasattr(obj, "__dataclass_fields__") or hasattr(type(obj), "__dataclass_fields__")  # pyright: ignore[reportUnknownArgumentType]
+    # Ensure obj is an instance and not the class itself,
+    # and that its type is a dataclass.
+    return not isinstance(obj, type) and hasattr(type(obj), "__dataclass_fields__")
 
 
 @lru_cache(typed=True)

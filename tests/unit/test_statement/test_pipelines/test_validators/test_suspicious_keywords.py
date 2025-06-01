@@ -183,12 +183,12 @@ def test_suspicious_keywords_configuration_database_introspection() -> None:
     result_without = validator_without_intro.validate(expression, "mysql", config)
 
     # With introspection checks should be more restrictive
-    intro_issues_with = len([
-        i for i in result_with.issues if "introspection" in i.lower() or "information_schema" in i.lower()
-    ])
-    intro_issues_without = len([
-        i for i in result_without.issues if "introspection" in i.lower() or "information_schema" in i.lower()
-    ])
+    intro_issues_with = len(
+        [i for i in result_with.issues if "introspection" in i.lower() or "information_schema" in i.lower()]
+    )
+    intro_issues_without = len(
+        [i for i in result_without.issues if "introspection" in i.lower() or "information_schema" in i.lower()]
+    )
 
     assert intro_issues_with >= intro_issues_without
 

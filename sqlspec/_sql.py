@@ -1,4 +1,4 @@
-# ruff: noqa: PLR0904, SLF001, S608
+# ruff: noqa: PLR0904, SLF001
 """Unified SQL factory for creating SQL builders and column expressions with a clean API.
 
 This module provides the `sql` factory object for easy SQL construction:
@@ -247,129 +247,119 @@ class SQLFactory:
         return any(candidate_upper.startswith(starter) for starter in sql_starters)
 
     def _populate_insert_from_sql(self, builder: "InsertBuilder", sql_string: str) -> "InsertBuilder":
+        """Parse SQL string and populate INSERT builder using SQLGlot directly."""
         try:
-            from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
+            # Use SQLGlot directly for parsing - no validation here
+            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
+            if parsed_expr is None:
+                import sqlglot
 
-            analyzer = StatementAnalyzer()
-            analysis = analyzer.analyze_statement(sql_string, self.dialect)
+                parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
-            if analysis.statement_type == "Insert":
-                # Standard INSERT statement
-                if analysis.table_name:
-                    builder.into(analysis.table_name)
-
-                # Set the internal expression to the parsed one, ensuring it's an Insert type
-                if isinstance(analysis.expression, exp.Insert):
-                    builder._expression = analysis.expression
-
+            if isinstance(parsed_expr, exp.Insert):
+                # Set the internal expression to the parsed one
+                builder._expression = parsed_expr
                 return builder
 
-            if analysis.statement_type == "Select":
-                # Handle INSERT FROM SELECT case
-                logger.info("Converting SELECT to INSERT FROM SELECT pattern")
-                # This would need a target table - for now, return builder with the SELECT as source
-                if hasattr(builder, "from_select"):
-                    # We'd need to create a temporary SelectBuilder from the analysis
-                    # This is a placeholder for the full implementation
-                    pass
+            if isinstance(parsed_expr, exp.Select):
+                # Handle INSERT FROM SELECT case - just return builder for now
+                # The actual conversion logic can be handled by the builder itself
+                logger.info("Detected SELECT statement for INSERT - may need target table specification")
                 return builder
 
-            from sqlspec.exceptions import SQLBuilderError
-
-            msg = f"Cannot create INSERT from {analysis.statement_type} statement"
-            raise SQLBuilderError(msg)  # noqa: TRY301
+            # For other statement types, just return the builder as-is
+            logger.warning("Cannot create INSERT from %s statement", type(parsed_expr).__name__)
+            return builder
 
         except Exception as e:  # noqa: BLE001
             logger.warning("Failed to parse INSERT SQL, falling back to traditional mode: %s", e)
             return builder
 
     def _populate_select_from_sql(self, builder: "SelectBuilder", sql_string: str) -> "SelectBuilder":
+        """Parse SQL string and populate SELECT builder using SQLGlot directly."""
         try:
-            from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
+            # Use SQLGlot directly for parsing - no validation here
+            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
+            if parsed_expr is None:
+                import sqlglot
 
-            analyzer = StatementAnalyzer()
-            analysis = analyzer.analyze_statement(sql_string, self.dialect)
+                parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
-            if analysis.statement_type == "Select":
-                # Set the internal expression to the parsed one, ensuring it's a Select type
-                if isinstance(analysis.expression, exp.Select):
-                    builder._expression = analysis.expression
+            if isinstance(parsed_expr, exp.Select):
+                # Set the internal expression to the parsed one
+                builder._expression = parsed_expr
                 return builder
-            from sqlspec.exceptions import SQLBuilderError
 
-            msg = f"Cannot create SELECT from {analysis.statement_type} statement"
-            raise SQLBuilderError(msg)
+            logger.warning("Cannot create SELECT from %s statement", type(parsed_expr).__name__)
+            return builder
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Failed to parse SELECT SQL, falling back to traditional mode: %s", e)
             return builder
 
     def _populate_update_from_sql(self, builder: "UpdateBuilder", sql_string: str) -> "UpdateBuilder":
+        """Parse SQL string and populate UPDATE builder using SQLGlot directly."""
         try:
-            from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
+            # Use SQLGlot directly for parsing - no validation here
+            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
+            if parsed_expr is None:
+                import sqlglot
 
-            analyzer = StatementAnalyzer()
-            analysis = analyzer.analyze_statement(sql_string, self.dialect)
+                parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
-            if analysis.statement_type == "Update":
-                if analysis.table_name:
-                    builder.table(analysis.table_name)
-
-                # Set the internal expression to the parsed one, ensuring it's an Update type
-                if isinstance(analysis.expression, exp.Update):
-                    builder._expression = analysis.expression
+            if isinstance(parsed_expr, exp.Update):
+                # Set the internal expression to the parsed one
+                builder._expression = parsed_expr
                 return builder
-            from sqlspec.exceptions import SQLBuilderError
 
-            msg = f"Cannot create UPDATE from {analysis.statement_type} statement"
-            raise SQLBuilderError(msg)
+            logger.warning("Cannot create UPDATE from %s statement", type(parsed_expr).__name__)
+            return builder
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Failed to parse UPDATE SQL, falling back to traditional mode: %s", e)
             return builder
 
     def _populate_delete_from_sql(self, builder: "DeleteBuilder", sql_string: str) -> "DeleteBuilder":
+        """Parse SQL string and populate DELETE builder using SQLGlot directly."""
         try:
-            from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
+            # Use SQLGlot directly for parsing - no validation here
+            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
+            if parsed_expr is None:
+                import sqlglot
 
-            analyzer = StatementAnalyzer()
-            analysis = analyzer.analyze_statement(sql_string, self.dialect)
+                parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
-            if analysis.statement_type == "Delete":
-                # Set the internal expression to the parsed one, ensuring it's a Delete type
-                if isinstance(analysis.expression, exp.Delete):
-                    builder._expression = analysis.expression
+            if isinstance(parsed_expr, exp.Delete):
+                # Set the internal expression to the parsed one
+                builder._expression = parsed_expr
                 return builder
-            from sqlspec.exceptions import SQLBuilderError
 
-            msg = f"Cannot create DELETE from {analysis.statement_type} statement"
-            raise SQLBuilderError(msg)
+            logger.warning("Cannot create DELETE from %s statement", type(parsed_expr).__name__)
+            return builder
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Failed to parse DELETE SQL, falling back to traditional mode: %s", e)
             return builder
 
     def _populate_merge_from_sql(self, builder: "MergeBuilder", sql_string: str) -> "MergeBuilder":
+        """Parse SQL string and populate MERGE builder using SQLGlot directly."""
         try:
-            from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
+            # Use SQLGlot directly for parsing - no validation here
+            parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
+            if parsed_expr is None:
+                import sqlglot
 
-            analyzer = StatementAnalyzer()
-            analysis = analyzer.analyze_statement(sql_string, self.dialect)
+                parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
-            if analysis.statement_type == "Merge":
-                if analysis.table_name:
-                    builder.into(analysis.table_name)
-
-                # Set the internal expression to the parsed one, ensuring it's a Merge type
-                if isinstance(analysis.expression, exp.Merge):
-                    builder._expression = analysis.expression
+            if isinstance(parsed_expr, exp.Merge):
+                # Set the internal expression to the parsed one
+                builder._expression = parsed_expr
                 return builder
-            from sqlspec.exceptions import SQLBuilderError
 
-            msg = f"Cannot create MERGE from {analysis.statement_type} statement"
-            raise SQLBuilderError(msg)
+            logger.warning("Cannot create MERGE from %s statement", type(parsed_expr).__name__)
+            return builder
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Failed to parse MERGE SQL, falling back to traditional mode: %s", e)
             return builder
 
