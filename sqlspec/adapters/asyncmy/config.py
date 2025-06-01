@@ -4,10 +4,10 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
 
-from asyncmy.connection import Connection, Pool
+from asyncmy.connection import Connection
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
+from sqlspec.adapters.asyncmy.driver import AsyncmyConnection, AsyncmyDriver
 from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig
@@ -17,6 +17,7 @@ from sqlspec.utils.telemetry import instrument_operation_async
 if TYPE_CHECKING:
     from asyncmy.cursors import Cursor, DictCursor
     from asyncmy.pool import Pool
+
 
 __all__ = ("AsyncmyConfig", "AsyncmyConnectionConfig", "AsyncmyPoolConfig")
 
@@ -191,7 +192,18 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict."""
+        """Return the connection configuration as a dict.
+
+        This method merges the connection_config and pool_config dictionaries,
+        ensuring that the pool_config takes precedence over the connection_config.
+        It also removes any keys with value Empty from the merged configuration.
+
+        Raises:
+            ImproperConfigurationError: If the configuration is invalid.
+
+        Returns:
+            A dictionary containing the merged connection configuration.
+        """
         # Merge connection_config into pool_config, with pool_config taking precedence
         merged_config = {**self.connection_config, **self.pool_config}
         config = {k: v for k, v in merged_config.items() if v is not Empty}

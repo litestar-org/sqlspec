@@ -65,12 +65,12 @@ def test_sync_insert_returning(oracle_sync_session: OracleSyncConfig, params: An
 
         result = driver.execute(sql, exec_params)
         assert isinstance(result, SelectResult)  # RETURNING makes this a SELECT result
-        assert result.rows is not None
-        assert len(result.rows) == 1
+        assert result.data is not None
+        assert len(result.data) == 1
         # Oracle often returns column names in uppercase
-        assert result.rows[0]["NAME"] == "test_name"
-        assert result.rows[0]["ID"] is not None
-        assert isinstance(result.rows[0]["ID"], int)
+        assert result.data[0]["NAME"] == "test_name"
+        assert result.data[0]["ID"] is not None
+        assert isinstance(result.data[0]["ID"], int)
         driver.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
         )
@@ -117,9 +117,9 @@ def test_sync_select(oracle_sync_session: OracleSyncConfig, params: Any, style: 
 
         select_result = driver.execute(select_sql, select_params)
         assert isinstance(select_result, SelectResult)
-        assert select_result.rows is not None
-        assert len(select_result.rows) == 1
-        assert select_result.rows[0]["NAME"] == "test_name"
+        assert select_result.data is not None
+        assert len(select_result.data) == 1
+        assert select_result.data[0]["NAME"] == "test_name"
         driver.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
         )
@@ -163,10 +163,10 @@ def test_sync_select_value(oracle_sync_session: OracleSyncConfig, params: Any, s
         select_sql = "SELECT 'test_value' FROM dual"
         value_result = driver.execute(select_sql)
         assert isinstance(value_result, SelectResult)
-        assert value_result.rows is not None
-        assert len(value_result.rows) == 1
+        assert value_result.data is not None
+        assert len(value_result.data) == 1
         assert value_result.column_names is not None
-        value = value_result.rows[0][value_result.column_names[0]]
+        value = value_result.data[0][value_result.column_names[0]]
         assert value == "test_value"
         driver.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"

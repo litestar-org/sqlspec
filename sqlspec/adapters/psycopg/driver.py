@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager, contextmanager
 from typing import Any, ClassVar, Optional, Union, cast
 
 from psycopg import AsyncConnection, Connection
-from psycopg.rows import DictRow
+from psycopg.rows import DictRow as PsycopgDictRow
 
 from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
@@ -13,15 +13,15 @@ from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTransl
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ExecuteResult, SelectResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import ModelDTOT, SQLParameterType
+from sqlspec.typing import DictRow, ModelDTOT, SQLParameterType
 from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
 
 logger = logging.getLogger("sqlspec")
 
 __all__ = ("PsycopgAsyncConnection", "PsycopgAsyncDriver", "PsycopgSyncConnection", "PsycopgSyncDriver")
 
-PsycopgSyncConnection = Connection[DictRow]
-PsycopgAsyncConnection = AsyncConnection[DictRow]
+PsycopgSyncConnection = Connection[PsycopgDictRow]
+PsycopgAsyncConnection = AsyncConnection[PsycopgDictRow]
 
 
 class PsycopgSyncDriver(
@@ -107,7 +107,7 @@ class PsycopgSyncDriver(
     ) -> Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]]]:
         with instrument_operation(self, "psycopg_wrap_select", "database"):
             cursor = raw_driver_result
-            fetched_data: list[DictRow] = cursor.fetchall()
+            fetched_data: list[PsycopgDictRow] = cursor.fetchall()
             column_names = [col.name for col in cursor.description or []]
             rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
 
@@ -261,7 +261,7 @@ class PsycopgAsyncDriver(
     ) -> Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]]]:
         with instrument_operation(self, "psycopg_wrap_select", "database"):
             cursor = raw_driver_result
-            fetched_data: list[DictRow] = cursor.fetchall()
+            fetched_data: list[PsycopgDictRow] = cursor.fetchall()
             column_names = [col.name for col in cursor.description or []]
             rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
 
