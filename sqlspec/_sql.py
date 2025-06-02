@@ -240,7 +240,32 @@ class SQLFactory:
         candidate_upper = candidate.strip().upper()
 
         # Check for SQL keywords at the beginning
-        sql_starters = ["SELECT", "INSERT", "UPDATE", "DELETE", "MERGE", "WITH"]
+        sql_starters = {
+            "SELECT",
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+            "MERGE",
+            "WITH",
+            "CALL",
+            "DECLARE",
+            "BEGIN",
+            "END",
+            "CREATE",
+            "DROP",
+            "ALTER",
+            "TRUNCATE",
+            "RENAME",
+            "GRANT",
+            "REVOKE",
+            "SET",
+            "SHOW",
+            "USE",
+            "EXPLAIN",
+            "OPTIMIZE",
+            "VACUUM",
+            "COPY",
+        }
 
         if expected_type:
             return candidate_upper.startswith(expected_type.upper())

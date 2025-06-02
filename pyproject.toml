@@ -277,7 +277,7 @@ disable_error_code = "ignore-without-code"
 module = "sqlspec.extensions.litestar.providers"
 
 [[tool.mypy.overrides]]
-disable_error_code = "ignore-without-code,method-assign,attr-defined,unused-ignore"
+disable_error_code = "ignore-without-code,method-assign,attr-defined,unused-ignore,assignment"
 module = "tests.*"
 
 

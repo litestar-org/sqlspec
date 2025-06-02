@@ -264,7 +264,7 @@ except ImportError:
             return None
 
         def __enter__(self) -> "Span":
-            return self
+            return self  # type: ignore[return-value]
 
         def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
             return None
@@ -281,9 +281,9 @@ except ImportError:
             record_exception: bool = True,
             set_status_on_exception: bool = True,
         ) -> Span:
-            return Span()  # pragma: no cover
+            return Span()  # type: ignore[abstract]
 
-    class _TraceModule:  # type: ignore[no-redef]
+    class _TraceModule:
         def get_tracer(
             self,
             instrumenting_module_name: str,
@@ -298,8 +298,8 @@ except ImportError:
         Status = type(None)  # Shim for Status
 
     trace = _TraceModule()  # type: ignore[assignment]
-    StatusCode = trace.StatusCode  # type: ignore[misc, assignment]
-    Status = trace.Status  # type: ignore[misc, assignment]
+    StatusCode = trace.StatusCode  # type: ignore[misc]
+    Status = trace.Status  # type: ignore[misc]
     OPENTELEMETRY_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
 
@@ -381,7 +381,7 @@ try:
 except ImportError:
     # Define shims for when aiosql is not installed
 
-    class _AiosqlShim:  # type: ignore[no-redef]
+    class _AiosqlShim:
         """Placeholder aiosql module"""
 
         @staticmethod
