@@ -99,6 +99,14 @@ class DuckDBDriver(
                     final_exec_params = [list(p) if isinstance(p, (list, tuple)) else [p] for p in parameters]
                 else:
                     final_exec_params = []
+            # Use provided parameters if available, otherwise get from statement
+            elif parameters is not None:
+                if isinstance(parameters, list):
+                    final_exec_params = parameters
+                elif hasattr(parameters, "__iter__") and not isinstance(parameters, (str, bytes)):
+                    final_exec_params = list(parameters)
+                else:
+                    final_exec_params = [parameters]
             else:
                 single_params = statement.get_parameters(style=self._get_placeholder_style())
                 if single_params is not None:
@@ -122,9 +130,17 @@ class DuckDBDriver(
                     return "SCRIPT EXECUTED"
                 if is_many:
                     cursor.executemany(final_sql, cast("list[list[Any]]", final_exec_params))
-                else:
-                    cursor.execute(final_sql, final_exec_params or [])
-                return cursor
+                    # For executemany, return cursor info for execute result
+                    return {"rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1}
+                cursor.execute(final_sql, final_exec_params or [])
+
+                # For SELECT queries, fetch the data immediately since cursor will be closed
+                if self.returns_rows(statement.expression):
+                    fetched_data = cursor.fetchall()
+                    column_names = [col[0] for col in cursor.description or []]
+                    return {"data": fetched_data, "columns": column_names}
+                # For non-SELECT queries, return cursor info
+                return {"rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1}
 
     def _wrap_select_result(
         self,
@@ -134,9 +150,23 @@ class DuckDBDriver(
         **kwargs: Any,
     ) -> Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]]]:
         with instrument_operation(self, "duckdb_wrap_select", "database"):
-            cursor = raw_driver_result
-            fetched_data = cursor.fetchall()
-            column_names = [col[0] for col in cursor.description or []]
+            # Handle the new dictionary format from _execute_impl
+            if isinstance(raw_driver_result, dict) and "data" in raw_driver_result:
+                fetched_data = raw_driver_result["data"]
+                column_names = raw_driver_result["columns"]
+            elif not isinstance(raw_driver_result, dict):
+                # Fallback for backward compatibility (shouldn't happen with new implementation)
+                if hasattr(raw_driver_result, "fetchall") and hasattr(raw_driver_result, "description"):
+                    fetched_data = raw_driver_result.fetchall()
+                    column_names = [col[0] for col in raw_driver_result.description or []]
+                else:
+                    # Should not happen with current implementation
+                    fetched_data = []
+                    column_names = []
+            else:
+                # Should not happen with current implementation
+                fetched_data = []
+                column_names = []
 
             # Convert to list of dicts
             rows_as_dicts: list[dict[str, Any]] = []
@@ -185,8 +215,12 @@ class DuckDBDriver(
                     operation_type=operation_type or "SCRIPT",
                 )
 
-            cursor = raw_driver_result
-            rows_affected = cursor.rowcount if hasattr(cursor, "rowcount") else -1
+            # Handle the new dictionary format from _execute_impl
+            if isinstance(raw_driver_result, dict) and "rowcount" in raw_driver_result:
+                rows_affected = raw_driver_result["rowcount"]
+            else:
+                # Fallback for backward compatibility
+                rows_affected = getattr(raw_driver_result, "rowcount", -1)
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)

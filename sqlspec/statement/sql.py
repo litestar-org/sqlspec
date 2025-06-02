@@ -16,7 +16,7 @@ If placeholder_style is not specified, the method falls back to dialect-based lo
 
 import logging
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import sqlglot
 from sqlglot import exp
@@ -133,12 +133,10 @@ class SQLConfig:
             if self.enable_transformations:
                 from sqlspec.statement.pipelines.transformers import CommentRemover, ParameterizeLiterals
 
-                components_to_use.extend(
-                    [
-                        CommentRemover(),
-                        ParameterizeLiterals(),
-                    ]
-                )
+                components_to_use.extend([
+                    CommentRemover(),
+                    ParameterizeLiterals(),
+                ])
 
             # Add default validator if validation is enabled
             if self.enable_validation:
@@ -195,6 +193,8 @@ class SQL:
         "_cached_sql_string",
         "_config",
         "_dialect",
+        "_is_many",
+        "_is_script",
         "_merged_parameters",
         "_parameter_info",
         "_parsed_expression",
@@ -256,6 +256,8 @@ class SQL:
             "_builder_result_type", _builder_result_type
         )
         self._analysis_result: Optional[StatementAnalysis] = _existing_statement_data.get("_analysis_result", None)
+        self._is_many: bool = _existing_statement_data.get("_is_many", False)
+        self._is_script: bool = _existing_statement_data.get("_is_script", False)
 
         if not _existing_statement_data:
             self._initialize_statement(self._sql, actual_parameters, kwargs)
@@ -322,6 +324,22 @@ class SQL:
             )
             self._parsed_expression = transformed_expr
 
+            # Check if any transformers extracted parameters (like ParameterizeLiterals)
+            extracted_params = []
+            for component in pipeline.components:
+                if hasattr(component, "extracted_parameters") and hasattr(component, "get_parameters"):
+                    # Use get_parameters() method if available, otherwise access attribute directly
+                    if callable(getattr(component, "get_parameters", None)):
+                        component_params = component.get_parameters()  # type: ignore[attr-defined]
+                        if component_params:
+                            extracted_params.extend(component_params)
+                    elif getattr(component, "extracted_parameters", None):
+                        extracted_params.extend(component.extracted_parameters)  # type: ignore[attr-defined]
+
+            # If we have extracted parameters, merge them with existing parameters
+            if extracted_params:
+                self._merge_extracted_parameters(extracted_params)
+
             # Only set validation result if validation is enabled
             if self._config.enable_validation:
                 self._validation_result = validation_res_from_pipeline
@@ -360,6 +378,37 @@ class SQL:
                     raise SQLValidationError(msg, str(statement), self._validation_result.risk_level)
         else:  # If parsing or validation was disabled, ensure validation_result is None
             self._validation_result = None
+
+    def _merge_extracted_parameters(self, extracted_params: list[Any]) -> None:
+        """Merge parameters extracted by transformers with existing parameters.
+
+        Args:
+            extracted_params: List of parameter values extracted by transformers
+        """
+        if not extracted_params:
+            return
+
+        # Convert existing parameters to list format for merging
+        if self._merged_parameters is None:
+            self._merged_parameters = extracted_params
+        elif isinstance(self._merged_parameters, (list, tuple)):
+            # Extend existing list with extracted parameters
+            merged_list = list(self._merged_parameters) + extracted_params
+            self._merged_parameters = merged_list
+        elif isinstance(self._merged_parameters, dict):
+            # For dict parameters, we need to be more careful about merging
+            # Convert extracted params to dict format using ordinal-based names
+            param_dict = dict(self._merged_parameters)
+            for param_value in extracted_params:
+                # Find the next available ordinal-based key
+                ordinal = len(param_dict)
+                while f"_extracted_{ordinal}" in param_dict:
+                    ordinal += 1
+                param_dict[f"_extracted_{ordinal}"] = param_value
+            self._merged_parameters = param_dict
+        else:
+            # Single parameter case - convert to list and add extracted params
+            self._merged_parameters = [self._merged_parameters] + extracted_params
 
     def _process_parameters(
         self,
@@ -541,17 +590,30 @@ class SQL:
 
     @property
     def analysis_result(self) -> "Optional[StatementAnalysis]":
-        """Get the analysis result if analysis was performed.
+        """Get the analysis result for this statement.
 
         Returns:
-            StatementAnalysis if analysis is available, None otherwise.
+            The analysis result if analysis was enabled and performed, None otherwise.
         """
-        # Check if analysis was stored in the expression during pipeline processing
-        if self._parsed_expression:
-            pipeline_analysis = getattr(self._parsed_expression, "_sqlspec_analysis", None)
-            if pipeline_analysis:
-                return cast("StatementAnalysis", pipeline_analysis)
         return self._analysis_result
+
+    @property
+    def is_many(self) -> bool:
+        """Whether this statement should be executed as a batch operation.
+
+        Returns:
+            True if this is a batch operation, False otherwise.
+        """
+        return self._is_many
+
+    @property
+    def is_script(self) -> bool:
+        """Whether this statement should be executed as a script.
+
+        Returns:
+            True if this is a script operation, False otherwise.
+        """
+        return self._is_script
 
     def to_sql(
         self,
@@ -773,7 +835,7 @@ class SQL:
         if target_style == ParameterStyle.NAMED_DOLLAR:
             return f"${param_info.name}" if param_info.name else f"$param_{param_info.ordinal}"
         if target_style == ParameterStyle.NUMERIC:
-            return f":{param_info.ordinal + 1}"  # 1-based numbering
+            return f"${param_info.ordinal + 1}"  # PostgreSQL-style $1, $2, etc.
         if target_style == ParameterStyle.NAMED_AT:
             return f"@{param_info.name}" if param_info.name else f"@param_{param_info.ordinal}"
         if target_style == ParameterStyle.PYFORMAT_NAMED:
@@ -1261,11 +1323,63 @@ class SQL:
         # Create a hashable representation of config by using its string representation
         config_hash = hash(str(self._config))
 
-        return hash(
-            (
-                str(self._sql),
-                hashable_params,
-                self._dialect,
-                config_hash,
-            )
+        return hash((
+            str(self._sql),
+            hashable_params,
+            self._dialect,
+            config_hash,
+        ))
+
+    def as_many(self) -> "SQL":
+        """Create a copy of this SQL statement marked for batch execution.
+
+        Returns:
+            A new SQL instance with is_many=True.
+        """
+        new_sql = SQL(
+            statement=self._sql,
+            parameters=self._merged_parameters,
+            dialect=self._dialect,
+            config=self._config,
+            _builder_result_type=self._builder_result_type,
+            _existing_statement_data={
+                **self._get_existing_data(),
+                "_is_many": True,
+            },
         )
+        return new_sql
+
+    def as_script(self) -> "SQL":
+        """Create a copy of this SQL statement marked for script execution.
+
+        Returns:
+            A new SQL instance with is_script=True.
+        """
+        new_sql = SQL(
+            statement=self._sql,
+            parameters=self._merged_parameters,
+            dialect=self._dialect,
+            config=self._config,
+            _builder_result_type=self._builder_result_type,
+            _existing_statement_data={
+                **self._get_existing_data(),
+                "_is_script": True,
+            },
+        )
+        return new_sql
+
+    def _get_existing_data(self) -> dict[str, Any]:
+        """Get existing statement data for copying."""
+        return {
+            "_config": self._config,
+            "_dialect": self._dialect,
+            "_original_input": self._sql,
+            "_parsed_expression": self._parsed_expression,
+            "_parameter_info": self._parameter_info,
+            "_merged_parameters": self._merged_parameters,
+            "_validation_result": self._validation_result,
+            "_builder_result_type": self._builder_result_type,
+            "_analysis_result": self._analysis_result,
+            "_is_many": self._is_many,
+            "_is_script": self._is_script,
+        }

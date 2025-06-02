@@ -61,19 +61,13 @@ class AsyncpgDriver(
     async def _execute_impl(
         self,
         statement: SQL,
-        parameters: Optional[SQLParameterType] = None,
         connection: Optional[AsyncpgConnection] = None,
-        config: Optional[SQLConfig] = None,
-        is_many: bool = False,
-        is_script: bool = False,
         **kwargs: Any,
     ) -> Any:
         async with instrument_operation_async(self, "asyncpg_execute", "database"):
             conn = self._connection(connection)
-            if config is not None and config != statement.config:
-                statement = statement.copy(config=config)
 
-            if is_script:
+            if statement.is_script:
                 final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
                 if self.instrumentation_config.log_queries:
                     logger.debug("Executing SQL script: %s", final_sql)
@@ -84,37 +78,30 @@ class AsyncpgDriver(
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", final_sql)
 
-            if is_many:
-                args_list: list[Sequence[Any]] = []
-                if parameters and isinstance(parameters, Sequence):
-                    for param_set in parameters:
+            if statement.is_many:
+                params_list: list[tuple[Any, ...]] = []
+                if statement.parameters and isinstance(statement.parameters, Sequence):
+                    for param_set in statement.parameters:
                         if isinstance(param_set, (list, tuple)):
-                            args_list.append(param_set)
-                        elif isinstance(param_set, dict):
-                            # Convert dict to ordered args based on statement parameters
-                            ordered_params = statement.get_parameters(style=self._get_placeholder_style())
-                            if isinstance(ordered_params, (list, tuple)):
-                                args_list.append(ordered_params)
-                            else:
-                                args_list.append((ordered_params,) if ordered_params is not None else ())
+                            params_list.append(tuple(param_set))
                         elif param_set is None:
-                            args_list.append(())
+                            params_list.append(())
                         else:
-                            args_list.append((param_set,))
+                            params_list.append((param_set,))
 
-                if self.instrumentation_config.log_parameters and args_list:
-                    logger.debug("Query parameters (batch): %s", args_list)
+                if self.instrumentation_config.log_parameters and params_list:
+                    logger.debug("Query parameters (batch): %s", params_list)
 
-                await conn.executemany(final_sql, args_list)
-                return len(args_list)
+                return await conn.executemany(final_sql, params_list)
             # Single execution
-            ordered_params = statement.get_parameters(style=self._get_placeholder_style())
+            # Use the statement's already-processed parameters directly
+            processed_params = statement._merged_parameters if hasattr(statement, "_merged_parameters") else None
             args: list[Any] = []
 
-            if isinstance(ordered_params, (list, tuple)):
-                args.extend(ordered_params)
-            elif ordered_params is not None:
-                args.append(ordered_params)
+            if isinstance(processed_params, (list, tuple)):
+                args.extend(processed_params)
+            elif processed_params is not None:
+                args.append(processed_params)
 
             if self.instrumentation_config.log_parameters and args:
                 logger.debug("Query parameters: %s", args)
@@ -246,13 +233,14 @@ class AsyncpgDriver(
                 raise TypeError(msg)
 
             final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
-            ordered_params = stmt_obj.get_parameters(style=self._get_placeholder_style())
+            # Use the statement's already-processed parameters instead of calling get_parameters()
+            processed_params = stmt_obj._merged_parameters if hasattr(stmt_obj, "_merged_parameters") else None
 
             args: list[Any] = []
-            if isinstance(ordered_params, (list, tuple)):
-                args.extend(ordered_params)
-            elif ordered_params is not None:
-                args.append(ordered_params)
+            if isinstance(processed_params, (list, tuple)):
+                args.extend(processed_params)
+            elif processed_params is not None:
+                args.append(processed_params)
 
             records = await conn.fetch(final_sql, *args)
 

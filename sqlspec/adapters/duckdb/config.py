@@ -262,24 +262,28 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         # Filter out empty values and prepare config for duckdb.connect()
         config_dict = {k: v for k, v in self.connection_config.items() if v is not Empty}
 
-        # Extract DuckDB-specific settings into the config parameter
-        duckdb_settings = {}
-        connection_params = {}
-
         # Parameters that go directly to duckdb.connect()
-        direct_params = {"database", "read_only", "config"}
+        connection_params = {}
+        duckdb_config_settings = {}
 
+        # Only database and read_only go directly to connect()
+        # Everything else goes into the config dictionary
         for key, value in config_dict.items():
-            if key in direct_params:
-                connection_params[key] = value
+            if key == "database":
+                connection_params["database"] = value
+            elif key == "read_only":
+                connection_params["read_only"] = value
+            elif key == "config":
+                # If user provided a config dict, merge it
+                if isinstance(value, dict):
+                    duckdb_config_settings.update(value)
             else:
                 # All other parameters are DuckDB configuration settings
-                duckdb_settings[key] = value
+                duckdb_config_settings[key] = value
 
-        existing_config: dict[str, Any] = connection_params.get("config", {})
-        if duckdb_settings:
-            existing_config.update(duckdb_settings)
-            connection_params["config"] = existing_config
+        # Add the config dictionary if we have settings
+        if duckdb_config_settings:
+            connection_params["config"] = duckdb_config_settings
 
         return connection_params
 

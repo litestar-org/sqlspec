@@ -32,12 +32,15 @@ def psqlpy_config(postgres_service: PostgresService) -> PsqlpyConfig:
 async def test_connect_via_pool(psqlpy_config: PsqlpyConfig) -> None:
     """Test establishing a connection via the pool."""
     pool = await psqlpy_config.create_pool()
-    conn = await pool.connection()
-    assert conn is not None
-    # Optionally, perform a simple query to confirm connection
-    result = await conn.fetch_val("SELECT 1")  # Corrected method name
-    assert result == 1
-    conn.back_to_pool()
+    async with pool.acquire() as conn:
+        assert conn is not None
+        # Perform a simple query to confirm connection
+        # For psqlpy, we need to use execute() for simple queries
+        result = await conn.execute("SELECT 1")
+        # The result should be a QueryResult object with result() method
+        rows = result.result()
+        assert len(rows) == 1
+        assert rows[0]["?column?"] == 1  # PostgreSQL default column name for SELECT 1
 
 
 @pytest.mark.asyncio
@@ -48,8 +51,10 @@ async def test_connect_direct(psqlpy_config: PsqlpyConfig) -> None:
     async with psqlpy_config.provide_connection() as conn:
         assert conn is not None
         # Perform a simple query
-        result = await conn.fetch_val("SELECT 1")  # Corrected method name
-        assert result == 1
+        result = await conn.execute("SELECT 1")
+        rows = result.result()
+        assert len(rows) == 1
+        assert rows[0]["?column?"] == 1
     # Connection is automatically released by the context manager
 
 

@@ -467,6 +467,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
     def _build_statement(
         self,
         statement_input: "Union[SQL, Statement, QueryBuilder[Any]]",
+        parameters: "Optional[SQLParameterType]",
         config: "Optional[SQLConfig]",
         *filters: "StatementFilter",
     ) -> "SQL":
@@ -476,7 +477,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         elif isinstance(statement_input, QueryBuilder):
             sql_obj = statement_input.to_statement(config=config or self.config)
         else:  # str or exp.Expression
-            sql_obj = SQL(statement_input, dialect=self.dialect, config=config or self.config)
+            sql_obj = SQL(statement_input, parameters, dialect=self.dialect, config=config or self.config)
 
         for sql_filter in filters:
             if sql_filter is not None and hasattr(sql_filter, "append_to_statement"):
@@ -491,11 +492,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
     def _execute_impl(
         self,
         statement: "SQL",
-        parameters: "Optional[SQLParameterType]" = None,
         connection: "Optional[ConnectionT]" = None,
-        config: "Optional[SQLConfig]" = None,
-        is_many: bool = False,
-        is_script: bool = False,
         **kwargs: Any,
     ) -> Any:  # Raw driver result
         """Actual execution implementation by concrete drivers, using the raw connection."""
@@ -615,12 +612,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         **kwargs: Any,
     ) -> "Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]], ExecuteResult]":
         with instrument_operation(self, "execute", "database"):
-            sql_statement = self._build_statement(statement, config_override, *filters)
+            sql_statement = self._build_statement(statement, parameters, config_override, *filters)
             raw_driver_result = self._execute_impl(
                 statement=sql_statement,
-                parameters=parameters,
                 connection=self._connection(connection),
-                config=config_override or self.config,
                 **kwargs,
             )
             if CommonDriverAttributes.returns_rows(sql_statement.expression):
@@ -638,13 +633,12 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         **kwargs: Any,
     ) -> "ExecuteResult":
         with instrument_operation(self, "execute_many", "database"):
-            sql_statement = self._build_statement(statement, config_override, *filters)
+            sql_statement = self._build_statement(statement, parameters, config_override, *filters)
+            # Mark the statement for batch execution
+            sql_statement = sql_statement.as_many()
             raw_driver_result = self._execute_impl(
                 statement=sql_statement,
-                parameters=parameters,
                 connection=self._connection(connection),
-                config=config_override or self.config,
-                is_many=True,
                 **kwargs,
             )
             return self._wrap_execute_result(sql_statement, raw_driver_result, **kwargs)
@@ -659,18 +653,37 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         **kwargs: Any,
     ) -> str:
         with instrument_operation(self, "execute_script", "database"):
+            # Create a config that allows DDL for script execution
+            from sqlspec.statement.sql import SQLConfig
+
+            script_config = config_override or self.config
+            if script_config.enable_validation:
+                script_config = SQLConfig(
+                    enable_parsing=script_config.enable_parsing,
+                    enable_validation=False,  # Disable validation for scripts
+                    enable_transformations=script_config.enable_transformations,
+                    enable_analysis=script_config.enable_analysis,
+                    strict_mode=False,  # Disable strict mode for scripts
+                    cache_parsed_expression=script_config.cache_parsed_expression,
+                    processing_pipeline_components=[],  # No validation components
+                    parameter_converter=script_config.parameter_converter,
+                    parameter_validator=script_config.parameter_validator,
+                    sqlglot_schema=script_config.sqlglot_schema,
+                    analysis_cache_size=script_config.analysis_cache_size,
+                )
+
+            sql_statement = SQL(
+                statement,
+                parameters,
+                *filters,
+                dialect=self.dialect,
+                config=script_config,
+            )
+            # Mark the statement for script execution
+            sql_statement = sql_statement.as_script()
             script_output = self._execute_impl(
-                statement=SQL(
-                    statement,
-                    parameters,
-                    *filters,
-                    dialect=self.dialect,
-                    config=config_override or self.config,
-                ),
-                parameters=parameters,
+                statement=sql_statement,
                 connection=self._connection(connection),
-                config=config_override or self.config,
-                is_script=True,
                 **kwargs,
             )
             return cast("str", script_output)
@@ -703,6 +716,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
     def _build_statement(
         self,
         statement_input: "Union[SQL, Statement, QueryBuilder[Any]]",
+        parameters: "Optional[SQLParameterType]",
         config: "Optional[SQLConfig]",
         *filters: "StatementFilter",
     ) -> "SQL":
@@ -712,7 +726,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         elif isinstance(statement_input, QueryBuilder):
             sql_obj = statement_input.to_statement(config=config or self.config)
         else:  # str or exp.Expression
-            sql_obj = SQL(statement_input, dialect=self.dialect, config=config or self.config)
+            sql_obj = SQL(statement_input, parameters, dialect=self.dialect, config=config or self.config)
 
         for sql_filter in filters:
             if sql_filter is not None and hasattr(sql_filter, "append_to_statement"):
@@ -727,11 +741,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
     async def _execute_impl(
         self,
         statement: "SQL",
-        parameters: "Optional[SQLParameterType]" = None,
         connection: "Optional[ConnectionT]" = None,
-        config: "Optional[SQLConfig]" = None,
-        is_many: bool = False,
-        is_script: bool = False,
         **kwargs: Any,
     ) -> Any:  # Raw driver result
         raise NotImplementedError
@@ -850,12 +860,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         **kwargs: Any,
     ) -> "Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]], ExecuteResult]":
         async with instrument_operation_async(self, "execute", "database"):
-            sql_statement = self._build_statement(statement, config_override, *filters)
+            sql_statement = self._build_statement(statement, parameters, config_override, *filters)
             raw_driver_result = await self._execute_impl(
                 statement=sql_statement,
-                parameters=parameters,
                 connection=self._connection(connection),
-                config=config_override or self.config,
                 **kwargs,
             )
             if CommonDriverAttributes.returns_rows(sql_statement.expression):
@@ -874,13 +882,12 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         **kwargs: Any,
     ) -> "ExecuteResult":
         async with instrument_operation_async(self, "execute_many", "database"):
-            sql_statement = self._build_statement(statement, config_override, *filters)
+            sql_statement = self._build_statement(statement, parameters, config_override, *filters)
+            # Mark the statement for batch execution
+            sql_statement = sql_statement.as_many()
             raw_driver_result = await self._execute_impl(
                 statement=sql_statement,
-                parameters=parameters,
                 connection=self._connection(connection),
-                config=config_override or self.config,
-                is_many=True,
                 **kwargs,
             )
             return await self._wrap_execute_result(sql_statement, raw_driver_result, **kwargs)
@@ -895,18 +902,37 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         **kwargs: Any,
     ) -> str:
         async with instrument_operation_async(self, "execute_script", "database"):
+            # Create a config that allows DDL for script execution
+            from sqlspec.statement.sql import SQLConfig
+
+            script_config = config_override or self.config
+            if script_config.enable_validation:
+                script_config = SQLConfig(
+                    enable_parsing=script_config.enable_parsing,
+                    enable_validation=False,  # Disable validation for scripts
+                    enable_transformations=script_config.enable_transformations,
+                    enable_analysis=script_config.enable_analysis,
+                    strict_mode=False,  # Disable strict mode for scripts
+                    cache_parsed_expression=script_config.cache_parsed_expression,
+                    processing_pipeline_components=[],  # No validation components
+                    parameter_converter=script_config.parameter_converter,
+                    parameter_validator=script_config.parameter_validator,
+                    sqlglot_schema=script_config.sqlglot_schema,
+                    analysis_cache_size=script_config.analysis_cache_size,
+                )
+
+            sql_statement = SQL(
+                statement,
+                parameters,
+                *filters,
+                dialect=self.dialect,
+                config=script_config,
+            )
+            # Mark the statement for script execution
+            sql_statement = sql_statement.as_script()
             script_output = await self._execute_impl(
-                statement=SQL(
-                    statement,
-                    parameters,
-                    *filters,
-                    dialect=self.dialect,
-                    config=config_override or self.config,
-                ),
-                parameters=parameters,
+                statement=sql_statement,
                 connection=self._connection(connection),
-                config=config_override or self.config,
-                is_script=True,
                 **kwargs,
             )
             return cast("str", script_output)

@@ -5,7 +5,6 @@ import logging
 from collections.abc import Awaitable, Coroutine
 from typing import (
     TYPE_CHECKING,
-    Annotated,
     Any,
     Optional,
     Union,
@@ -78,17 +77,17 @@ class SQLSpec:
         logger.info("Pool cleanup completed. Cleaned %d pools", cleaned_count)
 
     @overload
-    def add_config(self, config: "SyncConfigT") -> "Annotated[type[SyncConfigT], int]":  # pyright: ignore[reportInvalidTypeVarUse]
+    def add_config(self, config: "SyncConfigT") -> "type[SyncConfigT]":  # pyright: ignore[reportInvalidTypeVarUse]
         ...
 
     @overload
-    def add_config(self, config: "AsyncConfigT") -> "Annotated[type[AsyncConfigT], int]":  # pyright: ignore[reportInvalidTypeVarUse]
+    def add_config(self, config: "AsyncConfigT") -> "type[AsyncConfigT]":  # pyright: ignore[reportInvalidTypeVarUse]
         ...
 
     def add_config(
         self,
         config: "Union[SyncConfigT, AsyncConfigT]",
-    ) -> "Union[Annotated[type[SyncConfigT], int], Annotated[type[AsyncConfigT], int]]":  # pyright: ignore[reportInvalidTypeVarUse]
+    ) -> "type[Union[SyncConfigT, AsyncConfigT]]":  # pyright: ignore[reportInvalidTypeVarUse]
         """Add a configuration instance to the registry.
 
         Args:
