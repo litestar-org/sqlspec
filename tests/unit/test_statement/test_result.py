@@ -15,6 +15,7 @@ from sqlspec.statement.result import (
     SQLResult,
     StatementResult,
 )
+from sqlspec.typing import RowT
 
 
 def test_statement_result_is_abstract() -> None:
@@ -57,7 +58,7 @@ def sample_rows() -> list[dict[str, Any]]:
 
 
 @pytest.fixture
-def basic_sql_result_select(sample_rows: list[dict[str, Any]]) -> SQLResult[dict[str, Any]]:
+def basic_sql_result_select(sample_rows: list[dict[str, Any]]) -> SQLResult[RowT]:
     """Basic SQLResult for SELECT-like operations for testing."""
     return SQLResult(
         statement="SELECT * FROM users",
@@ -92,22 +93,20 @@ def test_sql_result_initialization_select(sample_rows: list[dict[str, Any]]) -> 
     assert result.metadata == {"query_id": "123"}
 
 
-def test_sql_result_is_success_select(basic_sql_result_select: SQLResult[dict[str, Any]]) -> None:
+def test_sql_result_is_success_select(basic_sql_result_select: SQLResult[RowT]) -> None:
     """Test is_success method for SELECT-like SQLResult."""
     assert basic_sql_result_select.is_success() is True
 
     # Test with empty data list (still a successful select)
-    empty_result = SQLResult[dict[str, Any]](statement="SELECT * FROM empty", data=[], operation_type="SELECT")
+    empty_result = SQLResult[RowT](statement="SELECT * FROM empty", data=[], operation_type="SELECT")
     assert empty_result.is_success() is True
 
     # Test with rows_affected = -1 (indicates an issue with execution)
-    failed_result = SQLResult[dict[str, Any]](
-        statement="SELECT * FROM empty", data=[], operation_type="SELECT", rows_affected=-1
-    )
+    failed_result = SQLResult[RowT](statement="SELECT * FROM empty", data=[], operation_type="SELECT", rows_affected=-1)
     assert failed_result.is_success() is False
 
 
-def test_sql_result_get_data_select(basic_sql_result_select: SQLResult[dict[str, Any]]) -> None:
+def test_sql_result_get_data_select(basic_sql_result_select: SQLResult[RowT]) -> None:
     """Test get_data method returns data for SELECT-like SQLResult."""
     data = basic_sql_result_select.get_data()
     assert data == basic_sql_result_select.data
@@ -128,21 +127,21 @@ def test_sql_result_get_first_select(sample_rows: list[dict[str, Any]]) -> None:
     assert empty_result.get_first() is None
 
 
-def test_sql_result_get_count_select(basic_sql_result_select: SQLResult[dict[str, Any]]) -> None:
+def test_sql_result_get_count_select(basic_sql_result_select: SQLResult[RowT]) -> None:
     """Test get_count method for SELECT-like SQLResult."""
     assert basic_sql_result_select.get_count() == 3
 
     # Test with empty data
-    empty_result = SQLResult[dict[str, Any]](statement="SELECT * FROM empty", data=[], operation_type="SELECT")
+    empty_result = SQLResult[RowT](statement="SELECT * FROM empty", data=[], operation_type="SELECT")
     assert empty_result.get_count() == 0
 
 
-def test_sql_result_is_empty_select(basic_sql_result_select: SQLResult[dict[str, Any]]) -> None:
+def test_sql_result_is_empty_select(basic_sql_result_select: SQLResult[RowT]) -> None:
     """Test is_empty method for SELECT-like SQLResult."""
     assert basic_sql_result_select.is_empty() is False
 
     # Test with empty data
-    empty_result = SQLResult[dict[str, Any]](statement="SELECT * FROM empty", data=[], operation_type="SELECT")
+    empty_result = SQLResult[RowT](statement="SELECT * FROM empty", data=[], operation_type="SELECT")
     assert empty_result.is_empty() is True
 
 
@@ -171,7 +170,7 @@ def test_sql_result_row_operations_select(
 
 
 @pytest.fixture
-def basic_sql_result_execute() -> SQLResult[dict[str, Any]]:  # Changed from None to dict[str, Any]
+def basic_sql_result_execute() -> SQLResult[RowT]:  # Changed from None to dict[str, Any]
     """Basic SQLResult for EXECUTE-like operations for testing."""
     return SQLResult(
         statement="INSERT INTO users VALUES (1, 'test')",
@@ -229,29 +228,27 @@ def test_sql_result_is_success_execute() -> None:
     assert negative_result.is_success() is False
 
 
-def test_sql_result_get_data_execute(basic_sql_result_execute: SQLResult[dict[str, Any]]) -> None:
+def test_sql_result_get_data_execute(basic_sql_result_execute: SQLResult[RowT]) -> None:
     """Test get_data method returns empty list for EXECUTE-like SQLResult."""
     data = basic_sql_result_execute.get_data()
     assert data == []  # For execute-like results, data is empty list
 
 
-def test_sql_result_get_affected_count_execute(basic_sql_result_execute: SQLResult[dict[str, Any]]) -> None:
+def test_sql_result_get_affected_count_execute(basic_sql_result_execute: SQLResult[RowT]) -> None:
     """Test get_affected_count method for EXECUTE-like SQLResult."""
     assert basic_sql_result_execute.get_affected_count() == 5
 
     # Test with None rows_affected
-    none_result = SQLResult[dict[str, Any]](
-        statement="UPDATE test", data=[], rows_affected=None, operation_type="UPDATE"
-    )
+    none_result = SQLResult[RowT](statement="UPDATE test", data=[], rows_affected=None, operation_type="UPDATE")
     assert none_result.get_affected_count() == 0  # get_affected_count returns 0 if rows_affected is None
 
 
-def test_sql_result_get_inserted_id_from_metadata(basic_sql_result_execute: SQLResult[dict[str, Any]]) -> None:
+def test_sql_result_get_inserted_id_from_metadata(basic_sql_result_execute: SQLResult[RowT]) -> None:
     """Test getting last_inserted_id from metadata for EXECUTE-like SQLResult."""
     assert basic_sql_result_execute.get_metadata("last_inserted_id") == 123
 
     # Test with no last_inserted_id in metadata
-    no_id_result = SQLResult[dict[str, Any]](statement="INSERT INTO test", data=[], operation_type="INSERT")
+    no_id_result = SQLResult[RowT](statement="INSERT INTO test", data=[], operation_type="INSERT")
     assert no_id_result.get_metadata("last_inserted_id") is None
 
 

@@ -52,8 +52,6 @@ if TYPE_CHECKING:
     from sqlspec.statement.result import SQLResult
 
 
-StatementResultType = Union["SQLResult[dict[str, Any]]", "SQLResult[dict[str, T]]"]
-
 __all__ = (
     "AsyncDatabaseConfig",
     "AsyncDriverAdapterProtocol",

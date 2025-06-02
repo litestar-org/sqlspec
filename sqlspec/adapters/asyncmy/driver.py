@@ -12,7 +12,7 @@ from sqlspec.driver import AsyncDriverAdapterProtocol
 from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
-from sqlspec.typing import DictRow, ModelDTOT
+from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.telemetry import instrument_operation_async
 
 if TYPE_CHECKING:
@@ -30,7 +30,7 @@ AsyncmyConnection: TypeAlias = Connection
 
 
 class AsyncmyDriver(
-    AsyncDriverAdapterProtocol[AsyncmyConnection, DictRow],
+    AsyncDriverAdapterProtocol[AsyncmyConnection, RowT],
     AsyncArrowMixin[AsyncmyConnection],
     SQLTranslatorMixin[AsyncmyConnection],
     ResultConverter,
@@ -145,7 +145,7 @@ class AsyncmyDriver(
         result: "Any",
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: "Any",
-    ) -> "Union[SQLResult[ModelDTOT], SQLResult[dict[str, Any]]]":
+    ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
         async with instrument_operation_async(self, "asyncmy_wrap_select", "database"):
             cursor = cast("Cursor", result)
 
@@ -157,7 +157,7 @@ class AsyncmyDriver(
             column_names = [desc[0] for desc in cursor.description or []]
 
             if not results:
-                return SQLResult[dict[str, Any]](
+                return SQLResult[RowT](
                     statement=statement,
                     data=[],
                     column_names=column_names,
@@ -179,7 +179,7 @@ class AsyncmyDriver(
                     operation_type="SELECT",
                 )
 
-            return SQLResult[dict[str, Any]](
+            return SQLResult[RowT](
                 statement=statement,
                 data=rows_as_dicts,
                 column_names=column_names,
@@ -191,14 +191,14 @@ class AsyncmyDriver(
         statement: "SQL",
         result: "Any",
         **kwargs: "Any",
-    ) -> "SQLResult[dict[str, Any]]":
+    ) -> "SQLResult[RowT]":
         async with instrument_operation_async(self, "asyncmy_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             if statement.expression and hasattr(statement.expression, "key"):
                 operation_type = str(statement.expression.key).upper()
 
             if isinstance(result, str) and result == "SCRIPT EXECUTED":
-                return SQLResult[dict[str, Any]](
+                return SQLResult[RowT](
                     statement=statement,
                     data=[],
                     rows_affected=0,
@@ -217,7 +217,7 @@ class AsyncmyDriver(
                 if last_inserted_id is not None:
                     logger.debug("Asyncmy last inserted ID: %s", last_inserted_id)
 
-            return SQLResult[dict[str, Any]](
+            return SQLResult[RowT](
                 statement=statement,
                 data=returned_data,
                 rows_affected=rows_affected,

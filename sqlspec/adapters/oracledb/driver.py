@@ -18,7 +18,7 @@ from sqlspec.statement.mixins import (
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import ArrowTable, DictRow, ModelDTOT
+from sqlspec.typing import ArrowTable, DictRow, ModelDTOT, RowT
 from sqlspec.utils.sync_tools import ensure_async_
 from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
 
@@ -31,7 +31,7 @@ logger = logging.getLogger("sqlspec")
 
 
 class OracleSyncDriver(
-    SyncDriverAdapterProtocol[OracleSyncConnection, DictRow],
+    SyncDriverAdapterProtocol[OracleSyncConnection, RowT],
     SyncArrowMixin[OracleSyncConnection],
     SQLTranslatorMixin[OracleSyncConnection],
     ResultConverter,
@@ -125,11 +125,11 @@ class OracleSyncDriver(
         result: Any,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[dict[str, Any]]]:
+    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "oracle_wrap_select", "database"):
             cursor = cast("Cursor", result)
             if not cursor.description:
-                return SQLResult[dict[str, Any]](statement=statement, data=[], column_names=[], operation_type="SELECT")
+                return SQLResult[RowT](statement=statement, data=[], column_names=[], operation_type="SELECT")
             column_names = [col[0] for col in cursor.description]
             fetched_tuples = cursor.fetchall()
             rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples]
@@ -146,7 +146,7 @@ class OracleSyncDriver(
                     column_names=column_names,
                     operation_type="SELECT",
                 )
-            return SQLResult[dict[str, Any]](
+            return SQLResult[RowT](
                 statement=statement,
                 data=rows_as_dicts,
                 column_names=column_names,
@@ -158,7 +158,7 @@ class OracleSyncDriver(
         statement: SQL,
         result: Any,
         **kwargs: Any,
-    ) -> SQLResult[dict[str, Any]]:
+    ) -> SQLResult[RowT]:
         with instrument_operation(self, "oracle_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             if statement.expression and hasattr(statement.expression, "key"):
@@ -183,10 +183,10 @@ class OracleSyncDriver(
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)
 
-            # Data is empty as DML with RETURNING needs special handling in Oracle (outparams)
+            # Data is empty as DML with RETURNING needs special handling in Oracle (out params)
             # not covered by generic cursor.fetchall() in _wrap_execute_result.
-            # last_inserted_id is not standardly available from cursor.rowcount or cursor.lastrowid.
-            return SQLResult[dict[str, Any]](
+            # last_inserted_id is not standard available from cursor.rowcount or cursor.lastrowid.
+            return SQLResult[RowT](
                 statement=statement,
                 data=[],
                 rows_affected=rows_affected,
@@ -248,7 +248,7 @@ class OracleSyncDriver(
 
 
 class OracleAsyncDriver(
-    AsyncDriverAdapterProtocol[OracleAsyncConnection, DictRow],
+    AsyncDriverAdapterProtocol[OracleAsyncConnection, RowT],
     AsyncArrowMixin[OracleAsyncConnection],
     SQLTranslatorMixin[OracleAsyncConnection],
     ResultConverter,
@@ -343,11 +343,11 @@ class OracleAsyncDriver(
         result: Any,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[dict[str, Any]]]:
+    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         async with instrument_operation_async(self, "oracle_async_wrap_select", "database"):
             cursor = cast("AsyncCursor", result)
             if not cursor.description:
-                return SQLResult[dict[str, Any]](statement=statement, data=[], column_names=[], operation_type="SELECT")
+                return SQLResult[RowT](statement=statement, data=[], column_names=[], operation_type="SELECT")
             column_names = [col[0] for col in cursor.description]
             fetched_tuples = await cursor.fetchall()
             rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples]
@@ -364,7 +364,7 @@ class OracleAsyncDriver(
                     column_names=column_names,
                     operation_type="SELECT",
                 )
-            return SQLResult[dict[str, Any]](
+            return SQLResult[RowT](
                 statement=statement,
                 data=rows_as_dicts,
                 column_names=column_names,
@@ -376,7 +376,7 @@ class OracleAsyncDriver(
         statement: SQL,
         result: Any,
         **kwargs: Any,
-    ) -> SQLResult[dict[str, Any]]:
+    ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "oracle_async_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             if statement.expression and hasattr(statement.expression, "key"):
@@ -401,7 +401,7 @@ class OracleAsyncDriver(
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)
 
-            return SQLResult[dict[str, Any]](
+            return SQLResult[RowT](
                 statement=statement,
                 data=[],
                 rows_affected=rows_affected,

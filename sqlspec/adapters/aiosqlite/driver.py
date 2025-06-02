@@ -12,7 +12,7 @@ from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTransl
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT
+from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.telemetry import instrument_operation_async
 
 if TYPE_CHECKING:
@@ -26,7 +26,7 @@ AiosqliteConnection = aiosqlite.Connection
 
 
 class AiosqliteDriver(
-    AsyncDriverAdapterProtocol[AiosqliteConnection, DictRow],
+    AsyncDriverAdapterProtocol[AiosqliteConnection, RowT],
     AsyncArrowMixin[AiosqliteConnection],
     SQLTranslatorMixin[AiosqliteConnection],
     ResultConverter,
@@ -133,11 +133,11 @@ class AiosqliteDriver(
         result: Any,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[dict[str, Any]]]:
+    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         async with instrument_operation_async(self, "aiosqlite_wrap_select", "database"):
             if not isinstance(result, dict) or "data" not in result or "description" not in result:
                 logger.warning("Aiosqlite _wrap_select_result expects a dict with 'data' and 'description'.")
-                return SQLResult[dict[str, Any]](statement=statement, data=[], column_names=[], operation_type="SELECT")
+                return SQLResult[RowT](statement=statement, data=[], column_names=[], operation_type="SELECT")
 
             column_names = [desc[0] for desc in result["description"] or []]
 
@@ -154,7 +154,7 @@ class AiosqliteDriver(
                     column_names=column_names,
                     operation_type="SELECT",
                 )
-            return SQLResult[dict[str, Any]](
+            return SQLResult[RowT](
                 statement=statement,
                 data=rows_as_dicts,
                 column_names=column_names,
@@ -166,14 +166,14 @@ class AiosqliteDriver(
         statement: SQL,
         result: Any,
         **kwargs: Any,
-    ) -> SQLResult[dict[str, Any]]:
+    ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "aiosqlite_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             if statement.expression and hasattr(statement.expression, "key"):
                 operation_type = str(statement.expression.key).upper()
 
             if isinstance(result, str) and result == "SCRIPT EXECUTED":
-                return SQLResult[dict[str, Any]](
+                return SQLResult[RowT](
                     statement=statement,
                     data=[],
                     rows_affected=0,
@@ -192,7 +192,7 @@ class AiosqliteDriver(
                 if last_inserted_id is not None:
                     logger.debug("Aiosqlite last inserted ID: %s", last_inserted_id)
 
-            return SQLResult[dict[str, Any]](
+            return SQLResult[RowT](
                 statement=statement,
                 data=returned_data,
                 rows_affected=rows_affected,

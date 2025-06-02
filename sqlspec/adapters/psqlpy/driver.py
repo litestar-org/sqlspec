@@ -12,7 +12,7 @@ from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTransl
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT
+from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.telemetry import instrument_operation_async
 
 if TYPE_CHECKING:
@@ -32,7 +32,7 @@ class BatchResult:
 
 
 class PsqlpyDriver(
-    AsyncDriverAdapterProtocol[PsqlpyConnection, dict[str, Any]],
+    AsyncDriverAdapterProtocol[PsqlpyConnection, RowT],
     SQLTranslatorMixin[PsqlpyConnection],
     AsyncArrowMixin[PsqlpyConnection],
     ResultConverter,
@@ -139,7 +139,7 @@ class PsqlpyDriver(
         result: Any,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[dict[str, Any]]]:
+    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         async with instrument_operation_async(self, "psqlpy_wrap_select", "database"):
             query_result = cast("QueryResult", result)
             dict_rows: list[dict[str, Any]] = query_result.result()
@@ -157,7 +157,7 @@ class PsqlpyDriver(
                     column_names=column_names,
                     operation_type="SELECT",
                 )
-            return SQLResult[dict[str, Any]](
+            return SQLResult[RowT](
                 statement=statement,
                 data=dict_rows,
                 column_names=column_names,
@@ -169,7 +169,7 @@ class PsqlpyDriver(
         statement: SQL,
         result: Any,
         **kwargs: Any,
-    ) -> SQLResult[dict[str, Any]]:
+    ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "psqlpy_async_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             if statement.expression and hasattr(statement.expression, "key"):
@@ -194,7 +194,7 @@ class PsqlpyDriver(
             if self.instrumentation_config.log_results_count:
                 logger.debug("Psqlpy execute operation affected %d rows", rows_affected)
 
-            return SQLResult[dict[str, Any]](
+            return SQLResult[RowT](
                 statement=statement,
                 data=[],
                 rows_affected=rows_affected,

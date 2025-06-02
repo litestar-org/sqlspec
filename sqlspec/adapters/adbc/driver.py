@@ -3,19 +3,21 @@ import contextlib
 import logging
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from typing import Any, ClassVar, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
 from adbc_driver_manager.dbapi import Connection, Cursor
 
-from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.exceptions import SQLConversionError
 from sqlspec.statement.mixins import ResultConverter, SQLTranslatorMixin, SyncArrowMixin
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT
+from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.telemetry import instrument_operation
+
+if TYPE_CHECKING:
+    from sqlspec.config import InstrumentationConfig
 
 __all__ = ("AdbcConnection", "AdbcDriver")
 
@@ -25,7 +27,7 @@ AdbcConnection = Connection
 
 
 class AdbcDriver(
-    SyncDriverAdapterProtocol["AdbcConnection", DictRow],
+    SyncDriverAdapterProtocol["AdbcConnection", RowT],
     SQLTranslatorMixin["AdbcConnection"],
     SyncArrowMixin["AdbcConnection"],
     ResultConverter,
@@ -49,14 +51,15 @@ class AdbcDriver(
     def __init__(
         self,
         connection: "AdbcConnection",
-        config: Optional[SQLConfig] = None,
-        instrumentation_config: Optional[InstrumentationConfig] = None,
+        config: "Optional[SQLConfig]" = None,
+        instrumentation_config: "Optional[InstrumentationConfig]" = None,
+        default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
         super().__init__(
             connection=connection,
             config=config,
             instrumentation_config=instrumentation_config,
-            default_row_type=DictRow,
+            default_row_type=default_row_type,
         )
         self.dialect = self._get_dialect(connection)
 
@@ -171,13 +174,13 @@ class AdbcDriver(
                     cursor.execute(final_sql, final_exec_params or [])
                 return cursor
 
-    def _wrap_select_result(
+    def _wrap_select_result(  # pyright ignore
         self,
         statement: SQL,
         result: Any,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[dict[str, Any]]]:
+    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "adbc_wrap_select", "database"):
             cursor = result
             fetched_data = cursor.fetchall()
@@ -199,26 +202,26 @@ class AdbcDriver(
                     column_names=column_names,
                     operation_type="SELECT",
                 )
-            return SQLResult[dict[str, Any]](
+            return SQLResult[RowT](
                 statement=statement,
                 data=rows_as_dicts,
                 column_names=column_names,
                 operation_type="SELECT",
             )
 
-    def _wrap_execute_result(
+    def _wrap_execute_result(  # pyright ignore
         self,
         statement: SQL,
         result: Any,
         **kwargs: Any,
-    ) -> SQLResult[dict[str, Any]]:
+    ) -> SQLResult[RowT]:
         with instrument_operation(self, "adbc_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             if statement.expression and hasattr(statement.expression, "key"):
                 operation_type = str(statement.expression.key).upper()
 
             if isinstance(result, str):
-                return SQLResult[dict[str, Any]](
+                return SQLResult[RowT](
                     statement=statement,
                     data=[],
                     rows_affected=0,
@@ -248,7 +251,7 @@ class AdbcDriver(
                 if returned_data:
                     logger.debug("RETURNING clause potentially returned %d rows", len(returned_data))
 
-            return SQLResult[dict[str, Any]](
+            return SQLResult[RowT](
                 statement=statement,
                 data=returned_data,
                 rows_affected=rows_affected,

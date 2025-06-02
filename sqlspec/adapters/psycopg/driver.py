@@ -13,7 +13,7 @@ from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTransl
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT
+from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
 
 logger = logging.getLogger("sqlspec")
@@ -25,7 +25,7 @@ PsycopgAsyncConnection = AsyncConnection[PsycopgDictRow]
 
 
 class PsycopgSyncDriver(
-    SyncDriverAdapterProtocol[PsycopgSyncConnection, DictRow],
+    SyncDriverAdapterProtocol[PsycopgSyncConnection, RowT],
     SQLTranslatorMixin[PsycopgSyncConnection],
     SyncArrowMixin[PsycopgSyncConnection],
     ResultConverter,
@@ -46,7 +46,7 @@ class PsycopgSyncDriver(
             connection=connection,
             config=config,
             instrumentation_config=instrumentation_config,
-            default_row_type=DictRow,
+            default_row_type=default_row_type,
         )
 
     def _get_placeholder_style(self) -> ParameterStyle:
@@ -118,13 +118,13 @@ class PsycopgSyncDriver(
                     cursor.execute(final_sql, cast("Optional[dict[str, Any]]", final_driver_params))
                 return cursor
 
-    def _wrap_select_result(
+    def _wrap_select_result(  # pyright: ignore
         self,
         statement: SQL,
         result: Any,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[dict[str, Any]]]:
+    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "psycopg_wrap_select", "database"):
             cursor = result
             fetched_data: list[PsycopgDictRow] = cursor.fetchall()
@@ -144,26 +144,26 @@ class PsycopgSyncDriver(
                     column_names=column_names,
                     operation_type="SELECT",
                 )
-            return SQLResult[dict[str, Any]](
+            return SQLResult[RowT](
                 statement=statement,
                 data=rows_as_dicts,
                 column_names=column_names,
                 operation_type="SELECT",
             )
 
-    def _wrap_execute_result(
+    def _wrap_execute_result(  # pyright: ignore
         self,
         statement: SQL,
         result: Any,
         **kwargs: Any,
-    ) -> SQLResult[dict[str, Any]]:
+    ) -> SQLResult[RowT]:
         with instrument_operation(self, "psycopg_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             if statement.expression and hasattr(statement.expression, "key"):
                 operation_type = str(statement.expression.key).upper()
 
             if isinstance(result, str):
-                return SQLResult[dict[str, Any]](
+                return SQLResult[RowT](
                     statement=statement,
                     data=[],
                     rows_affected=0,
@@ -190,7 +190,7 @@ class PsycopgSyncDriver(
                 if returned_data:
                     logger.debug("RETURNING clause returned %d rows", len(returned_data))
 
-            return SQLResult[dict[str, Any]](
+            return SQLResult[RowT](
                 statement=statement,
                 data=returned_data,
                 rows_affected=rows_affected,
@@ -210,7 +210,7 @@ class PsycopgSyncDriver(
 
 
 class PsycopgAsyncDriver(
-    AsyncDriverAdapterProtocol[PsycopgAsyncConnection, DictRow],
+    AsyncDriverAdapterProtocol[PsycopgAsyncConnection, RowT],
     SQLTranslatorMixin[PsycopgAsyncConnection],
     AsyncArrowMixin[PsycopgAsyncConnection],
     ResultConverter,
@@ -292,13 +292,13 @@ class PsycopgAsyncDriver(
                     await cursor.execute(final_sql, cast("Optional[dict[str, Any]]", final_driver_params))
                 return cursor
 
-    async def _wrap_select_result(
+    async def _wrap_select_result(  # pyright: ignore
         self,
         statement: SQL,
         result: Any,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[dict[str, Any]]]:
+    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "psycopg_wrap_select", "database"):
             cursor = result
             fetched_data: list[PsycopgDictRow] = await cursor.fetchall()
@@ -318,26 +318,26 @@ class PsycopgAsyncDriver(
                     column_names=column_names,
                     operation_type="SELECT",
                 )
-            return SQLResult[dict[str, Any]](
+            return SQLResult[RowT](
                 statement=statement,
                 data=rows_as_dicts,
                 column_names=column_names,
                 operation_type="SELECT",
             )
 
-    async def _wrap_execute_result(
+    async def _wrap_execute_result(  # pyright: ignore
         self,
         statement: SQL,
         result: Any,
         **kwargs: Any,
-    ) -> SQLResult[dict[str, Any]]:
+    ) -> SQLResult[RowT]:
         with instrument_operation(self, "psycopg_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             if statement.expression and hasattr(statement.expression, "key"):
                 operation_type = str(statement.expression.key).upper()
 
             if isinstance(result, str):
-                return SQLResult[dict[str, Any]](
+                return SQLResult[RowT](
                     statement=statement,
                     data=[],
                     rows_affected=0,
@@ -364,7 +364,7 @@ class PsycopgAsyncDriver(
                 if returned_data:
                     logger.debug("RETURNING clause returned %d rows", len(returned_data))
 
-            return SQLResult[dict[str, Any]](
+            return SQLResult[RowT](
                 statement=statement,
                 data=returned_data,
                 rows_affected=rows_affected,
