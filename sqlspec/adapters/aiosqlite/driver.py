@@ -80,7 +80,6 @@ class AiosqliteDriver(
                     logger.debug("Executing SQL script: %s", final_sql)
                 async with self._get_cursor(conn) as cursor:
                     await cursor.executescript(final_sql)
-                    await conn.commit()
                 return "SCRIPT EXECUTED"
 
             final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())

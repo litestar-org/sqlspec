@@ -102,10 +102,10 @@ class MockSyncDriver(SyncDriverAdapterProtocol[MockConnection, DictRow]):
         schema_type: type | None = None,
         **kwargs: Any,
     ) -> Mock:
-        result = Mock()
-        result.rows = result
-        result.row_count = len(result) if result else 0
-        return result  # type: ignore
+        mock_result = Mock()
+        mock_result.rows = result
+        mock_result.row_count = len(result) if hasattr(result, "__len__") and result else 0
+        return mock_result  # type: ignore
 
     def _wrap_execute_result(
         self,
@@ -155,10 +155,10 @@ class MockAsyncDriver(AsyncDriverAdapterProtocol[MockAsyncConnection, DictRow]):
         schema_type: type | None = None,
         **kwargs: Any,
     ) -> Mock:
-        result = Mock()
-        result.rows = result
-        result.row_count = len(result) if result else 0
-        return result  # type: ignore
+        mock_result = Mock()
+        mock_result.rows = result
+        mock_result.row_count = len(result) if hasattr(result, "__len__") and result else 0
+        return mock_result  # type: ignore
 
     async def _wrap_execute_result(
         self,
@@ -166,10 +166,10 @@ class MockAsyncDriver(AsyncDriverAdapterProtocol[MockAsyncConnection, DictRow]):
         result: Any,
         **kwargs: Any,
     ) -> Mock:
-        result = Mock()
-        result.affected_count = 1
-        result.last_insert_id = None
-        return result  # type: ignore
+        mock_result = Mock()
+        mock_result.affected_count = 1
+        mock_result.last_insert_id = None
+        return mock_result  # type: ignore
 
 
 # CommonDriverAttributes Tests
@@ -609,7 +609,7 @@ def test_sync_driver_build_statement_with_filters() -> None:
     mock_filter.append_to_statement.return_value = SQL("SELECT * FROM users WHERE active = true")
 
     sql_string = "SELECT * FROM users"
-    driver._build_statement(sql_string, None, None, mock_filter)
+    driver._build_statement(sql_string, filters=[mock_filter])
 
     mock_filter.append_to_statement.assert_called_once()
 
@@ -690,9 +690,13 @@ def test_sync_driver_execute_script() -> None:
         result = driver.execute_script(script, config=config)
 
         mock_execute.assert_called_once()
-        _, kwargs = mock_execute.call_args
-        assert kwargs["is_script"] is True
-        assert result == "Script executed successfully"  # type: ignore
+        # Check that the statement passed to _execute_impl has is_script=True
+        call_args = mock_execute.call_args
+        statement = call_args[1]["statement"]
+        assert statement.is_script is True
+        # Result should be wrapped in SQLResult object
+        assert hasattr(result, "operation_type")
+        assert result.operation_type == "SCRIPT"
 
 
 def test_sync_driver_execute_with_parameters() -> None:
@@ -712,8 +716,10 @@ def test_sync_driver_execute_with_parameters() -> None:
             driver.execute("SELECT * FROM users WHERE id = :id", parameters=parameters, config=config)
 
             mock_execute.assert_called_once()
-            _, kwargs = mock_execute.call_args
-            assert kwargs.get("parameters") == parameters
+            # Check that the statement passed to _execute_impl contains the parameters
+            call_args = mock_execute.call_args
+            statement = call_args[1]["statement"]
+            assert statement.parameters == parameters
 
 
 # AsyncDriverAdapterProtocol Tests
@@ -803,9 +809,13 @@ async def test_async_driver_execute_script() -> None:
         result = await driver.execute_script(script, config=config)
 
         mock_execute.assert_called_once()
-        _, kwargs = mock_execute.call_args
-        assert kwargs["is_script"] is True
-        assert result == "Async script executed successfully"  # type: ignore
+        # Check that the statement passed to _execute_impl has is_script=True
+        call_args = mock_execute.call_args
+        statement = call_args[1]["statement"]
+        assert statement.is_script is True
+        # Result should be wrapped in SQLResult object
+        assert hasattr(result, "operation_type")
+        assert result.operation_type == "SCRIPT"
 
 
 async def test_async_driver_execute_with_schema_type() -> None:

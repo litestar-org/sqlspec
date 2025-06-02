@@ -44,9 +44,9 @@ def warn_deprecation(
         access_type = "Use of"
 
     if pending:
-        parts.append(f"{access_type} {kind} awaiting deprecation {deprecated_name!r}")  # pyright: ignore[reportUnknownMemberType]
+        parts.append(f"{access_type} {kind} awaiting deprecation '{deprecated_name}'")  # pyright: ignore[reportUnknownMemberType]
     else:
-        parts.append(f"{access_type} deprecated {kind} {deprecated_name!r}")  # pyright: ignore[reportUnknownMemberType]
+        parts.append(f"{access_type} deprecated {kind} '{deprecated_name}'")  # pyright: ignore[reportUnknownMemberType]
 
     parts.extend(  # pyright: ignore[reportUnknownMemberType]
         (

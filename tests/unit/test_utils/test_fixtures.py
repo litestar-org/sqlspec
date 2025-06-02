@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
+import msgspec
 import pytest
 
 from sqlspec.exceptions import MissingDependencyError
@@ -76,7 +77,7 @@ def test_open_fixture_file_not_found(temp_fixtures_dir: Path) -> None:
 
 def test_open_fixture_invalid_json(temp_fixtures_dir: Path) -> None:
     """Test that JSON decode errors are raised for invalid JSON."""
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises((json.JSONDecodeError, msgspec.DecodeError)):
         open_fixture(temp_fixtures_dir, "invalid_fixture")
 
 
@@ -145,7 +146,7 @@ async def test_open_fixture_async_complex_data(temp_fixtures_dir: Path) -> None:
 @pytest.mark.asyncio
 async def test_open_fixture_async_invalid_json(temp_fixtures_dir: Path) -> None:
     """Test that async version raises JSON decode errors for invalid JSON."""
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises((json.JSONDecodeError, msgspec.DecodeError)):
         await open_fixture_async(temp_fixtures_dir, "invalid_fixture")
 
 

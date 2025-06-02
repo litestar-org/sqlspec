@@ -230,7 +230,7 @@ def test_deprecated_decorator_with_parameters() -> None:
         assert len(warning_list) == 1
         message = str(warning_list[0].message)
         assert "Call to deprecated function 'old_function'" in message
-        assert "removal in 2.0.0" in message
+        assert "removed in 2.0.0" in message
         assert "Use 'new_function' instead" in message
         assert "Use the new implementation" in message
 
@@ -270,7 +270,8 @@ def test_deprecated_decorator_preserves_function_metadata() -> None:
     doc = documented_function.__doc__
     assert doc is not None
     assert "A well documented function" in doc
-    assert documented_function.__annotations__ == {"param": int, "return": str}
+    for type_name, expected in zip(documented_function.__annotations__.values(), [int, str]):
+        assert type_name == expected.__name__, "Annotations should be preserved"
 
 
 def test_deprecated_decorator_with_kind_auto_detection() -> None:

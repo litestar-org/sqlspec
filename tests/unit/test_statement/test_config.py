@@ -355,18 +355,28 @@ def test_returns_rows_expression_types(driver_attributes: CommonDriverAttributes
     delete_with_returning = delete_with_returning.returning(exp.Returning())
     assert driver_attributes.returns_rows(delete_with_returning) is True, "Delete with RETURNING should return rows"
 
+    # Test empty WITH expression (should not return rows as it has no expressions)
     with_expr = exp.With()
-    assert driver_attributes.returns_rows(with_expr) is True, "WITH expression should return rows"
+    assert driver_attributes.returns_rows(with_expr) is False, "Empty WITH expression should not return rows"
 
+    # Test WITH expression with actual expressions (simulate a proper WITH clause)
+    with_expr_with_content = exp.With()
+    # Manually set expressions to simulate a WITH clause that has actual content
+    with_expr_with_content.set("expressions", [exp.Select().select("*").from_("cte")])
+    assert driver_attributes.returns_rows(with_expr_with_content) is True, (
+        "WITH expression with content should return rows"
+    )
+
+    # SHOW, EXPLAIN, and other database-specific commands are parsed as exp.Command in sqlglot
+    command_expr = exp.Command()
+    assert driver_attributes.returns_rows(command_expr) is True, "Command expression should return rows"
+
+    # Test specific expression types that exist but might not be commonly used
     show_expr = exp.Show()
     assert driver_attributes.returns_rows(show_expr) is True, "SHOW expression should return rows"
 
     describe_expr = exp.Describe()
     assert driver_attributes.returns_rows(describe_expr) is True, "DESCRIBE expression should return rows"
-
-    # EXPLAIN statements are parsed as exp.Command in sqlglot
-    explain_expr = exp.Command()
-    assert driver_attributes.returns_rows(explain_expr) is True, "EXPLAIN expression should return rows"
 
     pragma_expr = exp.Pragma()
     assert driver_attributes.returns_rows(pragma_expr) is True, "PRAGMA expression should return rows"

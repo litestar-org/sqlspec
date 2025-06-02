@@ -85,7 +85,7 @@ class SqliteDriver(
             # SQLite uses qmark (?) placeholders. It expects a tuple for single execute
             # and a list of tuples for executemany.
             # statement.parameters should provide this directly.
-            final_driver_params: Union[tuple[Any, ...], list[tuple[Any, ...]], None] = None
+            final_driver_params: Union[tuple[Any, ...], list[tuple[Any, ...]], dict[str, Any], None] = None
 
             if statement.is_script:
                 final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
@@ -94,28 +94,45 @@ class SqliteDriver(
                     logger.debug("Executing SQLite script: %s", final_sql)
                 with self._get_cursor(conn) as cursor:
                     cursor.executescript(final_sql)
+                # Explicitly commit the transaction after script execution
+                conn.commit()
                 return "SCRIPT EXECUTED"
 
-            final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
+            # Handle parameter conversion for SQLite
             params_to_execute = statement.parameters
+            final_driver_params: Union[tuple[Any, ...], list[tuple[Any, ...]], dict[str, Any], None] = None
 
-            if statement.is_many:
-                # executemany expects a list of tuples
-                if params_to_execute is not None and isinstance(params_to_execute, list):
-                    # Ensure each item in the list is a tuple
-                    final_driver_params = [
-                        tuple(p) if isinstance(p, (list, tuple)) else (p,) for p in params_to_execute
-                    ]
-                else:
-                    final_driver_params = []  # Default to empty list if params are not a list for is_many
-            # execute expects a tuple of parameters, or an empty tuple if no params
-            elif params_to_execute is not None:
-                if isinstance(params_to_execute, (list, tuple)):
-                    final_driver_params = tuple(params_to_execute)
-                else:  # Single parameter value, wrap in a tuple
-                    final_driver_params = (params_to_execute,)
+            # Check if we have named parameters in a dictionary
+            has_named_params = (
+                params_to_execute is not None
+                and isinstance(params_to_execute, dict)
+                and not statement.is_many
+            )
+
+            if has_named_params:
+                # Keep named placeholders for dictionary parameters
+                final_sql = statement.to_sql(placeholder_style=ParameterStyle.NAMED_COLON)
+                final_driver_params = params_to_execute
             else:
-                final_driver_params = ()  # Empty tuple for no parameters
+                # Use qmark style for other cases
+                final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
+
+                if statement.is_many:
+                    # executemany expects a list of tuples
+                    if params_to_execute is not None and isinstance(params_to_execute, list):
+                        # Ensure each item in the list is a tuple
+                        final_driver_params = [
+                            tuple(p) if isinstance(p, (list, tuple)) else (p,) for p in params_to_execute
+                        ]
+                    else:
+                        final_driver_params = []  # Default to empty list if params are not a list for is_many
+                elif params_to_execute is not None:
+                    if isinstance(params_to_execute, (list, tuple)):
+                        final_driver_params = tuple(params_to_execute)
+                    else:  # Single parameter value, wrap in a tuple
+                        final_driver_params = (params_to_execute,)
+                else:
+                    final_driver_params = ()  # Empty tuple for no parameters
 
             # Logging
             if self.instrumentation_config.log_queries:
@@ -134,9 +151,21 @@ class SqliteDriver(
                         final_sql,
                         cast("list[tuple[Any, ...]]", final_driver_params or []),
                     )
+                    return cursor.rowcount  # Return rowcount for execute_many operations
+
+                if isinstance(final_driver_params, dict):
+                    cursor.execute(final_sql, final_driver_params)
                 else:
                     cursor.execute(final_sql, cast("tuple[Any, ...]", final_driver_params))
-                return cursor  # Return cursor for _wrap_select_result or _wrap_execute_result
+
+                # For SELECT queries, fetch data while cursor is still open
+                if self.returns_rows(statement.expression):
+                    fetched_data: list[sqlite3.Row] = cursor.fetchall()
+                    column_names = [col[0] for col in cursor.description or []]
+                    return {"data": fetched_data, "column_names": column_names, "rowcount": cursor.rowcount}
+
+                # For non-SELECT queries, return rowcount
+                return cursor.rowcount
 
     def _wrap_select_result(
         self,
@@ -146,9 +175,15 @@ class SqliteDriver(
         **kwargs: Any,
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "sqlite_wrap_select", "database"):
-            cursor = result
-            fetched_data: list[sqlite3.Row] = cursor.fetchall()
-            column_names = [col[0] for col in cursor.description or []]
+            # result should be a dict with keys: data, column_names, rowcount
+            if isinstance(result, dict):
+                fetched_data = result.get("data", [])
+                column_names = result.get("column_names", [])
+            else:
+                # Fallback for backward compatibility
+                cursor = result
+                fetched_data = cursor.fetchall()
+                column_names = [col[0] for col in cursor.description or []]
 
             # Convert list[sqlite3.Row] to list[dict[str, Any]] first for consistent processing
             rows_as_dicts = [dict(row) for row in fetched_data]
@@ -195,13 +230,32 @@ class SqliteDriver(
                     metadata={"status_message": result},
                 )
 
-            cursor = result
-            rows_affected = getattr(cursor, "rowcount", -1)
-            last_inserted_id = getattr(cursor, "lastrowid", None)
+            # result is an integer (rowcount) for DML operations
+            if isinstance(result, int):
+                rows_affected = result
+                last_inserted_id = None
+            else:
+                # Fallback: assume cursor object
+                cursor = result
+                rows_affected = getattr(cursor, "rowcount", -1)
+                last_inserted_id = getattr(cursor, "lastrowid", None)
 
             # SQLite DML operations (without RETURNING which isn't standardly fetched this way) don't populate cursor.fetchall()
             # So, data is typically empty.
             returned_data: list[dict[str, Any]] = []
+
+            if self.instrumentation_config.log_results_count:
+                logger.debug("Execute operation affected %d rows", rows_affected)
+                if last_inserted_id is not None:
+                    logger.debug("Last inserted ID: %s", last_inserted_id)
+
+            return SQLResult[RowT](
+                statement=statement,
+                data=cast("list[RowT]", returned_data),
+                rows_affected=rows_affected,
+                operation_type=operation_type,
+                last_inserted_id=last_inserted_id,
+            )
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)

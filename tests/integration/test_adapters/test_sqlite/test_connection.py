@@ -18,7 +18,8 @@ def test_sqlite_basic_connection() -> None:
         cursor = conn.cursor()
         cursor.execute("SELECT 1")
         result = cursor.fetchone()
-        assert result == (1,)
+        # SQLite Row factory returns Row objects, not tuples
+        assert result[0] == 1
         cursor.close()
 
     # Test session management

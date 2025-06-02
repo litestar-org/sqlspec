@@ -193,8 +193,8 @@ class CommonDriverAttributes(ABC, Generic[ConnectionT, RowT]):
         if expression is None:
             return False
         if isinstance(
-            expression, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma)
-        ):  # Added more types
+            expression, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma, exp.Command)
+        ):  # Added more types including Command for SHOW/EXPLAIN statements
             return True
         if isinstance(expression, exp.With) and expression.expressions:
             # Check the final expression in the WITH clause
@@ -431,6 +431,9 @@ class AsyncInstrumentationMixin(ABC):
                 span.end()
 
 
+EMPTY_FILTERS: "list[StatementFilter]" = []
+
+
 class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncInstrumentationMixin, ABC):
     def __init__(
         self,
@@ -454,31 +457,19 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
             instrumentation_config=instrumentation_config,
             default_row_type=default_row_type,
         )
-        # SyncInstrumentationMixin has no __init__
 
     def _build_statement(
         self,
         statement: "Union[SQL, Statement, QueryBuilder[Any]]",
-        parameters: "Optional[SQLParameterType]",
-        config: "Optional[SQLConfig]",
-        *filters: "StatementFilter",
+        parameters: "Optional[SQLParameterType]" = None,
+        filters: "Optional[list[StatementFilter]    ]" = None,
+        config: "Optional[SQLConfig]" = None,
     ) -> "SQL":
-        sql_obj: SQL
         if isinstance(statement, SQL):
-            sql_obj = statement
-        elif isinstance(statement, QueryBuilder):
-            sql_obj = statement.to_statement(config=config or self.config)
-        else:  # str or exp.Expression
-            sql_obj = SQL(statement, parameters, dialect=self.dialect, config=config or self.config)
-
-        for sql_filter in filters:
-            if sql_filter is not None and hasattr(sql_filter, "append_to_statement"):
-                sql_obj = sql_filter.append_to_statement(sql_obj)
-            elif sql_filter is not None:
-                logger.warning(
-                    "Filter object %s of type %s does not support append_to_statement.", sql_filter, type(sql_filter)
-                )
-        return sql_obj
+            return statement
+        if isinstance(statement, QueryBuilder):
+            return statement.to_statement(config=config or self.config)
+        return SQL(statement, parameters, *filters or [], dialect=self.dialect, config=config or self.config)
 
     @abstractmethod
     def _execute_impl(
@@ -604,7 +595,9 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
         **kwargs: Any,
     ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
         with instrument_operation(self, "execute", "database"):
-            sql_statement = self._build_statement(statement, parameters, config, *filters)
+            sql_statement = self._build_statement(
+                statement, parameters, filters=list(filters) or [], config=config or self.config
+            )
             result = self._execute_impl(
                 statement=sql_statement,
                 connection=self._connection(connection),
@@ -616,21 +609,26 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
 
     def execute_many(
         self,
-        statement: "Union[SQL, Statement, QueryBuilder[Any]]",  # QueryBuilder for DMLs will likely not return rows.
+        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
         parameters: "Optional[Sequence[SQLParameterType]]" = None,
         *filters: "StatementFilter",
-        # schema_type is usually not relevant for execute_many's primary result
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> "SQLResult[RowT]":
         with instrument_operation(self, "execute_many", "database"):
-            sql_statement = self._build_statement(statement, parameters, config, *filters)
-            # Mark the statement for batch execution
-            sql_statement = sql_statement.as_many()
+            # For execute_many, don't pass the parameter sequence to _build_statement
+            # to avoid individual parameter validation. Parse once without parameters.
+            sql_statement = self._build_statement(
+                statement, parameters=None, filters=list(filters) or [], config=config or self.config
+            )
+            # Mark the statement for batch execution with the parameter sequence
+            sql_statement = sql_statement.as_many(parameters)
             result = self._execute_impl(
                 statement=sql_statement,
                 connection=self._connection(connection),
+                parameters=parameters,
+                is_many=True,
                 **kwargs,
             )
             return self._wrap_execute_result(sql_statement, result, **kwargs)
@@ -652,12 +650,12 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
             if script_config.enable_validation:
                 script_config = SQLConfig(
                     enable_parsing=script_config.enable_parsing,
-                    enable_validation=False,  # Disable validation for scripts
+                    enable_validation=False,
                     enable_transformations=script_config.enable_transformations,
                     enable_analysis=script_config.enable_analysis,
-                    strict_mode=False,  # Disable strict mode for scripts
+                    strict_mode=False,
                     cache_parsed_expression=script_config.cache_parsed_expression,
-                    processing_pipeline_components=[],  # No validation components
+                    processing_pipeline_components=[],
                     parameter_converter=script_config.parameter_converter,
                     parameter_validator=script_config.parameter_validator,
                     sqlglot_schema=script_config.sqlglot_schema,
@@ -676,6 +674,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
             script_output = self._execute_impl(
                 statement=sql_statement,
                 connection=self._connection(connection),
+                is_script=True,
                 **kwargs,
             )
             # For script execution, we expect the driver to return a SQLResult
@@ -722,26 +721,15 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], Asyn
     def _build_statement(
         self,
         statement: "Union[SQL, Statement, QueryBuilder[Any]]",
-        parameters: "Optional[SQLParameterType]",
-        config: "Optional[SQLConfig]",
-        *filters: "StatementFilter",
+        parameters: "Optional[SQLParameterType]" = None,
+        filters: "Optional[list[StatementFilter]]" = None,
+        config: "Optional[SQLConfig]" = None,
     ) -> "SQL":
-        sql_obj: SQL
         if isinstance(statement, SQL):
-            sql_obj = statement
-        elif isinstance(statement, QueryBuilder):
-            sql_obj = statement.to_statement(config=config or self.config)
-        else:  # str or exp.Expression
-            sql_obj = SQL(statement, parameters, dialect=self.dialect, config=config or self.config)
-
-        for sql_filter in filters:
-            if sql_filter is not None and hasattr(sql_filter, "append_to_statement"):
-                sql_obj = sql_filter.append_to_statement(sql_obj)
-            elif sql_filter is not None:
-                logger.warning(
-                    "Filter object %s of type %s does not support append_to_statement.", sql_filter, type(sql_filter)
-                )
-        return sql_obj
+            return statement
+        if isinstance(statement, QueryBuilder):
+            return statement.to_statement(config=config or self.config)
+        return SQL(statement, parameters, *filters or [], dialect=self.dialect, config=config or self.config)
 
     @abstractmethod
     async def _execute_impl(
@@ -866,7 +854,9 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], Asyn
         **kwargs: Any,
     ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
         async with instrument_operation_async(self, "execute", "database"):
-            sql_statement = self._build_statement(statement, parameters, config, *filters)
+            sql_statement = self._build_statement(
+                statement, parameters=parameters, filters=list(filters) or [], config=config or self.config
+            )
             result = await self._execute_impl(
                 statement=sql_statement,
                 connection=self._connection(connection),
@@ -886,12 +876,18 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], Asyn
         **kwargs: Any,
     ) -> "SQLResult[RowT]":
         async with instrument_operation_async(self, "execute_many", "database"):
-            sql_statement = self._build_statement(statement, parameters, config, *filters)
-            # Mark the statement for batch execution
-            sql_statement = sql_statement.as_many()
+            # For execute_many, don't pass the parameter sequence to _build_statement
+            # to avoid individual parameter validation. Parse once without parameters.
+            sql_statement = self._build_statement(
+                statement, parameters=None, filters=list(filters) or [], config=config or self.config
+            )
+            # Mark the statement for batch execution with the parameter sequence
+            sql_statement = sql_statement.as_many(parameters)
             result = await self._execute_impl(
                 statement=sql_statement,
                 connection=self._connection(connection),
+                parameters=parameters,
+                is_many=True,
                 **kwargs,
             )
             return await self._wrap_execute_result(sql_statement, result, **kwargs)
@@ -937,6 +933,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], Asyn
             script_output = await self._execute_impl(
                 statement=sql_statement,
                 connection=self._connection(connection),
+                is_script=True,
                 **kwargs,
             )
             # For script execution, we expect the driver to return a SQLResult

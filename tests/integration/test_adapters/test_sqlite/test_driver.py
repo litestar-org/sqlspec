@@ -130,8 +130,9 @@ def test_sqlite_execute_script(sqlite_session: SqliteDriver) -> None:
     """
 
     result = sqlite_session.execute_script(script)
-    # Script execution typically returns a status string
-    assert isinstance(result, str) or result is None  # type: ignore[unreachable]
+    # Script execution now returns SQLResult object
+    assert isinstance(result, SQLResult)
+    assert result.operation_type == "SCRIPT"
 
     # Verify script effects
     select_result = sqlite_session.execute(
@@ -313,7 +314,8 @@ def test_sqlite_schema_operations(sqlite_session: SqliteDriver) -> None:
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    assert isinstance(create_result, str) or create_result is None  # type: ignore[unreachable]
+    assert isinstance(create_result, SQLResult)
+    assert create_result.operation_type == "SCRIPT"
 
     # Insert data into new table
     insert_result = sqlite_session.execute("INSERT INTO schema_test (description) VALUES (?)", ("test description",))
@@ -328,7 +330,8 @@ def test_sqlite_schema_operations(sqlite_session: SqliteDriver) -> None:
 
     # Drop table
     drop_result = sqlite_session.execute_script("DROP TABLE schema_test")
-    assert isinstance(drop_result, str) or drop_result is None
+    assert isinstance(drop_result, SQLResult)
+    assert drop_result.operation_type == "SCRIPT"
 
 
 @pytest.mark.xdist_group("sqlite")
