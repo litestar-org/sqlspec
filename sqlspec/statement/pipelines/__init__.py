@@ -1,3 +1,19 @@
+"""SQL Statement Processing Pipelines.
+
+This module defines the framework for processing SQL statements through a series of
+configurable stages: transformation, validation, and analysis.
+
+Key Components:
+- `SQLProcessingContext`: Holds shared data and state during pipeline execution.
+- `StatementPipelineResult`: Encapsulates the final results of a pipeline run.
+- `StatementPipeline`: The main orchestrator for executing the processing stages.
+- `ProcessorProtocol`: The base protocol for all pipeline components (transformers,
+  validators, analyzers).
+- `ValidationResult`: Standardized result from validation components.
+- `ValidationIssue`: Represents a single issue found during validation (to be defined,
+  likely in `validators.base` or `base`).
+"""
+
 from sqlspec.statement.pipelines import analyzers, transformers, validators
 from sqlspec.statement.pipelines.analyzers import (
     StatementAnalysis,
@@ -5,20 +21,15 @@ from sqlspec.statement.pipelines.analyzers import (
 )
 from sqlspec.statement.pipelines.base import (
     ProcessorProtocol,
-    SQLValidation,
     SQLValidator,
-    TransformerPipeline,
-    UnifiedProcessor,
-    UsesExpression,
+    StatementPipeline,
     ValidationResult,
 )
+from sqlspec.statement.pipelines.context import SQLProcessingContext, StatementPipelineResult
 from sqlspec.statement.pipelines.transformers import (
     CommentRemover,
     HintRemover,
     ParameterizeLiterals,
-    RemoveUnusedColumns,
-    StarExpander,
-    TracingComment,
 )
 from sqlspec.statement.pipelines.validators import (
     PreventDDL,
@@ -29,26 +40,27 @@ from sqlspec.statement.pipelines.validators import (
 )
 
 __all__ = (
+    # Concrete Transformers
     "CommentRemover",
     "HintRemover",
     "ParameterizeLiterals",
+    # Concrete Validators (individual checks or groups)
     "PreventDDL",
     "PreventInjection",
     "ProcessorProtocol",
-    "RemoveUnusedColumns",
     "RiskyDML",
-    "SQLValidation",
+    "SQLProcessingContext",
     "SQLValidator",
-    "StarExpander",
     "StatementAnalysis",
+    # Concrete Analyzers
     "StatementAnalyzer",
+    # Core Pipeline & Context
+    "StatementPipeline",
+    "StatementPipelineResult",
     "SuspiciousKeywords",
     "TautologyConditions",
-    "TracingComment",
-    "TransformerPipeline",
-    "UnifiedProcessor",
-    "UsesExpression",
     "ValidationResult",
+    # Module exports
     "analyzers",
     "transformers",
     "validators",

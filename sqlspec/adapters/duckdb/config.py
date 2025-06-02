@@ -310,7 +310,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                         continue
 
                     # Install extension if needed
-                    install_kwargs = {}
+                    install_kwargs: dict[str, Any] = {}
                     if "version" in ext_config:
                         install_kwargs["version"] = ext_config["version"]
                     if "repository" in ext_config:
@@ -327,7 +327,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                     if self.instrumentation.log_pool_operations:
                         logger.debug("Loaded DuckDB extension: %s", ext_name, extra={"adapter": "duckdb"})
 
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     if self.instrumentation.log_pool_operations and ext_name:
                         logger.warning(
                             "Failed to load DuckDB extension: %s",
@@ -367,7 +367,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                         if self.instrumentation.log_pool_operations:
                             logger.debug("Created DuckDB secret: %s", secret_name, extra={"adapter": "duckdb"})
 
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     if self.instrumentation.log_pool_operations and secret_name:
                         logger.warning(
                             "Failed to create DuckDB secret: %s",
@@ -381,7 +381,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                     self.on_connection_create(connection)
                     if self.instrumentation.log_pool_operations:
                         logger.debug("Executed connection creation hook", extra={"adapter": "duckdb"})
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     if self.instrumentation.log_pool_operations:
                         logger.warning("Connection creation hook failed", extra={"adapter": "duckdb", "error": str(e)})
 

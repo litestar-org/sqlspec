@@ -1,6 +1,5 @@
 """Unit tests for Psycopg configuration."""
 
-from typing import NoReturn
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -612,7 +611,7 @@ def test_psycopg_sync_config_provide_connection_error_handling(mock_connect: Moc
 
 @patch("psycopg.AsyncConnection.connect")
 @pytest.mark.asyncio
-async def test_psycopg_async_config_provide_connection_error_handling(mock_connect: Mock) -> NoReturn:
+async def test_psycopg_async_config_provide_connection_error_handling(mock_connect: Mock) -> None:
     """Test Psycopg async config provide_connection error handling."""
     mock_connection = AsyncMock()
     mock_connect.return_value = mock_connection

@@ -1,10 +1,24 @@
 """Tests for the ParameterizeLiterals transformer."""
 
+from typing import Optional
+
 from sqlglot import parse_one
 from sqlglot.dialects import Dialect
 
+from sqlspec.statement.pipelines.context import SQLProcessingContext
 from sqlspec.statement.pipelines.transformers import ParameterizeLiterals
 from sqlspec.statement.sql import SQLConfig
+
+
+def _create_test_context(sql: str, config: Optional[SQLConfig] = None) -> SQLProcessingContext:
+    """Helper function to create a SQLProcessingContext for testing."""
+    if config is None:
+        config = SQLConfig()
+
+    expression = parse_one(sql)
+    return SQLProcessingContext(
+        initial_sql_string=sql, dialect=Dialect.get_or_raise(""), config=config, current_expression=expression
+    )
 
 
 class TestParameterizeLiterals:
@@ -15,10 +29,9 @@ class TestParameterizeLiterals:
         sql = "SELECT * FROM users WHERE name = 'John'"
 
         parameterizer = ParameterizeLiterals()
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        param_expr, result = parameterizer.process(expression, Dialect.get_or_raise(""), config)
+        param_expr, _ = parameterizer.process(context)
 
         # Should replace string literal with placeholder
         param_sql = param_expr.sql()
@@ -35,10 +48,9 @@ class TestParameterizeLiterals:
         sql = "SELECT * FROM users WHERE name = 'John' AND age = 25 AND active = true"
 
         parameterizer = ParameterizeLiterals(preserve_boolean=False)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        param_expr, result = parameterizer.process(expression, Dialect.get_or_raise(""), config)
+        _, _ = parameterizer.process(context)
 
         # Should extract multiple parameters
         parameters = parameterizer.get_parameters()
@@ -51,10 +63,9 @@ class TestParameterizeLiterals:
         sql = "SELECT * FROM products WHERE price = 19.99 AND quantity = 100"
 
         parameterizer = ParameterizeLiterals()
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        param_expr, result = parameterizer.process(expression, Dialect.get_or_raise(""), config)
+        _, _ = parameterizer.process(context)
 
         # Should extract numeric parameters
         parameters = parameterizer.get_parameters()
@@ -67,10 +78,9 @@ class TestParameterizeLiterals:
         sql = "SELECT * FROM users WHERE email IS NULL"
 
         parameterizer = ParameterizeLiterals(preserve_null=True)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        param_expr, result = parameterizer.process(expression, Dialect.get_or_raise(""), config)
+        param_expr, _ = parameterizer.process(context)
 
         # Should preserve NULL literals
         param_sql = param_expr.sql()
@@ -85,13 +95,10 @@ class TestParameterizeLiterals:
         sql = "SELECT * FROM users WHERE active = true AND verified = false"
 
         parameterizer = ParameterizeLiterals(preserve_boolean=True)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        param_expr, result = parameterizer.process(expression, Dialect.get_or_raise(""), config)
+        _, _ = parameterizer.process(context)
 
-        # Should preserve boolean literals
-        param_expr.sql()
         # Note: SQLGlot might normalize boolean representation
 
         # Should not extract booleans as parameters (or fewer parameters)
@@ -103,10 +110,9 @@ class TestParameterizeLiterals:
         sql = "SELECT * FROM users LIMIT 10 OFFSET 20"
 
         parameterizer = ParameterizeLiterals(preserve_numbers_in_limit=True)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        param_expr, result = parameterizer.process(expression, Dialect.get_or_raise(""), config)
+        param_expr, _ = parameterizer.process(context)
 
         # Should preserve LIMIT/OFFSET numbers
         param_sql = param_expr.sql()
@@ -124,10 +130,9 @@ class TestParameterizeLiterals:
         sql = f"SELECT * FROM logs WHERE message = '{long_string}'"
 
         parameterizer = ParameterizeLiterals(max_string_length=1000)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        param_expr, result = parameterizer.process(expression, Dialect.get_or_raise(""), config)
+        param_expr, _ = parameterizer.process(context)
 
         # Should preserve long strings
         param_sql = param_expr.sql()
@@ -143,18 +148,17 @@ class TestParameterizeLiterals:
 
         # Test question mark style
         parameterizer1 = ParameterizeLiterals(placeholder_style="?")
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        param_expr1, _ = parameterizer1.process(expression, Dialect.get_or_raise(""), config)
+        param_expr1, _ = parameterizer1.process(context)
         param_sql1 = param_expr1.sql()
         assert "?" in param_sql1
 
         # Test named parameter style
         parameterizer2 = ParameterizeLiterals(placeholder_style=":name")
-        expression = parse_one(sql)
+        context = _create_test_context(sql)
 
-        param_expr2, _ = parameterizer2.process(expression, Dialect.get_or_raise(""), config)
+        param_expr2, _ = parameterizer2.process(context)
         param_sql2 = param_expr2.sql()
         # Should have named parameter (exact format may vary)
         assert "param_" in param_sql2 or ":" in param_sql2
@@ -164,10 +168,9 @@ class TestParameterizeLiterals:
         sql = "SELECT * FROM users WHERE name = 'John' AND age = 25"
 
         parameterizer = ParameterizeLiterals(placeholder_style="$1")
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        param_expr, _ = parameterizer.process(expression, Dialect.get_or_raise(""), config)
+        param_expr, _ = parameterizer.process(context)
         param_sql = param_expr.sql()
 
         # Should have numbered placeholders
@@ -178,9 +181,12 @@ class TestParameterizeLiterals:
         sql = "SELECT * FROM users WHERE name = 'John' AND age = 25"
 
         parameterizer = ParameterizeLiterals()
-        expression = parse_one(sql)
+        context = _create_test_context(sql)
 
-        param_sql, parameters = parameterizer.get_parameterized_query(expression, "mysql")
+        # Process the query first
+        param_expr, _ = parameterizer.process(context)
+        param_sql = param_expr.sql()
+        parameters = parameterizer.get_parameters()
 
         # Should return both SQL and parameters
         assert isinstance(param_sql, str)
@@ -194,10 +200,9 @@ class TestParameterizeLiterals:
         sql = "SELECT * FROM users WHERE name = 'John'"
 
         parameterizer = ParameterizeLiterals()
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        param_expr, _ = parameterizer.process(expression, Dialect.get_or_raise(""), config)
+        _, _ = parameterizer.process(context)
 
         # Should have parameters
         assert len(parameterizer.get_parameters()) > 0
@@ -222,10 +227,9 @@ class TestParameterizeLiterals:
         """
 
         parameterizer = ParameterizeLiterals()
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        param_expr, _ = parameterizer.process(expression, Dialect.get_or_raise(""), config)
+        _, _ = parameterizer.process(context)
 
         # Should extract multiple parameters from different parts of the query
         parameters = parameterizer.get_parameters()
@@ -239,10 +243,9 @@ class TestParameterizeLiterals:
         sql = "CREATE TABLE test (id INT, name VARCHAR(50))"
 
         parameterizer = ParameterizeLiterals()
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        param_expr, _ = parameterizer.process(expression, Dialect.get_or_raise(""), config)
+        param_expr, _ = parameterizer.process(context)
 
         # Should preserve the 50 in VARCHAR(50)
         param_sql = param_expr.sql()
@@ -257,10 +260,9 @@ class TestParameterizeLiterals:
         sql = "SELECT id, name FROM users"
 
         parameterizer = ParameterizeLiterals()
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        param_expr, result = parameterizer.process(expression, Dialect.get_or_raise(""), config)
+        param_expr, _ = parameterizer.process(context)
 
         # Should not extract any parameters
         parameters = parameterizer.get_parameters()
@@ -280,10 +282,9 @@ class TestParameterizeLiterals:
         """
 
         parameterizer = ParameterizeLiterals(preserve_null=True, preserve_boolean=False)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        param_expr, _ = parameterizer.process(expression, Dialect.get_or_raise(""), config)
+        param_expr, _ = parameterizer.process(context)
 
         # Should extract various types of parameters
         parameters = parameterizer.get_parameters()

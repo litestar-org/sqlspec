@@ -1,5 +1,6 @@
 """Unit tests for OracleDB drivers."""
 
+from typing import Any, Union
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -11,7 +12,7 @@ from sqlspec.adapters.oracledb import (
     OracleSyncDriver,
 )
 from sqlspec.config import InstrumentationConfig
-from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -168,11 +169,6 @@ def test_oracle_sync_driver_execute_impl_select(
     # Execute
     result = oracle_sync_driver._execute_impl(
         statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify cursor was created and execute was called
@@ -199,11 +195,6 @@ async def test_oracle_async_driver_execute_impl_select(
     # Execute
     result = await oracle_async_driver._execute_impl(
         statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify cursor was created and execute was called
@@ -230,11 +221,6 @@ def test_oracle_sync_driver_execute_impl_insert(
     # Execute
     result = oracle_sync_driver._execute_impl(
         statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify cursor was created and execute was called
@@ -252,24 +238,17 @@ def test_oracle_sync_driver_execute_impl_script(
     mock_cursor = Mock()
     mock_oracle_sync_connection.cursor.return_value = mock_cursor
 
-    # Create SQL statement (DDL allowed with strict_mode=False)
-    statement = SQL("CREATE TABLE test (id NUMBER); INSERT INTO test VALUES (1);", config=oracle_sync_driver.config)
-
-    # Execute script
-    result = oracle_sync_driver._execute_impl(
-        statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=True,
-    )
+    # Test script execution
+    script_statement = SQL(
+        "CREATE TABLE test (id NUMBER); INSERT INTO test VALUES (1);", config=oracle_sync_driver.config
+    ).as_script()
+    script_result = oracle_sync_driver._execute_impl(script_statement)
 
     # Verify cursor was created and execute was called
     mock_oracle_sync_connection.cursor.assert_called_once()
     mock_cursor.execute.assert_called_once()
     mock_cursor.close.assert_called_once()
-    assert result == "SCRIPT EXECUTED"
+    assert script_result == "SCRIPT EXECUTED"
 
 
 def test_oracle_sync_driver_execute_impl_many(
@@ -283,24 +262,20 @@ def test_oracle_sync_driver_execute_impl_many(
 
     # Create SQL statement with placeholder for parameters
     statement = SQL(
-        "INSERT INTO users (name) VALUES (:name)", parameters={"name": "dummy"}, config=oracle_sync_driver.config
-    )
-    parameters = [{"name": "John"}, {"name": "Jane"}, {"name": "Bob"}]
+        "INSERT INTO users (name) VALUES (?)",
+        parameters=[["John"], ["Jane"], ["Bob"]],
+        config=oracle_sync_driver.config,
+    ).as_many()
 
     # Execute many
     result = oracle_sync_driver._execute_impl(
         statement=statement,
-        parameters=parameters,
-        connection=None,
-        config=None,
-        is_many=True,
-        is_script=False,
     )
 
     # Verify cursor was created and executemany was called
     mock_oracle_sync_connection.cursor.assert_called_once()
     mock_cursor.executemany.assert_called_once_with(
-        "INSERT INTO users (name) VALUES (:name)", [{"name": "John"}, {"name": "Jane"}, {"name": "Bob"}]
+        "INSERT INTO users (name) VALUES (?)", [["John"], ["Jane"], ["Bob"]]
     )
     mock_cursor.close.assert_called_once()
     assert result is mock_cursor
@@ -324,11 +299,6 @@ def test_oracle_sync_driver_execute_impl_parameter_processing(
     # Execute
     oracle_sync_driver._execute_impl(
         statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify parameters were processed correctly
@@ -355,11 +325,6 @@ def test_oracle_sync_driver_execute_impl_positional_parameters(
     # Execute
     oracle_sync_driver._execute_impl(
         statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify named parameters were processed correctly
@@ -381,11 +346,11 @@ def test_oracle_sync_driver_wrap_select_result(oracle_sync_driver: OracleSyncDri
     # Wrap result
     result = oracle_sync_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.column_names == ["ID", "NAME"]
     assert result.data == [{"ID": 1, "NAME": "John"}, {"ID": 2, "NAME": "Jane"}]
@@ -404,11 +369,11 @@ def test_oracle_sync_driver_wrap_select_result_empty(oracle_sync_driver: OracleS
     # Wrap result
     result = oracle_sync_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.data == []
     assert result.column_names == []
@@ -426,11 +391,11 @@ def test_oracle_sync_driver_wrap_execute_result(oracle_sync_driver: OracleSyncDr
     # Wrap result
     result = oracle_sync_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 3
     assert result.operation_type == "UPDATE"
@@ -444,11 +409,11 @@ def test_oracle_sync_driver_wrap_execute_result_script(oracle_sync_driver: Oracl
     # Wrap result for script
     result = oracle_sync_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result="SCRIPT EXECUTED",
+        result="SCRIPT EXECUTED",
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 0
     assert result.operation_type == "CREATE"
@@ -466,11 +431,11 @@ def test_oracle_sync_driver_wrap_execute_result_list_rowcount(oracle_sync_driver
     # Wrap result
     result = oracle_sync_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 3  # Sum of list
     assert result.operation_type == "INSERT"
@@ -513,14 +478,7 @@ def test_oracle_sync_driver_error_handling(
 
     # Test error propagation
     with pytest.raises(Exception, match="Database error"):
-        oracle_sync_driver._execute_impl(
-            statement=statement,
-            parameters=None,
-            connection=None,
-            config=None,
-            is_many=False,
-            is_script=False,
-        )
+        oracle_sync_driver._execute_impl(statement=statement)
 
 
 @pytest.mark.asyncio
@@ -536,14 +494,7 @@ async def test_oracle_async_driver_error_handling(
 
     # Test error propagation
     with pytest.raises(Exception, match="Database error"):
-        await oracle_async_driver._execute_impl(
-            statement=statement,
-            parameters=None,
-            connection=None,
-            config=None,
-            is_many=False,
-            is_script=False,
-        )
+        await oracle_async_driver._execute_impl(statement=statement)
 
 
 def test_oracle_sync_driver_instrumentation(oracle_sync_driver: OracleSyncDriver) -> None:
@@ -557,8 +508,19 @@ def test_oracle_sync_driver_instrumentation(oracle_sync_driver: OracleSyncDriver
     assert hasattr(oracle_sync_driver.instrumentation_config, "log_parameters")
     assert hasattr(oracle_sync_driver.instrumentation_config, "log_results_count")
 
+    # Test execution with logging enabled
+    statement = SQL("SELECT * FROM users")
+    oracle_sync_driver._execute_impl(
+        statement=statement,
+    )
 
-def test_oracle_async_driver_instrumentation(oracle_async_driver: OracleAsyncDriver) -> None:
+    # Verify execution worked
+    mock_cursor = Mock()
+    mock_cursor.execute.assert_called_once_with("SELECT * FROM users")
+
+
+@pytest.mark.asyncio
+async def test_oracle_async_driver_instrumentation(oracle_async_driver: OracleAsyncDriver) -> None:
     """Test Oracle async driver instrumentation integration."""
     # Test instrumentation config is accessible
     assert oracle_async_driver.instrumentation_config is not None
@@ -568,6 +530,16 @@ def test_oracle_async_driver_instrumentation(oracle_async_driver: OracleAsyncDri
     assert hasattr(oracle_async_driver.instrumentation_config, "log_queries")
     assert hasattr(oracle_async_driver.instrumentation_config, "log_parameters")
     assert hasattr(oracle_async_driver.instrumentation_config, "log_results_count")
+
+    # Test execution with logging enabled
+    statement = SQL("SELECT * FROM users")
+    await oracle_async_driver._execute_impl(
+        statement=statement,
+    )
+
+    # Verify execution worked
+    mock_cursor = AsyncMock()
+    mock_cursor.execute.assert_called_once_with("SELECT * FROM users")
 
 
 def test_oracle_sync_driver_operation_type_detection(oracle_sync_driver: OracleSyncDriver) -> None:
@@ -590,7 +562,7 @@ def test_oracle_sync_driver_operation_type_detection(oracle_sync_driver: OracleS
 
         result = oracle_sync_driver._wrap_execute_result(
             statement=statement,
-            raw_driver_result=mock_cursor,
+            result=mock_cursor,
         )
 
         assert result.operation_type == expected_op_type
@@ -617,11 +589,6 @@ def test_oracle_sync_driver_logging_configuration(
     # Execute with logging enabled
     oracle_sync_driver._execute_impl(
         statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify execution worked
@@ -863,11 +830,6 @@ def test_oracle_sync_driver_named_parameters(
     # Execute
     oracle_sync_driver._execute_impl(
         statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify named parameters were processed correctly
@@ -895,11 +857,6 @@ async def test_oracle_async_driver_named_parameters(
     # Execute
     await oracle_async_driver._execute_impl(
         statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify named parameters were processed correctly
@@ -926,11 +883,6 @@ def test_oracle_sync_driver_single_parameter_conversion(
     # Execute
     oracle_sync_driver._execute_impl(
         statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify single parameter was processed correctly
@@ -955,14 +907,14 @@ def test_oracle_sync_driver_wrap_select_result_with_schema_type(oracle_sync_driv
     statement = SQL("SELECT id, name FROM users")
 
     # Wrap result with schema type
-    result = oracle_sync_driver._wrap_select_result(
+    result: Union[SQLResult[User], SQLResult[dict[str, Any]]] = oracle_sync_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
         schema_type=User,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.column_names == ["ID", "NAME"]
 
@@ -979,13 +931,13 @@ async def test_oracle_async_driver_wrap_select_result(oracle_async_driver: Oracl
     statement = SQL("SELECT id, name FROM users")
 
     # Wrap result
-    result = await oracle_async_driver._wrap_select_result(
+    result: Union[SQLResult[Any], SQLResult[dict[str, Any]]] = await oracle_async_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.column_names == ["ID", "NAME"]
     assert result.data == [{"ID": 1, "NAME": "John"}, {"ID": 2, "NAME": "Jane"}]
@@ -1004,11 +956,11 @@ async def test_oracle_async_driver_wrap_execute_result(oracle_async_driver: Orac
     # Wrap result
     result = await oracle_async_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 5
     assert result.operation_type == "UPDATE"
@@ -1027,11 +979,11 @@ def test_oracle_driver_uppercase_column_names(oracle_sync_driver: OracleSyncDriv
     # Wrap result
     result = oracle_sync_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result with uppercase column names
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.column_names == ["USER_ID", "USER_NAME", "CREATED_DATE"]
     assert result.data == [

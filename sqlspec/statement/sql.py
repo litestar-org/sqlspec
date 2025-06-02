@@ -34,7 +34,8 @@ from sqlspec.exceptions import (
 # Updated imports for pipeline components
 from sqlspec.statement.filters import StatementFilter, apply_filter
 from sqlspec.statement.parameters import ParameterConverter, ParameterStyle, ParameterValidator
-from sqlspec.statement.pipelines import TransformerPipeline, ValidationResult
+from sqlspec.statement.pipelines import ValidationResult
+from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
     from sqlspec.statement.parameters import ParameterInfo
     from sqlspec.statement.pipelines import ProcessorProtocol, SQLValidator
     from sqlspec.statement.pipelines.analyzers import StatementAnalysis
+    from sqlspec.statement.pipelines.base import StatementPipeline
     from sqlspec.typing import SQLParameterType
 
 __all__ = (
@@ -60,95 +62,107 @@ Statement = Union[str, exp.Expression, "SQL"]
 
 def _default_validator() -> "SQLValidator":
     from sqlspec.statement.pipelines import SQLValidator
-    from sqlspec.statement.pipelines.validators import (
-        PreventDDL,
-        PreventInjection,
-        RiskyDML,
-        SuspiciousKeywords,
-        TautologyConditions,
-    )
 
-    default_pipeline_validators = [
-        PreventInjection(),
-        RiskyDML(),
-        PreventDDL(),
-        TautologyConditions(),
-        SuspiciousKeywords(risk_level=RiskLevel.MEDIUM),
-    ]
-    return SQLValidator(validators=default_pipeline_validators)
+    # Return an empty SQLValidator since individual validators are now handled
+    # as ProcessorProtocol instances in the pipeline
+    return SQLValidator(validators=[])
 
 
 @dataclass
 class SQLConfig:
     """Configuration for SQLStatement behavior."""
 
+    # Behavior flags
     enable_parsing: bool = True
-    """Whether to enable SQLglot parsing for validation and transformation."""
-
     enable_validation: bool = True
-    """Whether to enable SQL validation and security checks."""
-
     enable_transformations: bool = True
-    """Whether to enable SQL transformer."""
-
     enable_analysis: bool = False
-    """Whether to enable SQL statement analysis for metadata extraction."""
-
     strict_mode: bool = True
-    """Whether to use strict validation of rules."""
-
     cache_parsed_expression: bool = True
-    """Whether to cache the parsed expression for performance."""
 
-    processing_pipeline_components: "list[ProcessorProtocol[exp.Expression]]" = field(default_factory=list)
-    """List of processing components (transformers, validators) for the pipeline."""
+    # Component lists for explicit staging
+    transformers: "Optional[list[ProcessorProtocol[exp.Expression]]]" = None
+    validators: "Optional[list[ProcessorProtocol[exp.Expression]]]" = None  # Or specific ValidatorProtocol
+    analyzers: "Optional[list[ProcessorProtocol[exp.Expression]]]" = None  # Or specific AnalyzerProtocol
 
+    # Fallback for old-style mixed component list (for smoother transition)
+    processing_pipeline_components: "Optional[list[ProcessorProtocol[exp.Expression]]]" = None
+
+    # Other configs
     parameter_converter: ParameterConverter = field(default_factory=ParameterConverter)
-    """Parameter converter to use for parameter processing."""
-
     parameter_validator: ParameterValidator = field(default_factory=ParameterValidator)
-    """Parameter validator to use for parameter validation."""
-
     sqlglot_schema: "Optional[SQLGlotSchema]" = None
-    """Optional sqlglot schema for schema-aware transformations."""
-
     analysis_cache_size: int = 1000
-    """Maximum number of analysis results to cache."""
+    input_sql_had_placeholders: bool = False  # Populated by SQL.__init__
 
-    def get_pipeline(self) -> "TransformerPipeline":
-        """Constructs and returns a TransformerPipeline from the configured components.
-        If no components are specified, it will add default ones based on flags.
-        The order is: Transform → Validate → Analyze
-
-        Returns:
-            A TransformerPipeline instance.
+    def get_statement_pipeline(self) -> "StatementPipeline":  # Renamed
+        """Constructs and returns a StatementPipeline from the configured components.
+        Prioritizes explicit transformer/validator/analyzer lists if provided.
+        Otherwise, uses default components based on enable_* flags or processing_pipeline_components.
         """
-        from sqlspec.statement.pipelines import TransformerPipeline
+        from sqlspec.statement.pipelines import StatementPipeline  # Renamed
+        from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
+        from sqlspec.statement.pipelines.transformers import CommentRemover, ParameterizeLiterals
+        from sqlspec.statement.pipelines.validators import (
+            PreventDDL,
+            PreventInjection,
+            RiskyDML,
+            SuspiciousKeywords,
+            TautologyConditions,
+        )
 
-        components_to_use = list(self.processing_pipeline_components)  # Make a copy
+        # Determine components for each stage
+        # If explicit lists are given, use them
+        # Otherwise, use defaults or the old processing_pipeline_components list
 
-        # If no components specified, add defaults in the correct order: Transform → Validate → Analyze
-        if not components_to_use:
-            # Add default transformers if transformations are enabled
-            if self.enable_transformations:
-                from sqlspec.statement.pipelines.transformers import CommentRemover, ParameterizeLiterals
+        final_transformers: list[ProcessorProtocol[exp.Expression]] = []
+        final_validators: list[ProcessorProtocol[exp.Expression]] = []
+        final_analyzers: list[ProcessorProtocol[exp.Expression]] = []
 
-                components_to_use.extend([
-                    CommentRemover(),
-                    ParameterizeLiterals(),
-                ])
+        if self.transformers is not None:
+            final_transformers.extend(self.transformers)
+        elif self.processing_pipeline_components is not None:
+            # Filter from old list - this is for transition
+            final_transformers.extend(
+                [
+                    p
+                    for p in self.processing_pipeline_components
+                    if not (hasattr(p, "validate") or hasattr(p, "analyze"))
+                ]
+            )  # Basic heuristic
+        elif self.enable_transformations:
+            final_transformers.extend([CommentRemover(), ParameterizeLiterals()])
 
-            # Add default validator if validation is enabled
-            if self.enable_validation:
-                components_to_use.append(_default_validator())
+        if self.validators is not None:
+            final_validators.extend(self.validators)
+        elif self.processing_pipeline_components is not None:
+            final_validators.extend(
+                [p for p in self.processing_pipeline_components if hasattr(p, "validate") and not hasattr(p, "analyze")]
+            )  # Basic heuristic
+        elif self.enable_validation:
+            # Use the new ProcessorProtocol-based validators directly
+            final_validators.extend(
+                [
+                    PreventInjection(),
+                    RiskyDML(),
+                    PreventDDL(),
+                    TautologyConditions(),
+                    SuspiciousKeywords(risk_level=RiskLevel.MEDIUM),
+                ]
+            )
 
-            # Add default analyzer if analysis is enabled (should be last)
-            if self.enable_analysis:
-                from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
+        if self.analyzers is not None:
+            final_analyzers.extend(self.analyzers)
+        elif self.processing_pipeline_components is not None:
+            final_analyzers.extend(
+                [p for p in self.processing_pipeline_components if hasattr(p, "analyze")]
+            )  # Basic heuristic
+        elif self.enable_analysis:
+            final_analyzers.append(StatementAnalyzer(cache_size=self.analysis_cache_size))
 
-                components_to_use.append(StatementAnalyzer(cache_size=self.analysis_cache_size))
-
-        return TransformerPipeline(components=components_to_use)
+        return StatementPipeline(
+            transformers=final_transformers, validators=final_validators, analyzers=final_analyzers
+        )
 
 
 class SQL:
@@ -296,88 +310,90 @@ class SQL:
         parameters: "Optional[SQLParameterType]",
         kwargs: "Optional[Mapping[str, Any]]",
     ) -> None:
-        """Initialize the statement with SQL and parameters.
+        """Initialize the statement with SQL, parameters, and run the processing pipeline."""
+        self._sql = statement  # Store original input
 
-        Raises:
-            SQLValidationError: If SQL validation fails in strict mode.
+        from sqlspec.statement.pipelines.context import SQLProcessingContext
 
-        """
-        self._sql = statement
+        context = SQLProcessingContext(
+            initial_sql_string=str(statement),
+            dialect=self._dialect,
+            config=self._config,
+            initial_parameters=parameters,
+            initial_kwargs=dict(kwargs) if kwargs else {},
+        )
+
+        if isinstance(statement, str):
+            try:
+                param_validator = self._config.parameter_validator
+                existing_params_info = param_validator.extract_parameters(statement)
+                if existing_params_info:
+                    context.input_sql_had_placeholders = True
+                    self._config.input_sql_had_placeholders = True
+            except Exception:
+                context.input_sql_had_placeholders = False
+                self._config.input_sql_had_placeholders = False
+        elif isinstance(statement, SQL):
+            context.input_sql_had_placeholders = statement.config.input_sql_had_placeholders
+            self._config.input_sql_had_placeholders = statement.config.input_sql_had_placeholders
+        else:
+            context.input_sql_had_placeholders = False
+            self._config.input_sql_had_placeholders = False
+
+        context.parameter_info, context.merged_parameters = self._process_parameters(
+            context.initial_sql_string, context.initial_parameters, context.initial_kwargs or None
+        )
+        self._parameter_info = context.parameter_info
+        self._merged_parameters = context.merged_parameters
 
         if self._config.enable_parsing:
             if isinstance(statement, exp.Expression):
-                self._parsed_expression = statement
+                context.current_expression = statement
             else:
-                self._parsed_expression = self.to_expression(str(statement), self._dialect)
+                try:
+                    context.current_expression = self.to_expression(str(statement), self._dialect)
+                except SQLValidationError as e:
+                    self._parsed_expression = None
+                    self._validation_result = ValidationResult(is_safe=False, risk_level=e.risk_level, issues=[str(e)])
+                    self._check_and_raise_for_strict_mode()
+                    return
         else:
-            self._parsed_expression = None
+            context.current_expression = None
 
-        self._parameter_info, self._merged_parameters = self._process_parameters(str(statement), parameters, kwargs)
+        self._parsed_expression = context.current_expression
 
-        # Process with pipeline if parsing is enabled
-        if self._config.enable_parsing and self._parsed_expression:
-            pipeline = self._config.get_pipeline()
-            transformed_expr, validation_res_from_pipeline = pipeline.execute(
-                self._parsed_expression,
-                self._dialect,
-                self._config,  # Pass config for context to processors
-            )
-            self._parsed_expression = transformed_expr
+        pipeline_result = None
+        if self._config.enable_parsing or isinstance(statement, exp.Expression):
+            if context.current_expression is not None or self._config.enable_parsing:
+                pipeline = self._config.get_statement_pipeline()
+                pipeline_result = pipeline.execute_pipeline(context)
 
-            # Check if any transformers extracted parameters (like ParameterizeLiterals)
-            extracted_params = []
-            for component in pipeline.components:
-                if hasattr(component, "extracted_parameters") and hasattr(component, "get_parameters"):
-                    # Use get_parameters() method if available, otherwise access attribute directly
-                    if callable(getattr(component, "get_parameters", None)):
-                        component_params = component.get_parameters()  # type: ignore[attr-defined]
-                        if component_params:
-                            extracted_params.extend(component_params)
-                    elif getattr(component, "extracted_parameters", None):
-                        extracted_params.extend(component.extracted_parameters)  # type: ignore[attr-defined]
+                self._parsed_expression = pipeline_result.final_expression
+                self._validation_result = pipeline_result.validation_result
+                self._analysis_result = pipeline_result.analysis_result
 
-            # If we have extracted parameters, merge them with existing parameters
-            if extracted_params:
-                self._merge_extracted_parameters(extracted_params)
+                if context.extracted_parameters_from_pipeline:
+                    self._merge_extracted_parameters(context.extracted_parameters_from_pipeline)
 
-            # Only set validation result if validation is enabled
-            if self._config.enable_validation:
-                self._validation_result = validation_res_from_pipeline
-            else:
-                self._validation_result = None
-
-            # If SQL was an expression, update it with the transformed one
-            if isinstance(self._sql, exp.Expression):
-                self._sql = self._parsed_expression
-
-            # Handle strict mode for validation results from pipeline
-            if self._validation_result is not None and not self._validation_result.is_safe and self._config.strict_mode:
-                default_validator_for_threshold = _default_validator()  # Get a default validator to check its min_risk
-                if (
-                    default_validator_for_threshold.min_risk_to_raise is not None
-                    and self._validation_result.risk_level.value
-                    >= default_validator_for_threshold.min_risk_to_raise.value
-                ):
-                    msg = (
-                        f"SQL processing pipeline failed with strict mode: {', '.join(self._validation_result.issues)}"
-                    )
-                    raise SQLValidationError(msg, str(self._sql), self._validation_result.risk_level)
-
-        elif self._config.enable_validation:  # Parsing disabled, but validation requested (basic string checks)
-            # This path is for when full parsing is off, so pipeline won't run on an expression.
-            # We might need a separate, simpler validation path if enable_parsing is false.
-            # For now, if parsing is off, the full pipeline (and thus SQLValidator as a component) won't run.
+                if isinstance(self._sql, exp.Expression) and self._parsed_expression is not None:
+                    self._sql = self._parsed_expression
+        elif self._config.enable_validation:
             default_validator = _default_validator()
-            self._validation_result = default_validator.validate(str(statement), self._dialect)
-            if self._validation_result is not None and not self._validation_result.is_safe and self._config.strict_mode:  # noqa: SIM102
-                if (
-                    default_validator.min_risk_to_raise is not None
-                    and self._validation_result.risk_level.value >= default_validator.min_risk_to_raise.value
-                ):
-                    msg = f"SQL validation failed (parsing disabled): {', '.join(self._validation_result.issues)}"
-                    raise SQLValidationError(msg, str(statement), self._validation_result.risk_level)
-        else:  # If parsing or validation was disabled, ensure validation_result is None
-            self._validation_result = None
+            if hasattr(default_validator, "validate") and callable(default_validator.validate):
+                self._validation_result = default_validator.validate(str(statement), self._dialect, self.config)
+            else:
+                self._validation_result = ValidationResult(
+                    is_safe=True,
+                    risk_level=RiskLevel.SKIP,
+                    issues=["Validation enabled but default validator structure unexpected."],
+                )
+
+        else:
+            self._validation_result = ValidationResult(
+                is_safe=True, risk_level=RiskLevel.SKIP, issues=["Parsing and Validation disabled"]
+            )
+
+        self._check_and_raise_for_strict_mode()
 
     def _merge_extracted_parameters(self, extracted_params: list[Any]) -> None:
         """Merge parameters extracted by transformers with existing parameters.
@@ -408,7 +424,7 @@ class SQL:
             self._merged_parameters = param_dict
         else:
             # Single parameter case - convert to list and add extracted params
-            self._merged_parameters = [self._merged_parameters] + extracted_params
+            self._merged_parameters = [self._merged_parameters, *extracted_params]
 
     def _process_parameters(
         self,
@@ -732,39 +748,55 @@ class SQL:
         if self._config.enable_parsing and self.expression is not None:
             # Only run validation components, not the full pipeline which might include transformers
             validator_only_pipeline = self._get_validation_only_pipeline()
-            _, validation_res = validator_only_pipeline.execute(self.expression, self._dialect, self._config)
-            self._validation_result = validation_res
+            pipeline_result = validator_only_pipeline.execute_pipeline(
+                SQLProcessingContext(
+                    initial_sql_string=str(self.expression),
+                    dialect=self._dialect,
+                    config=self._config,
+                    current_expression=self.expression,
+                )
+            )
+            self._validation_result = pipeline_result.validation_result
         elif self._config.enable_parsing and self.expression is None:
             # Attempt to parse first if not already an expression
             try:
                 parsed_expr = self.to_expression(self.sql, self._dialect)
                 validator_only_pipeline = self._get_validation_only_pipeline()
-                _, validation_res = validator_only_pipeline.execute(parsed_expr, self._dialect, self._config)
-                self._validation_result = validation_res
+                pipeline_result = validator_only_pipeline.execute_pipeline(
+                    SQLProcessingContext(
+                        initial_sql_string=self.sql,
+                        dialect=self._dialect,
+                        config=self._config,
+                        current_expression=parsed_expr,
+                    )
+                )
+                self._validation_result = pipeline_result.validation_result
             except SQLValidationError as e:
                 self._validation_result = ValidationResult(is_safe=False, risk_level=RiskLevel.HIGH, issues=[str(e)])
         else:  # Parsing disabled, do basic string validation
             validator = _default_validator()
-            self._validation_result = validator.validate(self.sql, self._dialect)
+            self._validation_result = validator.validate(self.sql, self._dialect, self.config)
 
         # Final check for strict mode after running validation
         self._check_and_raise_for_strict_mode()
+        # Ensure we always return a ValidationResult
+        if self._validation_result is None:
+            self._validation_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
         return self._validation_result
 
-    def _get_validation_only_pipeline(self) -> "TransformerPipeline":
-        """Get a pipeline with only validation components, no transformers."""
+    def _get_validation_only_pipeline(self) -> "StatementPipeline":
+        """Get a pipeline with only validation components, no transformers or analyzers."""
+        from sqlspec.statement.pipelines import StatementPipeline
 
-        validation_components = [
-            component
-            for component in self._config.processing_pipeline_components
-            if hasattr(component, "validators") or component.__class__.__name__.endswith("Validator")
-        ]
+        # Get the configured validators from the main pipeline configuration
+        main_pipeline_config = self.config.get_statement_pipeline()
+        configured_validators = main_pipeline_config.validators
 
-        # If no validation components found, use defaults
-        if not validation_components:
-            validation_components.append(_default_validator())
+        if not configured_validators and self.config.enable_validation:
+            # If no validators configured but validation is enabled, use default.
+            return StatementPipeline(validators=[_default_validator()])
 
-        return TransformerPipeline(components=validation_components)
+        return StatementPipeline(validators=configured_validators, transformers=[], analyzers=[])
 
     def _check_and_raise_for_strict_mode(self) -> None:
         if self._validation_result is not None and not self._validation_result.is_safe and self._config.strict_mode:
@@ -954,7 +986,7 @@ class SQL:
         sql = statement if statement is not None else self._sql
 
         # Merge kwargs and additional_kwargs
-        merged_kwargs = {}
+        merged_kwargs: dict[str, Any] = {}
         if kwargs:
             merged_kwargs.update(kwargs)
         if additional_kwargs:
@@ -1009,48 +1041,56 @@ class SQL:
 
     def transform(self) -> "SQL":
         """Return a transformed version of the statement using the configured pipeline.
-
-        Returns:
-            New SQLStatement with transformed SQL.
-
-        Raises:
-            SQLTransformationError: If SQL transformation within the pipeline fails and strict_mode is on.
-            SQLSpecError: If parsing is disabled, as transformations require a parsed expression.
+        This method now re-runs a transformation-focused part of the pipeline.
         """
-        if not self._config.enable_parsing:
-            msg = "Cannot transform SQL if parsing is disabled."
-            raise SQLSpecError(msg)
+        if not self._config.enable_parsing or not self._config.enable_transformations:
+            return self  # No parsing or no transformations enabled
 
-        if not self.expression:
-            # If there's no expression (e.g. from an empty initial SQL string),
-            # attempt to parse it first or return self if still no expression.
+        expr_to_transform = self.expression
+        if not expr_to_transform:
             try:
-                parsed_expr_for_transform = self.to_expression(self.sql, self._dialect)
-                if not parsed_expr_for_transform:
-                    return self  # No actual content to transform
+                expr_to_transform = self.to_expression(self.sql, self._dialect)
             except SQLValidationError:
                 return self  # Cannot parse, cannot transform
-        else:
-            parsed_expr_for_transform = self.expression
 
-        if not self._config.enable_transformations:
-            return self  # Transformations are globally disabled
+        from sqlspec.statement.pipelines import StatementPipeline
+        from sqlspec.statement.pipelines.context import SQLProcessingContext
 
-        pipeline = self._config.get_pipeline()
+        # Create a context for this specific transformation run
+        # It inherits most things from the current SQL object's state
+        transform_context = SQLProcessingContext(
+            initial_sql_string=str(self._sql),  # Add missing required parameter
+            dialect=self._dialect,
+            config=self._config,  # Use current config, which has enable_transformations=True
+            current_expression=expr_to_transform,
+            initial_parameters=self._merged_parameters,  # Pass current params
+            merged_parameters=self._merged_parameters,
+            parameter_info=self._parameter_info,
+            input_sql_had_placeholders=self._config.input_sql_had_placeholders,
+            # Validation and Analysis results are not strictly needed for transformation-only pass
+        )
+
+        # Get only transformers from the configured pipeline
+        current_pipeline_config = self.config.get_statement_pipeline()
+        transform_pipeline = StatementPipeline(
+            transformers=current_pipeline_config.transformers, validators=[], analyzers=[]
+        )
+
         try:
-            # The pipeline's execute method returns (transformed_expression, validation_result)
-            # We are interested in the transformed_expression here.
-            transformed_expr, _ = pipeline.execute(parsed_expr_for_transform, self._dialect, self._config)
-            # Create a new SQL instance with the transformed expression.
-            # The parameters remain the same. Validation will be re-run by the new instance's __init__.
-            return self.copy(statement=transformed_expr)
+            pipeline_result = transform_pipeline.execute_pipeline(transform_context)
+            if pipeline_result.final_expression is not expr_to_transform:
+                # Create a new SQL instance with the transformed expression and current parameters.
+                # The new instance's __init__ will re-run full validation/analysis if enabled.
+                return self.copy(
+                    statement=pipeline_result.final_expression, parameters=pipeline_result.merged_parameters
+                )
         except SQLValidationError as e:
-            # If a validator in the pipeline raises due to strict mode during transformation attempt
             msg = f"SQL transformation failed due to validation error during pipeline execution: {e}"
             raise SQLTransformationError(msg, self.sql) from e
-        except Exception as e:  # Catch other potential errors from transformers
+        except Exception as e:
             msg = f"SQL transformation pipeline failed: {e}"
             raise SQLTransformationError(msg, self.sql) from e
+        return self
 
     def where(self, *conditions: "Union[Condition, str]") -> "SQL":
         """Applies WHERE conditions and returns a new SQLStatement.
@@ -1085,8 +1125,8 @@ class SQL:
                 raise SQLParsingError(msg)
 
             # Ensure we have a Select expression that supports where()
-            if hasattr(new_expr, "where") and callable(new_expr.where):  # pyright: ignore
-                new_expr = new_expr.where(condition_expression)  # pyright: ignore
+            if hasattr(new_expr, "where") and callable(getattr(new_expr, "where", None)):
+                new_expr = new_expr.where(condition_expression)  # type: ignore[attr-defined]
             else:
                 # Convert to Select if not already selectable
                 if not isinstance(new_expr, exp.Select):
@@ -1114,8 +1154,8 @@ class SQL:
             expr_with_param = new_stmt._get_current_expression_for_modification()
 
             # Ensure expression supports limit()
-            if hasattr(expr_with_param, "limit") and callable(expr_with_param.limit):  # pyright: ignore
-                expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))  # pyright: ignore
+            if hasattr(expr_with_param, "limit") and callable(getattr(expr_with_param, "limit", None)):
+                expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
             else:
                 logger.warning("Expression does not support limit(), converting to Select")
                 if not isinstance(expr_with_param, exp.Select):
@@ -1125,8 +1165,8 @@ class SQL:
             return new_stmt.copy(statement=expr_with_param, parameters=new_stmt._merged_parameters)
 
         # Direct limit without parameter
-        if hasattr(new_expr, "limit") and callable(new_expr.limit):  # pyright: ignore
-            new_expr = new_expr.limit(limit_value)  # pyright: ignore
+        if hasattr(new_expr, "limit") and callable(getattr(new_expr, "limit", None)):
+            new_expr = new_expr.limit(limit_value)  # type: ignore[attr-defined]
         else:
             logger.warning("Expression does not support limit(), converting to Select")
             if not isinstance(new_expr, exp.Select):
@@ -1153,8 +1193,8 @@ class SQL:
             expr_with_param = new_stmt._get_current_expression_for_modification()
 
             # Ensure expression supports offset()
-            if hasattr(expr_with_param, "offset") and callable(expr_with_param.offset):  # pyright: ignore
-                expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))  # pyright: ignore
+            if hasattr(expr_with_param, "offset") and callable(getattr(expr_with_param, "offset", None)):
+                expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
             else:
                 logger.warning("Expression does not support offset(), converting to Select")
                 if not isinstance(expr_with_param, exp.Select):
@@ -1164,8 +1204,8 @@ class SQL:
             return new_stmt.copy(statement=expr_with_param, parameters=new_stmt._merged_parameters)
 
         # Direct offset without parameter
-        if hasattr(new_expr, "offset") and callable(new_expr.offset):  # pyright: ignore
-            new_expr = new_expr.offset(offset_value)  # pyright: ignore
+        if hasattr(new_expr, "offset") and callable(getattr(new_expr, "offset", None)):
+            new_expr = new_expr.offset(offset_value)  # type: ignore[attr-defined]
         else:
             logger.warning("Expression does not support offset(), converting to Select")
             if not isinstance(new_expr, exp.Select):
@@ -1206,7 +1246,7 @@ class SQL:
             elif isinstance(o_expr, exp.Order):
                 # Convert Order to Ordered by extracting the expression and desc flag
                 if hasattr(o_expr, "this") and hasattr(o_expr, "desc"):
-                    if o_expr.desc:
+                    if getattr(o_expr, "desc", False):  # Use getattr to avoid the always-true warning
                         parsed_orders.append(o_expr.this.desc())
                     else:
                         parsed_orders.append(o_expr.this.asc())
@@ -1215,14 +1255,12 @@ class SQL:
                     parsed_orders.append(o_expr)  # type: ignore[arg-type]
 
         if parsed_orders:
-            # Ensure expression supports order_by()
-            if hasattr(new_expr, "order_by") and callable(new_expr.order_by):  # pyright: ignore
-                new_expr = new_expr.order_by(*parsed_orders)  # pyright: ignore
-            else:
-                logger.warning("Expression does not support order_by(), converting to Select")
-                if not isinstance(new_expr, exp.Select):
-                    new_expr = exp.Select().from_(new_expr)
-                new_expr = new_expr.order_by(*parsed_orders)
+            # Ensure expression supports order_by() - convert to Select if needed
+            if not isinstance(new_expr, exp.Select):
+                logger.warning("Converting non-Select expression to Select for ORDER BY clause")
+                new_expr = exp.Select().from_(new_expr)
+            # We know it's a Select after the conversion above
+            new_expr = new_expr.order_by(*parsed_orders)  # type: ignore[attr-defined]
 
         return self.copy(statement=new_expr)
 
@@ -1323,31 +1361,76 @@ class SQL:
         # Create a hashable representation of config by using its string representation
         config_hash = hash(str(self._config))
 
-        return hash((
-            str(self._sql),
-            hashable_params,
-            self._dialect,
-            config_hash,
-        ))
+        return hash(
+            (
+                str(self._sql),
+                hashable_params,
+                self._dialect,
+                config_hash,
+            )
+        )
 
-    def as_many(self) -> "SQL":
+    def as_many(self, parameters: "Optional[SQLParameterType]" = None) -> "SQL":
         """Create a copy of this SQL statement marked for batch execution.
 
+        Args:
+            parameters: Optional list of parameter sets for executemany operations.
+                       Each item should be a list/tuple of parameters for one execution.
+                       Example: [["John"], ["Jane"], ["Bob"]] for INSERT statements.
+
         Returns:
-            A new SQL instance with is_many=True.
+            A new SQL instance with is_many=True and the provided parameters.
+
+        Example:
+            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many(
+            ...     [
+            ...         ["John"],
+            ...         ["Jane"],
+            ...         ["Bob"],
+            ...     ]
+            ... )
+            >>> # This creates a statement ready for executemany with 3 parameter sets
         """
-        new_sql = SQL(
-            statement=self._sql,
-            parameters=self._merged_parameters,
-            dialect=self._dialect,
-            config=self._config,
-            _builder_result_type=self._builder_result_type,
-            _existing_statement_data={
-                **self._get_existing_data(),
-                "_is_many": True,
-            },
+        # Use provided parameters or keep existing ones
+        many_parameters = parameters if parameters is not None else self._merged_parameters
+
+        # Create a config that completely disables all processing for executemany operations
+        # since validation should happen at execution time in the drivers
+        executemany_config = replace(
+            self._config,
+            enable_validation=False,  # Disable validation for executemany
+            enable_parsing=False,  # Disable parsing to avoid parameter processing
+            enable_transformations=False,  # Disable transformations
+            enable_analysis=False,  # Disable analysis
+            strict_mode=False,  # Disable strict mode to prevent exceptions
         )
-        return new_sql
+
+        # Create complete existing statement data to bypass all initialization
+        existing_data = {
+            "_config": executemany_config,
+            "_dialect": self._dialect,
+            "_original_input": self._sql,
+            "_parsed_expression": self._parsed_expression,
+            "_parameter_info": self._parameter_info,
+            "_merged_parameters": many_parameters,  # Set executemany parameters directly
+            "_validation_result": ValidationResult(
+                is_safe=True, risk_level=RiskLevel.SKIP, issues=["executemany validation skipped"]
+            ),
+            "_builder_result_type": self._builder_result_type,
+            "_analysis_result": self._analysis_result,
+            "_is_many": True,  # Mark as executemany
+            "_is_script": False,
+        }
+
+        # Create the new SQL instance with complete existing statement data to avoid any processing
+        return SQL(
+            statement=self._sql,
+            parameters=None,  # Don't pass parameters to avoid processing
+            dialect=self._dialect,
+            config=executemany_config,
+            _builder_result_type=self._builder_result_type,
+            _existing_statement_data=existing_data,
+        )
 
     def as_script(self) -> "SQL":
         """Create a copy of this SQL statement marked for script execution.
@@ -1355,7 +1438,7 @@ class SQL:
         Returns:
             A new SQL instance with is_script=True.
         """
-        new_sql = SQL(
+        return SQL(
             statement=self._sql,
             parameters=self._merged_parameters,
             dialect=self._dialect,
@@ -1366,7 +1449,6 @@ class SQL:
                 "_is_script": True,
             },
         )
-        return new_sql
 
     def _get_existing_data(self) -> dict[str, Any]:
         """Get existing statement data for copying."""

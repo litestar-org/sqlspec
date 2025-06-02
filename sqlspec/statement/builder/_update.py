@@ -14,18 +14,19 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._base import QueryBuilder, SafeQuery, WhereClauseMixin
-from sqlspec.statement.result import ExecuteResult
+from sqlspec.statement.result import SQLResult
+from sqlspec.typing import RowT
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder._select import SelectBuilder
 
-__all__ = ("UpdateBuilder", "update")
+__all__ = ("UpdateBuilder",)
 
 logger = logging.getLogger("sqlspec")
 
 
 @dataclass(unsafe_hash=True)
-class UpdateBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
+class UpdateBuilder(QueryBuilder[SQLResult[RowT]], WhereClauseMixin):
     """Builder for UPDATE statements.
 
     This builder provides a fluent interface for constructing SQL UPDATE statements
@@ -64,9 +65,9 @@ class UpdateBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
     _table: "Optional[str]" = field(default=None, init=False)
 
     @property
-    def _expected_result_type(self) -> "type[ExecuteResult]":
+    def _expected_result_type(self) -> "type[SQLResult[RowT]]":
         """Return the expected result type for this builder."""
-        return ExecuteResult
+        return SQLResult[RowT]
 
     def _create_base_expression(self) -> exp.Update:
         """Create a base UPDATE expression.
@@ -76,7 +77,7 @@ class UpdateBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
         """
         return exp.Update(this=None, expressions=[], joins=[])
 
-    def table(self, table_name: str, alias: "Optional[str]" = None) -> Self:
+    def table(self, table_name: str, alias: "Optional[str]" = None) -> "Self":
         """Set the table to update.
 
         Args:
@@ -94,7 +95,7 @@ class UpdateBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
         self._table = table_name
         return self
 
-    def set(self, column: "Union[str, exp.Expression]", value: Any) -> Self:
+    def set(self, column: "Union[str, exp.Expression]", value: Any) -> "Self":
         """Set a column to a value with parameter binding.
 
         Args:
@@ -125,7 +126,7 @@ class UpdateBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
 
         return self
 
-    def set_multiple(self, **values: Any) -> Self:
+    def set_multiple(self, **values: Any) -> "Self":
         """Set multiple columns with values.
 
         This is a convenience method for setting multiple columns at once.
@@ -140,7 +141,7 @@ class UpdateBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
             self.set(column, value)
         return self
 
-    def where(self, condition: "Union[str, exp.Expression]") -> Self:
+    def where(self, condition: "Union[str, exp.Expression]") -> "Self":
         """Add WHERE clause to filter rows to update.
 
         Args:
@@ -160,7 +161,7 @@ class UpdateBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
         self._expression = self._expression.where(condition_expr)
         return self
 
-    def from_(self, table: "Union[str, exp.Expression, SelectBuilder]", alias: "Optional[str]" = None) -> Self:
+    def from_(self, table: "Union[str, exp.Expression, SelectBuilder[RowT]]", alias: "Optional[str]" = None) -> "Self":
         """Add a FROM clause to the UPDATE statement (e.g., for PostgreSQL).
 
         Args:
@@ -191,7 +192,7 @@ class UpdateBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
         elif isinstance(table, exp.Expression):
             table_expr = exp.alias_(table, alias) if alias else table
         else:
-            msg = f"Unsupported table type for FROM clause: {type(table)}"  # type: ignore[unreachable]
+            msg = f"Unsupported table type for FROM clause: {type(table)}"
             raise SQLBuilderError(msg)
 
         if self._expression.args.get("from") is None:
@@ -210,11 +211,11 @@ class UpdateBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
 
     def join(
         self,
-        table: "Union[str, exp.Expression, SelectBuilder]",
+        table: "Union[str, exp.Expression, SelectBuilder[RowT]]",
         on: "Union[str, exp.Expression]",
         alias: "Optional[str]" = None,
         join_type: str = "INNER",
-    ) -> Self:
+    ) -> "Self":
         """Add JOIN clause to the UPDATE statement.
 
         Args:
@@ -271,7 +272,7 @@ class UpdateBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
 
         return self
 
-    def build(self) -> SafeQuery:
+    def build(self) -> "SafeQuery":
         """Build the UPDATE query with validation.
 
         Returns:
@@ -293,32 +294,3 @@ class UpdateBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
             raise SQLBuilderError(msg)
 
         return super().build()
-
-
-def update(table_name: str, alias: "Optional[str]" = None) -> UpdateBuilder:
-    """Create an UpdateBuilder with the table already set.
-
-    This is a convenience function for creating UPDATE statements.
-
-    Args:
-        table_name: The name of the table to update.
-        alias: Optional alias for the table.
-
-    Returns:
-        UpdateBuilder: A new UpdateBuilder instance with the table set.
-
-    Example:
-        ```python
-        # Using the convenience function
-        query = update("users").set("name", "John").where("id = 1")
-
-        # Equivalent to:
-        query = (
-            UpdateBuilder()
-            .table("users")
-            .set("name", "John")
-            .where("id = 1")
-        )
-        ```
-    """
-    return UpdateBuilder().table(table_name, alias)

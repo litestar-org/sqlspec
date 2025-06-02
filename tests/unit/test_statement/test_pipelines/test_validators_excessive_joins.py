@@ -1,11 +1,25 @@
 """Tests for the ExcessiveJoins validator."""
 
+from typing import Optional
+
 from sqlglot import parse_one
 from sqlglot.dialects import Dialect
 
 from sqlspec.exceptions import RiskLevel
+from sqlspec.statement.pipelines.context import SQLProcessingContext
 from sqlspec.statement.pipelines.validators import ExcessiveJoins
 from sqlspec.statement.sql import SQLConfig
+
+
+def _create_test_context(sql: str, config: Optional[SQLConfig] = None) -> SQLProcessingContext:
+    """Helper function to create a SQLProcessingContext for testing."""
+    if config is None:
+        config = SQLConfig()
+
+    expression = parse_one(sql)
+    return SQLProcessingContext(
+        initial_sql_string=sql, dialect=Dialect.get_or_raise(""), config=config, current_expression=expression
+    )
 
 
 class TestExcessiveJoins:
@@ -21,11 +35,11 @@ class TestExcessiveJoins:
         """
 
         validator = ExcessiveJoins(max_joins=5, warn_threshold=3)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
+        assert result is not None
         assert result.is_safe is True
         assert result.risk_level == RiskLevel.SAFE
         assert len(result.issues) == 0
@@ -44,11 +58,11 @@ class TestExcessiveJoins:
         """
 
         validator = ExcessiveJoins(max_joins=3, warn_threshold=2)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
+        assert result is not None
         assert result.is_safe is False
         assert result.risk_level == RiskLevel.MEDIUM
         assert len(result.issues) > 0
@@ -66,11 +80,11 @@ class TestExcessiveJoins:
         """
 
         validator = ExcessiveJoins(max_joins=5, warn_threshold=2)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
+        assert result is not None
         assert result.is_safe is True
         assert result.risk_level == RiskLevel.LOW
         assert len(result.issues) == 0
@@ -88,11 +102,11 @@ class TestExcessiveJoins:
         """
 
         validator = ExcessiveJoins(max_joins=10, warn_threshold=8)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
+        assert result is not None
         # Should warn about cartesian products
         assert any("CROSS JOINs detected" in warning for warning in result.warnings)
 
@@ -105,10 +119,9 @@ class TestExcessiveJoins:
         """
 
         validator = ExcessiveJoins(max_joins=10, warn_threshold=8)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
         # May detect as cartesian product risk
         assert result is not None
@@ -130,10 +143,9 @@ class TestExcessiveJoins:
         """
 
         validator = ExcessiveJoins(max_joins=10, warn_threshold=5)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
         # Should detect nested complexity
         assert result is not None
@@ -150,10 +162,9 @@ class TestExcessiveJoins:
         """
 
         validator = ExcessiveJoins(max_joins=10, warn_threshold=8)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
         # Should handle different join types
         assert result is not None
@@ -169,10 +180,9 @@ class TestExcessiveJoins:
         """
 
         validator = ExcessiveJoins(max_joins=10, warn_threshold=8)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
         # Should detect multiple self-joins
         assert result is not None
@@ -188,18 +198,19 @@ class TestExcessiveJoins:
 
         # Strict validator
         strict_validator = ExcessiveJoins(max_joins=1, warn_threshold=1)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = strict_validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = strict_validator.process(context)
 
+        assert result is not None
         assert result.is_safe is False
         assert len(result.issues) > 0
 
         # Lenient validator
         lenient_validator = ExcessiveJoins(max_joins=10, warn_threshold=8)
-        result = lenient_validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = lenient_validator.process(context)
 
+        assert result is not None
         assert result.is_safe is True
         assert len(result.issues) == 0
 
@@ -208,11 +219,11 @@ class TestExcessiveJoins:
         sql = "SELECT * FROM table1"
 
         validator = ExcessiveJoins(max_joins=5, warn_threshold=3)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
+        assert result is not None
         assert result.is_safe is True
         assert result.risk_level == RiskLevel.SAFE
         assert len(result.issues) == 0
@@ -228,11 +239,11 @@ class TestExcessiveJoins:
         """
 
         validator = ExcessiveJoins(max_joins=5, warn_threshold=3)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
         # Should handle complex conditions without issues
+        assert result is not None
         assert result.is_safe is True
         assert len(result.issues) == 0

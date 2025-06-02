@@ -14,7 +14,8 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._base import QueryBuilder
-from sqlspec.statement.result import ExecuteResult
+from sqlspec.statement.result import SQLResult
+from sqlspec.typing import RowT
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder._select import SelectBuilder
@@ -25,7 +26,7 @@ logger = logging.getLogger("sqlspec")
 
 
 @dataclass(unsafe_hash=True)
-class MergeBuilder(QueryBuilder[ExecuteResult]):
+class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInvalidTypeArguments]
     """Builder for MERGE statements.
 
     This builder provides a fluent interface for constructing SQL MERGE statements
@@ -74,13 +75,13 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
     """
 
     @property
-    def _expected_result_type(self) -> "type[ExecuteResult]":
+    def _expected_result_type(self) -> "type[SQLResult[RowT]]":
         """Return the expected result type for this builder.
 
         Returns:
-            The ExecuteResult type for MERGE statements.
+            The SQLResult type for MERGE statements.
         """
-        return ExecuteResult
+        return SQLResult[RowT]
 
     def _create_base_expression(self) -> "exp.Merge":
         """Create a base MERGE expression.
@@ -106,7 +107,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         self._expression.set("this", exp.to_table(table, alias=alias) if isinstance(table, str) else table)
         return self
 
-    def using(self, source: "Union[str, exp.Expression, SelectBuilder]", alias: "Optional[str]" = None) -> "Self":
+    def using(self, source: "Union[str, exp.Expression, SelectBuilder[RowT]]", alias: "Optional[str]" = None) -> "Self":
         """Set the source data for the MERGE operation (USING clause).
 
         Args:
@@ -140,7 +141,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
             if alias:
                 source_expr = exp.alias_(source_expr, alias)
         else:
-            msg = f"Unsupported source type for USING clause: {type(source)}"  # type: ignore[unreachable]
+            msg = f"Unsupported source type for USING clause: {type(source)}"
             raise SQLBuilderError(msg)
 
         self._expression.set("using", source_expr)
@@ -172,7 +173,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
         elif isinstance(condition, exp.Expression):
             condition_expr = condition
         else:
-            msg = f"Unsupported condition type for ON clause: {type(condition)}"  # type: ignore[unreachable]
+            msg = f"Unsupported condition type for ON clause: {type(condition)}"
             raise SQLBuilderError(msg)
 
         self._expression.set("on", condition_expr)
@@ -238,7 +239,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
             elif isinstance(condition, exp.Expression):
                 condition_expr = condition
             else:
-                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"  # type: ignore[unreachable]
+                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
                 raise SQLBuilderError(msg)
             when_args["this"] = condition_expr
 
@@ -274,7 +275,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
             elif isinstance(condition, exp.Expression):
                 condition_expr = condition
             else:
-                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"  # type: ignore[unreachable]
+                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
                 raise SQLBuilderError(msg)
             when_args["this"] = condition_expr
 
@@ -348,7 +349,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
             elif isinstance(condition, exp.Expression):
                 condition_expr = condition
             else:
-                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"  # type: ignore[unreachable]
+                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
                 raise SQLBuilderError(msg)
             when_args["this"] = condition_expr
 
@@ -400,7 +401,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
             elif isinstance(condition, exp.Expression):
                 condition_expr = condition
             else:
-                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"  # type: ignore[unreachable]
+                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
                 raise SQLBuilderError(msg)
             when_args["this"] = condition_expr
 
@@ -441,7 +442,7 @@ class MergeBuilder(QueryBuilder[ExecuteResult]):
             elif isinstance(condition, exp.Expression):
                 condition_expr = condition
             else:
-                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"  # type: ignore[unreachable]
+                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
                 raise SQLBuilderError(msg)
             when_args["this"] = condition_expr
 

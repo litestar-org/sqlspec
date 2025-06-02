@@ -1,12 +1,13 @@
 """Unit tests for AIOSQLite driver."""
 
+from typing import Any, Union
 from unittest.mock import AsyncMock
 
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConnection, AiosqliteDriver
 from sqlspec.config import InstrumentationConfig
-from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -93,11 +94,7 @@ async def test_aiosqlite_driver_execute_impl_select(
     # Execute
     result = await aiosqlite_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify connection was called and result is correct
@@ -121,11 +118,7 @@ async def test_aiosqlite_driver_execute_impl_insert(
     # Execute
     result = await aiosqlite_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify connection was called and result is cursor
@@ -143,16 +136,14 @@ async def test_aiosqlite_driver_execute_impl_script(
     mock_aiosqlite_connection.executescript.return_value = mock_cursor
 
     # Create SQL statement (DDL allowed with strict_mode=False)
-    statement = SQL("CREATE TABLE test (id INTEGER); INSERT INTO test VALUES (1);", config=aiosqlite_driver.config)
+    statement = SQL(
+        "CREATE TABLE test (id INTEGER); INSERT INTO test VALUES (1);", config=aiosqlite_driver.config
+    ).as_script()
 
     # Execute script
     result = await aiosqlite_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=True,
     )
 
     # Verify connection executescript was called
@@ -171,24 +162,22 @@ async def test_aiosqlite_driver_execute_impl_many(
     mock_aiosqlite_connection.executemany.return_value = mock_cursor
 
     # Create SQL statement with placeholder for parameters
-    statement = SQL("INSERT INTO users (name) VALUES (?)", parameters=["dummy"], config=aiosqlite_driver.config)
-    parameters = [["John"], ["Jane"], ["Bob"]]
+    parameters_list = [["John"], ["Jane"], ["Bob"]]
+    statement = SQL(
+        "INSERT INTO users (name) VALUES (?)", parameters=parameters_list, config=aiosqlite_driver.config
+    ).as_many()
 
     # Execute many
     result = await aiosqlite_driver._execute_impl(
         statement=statement,
-        parameters=parameters,
         connection=None,
-        config=None,
-        is_many=True,
-        is_script=False,
     )
 
     # Verify connection executemany was called
     mock_aiosqlite_connection.executemany.assert_called_once_with(
-        "INSERT INTO users (name) VALUES (?)", [["John"], ["Jane"], ["Bob"]]
+        "INSERT INTO users (name) VALUES (?)", parameters_list
     )
-    assert result == 3  # Should return rowcount
+    assert result == 3  # Should return rowcount for aiosqlite's cursor.rowcount on executemany
 
 
 @pytest.mark.asyncio
@@ -210,11 +199,7 @@ async def test_aiosqlite_driver_execute_impl_parameter_processing(
     # Execute
     result = await aiosqlite_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify parameters were processed correctly
@@ -231,13 +216,13 @@ async def test_aiosqlite_driver_wrap_select_result(aiosqlite_driver: AiosqliteDr
     statement = SQL("SELECT id, name FROM users")
 
     # Wrap result
-    result = await aiosqlite_driver._wrap_select_result(
+    result: Union[SQLResult[Any], SQLResult[dict[str, Any]]] = await aiosqlite_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=([(1, "John"), (2, "Jane")], [("id", None), ("name", None)]),
+        result=([(1, "John"), (2, "Jane")], [("id", None), ("name", None)]),
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.column_names == ["id", "name"]
     assert result.data == [(1, "John"), (2, "Jane")]
@@ -250,13 +235,13 @@ async def test_aiosqlite_driver_wrap_select_result_empty(aiosqlite_driver: Aiosq
     statement = SQL("SELECT * FROM empty_table")
 
     # Wrap result
-    result = await aiosqlite_driver._wrap_select_result(
+    result: Union[SQLResult[Any], SQLResult[dict[str, Any]]] = await aiosqlite_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=([], []),
+        result=([], []),
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.data == []
     assert result.column_names == []
@@ -278,12 +263,12 @@ async def test_aiosqlite_driver_wrap_select_result_with_schema_type(aiosqlite_dr
     # Wrap result with schema type
     result = await aiosqlite_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=([(1, "John"), (2, "Jane")], [("id", None), ("name", None)]),
+        result=([(1, "John"), (2, "Jane")], [("id", None), ("name", None)]),
         schema_type=User,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.column_names == ["id", "name"]
 
@@ -301,11 +286,11 @@ async def test_aiosqlite_driver_wrap_execute_result(aiosqlite_driver: AiosqliteD
     # Wrap result
     result = await aiosqlite_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 3
     assert result.operation_type == "UPDATE"
@@ -320,11 +305,11 @@ async def test_aiosqlite_driver_wrap_execute_result_script(aiosqlite_driver: Aio
     # Wrap result for script
     result = await aiosqlite_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result="SCRIPT EXECUTED",
+        result="SCRIPT EXECUTED",
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 0
     assert result.operation_type == "CREATE"
@@ -339,11 +324,11 @@ async def test_aiosqlite_driver_wrap_execute_result_integer(aiosqlite_driver: Ai
     # Wrap result with integer
     result = await aiosqlite_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result=5,
+        result=5,
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 5
     assert result.operation_type == "INSERT"
@@ -376,15 +361,12 @@ async def test_aiosqlite_driver_error_handling(
     with pytest.raises(Exception, match="Database error"):
         await aiosqlite_driver._execute_impl(
             statement=statement,
-            parameters=None,
             connection=None,
-            config=None,
-            is_many=False,
-            is_script=False,
         )
 
 
-def test_aiosqlite_driver_instrumentation(aiosqlite_driver: AiosqliteDriver) -> None:
+@pytest.mark.asyncio
+async def test_aiosqlite_driver_instrumentation(aiosqlite_driver: AiosqliteDriver) -> None:
     """Test AIOSQLite driver instrumentation integration."""
     # Test instrumentation config is accessible
     assert aiosqlite_driver.instrumentation_config is not None
@@ -394,6 +376,23 @@ def test_aiosqlite_driver_instrumentation(aiosqlite_driver: AiosqliteDriver) -> 
     assert hasattr(aiosqlite_driver.instrumentation_config, "log_queries")
     assert hasattr(aiosqlite_driver.instrumentation_config, "log_parameters")
     assert hasattr(aiosqlite_driver.instrumentation_config, "log_results_count")
+
+    # Test logging configuration
+    aiosqlite_driver.instrumentation_config.log_queries = True
+    aiosqlite_driver.instrumentation_config.log_parameters = True
+    aiosqlite_driver.instrumentation_config.log_results_count = True
+
+    # Create SQL statement with parameters
+    statement = SQL("SELECT * FROM users WHERE id = ?", parameters=[1], config=aiosqlite_driver.config)
+
+    # Execute with logging enabled
+    await aiosqlite_driver._execute_impl(
+        statement=statement,
+        connection=None,
+    )
+
+    # Verify execution worked
+    mock_aiosqlite_connection.execute.assert_called_once_with("SELECT * FROM users WHERE id = ?", [1])
 
 
 @pytest.mark.asyncio
@@ -417,7 +416,7 @@ async def test_aiosqlite_driver_operation_type_detection(aiosqlite_driver: Aiosq
 
         result = await aiosqlite_driver._wrap_execute_result(
             statement=statement,
-            raw_driver_result=mock_cursor,
+            result=mock_cursor,
         )
 
         assert result.operation_type == expected_op_type
@@ -554,11 +553,7 @@ async def test_aiosqlite_driver_logging_configuration(
     # Execute with logging enabled
     await aiosqlite_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify execution worked

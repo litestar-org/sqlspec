@@ -289,12 +289,12 @@ class ParameterValidator:
         """
         expected_input_type = self.determine_parameter_input_type(parameters_info)
 
+        # Allow creating SQL statements with placeholders but no parameters
+        # This enables patterns like SQL("SELECT * FROM users WHERE id = ?").as_many([...])
+        # Validation will happen later when parameters are actually provided
         if provided_params is None and parameters_info:
-            msg = (
-                f"SQL requires parameters (expected type: "
-                f"{expected_input_type.__name__ if expected_input_type else 'unknown'}), but none were provided."
-            )
-            raise MissingParameterError(msg, original_sql_for_error)
+            # Don't raise an error, just return - validation will happen later
+            return
 
         if (
             len(parameters_info) == 1

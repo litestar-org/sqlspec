@@ -12,11 +12,8 @@ from typing import (
     overload,
 )
 
-from psycopg.rows import TupleRow  # Assuming this is a common row type, adjust if needed
 from sqlglot import exp
-from typing_extensions import TypeVar
 
-from sqlspec._typing import trace  # pyright: ignore
 from sqlspec.config import (
     AsyncDatabaseConfig,
     InstrumentationConfig,
@@ -30,18 +27,20 @@ from sqlspec.statement.builder import (
     UpdateBuilder,
 )
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
-from sqlspec.typing import (
+from sqlspec.typing import (  # pyright: ignore
     ConnectionT,
     Counter,  # pyright: ignore
     DictRow,
     Gauge,  # pyright: ignore
     Histogram,  # pyright: ignore
     ModelDTOT,  # pyright: ignore
+    RowT,
     SQLParameterType,
     Status,  # pyright: ignore
     StatusCode,  # pyright: ignore
     T,
     Tracer,  # pyright: ignore
+    trace,
 )
 from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
 
@@ -50,14 +49,10 @@ if TYPE_CHECKING:
 
     from sqlspec.statement.filters import StatementFilter
     from sqlspec.statement.parameters import ParameterStyle
-    from sqlspec.statement.result import (
-        ExecuteResult,
-        SelectResult,
-        StatementResult,
-    )
+    from sqlspec.statement.result import SQLResult
 
 
-StatementResultType = Union["StatementResult[dict[str, Any]]", "StatementResult[dict[str, T]]"]
+StatementResultType = Union["SQLResult[dict[str, Any]]", "SQLResult[dict[str, T]]"]
 
 __all__ = (
     "AsyncDatabaseConfig",
@@ -71,10 +66,9 @@ __all__ = (
 
 
 logger = logging.getLogger("sqlspec")
-DefaultRowT = TypeVar("DefaultRowT", bound=Union[DictRow, TupleRow], default=DictRow)  # pyright: ignore
 
 
-class CommonDriverAttributes(ABC, Generic[ConnectionT, DefaultRowT]):
+class CommonDriverAttributes(ABC, Generic[ConnectionT, RowT]):
     """Enhanced common attributes and methods for driver adapters with instrumentation."""
 
     dialect: str
@@ -87,7 +81,7 @@ class CommonDriverAttributes(ABC, Generic[ConnectionT, DefaultRowT]):
     """Configuration for SQL statements."""
     instrumentation_config: "InstrumentationConfig"
     """Configuration for instrumentation."""
-    default_row_type: "type[DefaultRowT]"
+    default_row_type: "type[RowT]"
     """The default row type to use for results (DictRow, TupleRow, etc.)."""
 
     __supports_arrow__: "ClassVar[bool]" = False
@@ -105,7 +99,7 @@ class CommonDriverAttributes(ABC, Generic[ConnectionT, DefaultRowT]):
         connection: "ConnectionT",
         config: "Optional[SQLConfig]" = None,
         instrumentation_config: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "Optional[type[DefaultRowT]]" = None,
+        default_row_type: "Optional[type[RowT]]" = None,
     ) -> None:
         """Initialize with connection, config, instrumentation_config, and default_row_type.
 
@@ -133,7 +127,7 @@ class CommonDriverAttributes(ABC, Generic[ConnectionT, DefaultRowT]):
         if trace is None:
             logger.warning("OpenTelemetry not installed, skipping OpenTelemetry setup.")  # type: ignore[unreachable]
             return
-        self._tracer = trace.get_tracer(  # type: ignore[assignment]
+        self._tracer = trace.get_tracer(
             self.instrumentation_config.service_name,
             # __version__ # Consider adding version here if available
         )
@@ -145,17 +139,17 @@ class CommonDriverAttributes(ABC, Generic[ConnectionT, DefaultRowT]):
             custom_tag_keys = list(self.instrumentation_config.custom_tags.keys())
 
             # Database operation metrics
-            self._query_counter = Counter(  # type: ignore[misc]
+            self._query_counter = Counter(
                 f"{service_name}_db_operations_total",
                 "Total number of database operations executed",
                 ["operation", "status", "db_system", *custom_tag_keys],
             )
-            self._error_counter = Counter(  # type: ignore[misc]
+            self._error_counter = Counter(
                 f"{service_name}_db_errors_total",
                 "Total number of database errors",
                 ["operation", "error_type", "db_system", *custom_tag_keys],
             )
-            self._latency_histogram = Histogram(  # type: ignore[misc]
+            self._latency_histogram = Histogram(
                 f"{service_name}_db_operation_duration_seconds",
                 "Database operation duration in seconds",
                 ["operation", "db_system", *custom_tag_keys],
@@ -164,14 +158,14 @@ class CommonDriverAttributes(ABC, Generic[ConnectionT, DefaultRowT]):
             )
 
             # Connection pool metrics
-            self._pool_latency_histogram = Histogram(  # type: ignore[misc]
+            self._pool_latency_histogram = Histogram(
                 f"{service_name}_db_pool_operation_duration_seconds",
                 "Database connection pool operation duration in seconds",
                 ["operation", "db_system", *custom_tag_keys],
                 buckets=self.instrumentation_config.prometheus_latency_buckets
                 or [0.001, 0.005, 0.01, 0.05, 0.1, 5, 10],  # Buckets for pool operations
             )
-            self._pool_connections_gauge = Gauge(  # type: ignore[misc]
+            self._pool_connections_gauge = Gauge(
                 f"{service_name}_db_pool_connections",
                 "Number of database connections in the pool by status",
                 ["db_system", "status", *custom_tag_keys],
@@ -439,13 +433,13 @@ class AsyncInstrumentationMixin(ABC):
                 span.end()
 
 
-class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT], SyncInstrumentationMixin, ABC):
+class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncInstrumentationMixin, ABC):
     def __init__(
         self,
         connection: "ConnectionT",
         config: "Optional[SQLConfig]" = None,
         instrumentation_config: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "Optional[type[DefaultRowT]]" = None,
+        default_row_type: "Optional[type[RowT]]" = None,
     ) -> None:
         """Initialize sync driver adapter.
 
@@ -466,18 +460,18 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
 
     def _build_statement(
         self,
-        statement_input: "Union[SQL, Statement, QueryBuilder[Any]]",
+        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
         parameters: "Optional[SQLParameterType]",
         config: "Optional[SQLConfig]",
         *filters: "StatementFilter",
     ) -> "SQL":
         sql_obj: SQL
-        if isinstance(statement_input, SQL):
-            sql_obj = statement_input
-        elif isinstance(statement_input, QueryBuilder):
-            sql_obj = statement_input.to_statement(config=config or self.config)
+        if isinstance(statement, SQL):
+            sql_obj = statement
+        elif isinstance(statement, QueryBuilder):
+            sql_obj = statement.to_statement(config=config or self.config)
         else:  # str or exp.Expression
-            sql_obj = SQL(statement_input, parameters, dialect=self.dialect, config=config or self.config)
+            sql_obj = SQL(statement, parameters, dialect=self.dialect, config=config or self.config)
 
         for sql_filter in filters:
             if sql_filter is not None and hasattr(sql_filter, "append_to_statement"):
@@ -502,19 +496,19 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
     def _wrap_select_result(
         self,
         statement: "SQL",
-        raw_driver_result: Any,
+        result: Any,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]]]":
+    ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
         raise NotImplementedError
 
     @abstractmethod
     def _wrap_execute_result(
         self,
         statement: "SQL",
-        raw_driver_result: Any,
+        result: Any,
         **kwargs: Any,
-    ) -> "ExecuteResult":
+    ) -> "SQLResult[RowT]":
         raise NotImplementedError
 
     # Type-safe overloads based on the refactor plan pattern
@@ -528,7 +522,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SelectResult[ModelDTOT]": ...
+    ) -> "SQLResult[ModelDTOT]": ...
 
     @overload
     def execute(
@@ -540,7 +534,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SelectResult[dict[str, Any]]": ...
+    ) -> "SQLResult[RowT]": ...
 
     @overload
     def execute(
@@ -551,7 +545,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "ExecuteResult": ...
+    ) -> "SQLResult[RowT]": ...
 
     @overload
     def execute(
@@ -563,7 +557,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SelectResult[ModelDTOT]": ...
+    ) -> "SQLResult[ModelDTOT]": ...
 
     @overload
     def execute(
@@ -575,7 +569,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SelectResult[dict[str, Any]]": ...
+    ) -> "SQLResult[RowT]": ...
 
     @overload
     def execute(
@@ -587,7 +581,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SelectResult[ModelDTOT]": ...
+    ) -> "SQLResult[ModelDTOT]": ...
 
     @overload
     def execute(
@@ -599,7 +593,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[SelectResult[dict[str, Any]], ExecuteResult]": ...
+    ) -> "SQLResult[RowT]": ...
 
     def execute(
         self,
@@ -608,40 +602,40 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         *filters: "StatementFilter",
         schema_type: "Optional[type[ModelDTOT]]" = None,
         connection: "Optional[ConnectionT]" = None,
-        config_override: "Optional[SQLConfig]" = None,  # Renamed from 'config' to avoid clash
+        config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]], ExecuteResult]":
+    ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
         with instrument_operation(self, "execute", "database"):
-            sql_statement = self._build_statement(statement, parameters, config_override, *filters)
-            raw_driver_result = self._execute_impl(
+            sql_statement = self._build_statement(statement, parameters, config, *filters)
+            result = self._execute_impl(
                 statement=sql_statement,
                 connection=self._connection(connection),
                 **kwargs,
             )
             if CommonDriverAttributes.returns_rows(sql_statement.expression):
-                return self._wrap_select_result(sql_statement, raw_driver_result, schema_type=schema_type, **kwargs)
-            return self._wrap_execute_result(sql_statement, raw_driver_result, **kwargs)
+                return self._wrap_select_result(sql_statement, result, schema_type=schema_type, **kwargs)
+            return self._wrap_execute_result(sql_statement, result, **kwargs)
 
     def execute_many(
         self,
-        statement: "Union[SQL, Statement, QueryBuilder[ExecuteResult]]",  # Typically for DML builders
+        statement: "Union[SQL, Statement, QueryBuilder[Any]]",  # QueryBuilder for DMLs will likely not return rows.
         parameters: "Optional[Sequence[SQLParameterType]]" = None,
         *filters: "StatementFilter",
         # schema_type is usually not relevant for execute_many's primary result
         connection: "Optional[ConnectionT]" = None,
-        config_override: "Optional[SQLConfig]" = None,
+        config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "ExecuteResult":
+    ) -> "SQLResult[RowT]":
         with instrument_operation(self, "execute_many", "database"):
-            sql_statement = self._build_statement(statement, parameters, config_override, *filters)
+            sql_statement = self._build_statement(statement, parameters, config, *filters)
             # Mark the statement for batch execution
             sql_statement = sql_statement.as_many()
-            raw_driver_result = self._execute_impl(
+            result = self._execute_impl(
                 statement=sql_statement,
                 connection=self._connection(connection),
                 **kwargs,
             )
-            return self._wrap_execute_result(sql_statement, raw_driver_result, **kwargs)
+            return self._wrap_execute_result(sql_statement, result, **kwargs)
 
     def execute_script(
         self,
@@ -649,14 +643,14 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
         parameters: "Optional[SQLParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
-        config_override: "Optional[SQLConfig]" = None,
+        config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> str:
+    ) -> "SQLResult[RowT]":
         with instrument_operation(self, "execute_script", "database"):
             # Create a config that allows DDL for script execution
             from sqlspec.statement.sql import SQLConfig
 
-            script_config = config_override or self.config
+            script_config = config or self.config
             if script_config.enable_validation:
                 script_config = SQLConfig(
                     enable_parsing=script_config.enable_parsing,
@@ -686,16 +680,30 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT]
                 connection=self._connection(connection),
                 **kwargs,
             )
-            return cast("str", script_output)
+            # For script execution, we expect the driver to return a SQLResult
+            # If it returns a string (legacy), wrap it in a SQLResult
+            if isinstance(script_output, str):
+                from sqlspec.statement.result import SQLResult
+
+                result = SQLResult[RowT](
+                    statement=sql_statement,
+                    data=[],
+                    operation_type="SCRIPT",
+                )
+                # For now, assume success if we got a string back
+                result.total_statements = 1
+                result.successful_statements = 1
+                return result
+            return cast("SQLResult[RowT]", script_output)
 
 
-class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT], AsyncInstrumentationMixin, ABC):
+class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], AsyncInstrumentationMixin, ABC):
     def __init__(
         self,
         connection: "ConnectionT",
         config: "Optional[SQLConfig]" = None,
         instrumentation_config: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "Optional[type[DefaultRowT]]" = None,
+        default_row_type: "Optional[type[RowT]]" = None,
     ) -> None:
         """Initialize async driver adapter.
 
@@ -715,18 +723,18 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
 
     def _build_statement(
         self,
-        statement_input: "Union[SQL, Statement, QueryBuilder[Any]]",
+        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
         parameters: "Optional[SQLParameterType]",
         config: "Optional[SQLConfig]",
         *filters: "StatementFilter",
     ) -> "SQL":
         sql_obj: SQL
-        if isinstance(statement_input, SQL):
-            sql_obj = statement_input
-        elif isinstance(statement_input, QueryBuilder):
-            sql_obj = statement_input.to_statement(config=config or self.config)
+        if isinstance(statement, SQL):
+            sql_obj = statement
+        elif isinstance(statement, QueryBuilder):
+            sql_obj = statement.to_statement(config=config or self.config)
         else:  # str or exp.Expression
-            sql_obj = SQL(statement_input, parameters, dialect=self.dialect, config=config or self.config)
+            sql_obj = SQL(statement, parameters, dialect=self.dialect, config=config or self.config)
 
         for sql_filter in filters:
             if sql_filter is not None and hasattr(sql_filter, "append_to_statement"):
@@ -750,19 +758,19 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
     async def _wrap_select_result(
         self,
         statement: "SQL",
-        raw_driver_result: Any,
+        result: Any,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> "Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]]]":
+    ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
         raise NotImplementedError
 
     @abstractmethod
     async def _wrap_execute_result(
         self,
         statement: "SQL",
-        raw_driver_result: Any,
+        result: Any,
         **kwargs: Any,
-    ) -> "ExecuteResult":
+    ) -> "SQLResult[RowT]":
         raise NotImplementedError
 
     # Type-safe overloads based on the refactor plan pattern
@@ -776,7 +784,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SelectResult[ModelDTOT]": ...
+    ) -> "SQLResult[ModelDTOT]": ...
 
     @overload
     async def execute(
@@ -788,7 +796,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SelectResult[dict[str, Any]]": ...
+    ) -> "SQLResult[RowT]": ...
 
     @overload
     async def execute(
@@ -799,7 +807,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "ExecuteResult": ...
+    ) -> "SQLResult[RowT]": ...
 
     @overload
     async def execute(
@@ -811,7 +819,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SelectResult[ModelDTOT]": ...
+    ) -> "SQLResult[ModelDTOT]": ...
 
     @overload
     async def execute(
@@ -823,7 +831,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SelectResult[dict[str, Any]]": ...
+    ) -> "SQLResult[RowT]": ...
 
     @overload
     async def execute(
@@ -835,7 +843,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SelectResult[ModelDTOT]": ...
+    ) -> "SQLResult[ModelDTOT]": ...
 
     @overload
     async def execute(
@@ -847,7 +855,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[SelectResult[dict[str, Any]], ExecuteResult]": ...
+    ) -> "SQLResult[RowT]": ...
 
     async def execute(
         self,
@@ -856,41 +864,39 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         *filters: "StatementFilter",
         schema_type: "Optional[type[ModelDTOT]]" = None,
         connection: "Optional[ConnectionT]" = None,
-        config_override: "Optional[SQLConfig]" = None,
+        config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]], ExecuteResult]":
+    ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
         async with instrument_operation_async(self, "execute", "database"):
-            sql_statement = self._build_statement(statement, parameters, config_override, *filters)
-            raw_driver_result = await self._execute_impl(
+            sql_statement = self._build_statement(statement, parameters, config, *filters)
+            result = await self._execute_impl(
                 statement=sql_statement,
                 connection=self._connection(connection),
                 **kwargs,
             )
             if CommonDriverAttributes.returns_rows(sql_statement.expression):
-                return await self._wrap_select_result(
-                    sql_statement, raw_driver_result, schema_type=schema_type, **kwargs
-                )
-            return await self._wrap_execute_result(sql_statement, raw_driver_result, **kwargs)
+                return await self._wrap_select_result(sql_statement, result, schema_type=schema_type, **kwargs)
+            return await self._wrap_execute_result(sql_statement, result, **kwargs)
 
     async def execute_many(
         self,
-        statement: "Union[SQL, Statement, QueryBuilder[ExecuteResult]]",
+        statement: "Union[SQL, Statement, QueryBuilder[Any]]",  # QueryBuilder for DMLs will likely not return rows.
         parameters: "Optional[Sequence[SQLParameterType]]" = None,
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
-        config_override: "Optional[SQLConfig]" = None,
+        config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "ExecuteResult":
+    ) -> "SQLResult[RowT]":
         async with instrument_operation_async(self, "execute_many", "database"):
-            sql_statement = self._build_statement(statement, parameters, config_override, *filters)
+            sql_statement = self._build_statement(statement, parameters, config, *filters)
             # Mark the statement for batch execution
             sql_statement = sql_statement.as_many()
-            raw_driver_result = await self._execute_impl(
+            result = await self._execute_impl(
                 statement=sql_statement,
                 connection=self._connection(connection),
                 **kwargs,
             )
-            return await self._wrap_execute_result(sql_statement, raw_driver_result, **kwargs)
+            return await self._wrap_execute_result(sql_statement, result, **kwargs)
 
     async def execute_script(
         self,
@@ -898,14 +904,14 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
         parameters: "Optional[SQLParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
-        config_override: "Optional[SQLConfig]" = None,
+        config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> str:
+    ) -> "SQLResult[RowT]":
         async with instrument_operation_async(self, "execute_script", "database"):
             # Create a config that allows DDL for script execution
             from sqlspec.statement.sql import SQLConfig
 
-            script_config = config_override or self.config
+            script_config = config or self.config
             if script_config.enable_validation:
                 script_config = SQLConfig(
                     enable_parsing=script_config.enable_parsing,
@@ -935,9 +941,23 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, DefaultRowT
                 connection=self._connection(connection),
                 **kwargs,
             )
-            return cast("str", script_output)
+            # For script execution, we expect the driver to return a SQLResult
+            # If it returns a string (legacy), wrap it in a SQLResult
+            if isinstance(script_output, str):
+                from sqlspec.statement.result import SQLResult
+
+                result = SQLResult[RowT](
+                    statement=sql_statement,
+                    data=[],
+                    operation_type="SCRIPT",
+                )
+                # For now, assume success if we got a string back
+                result.total_statements = 1
+                result.successful_statements = 1
+                return result
+            return cast("SQLResult[RowT]", script_output)
 
 
 DriverAdapterProtocol = Union[
-    SyncDriverAdapterProtocol[ConnectionT, DefaultRowT], AsyncDriverAdapterProtocol[ConnectionT, DefaultRowT]
+    SyncDriverAdapterProtocol[ConnectionT, RowT], AsyncDriverAdapterProtocol[ConnectionT, RowT]
 ]

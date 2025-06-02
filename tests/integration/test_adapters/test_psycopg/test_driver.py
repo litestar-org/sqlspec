@@ -10,7 +10,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
 from sqlspec.adapters.psycopg.config import PsycopgPoolConfig
-from sqlspec.statement.result import ExecuteResult, SelectResult
+from sqlspec.statement.result import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -48,12 +48,12 @@ def test_psycopg_basic_crud(psycopg_session: PsycopgSyncDriver) -> None:
     """Test basic CRUD operations."""
     # INSERT
     insert_result = psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("test_name", 42))
-    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
-    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
+    assert isinstance(insert_result, SQLResult)
+    assert insert_result.rows_affected == 1
 
     # SELECT
     select_result = psycopg_session.execute("SELECT name, value FROM test_table WHERE name = %s", ("test_name",))
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
     assert select_result.data[0]["name"] == "test_name"
@@ -61,23 +61,23 @@ def test_psycopg_basic_crud(psycopg_session: PsycopgSyncDriver) -> None:
 
     # UPDATE
     update_result = psycopg_session.execute("UPDATE test_table SET value = %s WHERE name = %s", (100, "test_name"))
-    assert isinstance(update_result, ExecuteResult)
+    assert isinstance(update_result, SQLResult)
     assert update_result.rows_affected == 1
 
     # Verify UPDATE
     verify_result = psycopg_session.execute("SELECT value FROM test_table WHERE name = %s", ("test_name",))
-    assert isinstance(verify_result, SelectResult)
+    assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
     delete_result = psycopg_session.execute("DELETE FROM test_table WHERE name = %s", ("test_name",))
-    assert isinstance(delete_result, ExecuteResult)
+    assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 
     # Verify DELETE
     empty_result = psycopg_session.execute("SELECT COUNT(*) as count FROM test_table")
-    assert isinstance(empty_result, SelectResult)
+    assert isinstance(empty_result, SQLResult)
     assert empty_result.data is not None
     assert empty_result.data[0]["count"] == 0
 
@@ -102,7 +102,7 @@ def test_psycopg_parameter_styles(psycopg_session: PsycopgSyncDriver, params: An
         sql = "SELECT name FROM test_table WHERE name = %(name)s"
 
     result = psycopg_session.execute(sql, params)
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
     assert result.data[0]["name"] == "test_value"
@@ -114,18 +114,18 @@ def test_psycopg_execute_many(psycopg_session: PsycopgSyncDriver) -> None:
     params_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
     result = psycopg_session.execute_many("INSERT INTO test_table (name, value) VALUES (%s, %s)", params_list)
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.rows_affected == len(params_list)
 
     # Verify all records were inserted
     select_result = psycopg_session.execute("SELECT COUNT(*) as count FROM test_table")
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert select_result.data[0]["count"] == len(params_list)
 
     # Verify data integrity
     ordered_result = psycopg_session.execute("SELECT name, value FROM test_table ORDER BY name")
-    assert isinstance(ordered_result, SelectResult)
+    assert isinstance(ordered_result, SQLResult)
     assert ordered_result.data is not None
     assert len(ordered_result.data) == 3
     assert ordered_result.data[0]["name"] == "name1"
@@ -149,7 +149,7 @@ def test_psycopg_execute_script(psycopg_session: PsycopgSyncDriver) -> None:
     select_result = psycopg_session.execute(
         "SELECT name, value FROM test_table WHERE name LIKE 'script_test%' ORDER BY name"
     )
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 2
     assert select_result.data[0]["name"] == "script_test1"
@@ -168,7 +168,7 @@ def test_psycopg_result_methods(psycopg_session: PsycopgSyncDriver) -> None:
 
     # Test SelectResult methods
     result = psycopg_session.execute("SELECT * FROM test_table ORDER BY name")
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
 
     # Test get_first()
     first_row = result.get_first()
@@ -183,7 +183,7 @@ def test_psycopg_result_methods(psycopg_session: PsycopgSyncDriver) -> None:
 
     # Test empty result
     empty_result = psycopg_session.execute("SELECT * FROM test_table WHERE name = %s", ("nonexistent",))
-    assert isinstance(empty_result, SelectResult)
+    assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None
 
@@ -249,7 +249,7 @@ def test_psycopg_data_types(psycopg_session: PsycopgSyncDriver) -> None:
     select_result = psycopg_session.execute(
         "SELECT text_col, integer_col, numeric_col, boolean_col, json_col, array_col FROM data_types_test"
     )
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
@@ -271,7 +271,7 @@ def test_psycopg_transactions(psycopg_session: PsycopgSyncDriver) -> None:
 
     # Verify data is committed
     result = psycopg_session.execute("SELECT COUNT(*) as count FROM test_table WHERE name = %s", ("transaction_test",))
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.data is not None
     assert result.data[0]["count"] == 1
 
@@ -298,7 +298,7 @@ def test_psycopg_complex_queries(psycopg_session: PsycopgSyncDriver) -> None:
         ORDER BY t1.name, t2.name
         LIMIT 3
     """)
-    assert isinstance(join_result, SelectResult)
+    assert isinstance(join_result, SQLResult)
     assert join_result.data is not None
     assert len(join_result.data) == 3
 
@@ -311,7 +311,7 @@ def test_psycopg_complex_queries(psycopg_session: PsycopgSyncDriver) -> None:
             MAX(value) as max_value
         FROM test_table
     """)
-    assert isinstance(agg_result, SelectResult)
+    assert isinstance(agg_result, SQLResult)
     assert agg_result.data is not None
     assert agg_result.data[0]["total_count"] == 4
     assert agg_result.data[0]["avg_value"] == 29.5
@@ -325,7 +325,7 @@ def test_psycopg_complex_queries(psycopg_session: PsycopgSyncDriver) -> None:
         WHERE value > (SELECT AVG(value) FROM test_table)
         ORDER BY value
     """)
-    assert isinstance(subquery_result, SelectResult)
+    assert isinstance(subquery_result, SQLResult)
     assert subquery_result.data is not None
     assert len(subquery_result.data) == 2  # Bob and Charlie
     assert subquery_result.data[0]["name"] == "Bob"
@@ -346,8 +346,8 @@ def test_psycopg_schema_operations(psycopg_session: PsycopgSyncDriver) -> None:
 
     # Insert data into new table
     insert_result = psycopg_session.execute("INSERT INTO schema_test (description) VALUES (%s)", ("test description",))
-    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
-    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
+    assert isinstance(insert_result, SQLResult)
+    assert insert_result.rows_affected == 1
 
     # Verify table structure
     info_result = psycopg_session.execute("""
@@ -356,7 +356,7 @@ def test_psycopg_schema_operations(psycopg_session: PsycopgSyncDriver) -> None:
         WHERE table_name = 'schema_test'
         ORDER BY ordinal_position
     """)
-    assert isinstance(info_result, SelectResult)
+    assert isinstance(info_result, SQLResult)
     assert info_result.data is not None
     assert len(info_result.data) == 3  # id, description, created_at
 
@@ -374,7 +374,7 @@ def test_psycopg_column_names_and_metadata(psycopg_session: PsycopgSyncDriver) -
     result = psycopg_session.execute(
         "SELECT id, name, value, created_at FROM test_table WHERE name = %s", ("metadata_test",)
     )
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
     assert result.data is not None
     assert len(result.data) == 1
@@ -406,7 +406,7 @@ def test_psycopg_with_schema_type(psycopg_session: PsycopgSyncDriver) -> None:
         "SELECT id, name, value FROM test_table WHERE name = %s", ("schema_test",), schema_type=TestRecord
     )
 
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
 
@@ -422,12 +422,12 @@ def test_psycopg_performance_bulk_operations(psycopg_session: PsycopgSyncDriver)
 
     # Bulk insert
     result = psycopg_session.execute_many("INSERT INTO test_table (name, value) VALUES (%s, %s)", bulk_data)
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.rows_affected == 100
 
     # Bulk select
     select_result = psycopg_session.execute("SELECT COUNT(*) as count FROM test_table WHERE name LIKE 'bulk_user_%'")
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert select_result.data[0]["count"] == 100
 
@@ -435,7 +435,7 @@ def test_psycopg_performance_bulk_operations(psycopg_session: PsycopgSyncDriver)
     page_result = psycopg_session.execute(
         "SELECT name, value FROM test_table WHERE name LIKE 'bulk_user_%' ORDER BY value LIMIT 10 OFFSET 20"
     )
-    assert isinstance(page_result, SelectResult)
+    assert isinstance(page_result, SQLResult)
     assert page_result.data is not None
     assert len(page_result.data) == 10
     assert page_result.data[0]["name"] == "bulk_user_20"
@@ -448,7 +448,7 @@ def test_psycopg_postgresql_specific_features(psycopg_session: PsycopgSyncDriver
     returning_result = psycopg_session.execute(
         "INSERT INTO test_table (name, value) VALUES (%s, %s) RETURNING id, name", ("returning_test", 999)
     )
-    assert isinstance(returning_result, SelectResult)  # psycopg returns SelectResult for RETURNING
+    assert isinstance(returning_result, SQLResult)  # psycopg returns SQLResult for RETURNING
     assert returning_result.data is not None
     assert len(returning_result.data) == 1
     assert returning_result.data[0]["name"] == "returning_test"
@@ -468,7 +468,7 @@ def test_psycopg_postgresql_specific_features(psycopg_session: PsycopgSyncDriver
         WHERE name LIKE 'window%'
         ORDER BY value
     """)
-    assert isinstance(window_result, SelectResult)
+    assert isinstance(window_result, SQLResult)
     assert window_result.data is not None
     assert len(window_result.data) == 3
     assert window_result.data[0]["row_num"] == 1
@@ -492,7 +492,7 @@ def test_psycopg_json_operations(psycopg_session: PsycopgSyncDriver) -> None:
 
     # Test JSON queries
     json_result = psycopg_session.execute("SELECT data->>'name' as name, data->>'age' as age FROM json_test")
-    assert isinstance(json_result, SelectResult)
+    assert isinstance(json_result, SQLResult)
     assert json_result.data is not None
     assert json_result.data[0]["name"] == "test"
     assert json_result.data[0]["age"] == "30"
@@ -524,7 +524,7 @@ def test_psycopg_copy_operations(psycopg_session: PsycopgSyncDriver) -> None:
 
             # Verify data was copied
             verify_result = psycopg_session.execute("SELECT COUNT(*) as count FROM copy_test")
-            assert isinstance(verify_result, SelectResult)
+            assert isinstance(verify_result, SQLResult)
             assert verify_result.data[0]["count"] == 2
 
         except Exception:

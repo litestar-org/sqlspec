@@ -3,7 +3,7 @@
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
-from sqlspec.statement.result import SelectResult
+from sqlspec.statement.result import SQLResult
 
 
 @pytest.mark.xdist_group("sqlite")
@@ -27,7 +27,7 @@ async def test_connection() -> None:
         # Test basic query through session
         sql = "SELECT 1"
         select_result = await session.execute(sql)
-        assert isinstance(select_result, SelectResult)
+        assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert len(select_result.data) == 1
         assert select_result.column_names is not None

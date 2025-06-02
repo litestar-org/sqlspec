@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from litestar.datastructures.state import State
     from litestar.types import BeforeMessageSendHookHandler, Scope
 
-    from sqlspec.base import AsyncConfigT, DriverT, SyncConfigT
+    from sqlspec.config import AsyncConfigT, DriverT, SyncConfigT
     from sqlspec.typing import ConnectionT, PoolT
 
 

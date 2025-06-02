@@ -3,7 +3,7 @@
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteConnectionConfig
-from sqlspec.statement.result import ExecuteResult, SelectResult
+from sqlspec.statement.result import SQLResult
 
 
 @pytest.mark.xdist_group("sqlite")
@@ -26,7 +26,7 @@ def test_sqlite_basic_connection() -> None:
         assert session is not None
         # Test basic query through session
         result = session.execute("SELECT 1 AS test_value")
-        assert isinstance(result, SelectResult)
+        assert isinstance(result, SQLResult)
         assert result.data is not None
         assert len(result.data) == 1
         assert result.data[0]["test_value"] == 1
@@ -55,12 +55,12 @@ def test_sqlite_file_database_connection() -> None:
             """)
 
             insert_result = session.execute("INSERT INTO test_table (name) VALUES (?)", ("test_name",))
-            assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
-            assert insert_result.rows_affected == 1  # type: ignore[unreachable]
+            assert isinstance(insert_result, SQLResult)
+            assert insert_result.rows_affected == 1
 
             # Verify data persists
             select_result = session.execute("SELECT name FROM test_table")
-            assert isinstance(select_result, SelectResult)
+            assert isinstance(select_result, SQLResult)
             assert select_result.data is not None
             assert len(select_result.data) == 1
             assert select_result.data[0]["name"] == "test_name"
@@ -85,7 +85,7 @@ def test_sqlite_connection_configuration() -> None:
 
     with config.provide_session() as session:
         result = session.execute("SELECT 1 AS configured")
-        assert isinstance(result, SelectResult)
+        assert isinstance(result, SQLResult)
         assert result.data is not None
         assert result.data[0]["configured"] == 1
 
@@ -103,6 +103,6 @@ def test_sqlite_isolation_levels() -> None:
 
         with config.provide_session() as session:
             result = session.execute("SELECT 1 AS isolation_test")
-            assert isinstance(result, SelectResult)
+            assert isinstance(result, SQLResult)
             assert result.data is not None
             assert result.data[0]["isolation_test"] == 1

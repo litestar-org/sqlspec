@@ -1,14 +1,72 @@
 # SQLSpec Internal Reference Guide
 
-**🎯 PURPOSE**: This file contains implementation details, architectural decisions, and key concepts for generating comprehensive user documentation. Each section can be referenced independently.
+**🎯 PURPOSE**: This document serves as a directory for detailed internal reference guides, architectural decisions, and key concepts for the SQLSpec library. Each section has been moved to its own file within the `docs/internal/` directory for better organization.
 
-**📝 USAGE INSTRUCTIONS FOR AI**:
+**📝 USAGE INSTRUCTIONS FOR AI**: When asked to update or refer to internal documentation, please locate the relevant file within the `docs/internal/` directory based on its title or reference number.
 
-- Each section has a `[REF-XXX]` tag for easy referencing
-- Append new sections at the bottom with incrementing reference numbers
-- Include both "what" and "why" for architectural decisions
-- Focus on user-facing implications, not just implementation details
-- Include code examples that show the user experience
+---
+
+## Table of Contents
+
+- **[REF-001] Instrumentation Architecture**: [Context Managers vs Decorators](./internal/001_instrumentation_architecture.md)
+- **[REF-002] Psycopg Driver**: [ModelDTOT and Schema Type Patterns](./internal/002_psycopg_driver_modeldtot.md)
+- **[REF-003] Connection Pool**: [Lifecycle and Instrumentation](./internal/003_connection_pool_lifecycle.md)
+- **[REF-004] Clean Code Patterns**: [Reduced Defensive Programming](./internal/004_clean_code_patterns.md)
+- **[REF-005] Driver Protocol**: [Architecture](./internal/005_driver_protocol_architecture.md)
+- **[REF-006] Configuration Design**: [TypedDict Approach](./internal/006_configuration_typeddict.md)
+- **[REF-007] Configuration and Driver Protocol**: [Overall Architecture](./internal/007_config_driver_protocol_architecture.md)
+- **[REF-008] SQL Builder System**: [Architecture](./internal/008_sql_builder_system.md)
+- **[REF-009] SQL Factory**: [Unified Builder and Expression API](./internal/009_sql_factory_api.md)
+- **[REF-010] AioSQL Integration**: [File-Based SQL with Full SQLSpec Power](./internal/010_aiosql_integration.md)
+- **[REF-011] SQLStatement & StatementPipeline**: [Unified SQL Processing](./internal/011_sqlstatement_pipeline.md)
+- **[REF-012] Deprecated - Unified Pipeline Architecture (Old)**: [Details](./internal/012_unified_pipeline_deprecated.md)
+
+---
+
+**📋 NOTE ON ONGOING REFACTORING**:
+
+Additional documentation for refactoring specific components can be found in:
+
+- [Refactoring Guide: SQLSpec Statement Processors](./REFACTORING_PROCESSORS.md)
+- [Refactoring Guide: SQLSpec Driver Adapters (`_execute_impl`)](./REFACTORING_DRIVERS.md)
+
+---
+
+## 📝 TEMPLATE FOR NEW ENTRIES (in `docs/internal/`)
+
+When adding new reference sections, create a new file in `docs/internal/` (e.g., `XXX_my_new_feature.md`) and use the following template:
+
+```markdown
+## [REF-XXX] Title: Brief Description
+
+**DECISION**: What was decided and why.
+
+**IMPLEMENTATION**:
+- Key implementation details
+- Important code patterns
+- Architectural choices
+
+**USER BENEFIT**:
+- How this helps users
+- What problems it solves
+- Performance/DX improvements
+
+**CODE EXAMPLES**:
+
+```python
+# Show user-facing examples
+# Include both basic and advanced usage
+```
+
+**KEY POINTS FOR DOCS**:
+
+- Important concepts to emphasize
+- Common pitfalls to avoid
+- Integration considerations
+
+---
+
+```
 
 ---
 
@@ -1407,1402 +1465,126 @@ result = await driver.execute(
 
 ---
 
-## [REF-011] SQLStatement Architecture: Unified SQL Processing with Pipeline System
+## [REF-011] SQLStatement & StatementPipeline: Unified SQL Processing
 
-**DECISION**: Create a comprehensive SQL processing system with SQLStatement as the core orchestrator, integrating pipelines, validators, analyzers, and transformers.
+**DECISION**: Implement a cohesive SQL processing system where `SQLStatement` (`sqlspec.statement.sql.SQL`) is the central immutable object representing a query and its state. Processing (transformation, validation, analysis) is delegated to a `StatementPipeline` (`sqlspec.statement.pipelines.StatementPipeline`) which operates on a shared `SQLProcessingContext`.
 
-**IMPLEMENTATION**:
+**ARCHITECTURE OVERVIEW**:
 
-### Core SQLStatement Architecture
+1. **`SQL` Object (The "What")**:
+    - Represents a specific SQL statement, its parameters, dialect, and configuration (`SQLConfig`).
+    - Immutable: Methods like `.where()`, `.limit()`, `.transform()`, `.copy()` return *new* `SQL` instances.
+    - Upon instantiation (`__init__`), it prepares an `SQLProcessingContext`.
+    - It then invokes the `StatementPipeline` to process this context.
+    - Finally, it populates its internal state (parsed expression, validation results, analysis results, final parameters) from the `StatementPipelineResult`.
 
-- **Immutable Design**: SQLStatement instances are immutable - modification methods return new instances
-- **Configuration-Driven**: `SQLConfig` controls parsing, validation, transformation, and analysis behavior
-- **Pipeline Integration**: Processing components (validators, analyzers, transformers) run through unified pipeline
-- **Parameter Management**: Intelligent parameter binding with multiple style support (named, positional, pyformat)
-- **Type Safety**: Strong typing throughout with generic result types and schema conversion
+2. **`SQLConfig` (The "How-To Customize")**:
+    - Controls all aspects of processing: parsing, transformation, validation, analysis enablement.
+    - Defines which processor components (transformers, validators, analyzers) are part of the pipeline, allowing for distinct lists for each stage.
+    - Includes a flag `input_sql_had_placeholders`, determined by `SQL.__init__`, to inform transformers like `ParameterizeLiterals`.
 
-### Pipeline System Architecture
+3. **`SQLProcessingContext` (The "Shared Workspace")**:
+    - A dataclass (`sqlspec.statement.pipelines.context.SQLProcessingContext`) passed through the pipeline stages.
+    - Holds mutable state during a single pipeline run:
+        - `initial_sql_string`, `dialect`, `config` (from `SQL` object).
+        - `initial_parameters`, `initial_kwargs`, `merged_parameters`, `parameter_info` (from `SQL` object's parameter processing).
+        - `current_expression`: The `sqlglot.exp.Expression`, potentially modified by transformers.
+        - `extracted_parameters_from_pipeline`: Parameters extracted by transformers.
+        - `validation_result: Optional[ValidationResult]`: Populated by the validation stage.
+        - `analysis_result: Optional[StatementAnalysis]`: Populated by the analysis stage.
+        - `input_sql_had_placeholders`: Copied from `SQLConfig`.
+        - `statement_type`: (Future) Could be populated by an early analysis step.
 
-- **ProcessorProtocol**: Common interface for all processing components
-- **TransformerPipeline**: Orchestrates execution of multiple processors in sequence
-- **Component Types**: Validators (security checks), Analyzers (metadata extraction), Transformers (SQL modification)
-- **Aggregated Results**: Pipeline collects validation results and applies transformations
+4. **`StatementPipeline` (The "Orchestrator")**:
+    - Defined in `sqlspec.statement.pipelines.base.StatementPipeline`.
+    - Its `execute_pipeline(context: SQLProcessingContext)` method orchestrates the stages:
+        - **Parsing (Implicit/Initial)**: Ensures `context.current_expression` is populated from `context.initial_sql_string` if not already an expression (respecting `context.config.enable_parsing`).
+        - **Transformation Stage**: Iterates through configured transformers. Each transformer receives the `context`, can modify `context.current_expression` and add to `context.extracted_parameters_from_pipeline`.
+        - **Validation Stage**: Iterates through configured validators. Each receives `context`, performs checks on `context.current_expression`, and contributes to an aggregated `ValidationResult` which is then stored in `context.validation_result`.
+        - **Analysis Stage**: Iterates through configured analyzers. Each receives `context` (including `context.validation_result`), performs analysis on `context.current_expression`, and the primary analyzer sets `context.analysis_result`.
+    - Returns a `StatementPipelineResult` dataclass containing the final state from the context.
 
-### Configuration and Initialization Flow
+5. **`ProcessorProtocol` (The "Component Contract")**:
+    - Base protocol (`sqlspec.statement.pipelines.base.ProcessorProtocol`) for all transformers, validators, and analyzers.
+    - Defines `process(self, context: SQLProcessingContext) -> tuple[exp.Expression, Optional[ValidationResult]]`.
+        - Concrete implementations adapt this: transformers usually update `context.current_expression` and return `(context.current_expression, None)`. Validators return `(context.current_expression, ValidationResult_part)`. Analyzers update `context.analysis_result` and return `(context.current_expression, None)`.
 
-```python
-# SQLConfig controls all processing behavior
-config = SQLConfig(
-    enable_parsing=True,           # SQLGlot parsing for transformations
-    enable_validation=True,        # Security and safety checks
-    enable_transformations=True,   # SQL modification capabilities
-    enable_analysis=True,          # Metadata extraction
-    strict_mode=True,             # Fail fast on validation errors
-    processing_pipeline_components=[...],  # Custom processors
-)
+6. **`StatementPipelineResult` (The "Outcome")**:
+    - A dataclass (`sqlspec.statement.pipelines.context.StatementPipelineResult`) bundling the final outputs of a pipeline run, which the `SQL` object uses to set its state.
 
-# SQLStatement initialization triggers full pipeline
-stmt = SQL(
-    "SELECT * FROM users WHERE id = :user_id",
-    parameters={"user_id": 123},
-    config=config
-)
-```
+**USER BENEFIT & KEY DESIGN PRINCIPLES**:
 
-**USER BENEFIT**:
+- **Parse Once, Process Many Ways**: The SQL string is parsed into a `sqlglot` expression once (if parsing is enabled). This expression (or its transformed versions) is then passed through validation and analysis stages. This is efficient.
+- **Clear Data Flow**: `SQLProcessingContext` makes the data available to each processing stage explicit, reducing side effects and making the pipeline easier to reason about.
+- **Extensibility**: New transformers, validators, or analyzers can be created by implementing `ProcessorProtocol` and added to `SQLConfig`.
+- **Configurability**: Users can precisely control each stage (enable/disable, provide custom components) via `SQLConfig`.
+- **Improved Testability**: Individual processors can be tested by mocking the `SQLProcessingContext`.
+- **Separation of Concerns**:
+    - `SQL` object: User-facing API and final state holder.
+    - `SQLConfig`: Defines processing rules.
+    - `SQLProcessingContext`: Transient state during a single processing run.
+    - `StatementPipeline`: Orchestrates the run.
+    - Processors: Implement specific logic for transformation, validation, or analysis.
+- **Robust Parameter Handling**: The system distinguishes between parameters provided initially to the `SQL` object and those extracted by transformers (e.g., `ParameterizeLiterals`), merging them correctly.
+- **Informed Analysis**: The analysis stage can leverage results from the validation stage (e.g., a cartesian product validator can provide data that an analyzer then reports), promoting synergy between stages.
 
-- **Security First**: Automatic SQL injection prevention and security validation
-- **Rich Metadata**: Deep insights into query structure, complexity, and characteristics
-- **Performance**: Intelligent caching at multiple levels (parsing, analysis, validation)
-- **Developer Experience**: Type-safe, immutable objects with comprehensive introspection
-- **Extensibility**: Plugin architecture for custom validators, analyzers, and transformers
-
-**CORE SQLSTATEMENT PATTERNS**:
-
-### 1. Immutable Statement Creation and Modification
-
-```python
-from sqlspec.statement.sql import SQL, SQLConfig
-
-# Initial statement creation
-base_stmt = SQL(
-    "SELECT id, name, email FROM users WHERE active = true",
-    config=SQLConfig(enable_analysis=True, enable_validation=True)
-)
-
-# Immutable modifications - each returns new instance
-filtered_stmt = base_stmt.where("department = 'Engineering'")
-paginated_stmt = filtered_stmt.limit(50).offset(0)
-ordered_stmt = paginated_stmt.order_by("name ASC", "created_at DESC")
-
-# Original statement unchanged
-assert base_stmt.sql != paginated_stmt.sql
-assert base_stmt is not paginated_stmt  # Different instances
-```
-
-### 2. Configuration-Driven Processing
+**EXAMPLE PIPELINE EXECUTION FLOW (Conceptual)**:
 
 ```python
-# Minimal configuration - basic functionality
-minimal_config = SQLConfig(
-    enable_parsing=False,    # Skip SQLGlot parsing
-    enable_validation=False, # Skip security checks
-    enable_analysis=False    # Skip metadata extraction
-)
-
-# Full-featured configuration
-full_config = SQLConfig(
-    enable_parsing=True,
-    enable_validation=True,
-    enable_transformations=True,
-    enable_analysis=True,
-    strict_mode=True,
-    processing_pipeline_components=[
-        StatementAnalyzer(cache_size=1000),
-        CustomSecurityValidator(),
-        QueryOptimizer(),
-    ]
-)
-
-# Same SQL, different processing based on config
-basic_stmt = SQL("SELECT * FROM users", config=minimal_config)
-enhanced_stmt = SQL("SELECT * FROM users", config=full_config)
-
-# Enhanced statement has rich metadata
-analysis = enhanced_stmt.analyze()
-validation = enhanced_stmt.validate()
-```
-
-### 3. Parameter Management and Security
-
-```python
-# Multiple parameter styles supported
-named_stmt = SQL(
-    "SELECT * FROM users WHERE id = :user_id AND dept = :department",
-    parameters={"user_id": 123, "department": "Engineering"}
-)
-
-positional_stmt = SQL(
-    "SELECT * FROM users WHERE id = ? AND dept = ?",
-    parameters=[123, "Engineering"]
-)
-
-# Mixed parameter sources (args + kwargs)
-mixed_stmt = SQL(
-    "SELECT * FROM users WHERE id = :user_id AND active = ?",
-    args=[True],
-    kwargs={"user_id": 123}
-)
-
-# Automatic parameter conversion for different database drivers
-sql_server_sql = stmt.to_sql(placeholder_style="named_at")     # @user_id
-postgres_sql = stmt.to_sql(placeholder_style="pyformat_named") # %(user_id)s
-mysql_sql = stmt.to_sql(placeholder_style="qmark")            # ?
-```
-
-**PIPELINE SYSTEM DEEP DIVE**:
-
-### Component Architecture
-
-```python
-from sqlspec.statement.pipelines.base import ProcessorProtocol
-from sqlglot import exp
-
-class CustomAnalyzer(ProcessorProtocol[exp.Expression]):
-    """Custom processor example."""
-
-    def process(
-        self,
-        expression: exp.Expression,
-        dialect: Optional[DialectType] = None,
-        config: Optional[SQLConfig] = None,
-    ) -> tuple[exp.Expression, Optional[ValidationResult]]:
-        # Analyze the expression
-        analysis_result = self._perform_analysis(expression)
-
-        # Return unchanged expression (analyzers don't modify)
-        # and optional validation result
-        return expression, None
-
-    def _perform_analysis(self, expr: exp.Expression) -> AnalysisResult:
-        # Custom analysis logic
-        pass
-```
-
-### Pipeline Execution Flow
-
-```python
-# 1. SQLStatement creation triggers pipeline
-stmt = SQL("SELECT * FROM users WHERE id = 1", config=config)
-
-# 2. Pipeline processes expression through all components
-pipeline = config.get_pipeline()
-transformed_expr, aggregated_validation = pipeline.execute(
-    parsed_expression,
-    dialect,
-    config
-)
-
-# 3. Results integrated back into SQLStatement
-# - Transformed expression becomes new statement
-# - Validation results available via .validation_result
-# - Analysis results available via .analyze()
-```
-
-### Built-in Pipeline Components
-
-#### Validators (Security & Safety)
-
-```python
-from sqlspec.statement.pipelines.validators import (
-    InjectionValidator,      # SQL injection detection
-    PreventDDL,             # Block dangerous DDL operations
-    RiskyDML,               # Flag potentially dangerous DML
-    SuspiciousKeywords,     # Detect suspicious SQL patterns
-    TautologyConditions,    # Find always-true/false conditions
-)
-
-# Default validation pipeline
-default_validators = [
-    InjectionValidator(),
-    RiskyDML(),
-    PreventDDL(),
-    SuspiciousKeywords(risk_level=RiskLevel.MEDIUM),
-]
-
-config = SQLConfig(
-    enable_validation=True,
-    processing_pipeline_components=default_validators
-)
-```
-
-#### Analyzers (Metadata Extraction)
-
-```python
-from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
-
-# Rich metadata extraction
-analyzer = StatementAnalyzer(cache_size=1000)
-stmt = SQL(
-    """
-    SELECT u.name, u.email, COUNT(o.id) as order_count,
-           AVG(o.amount) as avg_order_value
-    FROM users u
-    LEFT JOIN orders o ON u.id = o.user_id
-    WHERE u.department IN ('Sales', 'Marketing')
-      AND u.active = true
-    GROUP BY u.id, u.name, u.email
-    HAVING COUNT(o.id) > 0
-    ORDER BY avg_order_value DESC
-    LIMIT 50
-    """,
-    config=SQLConfig(enable_analysis=True)
-)
-
-analysis = stmt.analyze()
-print(f"Statement Type: {analysis.statement_type}")     # Select
-print(f"Tables: {analysis.tables}")                     # ['users', 'orders']
-print(f"Complexity Score: {analysis.complexity_score}") # 8 (joins + aggregates + conditions)
-print(f"Join Count: {analysis.join_count}")             # 1
-print(f"Aggregate Functions: {analysis.aggregate_functions}") # ['count', 'avg']
-print(f"Uses Subqueries: {analysis.uses_subqueries}")   # False
-```
-
-#### Transformers (SQL Modification)
-
-```python
-from sqlspec.statement.pipelines.transformers import (
-    AuditCommentAppender,    # Add audit comments
-    ParameterizeLiterals,    # Convert literals to parameters
-    ForceWhereClause,       # Ensure WHERE clauses exist
-    ColumnPruner,           # Remove unnecessary columns
-)
-
-# SQL transformation pipeline
-transformers = [
-    ParameterizeLiterals(),      # Security: parameterize all literals
-    ForceWhereClause(),          # Safety: require WHERE clauses
-    AuditCommentAppender(user_id="current_user"), # Audit: add tracking
-]
-
-config = SQLConfig(
-    enable_transformations=True,
-    processing_pipeline_components=transformers
-)
-
-original_sql = "SELECT * FROM users WHERE active = 1"
-stmt = SQL(original_sql, config=config)
-
-# Transformed SQL with audit comment and parameterized literal
-transformed = stmt.transform()
-print(transformed.sql)
-# Output: "SELECT * FROM users WHERE active = :param_1 -- Modified by: current_user"
-```
-
-**COMPREHENSIVE ANALYZER ECOSYSTEM**:
-
-### StatementAnalyzer - Real-Time Query Intelligence
-
-```python
-from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
-
-# Comprehensive real-time analysis
-analyzer = StatementAnalyzer(
-    cache_size=1000,                 # Analysis result caching
-    max_join_count=10,               # Join complexity thresholds
-    max_subquery_depth=3,            # Subquery nesting limits
-    max_function_calls=20,           # Function usage limits
-    max_where_conditions=15,         # WHERE clause complexity
-)
-
-# Real-time analysis capabilities:
-analysis = analyzer.analyze_expression(expression)
-
-# Structural Analysis
-print(f"Statement Type: {analysis.statement_type}")           # Select, Insert, Update, Delete
-print(f"Primary Table: {analysis.table_name}")               # Main table being queried
-print(f"All Tables: {analysis.tables}")                      # All referenced tables
-print(f"Columns: {analysis.columns}")                        # Column references
-
-# Complexity Analysis
-print(f"Complexity Score: {analysis.complexity_score}")      # Overall complexity rating
-print(f"Join Count: {analysis.join_count}")                  # Number of joins
-print(f"Join Types: {analysis.join_types}")                  # Distribution of join types
-print(f"Subquery Count: {len(analysis.tables)}")            # Number of subqueries
-print(f"Max Subquery Depth: {analysis.max_subquery_depth}")  # Nesting depth
-
-# Performance Indicators
-print(f"Uses Subqueries: {analysis.uses_subqueries}")        # Contains subqueries
-print(f"Has Returning: {analysis.has_returning}")            # Has RETURNING clause
-print(f"Is Insert From Select: {analysis.is_from_select}")   # INSERT FROM SELECT pattern
-print(f"Aggregate Functions: {analysis.aggregate_functions}") # GROUP BY/aggregate usage
-
-# Advanced Metrics
-print(f"Function Count: {analysis.function_count}")          # SQL function usage
-print(f"Correlated Subqueries: {analysis.correlated_subquery_count}") # Expensive subqueries
-print(f"Cartesian Products: {analysis.potential_cartesian_products}")  # Performance risks
-print(f"Complexity Warnings: {analysis.complexity_warnings}") # Performance warnings
-print(f"Complexity Issues: {analysis.complexity_issues}")     # Performance issues
-```
-
-**REAL-TIME PROCESSING WORKFLOWS**:
-
-### 1. Security-First Processing Pipeline
-
-```python
-# Real-time security processing for user-submitted queries
-security_processor = UnifiedProcessor(
-    transformers=[
-        CommentRemover(),                    # Remove attack vectors
-        ParameterizeLiterals(),             # Prevent injection
-    ],
-    validators=[
-        PreventDDL(risk_level=RiskLevel.HIGH),           # Block DDL
-        SuspiciousKeywords(risk_level=RiskLevel.MEDIUM), # Detect threats
-        TautologyConditions(risk_level=RiskLevel.HIGH),  # Block logic bombs
-        RiskyDML(require_where_clause=True),             # Require WHERE clauses
-    ],
-    cache_analysis=True,
-)
-
-# Real-time security validation
-def validate_user_query(sql: str, user_context: dict) -> dict:
-    expression = sqlglot.parse_one(sql)
-
-    # Single-pass security processing
-    transformed_expr, validation_result = security_processor.process(
-        expression,
-        dialect="postgresql",
-        config=SQLConfig(strict_mode=True)
-    )
-
-    # Real-time security assessment
-    return {
-        "is_safe": validation_result.is_safe,
-        "risk_level": validation_result.risk_level.name,
-        "security_issues": validation_result.issues,
-        "warnings": validation_result.warnings,
-        "transformed_sql": transformed_expr.sql(),
-        "analysis": security_processor._analysis_cache.get(expression.sql())
-    }
-```
-
-### 2. Performance Optimization Pipeline
-
-```python
-# Real-time performance analysis and optimization
-performance_processor = UnifiedProcessor(
-    analyzers=[StatementAnalyzer(cache_size=1000)],
-    transformers=[
-        StarExpander(schema_provider=schema_service),    # Explicit columns
-        RemoveUnusedColumns(),                           # Optimize projections
-    ],
-    validators=[
-        ExcessiveJoins(max_joins=8, warn_threshold=5),   # Join complexity
-        CartesianProductDetector(),                      # Performance risks
-    ],
-    cache_analysis=True,
-)
-
-# Real-time performance insights
-def analyze_query_performance(sql: str) -> dict:
-    expression = sqlglot.parse_one(sql)
-
-    # Single-pass performance analysis
-    optimized_expr, validation_result = performance_processor.process(
-        expression,
-        dialect="postgresql",
-        config=SQLConfig(enable_transformations=True)
-    )
-
-    # Extract performance metrics
-    analysis = performance_processor._analysis_cache.get(expression.sql())
-
-    return {
-        "complexity_score": analysis.metrics.get("complexity_score", 0),
-        "join_analysis": {
-            "count": analysis.metrics.get("join_count", 0),
-            "types": analysis.metrics.get("join_types", {}),
-            "cartesian_risk": analysis.metrics.get("cartesian_risk", 0),
-        },
-        "subquery_analysis": {
-            "count": analysis.metrics.get("subquery_count", 0),
-            "max_depth": analysis.metrics.get("max_subquery_depth", 0),
-            "correlated_count": analysis.metrics.get("correlated_subquery_count", 0),
-        },
-        "function_analysis": {
-            "total_count": analysis.metrics.get("function_count", 0),
-            "expensive_functions": analysis.metrics.get("expensive_functions", 0),
-        },
-        "optimization_applied": optimized_expr.sql() != expression.sql(),
-        "performance_warnings": validation_result.warnings,
-        "performance_issues": validation_result.issues,
-    }
-```
-
-### 3. Compliance and Audit Pipeline
-
-```python
-# Real-time compliance and audit processing
-compliance_processor = UnifiedProcessor(
-    transformers=[
-        TracingComment(
-            user_id="current_user",
-            session_id="session_id",
-            application="app_name",
-            include_timestamp=True
-        ),
-        CommentRemover(),                    # Clean SQL for logging
-    ],
-    validators=[
-        PreventDDL(),                        # Compliance: No schema changes
-        RiskyDML(require_where_clause=True), # Compliance: Require WHERE
-    ],
-    analyzers=[StatementAnalyzer()],         # Full analysis for audit
-    cache_analysis=True,
-)
-
-# Real-time compliance checking
-def ensure_compliance(sql: str, user_context: dict) -> dict:
-    expression = sqlglot.parse_one(sql)
-
-    # Single-pass compliance processing
-    audited_expr, validation_result = compliance_processor.process(
-        expression,
-        dialect="postgresql",
-        config=SQLConfig(strict_mode=False)  # Warnings, not errors
-    )
-
-    # Extract audit information
-    analysis = compliance_processor._analysis_cache.get(expression.sql())
-
-    return {
-        "compliant": validation_result.is_safe,
-        "audit_trail": {
-            "original_sql": expression.sql(),
-            "audited_sql": audited_expr.sql(),
-            "user": user_context.get("user_id"),
-            "timestamp": datetime.now().isoformat(),
-            "analysis": {
-                "tables_accessed": analysis.metrics.get("tables", []),
-                "operation_type": analysis.metrics.get("statement_type"),
-                "complexity_score": analysis.metrics.get("complexity_score", 0),
-            }
-        },
-        "compliance_issues": validation_result.issues,
-        "compliance_warnings": validation_result.warnings,
-    }
-```
-
-**REAL-TIME INTEGRATION PATTERNS**:
-
-### 1. Driver Protocol Integration
-
-```python
-# Unified processor integrates seamlessly with driver protocol
-async with sqlspec.provide_session(DatabaseConfig) as driver:
-
-    # Create processor for session
-    session_processor = UnifiedProcessor(
-        transformers=[CommentRemover(), ParameterizeLiterals()],
-        validators=[PreventDDL(), SuspiciousKeywords()],
-        cache_analysis=True,
-    )
-
-    # Process query before execution
-    expression = sqlglot.parse_one(user_sql)
-    safe_expr, validation = session_processor.process(expression)
-
-    if validation.is_safe:
-        # Execute processed query
-        result = await driver.execute(safe_expr, schema_type=User)
-    else:
-        # Handle security issues
-        raise SecurityError(f"Query blocked: {validation.issues}")
-```
-
-### 2. Real-Time API Integration
-
-```python
-from fastapi import FastAPI, HTTPException
-from sqlspec.statement.pipelines import UnifiedProcessor
-
-app = FastAPI()
-
-# Global processor for API endpoints
-api_processor = UnifiedProcessor(
-    transformers=[CommentRemover(), TracingComment()],
-    validators=[PreventDDL(), SuspiciousKeywords(), RiskyDML()],
-    cache_analysis=True,
-)
-
-@app.post("/api/query")
-async def execute_query(query_request: QueryRequest):
-    """Real-time query processing API endpoint."""
-
-    # Parse and process in real-time
-    expression = sqlglot.parse_one(query_request.sql)
-    processed_expr, validation = api_processor.process(
-        expression,
-        dialect="postgresql",
-        config=SQLConfig(strict_mode=True)
-    )
-
-    # Real-time security check
-    if not validation.is_safe:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "Query validation failed",
-                "issues": validation.issues,
-                "risk_level": validation.risk_level.name
-            }
-        )
-
-    # Extract real-time analysis
-    analysis = api_processor._analysis_cache.get(expression.sql())
-
-    # Execute with driver
-    async with driver_session() as driver:
-        result = await driver.execute(processed_expr)
-
-        return {
-            "data": result.rows,
-            "metadata": {
-                "row_count": result.row_count,
-                "analysis": {
-                    "complexity_score": analysis.metrics.get("complexity_score", 0),
-                    "tables_accessed": analysis.metrics.get("tables", []),
-                    "join_count": analysis.metrics.get("join_count", 0),
-                }
-            }
-        }
-```
-
-### 3. Middleware Integration
-
-```python
-class SQLProcessingMiddleware:
-    """Real-time SQL processing middleware."""
-
-    def __init__(self):
-        self.processor = UnifiedProcessor(
-            transformers=[CommentRemover(), ParameterizeLiterals()],
-            validators=[PreventDDL(), SuspiciousKeywords(), TautologyConditions()],
-            analyzers=[StatementAnalyzer()],
-            cache_analysis=True,
-        )
-
-    async def process_request(self, sql: str, context: dict) -> dict:
-        """Process SQL request in real-time."""
-
-        # Real-time processing
-        expression = sqlglot.parse_one(sql)
-        processed_expr, validation = self.processor.process(
-            expression,
-            dialect=context.get("dialect", "postgresql"),
-            config=SQLConfig(strict_mode=context.get("strict_mode", True))
-        )
-
-        # Real-time analysis extraction
-        analysis = self.processor._analysis_cache.get(expression.sql())
-
-        return {
-            "processed_sql": processed_expr.sql(),
-            "is_safe": validation.is_safe,
-            "security_issues": validation.issues,
-            "warnings": validation.warnings,
-            "real_time_analysis": {
-                "complexity_score": analysis.metrics.get("complexity_score", 0),
-                "security_risk": validation.risk_level.name,
-                "performance_indicators": {
-                    "join_count": analysis.metrics.get("join_count", 0),
-                    "subquery_count": analysis.metrics.get("subquery_count", 0),
-                    "function_count": analysis.metrics.get("function_count", 0),
-                },
-                "structural_analysis": {
-                    "statement_type": analysis.metrics.get("statement_type"),
-                    "tables_accessed": analysis.metrics.get("tables", []),
-                    "has_aggregates": analysis.metrics.get("has_aggregates", False),
-                    "has_subqueries": analysis.metrics.get("has_subqueries", False),
-                }
-            }
-        }
-```
-
-**REAL-TIME MONITORING AND OBSERVABILITY**:
-
-### Pipeline Metrics and Insights
-
-```python
-# Real-time pipeline monitoring
-class PipelineMonitor:
-    """Monitor unified processor performance and insights."""
-
-    def __init__(self, processor: UnifiedProcessor):
-        self.processor = processor
-        self.metrics = {
-            "queries_processed": 0,
-            "security_blocks": 0,
-            "performance_warnings": 0,
-            "cache_hits": 0,
-            "processing_times": [],
-        }
-
-    def get_real_time_stats(self) -> dict:
-        """Get real-time processing statistics."""
-
-        cache_size = len(self.processor._analysis_cache)
-
-        return {
-            "pipeline_health": {
-                "queries_processed": self.metrics["queries_processed"],
-                "cache_efficiency": {
-                    "size": cache_size,
-                    "hit_ratio": self.metrics["cache_hits"] / max(self.metrics["queries_processed"], 1),
-                },
-                "security_metrics": {
-                    "blocks": self.metrics["security_blocks"],
-                    "block_rate": self.metrics["security_blocks"] / max(self.metrics["queries_processed"], 1),
-                },
-                "performance_metrics": {
-                    "warnings": self.metrics["performance_warnings"],
-                    "avg_processing_time": sum(self.metrics["processing_times"]) / max(len(self.metrics["processing_times"]), 1),
-                }
-            },
-            "real_time_insights": {
-                "most_complex_queries": self._get_complex_queries(),
-                "common_security_issues": self._get_security_patterns(),
-                "performance_bottlenecks": self._get_performance_issues(),
-            }
-        }
+# 1. User creates SQL object
+# config = SQLConfig(transformers=[T1, T2], validators=[V1], analyzers=[A1])
+# sql_obj = SQL("SELECT * FROM data WHERE id = 1", config=my_config)
+
+# 2. SQL.__init__ -> SQL._initialize_statement:
+#    - Creates SQLProcessingContext (ctx)
+#    - ctx.initial_sql_string = "SELECT * FROM data WHERE id = 1"
+#    - Determines ctx.input_sql_had_placeholders = False
+#    - Processes initial parameters (none here) -> ctx.merged_parameters = []
+#    - Parses SQL -> ctx.current_expression = sqlglot.parse_one(...)
+#    - Calls pipeline = self.config.get_statement_pipeline()
+#    - pipeline_result = pipeline.execute_pipeline(ctx)
+
+# 3. StatementPipeline.execute_pipeline(ctx):
+#    - Stage 0: Parsing (already done by SQL._initialize_statement, or done here if ctx.current_expression is None)
+#    - Stage 1: Transformers
+#        - T1.process(ctx) -> updates ctx.current_expression, maybe ctx.extracted_parameters_from_pipeline
+#        - T2.process(ctx) -> updates ctx.current_expression, maybe ctx.extracted_parameters_from_pipeline
+#    - Stage 2: Validators
+#        - V1.process(ctx) -> returns (ctx.current_expression, v1_result). Pipeline aggregates into ctx.validation_result.
+#    - Stage 3: Analyzers
+#        - A1.process(ctx) -> updates ctx.analysis_result.
+#    - Returns StatementPipelineResult (with final ctx.current_expression, ctx.validation_result, etc.)
+
+# 4. SQL._initialize_statement (continues):
+#    - self._parsed_expression = pipeline_result.final_expression
+#    - self._validation_result = pipeline_result.validation_result
+#    - self._analysis_result = pipeline_result.analysis_result
+#    - self._merge_extracted_parameters(ctx.extracted_parameters_from_pipeline)
+#    - self._check_and_raise_for_strict_mode()
+
+# 5. User can now access results:
+#    print(sql_obj.sql) # Potentially transformed SQL
+#    print(sql_obj.parameters) # Final merged parameters
+#    print(sql_obj.validation_result)
+#    print(sql_obj.analysis_result)
 ```
 
 **KEY POINTS FOR DOCS**:
 
-- **Real-Time Processing**: Single-pass analysis, transformation, and validation with minimal overhead
-- **Comprehensive Security**: Multi-layered threat detection including injection, DDL prevention, and suspicious patterns
-- **Performance Intelligence**: Real-time complexity analysis, join optimization, and cartesian product detection
-- **Audit and Compliance**: Automatic audit trails, compliance checking, and regulatory requirement enforcement
-- **Shared Analysis**: Unified analysis engine eliminates redundant processing across all components
-- **Extensible Architecture**: ProcessorProtocol enables custom validators, transformers, and analyzers
-- **Production Ready**: Intelligent caching, minimal overhead, and comprehensive error handling
-- **Developer Experience**: Rich real-time insights, type-safe interfaces, and comprehensive observability
-- **Integration Friendly**: Seamless integration with driver protocol, APIs, middleware, and monitoring systems
-- **Zero-Compromise Security**: Real-time threat detection without sacrificing performance or functionality
+- Emphasize the "Parse Once, Process Many Ways" philosophy.
+- Explain the roles of `SQL`, `SQLConfig`, `SQLProcessingContext`, `StatementPipeline`, and `ProcessorProtocol`.
+- Highlight how `SQLConfig` allows fine-grained control over the pipeline.
+- Detail how information (like `input_sql_had_placeholders` or `validation_result`) flows via the `SQLProcessingContext` to inform later stages.
+- Show how to create and plug in custom processors.
+- Explain the benefits for security (e.g., `ParameterizeLiterals` informed by context), performance (cached parsing, efficient data flow), and extensibility.
 
 ---
 
-## [REF-012] Unified Pipeline Architecture: Real-Time SQL Processing and Analysis
+## [REF-012] Deprecated - Unified Pipeline Architecture (Old)
 
-**DECISION**: Implement a unified processing pipeline that combines analysis, transformation, and validation in a single pass to eliminate redundant parsing while providing comprehensive real-time SQL insights.
+This section is now superseded by [REF-011] which details the `SQLProcessingContext` and staged `StatementPipeline` approach. The `UnifiedProcessor` concept, while aiming for similar goals, has been refined into the more explicit staged pipeline managed by `StatementPipeline` and orchestrated by the `SQL` object through `SQLProcessingContext`.
 
-**IMPLEMENTATION**:
-
-### Core Architecture Components
-
-- **UnifiedProcessor**: Central orchestrator that performs analysis once and shares results across all components
-- **ProcessorProtocol**: Common interface enabling consistent extension points for all processing components
-- **Comprehensive Analysis Engine**: Built-in analysis covering structural patterns, complexity metrics, and security risks
-- **Enhanced Component Interfaces**: Optional `validate_with_analysis` and `transform_with_analysis` methods for shared analysis
-- **Multi-Level Caching**: Analysis results cached at expression, statement, and component levels
-
-### Real-Time Processing Philosophy
-
-- **Parse Once, Process Once**: Single SQLglot parsing pass eliminates redundant expression tree creation
-- **Shared Analysis Results**: Common metrics computed once and distributed to all components
-- **Minimal Overhead**: Lightweight processing with intelligent caching for production workloads
-- **Live Insights**: Real-time extraction of query complexity, security risks, and structural patterns
-
-**USER BENEFIT**:
-
-- **Real-Time Security**: Immediate detection of SQL injection attempts, suspicious patterns, and risky operations
-- **Live Query Intelligence**: Instant insights into query complexity, performance characteristics, and structural analysis
-- **Zero-Latency Validation**: Comprehensive security and safety checks with minimal processing overhead
-- **Dynamic Transformation**: Real-time SQL modification for security, optimization, and compliance
-- **Comprehensive Observability**: Rich metadata extraction for monitoring, debugging, and optimization
-
-**UNIFIED PROCESSOR ARCHITECTURE**:
-
-### Core UnifiedProcessor Design
-
-```python
-from sqlspec.statement.pipelines import UnifiedProcessor
-from sqlspec.statement.pipelines.validators import (
-    ExcessiveJoins, CartesianProductDetector, PreventDDL,
-    SuspiciousKeywords, TautologyConditions, RiskyDML
-)
-from sqlspec.statement.pipelines.transformers import (
-    CommentRemover, HintRemover, ParameterizeLiterals,
-    TracingComment, StarExpander
-)
-from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
-
-# Create unified processor with comprehensive pipeline
-processor = UnifiedProcessor(
-    analyzers=[StatementAnalyzer(cache_size=1000)],
-    transformers=[
-        CommentRemover(),           # Security: Remove comment-based attacks
-        ParameterizeLiterals(),     # Security: Parameterize all literals
-        TracingComment(user_id="current_user"),  # Audit: Add execution tracking
-    ],
-    validators=[
-        PreventDDL(),              # Security: Block dangerous DDL operations
-        RiskyDML(),                # Security: Flag dangerous DML patterns
-        SuspiciousKeywords(),      # Security: Detect suspicious SQL patterns
-        TautologyConditions(),     # Security: Find always-true/false conditions
-        ExcessiveJoins(),          # Performance: Detect complex join patterns
-        CartesianProductDetector(), # Performance: Prevent cartesian products
-    ],
-    cache_analysis=True,           # Performance: Cache analysis results
-)
-
-# Single processing pass with comprehensive analysis
-expression = sqlglot.parse_one(sql)
-transformed_expr, validation_result = processor.process(
-    expression,
-    dialect="postgresql",
-    config=config
-)
-```
-
-### Real-Time Analysis Engine
-
-The unified processor performs comprehensive analysis in a single pass:
-
-```python
-# Automatic analysis extraction during processing
-analysis_result = processor._analysis_cache.get(expression.sql())
-
-# Rich real-time metrics available immediately
-metrics = {
-    "statement_type": analysis_result.metrics["statement_type"],        # Select, Insert, Update, etc.
-    "complexity_score": analysis_result.metrics["complexity_score"],    # Overall complexity rating
-    "join_count": analysis_result.metrics["join_count"],                # Number of joins
-    "join_types": analysis_result.metrics["join_types"],                # Types of joins used
-    "subquery_count": analysis_result.metrics["subquery_count"],        # Number of subqueries
-    "max_subquery_depth": analysis_result.metrics["max_subquery_depth"], # Nesting depth
-    "function_count": analysis_result.metrics["function_count"],         # SQL functions used
-    "table_count": analysis_result.metrics["table_count"],              # Tables referenced
-    "cartesian_risk": analysis_result.metrics["cartesian_risk"],        # Cartesian product risk
-    "has_aggregates": analysis_result.metrics["has_aggregates"],        # Uses GROUP BY/aggregates
-    "has_subqueries": analysis_result.metrics["has_subqueries"],        # Contains subqueries
-    "has_window_functions": analysis_result.metrics["has_window_functions"], # Uses window functions
-}
-```
-
-**COMPREHENSIVE VALIDATOR ECOSYSTEM**:
-
-### 1. Security Validators - Real-Time Threat Detection
-
-#### PreventDDL - Database Schema Protection
-
-```python
-from sqlspec.statement.pipelines.validators import PreventDDL
-
-# Blocks dangerous DDL operations in real-time
-ddl_validator = PreventDDL(
-    risk_level=RiskLevel.HIGH,
-    allowed_operations=["CREATE INDEX"],  # Optional whitelist
-)
-
-# Detects and blocks:
-# - DROP TABLE/DATABASE operations
-# - ALTER TABLE structure changes
-# - TRUNCATE operations
-# - CREATE/DROP USER operations
-# - GRANT/REVOKE permission changes
-```
-
-#### SuspiciousKeywords - Pattern-Based Threat Detection
-
-```python
-from sqlspec.statement.pipelines.validators import SuspiciousKeywords
-
-# Real-time detection of suspicious SQL patterns
-keyword_validator = SuspiciousKeywords(
-    risk_level=RiskLevel.MEDIUM,
-    custom_keywords=["xp_cmdshell", "sp_configure"],  # Custom threat patterns
-)
-
-# Detects suspicious patterns:
-# - File system operations (LOAD_FILE, INTO OUTFILE)
-# - System command execution attempts
-# - Information schema probing
-# - Time-based attack patterns
-# - Union-based injection attempts
-```
-
-#### TautologyConditions - Logic Bomb Detection
-
-```python
-from sqlspec.statement.pipelines.validators import TautologyConditions
-
-# Detects always-true/false conditions (common in SQL injection)
-tautology_validator = TautologyConditions(
-    risk_level=RiskLevel.HIGH,
-    check_numeric_tautologies=True,   # 1=1, 0=0 patterns
-    check_string_tautologies=True,    # 'a'='a' patterns
-)
-
-# Real-time detection of:
-# - Classic injection patterns (1=1, 1=0)
-# - String-based tautologies ('x'='x')
-# - Mathematical tautologies (2+2=4)
-# - Boolean logic bypasses (true OR false)
-```
-
-#### RiskyDML - Dangerous Operation Detection
-
-```python
-from sqlspec.statement.pipelines.validators import RiskyDML
-
-# Flags potentially dangerous DML operations
-risky_dml_validator = RiskyDML(
-    risk_level=RiskLevel.MEDIUM,
-    require_where_clause=True,        # Require WHERE in UPDATE/DELETE
-    max_affected_threshold=1000,      # Limit bulk operations
-)
-
-# Detects risky patterns:
-# - UPDATE/DELETE without WHERE clauses
-# - Bulk operations exceeding thresholds
-# - Cross-table UPDATE operations
-# - Subquery-based modifications
-```
-
-### 2. Performance Validators - Real-Time Optimization
-
-#### ExcessiveJoins - Join Complexity Analysis
-
-```python
-from sqlspec.statement.pipelines.validators import ExcessiveJoins
-
-# Real-time join complexity analysis
-join_validator = ExcessiveJoins(
-    max_joins=10,                     # Maximum allowed joins
-    warn_threshold=7,                 # Warning threshold
-    risk_level=RiskLevel.MEDIUM,
-)
-
-# Enhanced analysis with shared metrics:
-def validate_with_analysis(self, expression, analysis, dialect, config):
-    join_count = analysis.metrics.get("join_count", 0)
-    join_types = analysis.metrics.get("join_types", {})
-    cartesian_risk = analysis.metrics.get("cartesian_risk", 0)
-
-    # Real-time join pattern analysis
-    # - Detects excessive join complexity
-    # - Identifies join type distribution
-    # - Flags potential performance issues
-```
-
-#### CartesianProductDetector - Performance Risk Analysis
-
-```python
-from sqlspec.statement.pipelines.validators import CartesianProductDetector
-
-# Real-time cartesian product detection
-cartesian_validator = CartesianProductDetector(
-    risk_level=RiskLevel.HIGH,
-    allow_explicit_cross_joins=True,  # Allow intentional CROSS JOINs
-    max_table_product_size=1000000,   # Size threshold
-)
-
-# Enhanced analysis capabilities:
-def validate_with_analysis(self, expression, analysis, dialect, config):
-    cross_joins = analysis.metrics.get("cross_joins", 0)
-    joins_without_conditions = analysis.metrics.get("joins_without_conditions", 0)
-
-    # Real-time detection of:
-    # - Explicit CROSS JOIN operations
-    # - Joins without proper conditions
-    # - Multiple table FROM clauses without correlation
-    # - Potential result set explosion patterns
-```
-
-**COMPREHENSIVE TRANSFORMER ECOSYSTEM**:
-
-### 1. Security Transformers - Real-Time SQL Hardening
-
-#### CommentRemover - Attack Vector Elimination
-
-```python
-from sqlspec.statement.pipelines.transformers import CommentRemover
-
-# Real-time comment removal for security
-comment_remover = CommentRemover(
-    enabled=True,
-    preserve_mysql_version_comments=False,  # Remove MySQL version comments
-)
-
-# Removes security risks:
-# - SQL injection via comments
-# - Information disclosure in comments
-# - Comment-based attack vectors
-# - Preserves hints and functional comments
-```
-
-#### ParameterizeLiterals - Injection Prevention
-
-```python
-from sqlspec.statement.pipelines.transformers import ParameterizeLiterals
-
-# Automatic literal parameterization for security
-parameterizer = ParameterizeLiterals(
-    enabled=True,
-    preserve_numeric_literals=False,  # Parameterize all literals
-    parameter_prefix="param_",        # Custom parameter naming
-)
-
-# Real-time transformation:
-# Original: "SELECT * FROM users WHERE id = 123 AND name = 'John'"
-# Transformed: "SELECT * FROM users WHERE id = :param_1 AND name = :param_2"
-# Parameters: {"param_1": 123, "param_2": "John"}
-```
-
-#### HintRemover - Query Optimization Control
-
-```python
-from sqlspec.statement.pipelines.transformers import HintRemover
-
-# Remove database-specific hints for portability
-hint_remover = HintRemover()
-
-# Removes optimizer hints:
-# - Oracle hints (/*+ INDEX(table_name) */)
-# - MySQL hints (/*! SQL_NO_CACHE */)
-# - SQL Server hints (WITH (NOLOCK))
-# - Preserves functional SQL structure
-```
-
-### 2. Audit and Compliance Transformers
-
-#### TracingComment - Execution Tracking
-
-```python
-from sqlspec.statement.pipelines.transformers import TracingComment
-
-# Add audit trails to SQL statements
-tracing_transformer = TracingComment(
-    user_id="current_user",
-    session_id="session_123",
-    application="myapp",
-    include_timestamp=True,
-)
-
-# Real-time audit enhancement:
-# Original: "SELECT * FROM users WHERE active = true"
-# Enhanced: "SELECT * FROM users WHERE active = true -- Executed by: current_user, Session: session_123, App: myapp, Time: 2024-01-15T10:30:00Z"
-```
-
-#### StarExpander - Column Visibility Control
-
-```python
-from sqlspec.statement.pipelines.transformers import StarExpander
-
-# Expand SELECT * for explicit column control
-star_expander = StarExpander(
-    schema_provider=schema_service,   # Schema information source
-    exclude_sensitive_columns=True,  # Skip PII columns
-)
-
-# Real-time expansion:
-# Original: "SELECT * FROM users"
-# Expanded: "SELECT id, name, email, created_at FROM users"
-# (excludes sensitive columns like ssn, password_hash)
-```
-
-### 3. Optimization Transformers
-
-#### RemoveUnusedColumns - Query Optimization
-
-```python
-from sqlspec.statement.pipelines.transformers import RemoveUnusedColumns
-
-# Remove unused columns for performance
-column_optimizer = RemoveUnusedColumns(
-    analyze_usage=True,              # Analyze column usage patterns
-    preserve_primary_keys=True,      # Keep primary keys
-)
-
-# Real-time optimization:
-# - Removes unused SELECT columns
-# - Optimizes JOIN conditions
-# - Reduces data transfer overhead
-```
-
-**COMPREHENSIVE ANALYZER ECOSYSTEM**:
-
-### StatementAnalyzer - Real-Time Query Intelligence
-
-```python
-from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
-
-# Comprehensive real-time analysis
-analyzer = StatementAnalyzer(
-    cache_size=1000,                 # Analysis result caching
-    max_join_count=10,               # Join complexity thresholds
-    max_subquery_depth=3,            # Subquery nesting limits
-    max_function_calls=20,           # Function usage limits
-    max_where_conditions=15,         # WHERE clause complexity
-)
-
-# Real-time analysis capabilities:
-analysis = analyzer.analyze_expression(expression)
-
-# Structural Analysis
-print(f"Statement Type: {analysis.statement_type}")           # Select, Insert, Update, Delete
-print(f"Primary Table: {analysis.table_name}")               # Main table being queried
-print(f"All Tables: {analysis.tables}")                      # All referenced tables
-print(f"Columns: {analysis.columns}")                        # Column references
-
-# Complexity Analysis
-print(f"Complexity Score: {analysis.complexity_score}")      # Overall complexity rating
-print(f"Join Count: {analysis.join_count}")                  # Number of joins
-print(f"Join Types: {analysis.join_types}")                  # Distribution of join types
-print(f"Subquery Count: {len(analysis.tables)}")            # Number of subqueries
-print(f"Max Subquery Depth: {analysis.max_subquery_depth}")  # Nesting depth
-
-# Performance Indicators
-print(f"Uses Subqueries: {analysis.uses_subqueries}")        # Contains subqueries
-print(f"Has Returning: {analysis.has_returning}")            # Has RETURNING clause
-print(f"Is Insert From Select: {analysis.is_from_select}")   # INSERT FROM SELECT pattern
-print(f"Aggregate Functions: {analysis.aggregate_functions}") # GROUP BY/aggregate usage
-
-# Advanced Metrics
-print(f"Function Count: {analysis.function_count}")          # SQL function usage
-print(f"Correlated Subqueries: {analysis.correlated_subquery_count}") # Expensive subqueries
-print(f"Cartesian Products: {analysis.potential_cartesian_products}")  # Performance risks
-print(f"Complexity Warnings: {analysis.complexity_warnings}") # Performance warnings
-print(f"Complexity Issues: {analysis.complexity_issues}")     # Performance issues
-```
-
-**REAL-TIME PROCESSING WORKFLOWS**:
-
-### 1. Security-First Processing Pipeline
-
-```python
-# Real-time security processing for user-submitted queries
-security_processor = UnifiedProcessor(
-    transformers=[
-        CommentRemover(),                    # Remove attack vectors
-        ParameterizeLiterals(),             # Prevent injection
-    ],
-    validators=[
-        PreventDDL(risk_level=RiskLevel.HIGH),           # Block DDL
-        SuspiciousKeywords(risk_level=RiskLevel.MEDIUM), # Detect threats
-        TautologyConditions(risk_level=RiskLevel.HIGH),  # Block logic bombs
-        RiskyDML(require_where_clause=True),             # Require WHERE clauses
-    ],
-    cache_analysis=True,
-)
-
-# Real-time security validation
-def validate_user_query(sql: str, user_context: dict) -> dict:
-    expression = sqlglot.parse_one(sql)
-
-    # Single-pass security processing
-    transformed_expr, validation_result = security_processor.process(
-        expression,
-        dialect="postgresql",
-        config=SQLConfig(strict_mode=True)
-    )
-
-    # Real-time security assessment
-    return {
-        "is_safe": validation_result.is_safe,
-        "risk_level": validation_result.risk_level.name,
-        "security_issues": validation_result.issues,
-        "warnings": validation_result.warnings,
-        "transformed_sql": transformed_expr.sql(),
-        "analysis": security_processor._analysis_cache.get(expression.sql())
-    }
-```
-
-### 2. Performance Optimization Pipeline
-
-```python
-# Real-time performance analysis and optimization
-performance_processor = UnifiedProcessor(
-    analyzers=[StatementAnalyzer(cache_size=1000)],
-    transformers=[
-        StarExpander(schema_provider=schema_service),    # Explicit columns
-        RemoveUnusedColumns(),                           # Optimize projections
-    ],
-    validators=[
-        ExcessiveJoins(max_joins=8, warn_threshold=5),   # Join complexity
-        CartesianProductDetector(),                      # Performance risks
-    ],
-    cache_analysis=True,
-)
-
-# Real-time performance insights
-def analyze_query_performance(sql: str) -> dict:
-    expression = sqlglot.parse_one(sql)
-
-    # Single-pass performance analysis
-    optimized_expr, validation_result = performance_processor.process(
-        expression,
-        dialect="postgresql",
-        config=SQLConfig(enable_transformations=True)
-    )
-
-    # Extract performance metrics
-    analysis = performance_processor._analysis_cache.get(expression.sql())
-
-    return {
-        "complexity_score": analysis.metrics.get("complexity_score", 0),
-        "join_analysis": {
-            "count": analysis.metrics.get("join_count", 0),
-            "types": analysis.metrics.get("join_types", {}),
-            "cartesian_risk": analysis.metrics.get("cartesian_risk", 0),
-        },
-        "subquery_analysis": {
-            "count": analysis.metrics.get("subquery_count", 0),
-            "max_depth": analysis.metrics.get("max_subquery_depth", 0),
-            "correlated_count": analysis.metrics.get("correlated_subquery_count", 0),
-        },
-        "function_analysis": {
-            "total_count": analysis.metrics.get("function_count", 0),
-            "expensive_functions": analysis.metrics.get("expensive_functions", 0),
-        },
-        "optimization_applied": optimized_expr.sql() != expression.sql(),
-        "performance_warnings": validation_result.warnings,
-        "performance_issues": validation_result.issues,
-    }
-```
-
-### 3. Compliance and Audit Pipeline
-
-```python
-# Real-time compliance and audit processing
-compliance_processor = UnifiedProcessor(
-    transformers=[
-        TracingComment(
-            user_id="current_user",
-            session_id="session_id",
-            application="app_name",
-            include_timestamp=True
-        ),
-        CommentRemover(),                    # Clean SQL for logging
-    ],
-    validators=[
-        PreventDDL(),                        # Compliance: No schema changes
-        RiskyDML(require_where_clause=True), # Compliance: Require WHERE
-    ],
-    analyzers=[StatementAnalyzer()],         # Full analysis for audit
-    cache_analysis=True,
-)
-
-# Real-time compliance checking
-def ensure_compliance(sql: str, user_context: dict) -> dict:
-    expression = sqlglot.parse_one(sql)
-
-    # Single-pass compliance processing
-    audited_expr, validation_result = compliance_processor.process(
-        expression,
-        dialect="postgresql",
-        config=SQLConfig(strict_mode=False)  # Warnings, not errors
-    )
-
-    # Extract audit information
-    analysis = compliance_processor._analysis_cache.get(expression.sql())
-
-    return {
-        "compliant": validation_result.is_safe,
-        "audit_trail": {
-            "original_sql": expression.sql(),
-            "audited_sql": audited_expr.sql(),
-            "user": user_context.get("user_id"),
-            "timestamp": datetime.now().isoformat(),
-            "analysis": {
-                "tables_accessed": analysis.metrics.get("tables", []),
-                "operation_type": analysis.metrics.get("statement_type"),
-                "complexity_score": analysis.metrics.get("complexity_score", 0),
-            }
-        },
-        "compliance_issues": validation_result.issues,
-        "compliance_warnings": validation_result.warnings,
-    }
-```
-
-**REAL-TIME INTEGRATION PATTERNS**:
-
-### 1. Driver Protocol Integration
-
-```python
-# Unified processor integrates seamlessly with driver protocol
-async with sqlspec.provide_session(DatabaseConfig) as driver:
-
-    # Create processor for session
-    session_processor = UnifiedProcessor(
-        transformers=[CommentRemover(), ParameterizeLiterals()],
-        validators=[PreventDDL(), SuspiciousKeywords()],
-        cache_analysis=True,
-    )
-
-    # Process query before execution
-    expression = sqlglot.parse_one(user_sql)
-    safe_expr, validation = session_processor.process(expression)
-
-    if validation.is_safe:
-        # Execute processed query
-        result = await driver.execute(safe_expr, schema_type=User)
-    else:
-        # Handle security issues
-        raise SecurityError(f"Query blocked: {validation.issues}")
-```
-
-### 2. Real-Time API Integration
-
-```python
-from fastapi import FastAPI, HTTPException
-from sqlspec.statement.pipelines import UnifiedProcessor
-
-app = FastAPI()
-
-# Global processor for API endpoints
-api_processor = UnifiedProcessor(
-    transformers=[CommentRemover(), TracingComment()],
-    validators=[PreventDDL(), SuspiciousKeywords(), RiskyDML()],
-    cache_analysis=True,
-)
-
-@app.post("/api/query")
-async def execute_query(query_request: QueryRequest):
-    """Real-time query processing API endpoint."""
-
-    # Parse and process in real-time
-    expression = sqlglot.parse_one(query_request.sql)
-    processed_expr, validation = api_processor.process(
-        expression,
-        dialect="postgresql",
-        config=SQLConfig(strict_mode=True)
-    )
-
-    # Real-time security check
-    if not validation.is_safe:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "Query validation failed",
-                "issues": validation.issues,
-                "risk_level": validation.risk_level.name
-            }
-        )
-
-    # Extract real-time analysis
-    analysis = api_processor._analysis_cache.get(expression.sql())
-
-    # Execute with driver
-    async with driver_session() as driver:
-        result = await driver.execute(processed_expr)
-
-        return {
-            "data": result.rows,
-            "metadata": {
-                "row_count": result.row_count,
-                "analysis": {
-                    "complexity_score": analysis.metrics.get("complexity_score", 0),
-                    "tables_accessed": analysis.metrics.get("tables", []),
-                    "join_count": analysis.metrics.get("join_count", 0),
-                }
-            }
-        }
-```
-
-### 3. Middleware Integration
-
-```python
-class SQLProcessingMiddleware:
-    """Real-time SQL processing middleware."""
-
-    def __init__(self):
-        self.processor = UnifiedProcessor(
-            transformers=[CommentRemover(), ParameterizeLiterals()],
-            validators=[PreventDDL(), SuspiciousKeywords(), TautologyConditions()],
-            analyzers=[StatementAnalyzer()],
-            cache_analysis=True,
-        )
-
-    async def process_request(self, sql: str, context: dict) -> dict:
-        """Process SQL request in real-time."""
-
-        # Real-time processing
-        expression = sqlglot.parse_one(sql)
-        processed_expr, validation = self.processor.process(
-            expression,
-            dialect=context.get("dialect", "postgresql"),
-            config=SQLConfig(strict_mode=context.get("strict_mode", True))
-        )
-
-        # Real-time analysis extraction
-        analysis = self.processor._analysis_cache.get(expression.sql())
-
-        return {
-            "processed_sql": processed_expr.sql(),
-            "is_safe": validation.is_safe,
-            "security_issues": validation.issues,
-            "warnings": validation.warnings,
-            "real_time_analysis": {
-                "complexity_score": analysis.metrics.get("complexity_score", 0),
-                "security_risk": validation.risk_level.name,
-                "performance_indicators": {
-                    "join_count": analysis.metrics.get("join_count", 0),
-                    "subquery_count": analysis.metrics.get("subquery_count", 0),
-                    "function_count": analysis.metrics.get("function_count", 0),
-                },
-                "structural_analysis": {
-                    "statement_type": analysis.metrics.get("statement_type"),
-                    "tables_accessed": analysis.metrics.get("tables", []),
-                    "has_aggregates": analysis.metrics.get("has_aggregates", False),
-                    "has_subqueries": analysis.metrics.get("has_subqueries", False),
-                }
-            }
-        }
-```
-
-**REAL-TIME MONITORING AND OBSERVABILITY**:
-
-### Pipeline Metrics and Insights
-
-```python
-# Real-time pipeline monitoring
-class PipelineMonitor:
-    """Monitor unified processor performance and insights."""
-
-    def __init__(self, processor: UnifiedProcessor):
-        self.processor = processor
-        self.metrics = {
-            "queries_processed": 0,
-            "security_blocks": 0,
-            "performance_warnings": 0,
-            "cache_hits": 0,
-            "processing_times": [],
-        }
-
-    def get_real_time_stats(self) -> dict:
-        """Get real-time processing statistics."""
-
-        cache_size = len(self.processor._analysis_cache)
-
-        return {
-            "pipeline_health": {
-                "queries_processed": self.metrics["queries_processed"],
-                "cache_efficiency": {
-                    "size": cache_size,
-                    "hit_ratio": self.metrics["cache_hits"] / max(self.metrics["queries_processed"], 1),
-                },
-                "security_metrics": {
-                    "blocks": self.metrics["security_blocks"],
-                    "block_rate": self.metrics["security_blocks"] / max(self.metrics["queries_processed"], 1),
-                },
-                "performance_metrics": {
-                    "warnings": self.metrics["performance_warnings"],
-                    "avg_processing_time": sum(self.metrics["processing_times"]) / max(len(self.metrics["processing_times"]), 1),
-                }
-            },
-            "real_time_insights": {
-                "most_complex_queries": self._get_complex_queries(),
-                "common_security_issues": self._get_security_patterns(),
-                "performance_bottlenecks": self._get_performance_issues(),
-            }
-        }
-```
-
-**KEY POINTS FOR DOCS**:
-
-- **Real-Time Processing**: Single-pass analysis, transformation, and validation with minimal overhead
-- **Comprehensive Security**: Multi-layered threat detection including injection, DDL prevention, and suspicious patterns
-- **Performance Intelligence**: Real-time complexity analysis, join optimization, and cartesian product detection
-- **Audit and Compliance**: Automatic audit trails, compliance checking, and regulatory requirement enforcement
-- **Shared Analysis**: Unified analysis engine eliminates redundant processing across all components
-- **Extensible Architecture**: ProcessorProtocol enables custom validators, transformers, and analyzers
-- **Production Ready**: Intelligent caching, minimal overhead, and comprehensive error handling
-- **Developer Experience**: Rich real-time insights, type-safe interfaces, and comprehensive observability
-- **Integration Friendly**: Seamless integration with driver protocol, APIs, middleware, and monitoring systems
-- **Zero-Compromise Security**: Real-time threat detection without sacrificing performance or functionality
+**REASON FOR DEPRECATION**: The new model with `SQLProcessingContext` offers a clearer and more flexible way to manage state and data flow between distinct processing stages (transform, validate, analyze) compared to a single `UnifiedProcessor` trying to manage all interactions internally. The staged approach also makes the "process once" concept for each *type* of operation more explicit.
 
 ---
 
@@ -2812,39 +1594,3 @@ Copy this template when adding new reference sections:
 
 ```markdown
 ## [REF-XXX] Title: Brief Description
-
-**DECISION**: What was decided and why.
-
-**IMPLEMENTATION**:
-- Key implementation details
-- Important code patterns
-- Architectural choices
-
-**USER BENEFIT**:
-- How this helps users
-- What problems it solves
-- Performance/DX improvements
-
-**CODE EXAMPLES**:
-```python
-# Show user-facing examples
-# Include both basic and advanced usage
-```
-
-**KEY POINTS FOR DOCS**:
-
-- Important concepts to emphasize
-- Common pitfalls to avoid
-- Integration considerations
-
----
-
-**📋 NEXT SECTIONS TO ADD**:
-
-- Error handling patterns and custom exceptions
-- Arrow integration architecture
-- Statement builder integration
-- Extension system design
-- Testing patterns and fixtures
-- Performance optimization techniques
-- Database-specific adapter patterns

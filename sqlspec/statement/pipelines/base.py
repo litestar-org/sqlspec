@@ -4,34 +4,33 @@ This module defines the core framework for constructing and executing a series o
 SQL processing steps, such as transformations and validations.
 """
 
+import contextlib
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Generic, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Optional
 
 import sqlglot  # Added
 from sqlglot import exp
-from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError  # Added
+from typing_extensions import TypeVar
 
 from sqlspec.exceptions import RiskLevel, SQLValidationError
+from sqlspec.statement.pipelines.context import SQLProcessingContext, StatementPipelineResult
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.statement.sql import SQLConfig, Statement
+
 
 __all__ = (
     "AnalysisResult",
     "ProcessorProtocol",
-    "SQLAnalysis",
-    "SQLTransformation",
-    "SQLTransformer",
-    "SQLValidation",
     "SQLValidator",
+    "StatementPipeline",
     "TransformationResult",
-    "TransformerPipeline",
-    "UnifiedProcessor",
     "UsesExpression",
     "ValidationResult",
 )
@@ -40,6 +39,7 @@ __all__ = (
 logger = logging.getLogger("sqlspec")
 
 ExpressionT = TypeVar("ExpressionT", bound="exp.Expression")
+ResultT = TypeVar("ResultT")
 
 
 # Copied UsesExpression class here
@@ -87,110 +87,143 @@ class UsesExpression:
 
 
 class ProcessorProtocol(ABC, Generic[ExpressionT]):
-    """Protocol for a processing step in the SQL pipeline.
-
-    A processor can either transform an expression, validate it, or both.
-    """
+    """Defines the interface for a single processing step in the SQL pipeline."""
 
     @abstractmethod
-    def process(
-        self,
-        expression: "ExpressionT",
-        dialect: "Optional[DialectType]" = None,
-        config: "Optional[SQLConfig]" = None,
-    ) -> "tuple[ExpressionT, Optional[ValidationResult]]":
-        """Process the SQL expression.
+    def process(self, context: "SQLProcessingContext") -> "tuple[ExpressionT, Optional[ValidationResult]]":
+        """Processes an SQL expression.
 
         Args:
-            expression: The SQL expression to process.
-            dialect: The SQL dialect.
-            config: The SQLConfig, providing context like strict_mode.
+            context: The SQLProcessingContext holding the current state and config.
 
         Returns:
-            A tuple containing the (potentially modified) expression
-            and an optional ValidationResult if this processor performs validation.
+            A tuple containing the (potentially modified) expression and an optional
+            ValidationResult if the processor is a validator. Transformers might only
+            modify context.current_expression and return (context.current_expression, None).
+            Analyzers might return (context.current_expression, context.analysis_result) or similar.
+            The exact return needs to be harmonized or made more flexible.
+            For now, aiming for (updated_expression, optional_validation_result_part).
+            Processors will update the context directly for analysis results or extracted params.
         """
         raise NotImplementedError
 
 
-@dataclass
-class TransformerPipeline:
-    """Orchestrates a sequence of SQL processing steps."""
+class StatementPipeline:
+    """Orchestrates the processing of an SQL expression through transformers, validators, and analyzers."""
 
-    components: "list[ProcessorProtocol[exp.Expression]]" = field(default_factory=list)
-
-    def execute(
+    def __init__(
         self,
-        expression: exp.Expression,
-        dialect: "Optional[DialectType]" = None,
-        config: "Optional[SQLConfig]" = None,
-    ) -> "tuple[exp.Expression, ValidationResult]":
-        """Executes all components in the pipeline.
+        transformers: Optional[list[ProcessorProtocol[exp.Expression]]] = None,
+        validators: Optional[list[ProcessorProtocol[exp.Expression]]] = None,
+        analyzers: Optional[list[ProcessorProtocol[exp.Expression]]] = None,
+    ) -> None:
+        self.transformers = transformers or []
+        self.validators = validators or []
+        self.analyzers = analyzers or []
 
-        Args:
-            expression: The initial SQL expression.
-            dialect: The SQL dialect.
-            config: The SQLConfig to provide context to processors and for final validation aggregation.
+    def execute_pipeline(self, context: "SQLProcessingContext") -> "StatementPipelineResult":
+        """Executes the full pipeline (transform, validate, analyze) using the SQLProcessingContext."""
 
-        Returns:
-            A tuple containing the final transformed expression and an aggregated ValidationResult.
-        """
-        # Need to import ValidationResult here for instantiation if it's not at top level due to TYPE_CHECKING
+        # Ensure initial expression is in context
+        if context.current_expression is None:
+            if context.config.enable_parsing:
+                from sqlspec.statement.sql import SQL  # For to_expression
 
-        current_expression = expression
-        aggregated_issues: list[str] = []
-        aggregated_warnings: list[str] = []
-        # Ensure RiskLevel.SAFE is used correctly
-        overall_risk_level = RiskLevel.SAFE
-        final_is_safe = True
+                try:
+                    # Parsing is the first implicit step if no expression is in context
+                    context.current_expression = SQL.to_expression(context.initial_sql_string, context.dialect)
+                except Exception as e:
+                    # Populate validation_result with parsing error and return immediately
+                    context.validation_result = ValidationResult(
+                        is_safe=False, risk_level=RiskLevel.CRITICAL, issues=[f"SQL Parsing Error: {e}"]
+                    )
+                    # Return a result indicating parsing failure
+                    return StatementPipelineResult(
+                        final_expression=None,
+                        merged_parameters=context.merged_parameters,
+                        parameter_info=context.parameter_info,
+                        validation_result=context.validation_result,
+                        analysis_result=None,
+                        input_sql_had_placeholders=context.input_sql_had_placeholders,
+                    )
+            else:
+                # If parsing is disabled and no expression given, it's a config error for the pipeline.
+                # However, SQL._initialize_statement should have handled this by not calling the pipeline
+                # or by ensuring current_expression is set if enable_parsing is false.
+                # For safety, we can raise or create an error result.
+                context.validation_result = ValidationResult(
+                    is_safe=False,
+                    risk_level=RiskLevel.CRITICAL,
+                    issues=["Pipeline executed without an initial expression and parsing disabled."],
+                )
+                return StatementPipelineResult(
+                    final_expression=None,
+                    merged_parameters=context.merged_parameters,
+                    parameter_info=context.parameter_info,
+                    validation_result=context.validation_result,
+                    analysis_result=None,
+                    input_sql_had_placeholders=context.input_sql_had_placeholders,
+                )
 
-        if not self.components and config is not None and config.enable_validation:
-            # This case implies default validation might be needed,
-            # which SQLConfig/SQLStatement should set up by providing default components.
-            pass  # SQLStatement handles adding default validator if components list is empty
+        # 1. Transformation Stage
+        if context.config.enable_transformations:
+            for transformer in self.transformers:
+                # Transformers take context, modify context.current_expression
+                # and potentially context.extracted_parameters_from_pipeline.
+                # The return value of transformer.process is (modified_expr, None)
+                modified_expr, _ = transformer.process(context)
+                context.current_expression = modified_expr  # Update context
 
-        for component in self.components:
-            current_expression, validation_result_component = component.process(current_expression, dialect, config)
-            if validation_result_component is not None:
-                aggregated_issues.extend(validation_result_component.issues)
-                aggregated_warnings.extend(validation_result_component.warnings)
-                if validation_result_component.risk_level.value > overall_risk_level.value:
-                    overall_risk_level = validation_result_component.risk_level
-                if not validation_result_component.is_safe:
-                    final_is_safe = False
+        # Parameter merging logic will be handled by SQL._initialize_statement after pipeline result
+        # For now, StatementPipelineResult will return the merged_parameters from the context,
+        # which SQL._initialize_statement should update with extracted_parameters_from_pipeline.
 
-        return current_expression, ValidationResult(
-            is_safe=final_is_safe,
-            risk_level=overall_risk_level,
-            issues=aggregated_issues,
-            warnings=aggregated_warnings,
+        # 2. Validation Stage
+        if context.config.enable_validation:
+            all_issues: list[str] = []
+            highest_risk = RiskLevel.SKIP
+            for validator_component in self.validators:
+                # Validators take context. current_expression is read from context.
+                # They should return (expression, ValidationResult_part)
+                # The expression returned by a validator should be the one it received (context.current_expression)
+                _, val_res_part = validator_component.process(context)
+                if val_res_part and val_res_part.issues:
+                    all_issues.extend(val_res_part.issues)
+                    if val_res_part.risk_level.value > highest_risk.value:
+                        highest_risk = val_res_part.risk_level
+
+            if all_issues:
+                context.validation_result = ValidationResult(
+                    is_safe=highest_risk.value < RiskLevel.MEDIUM.value, risk_level=highest_risk, issues=all_issues
+                )
+            else:
+                context.validation_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
+        else:  # Validation disabled
+            context.validation_result = ValidationResult(
+                is_safe=True, risk_level=RiskLevel.SKIP, issues=["Validation disabled by config."]
+            )
+
+        # 3. Analysis Stage
+        if context.config.enable_analysis and context.current_expression is not None:
+            for analyzer_component in self.analyzers:
+                # Analyzers take context. current_expression, validation_result are available.
+                # They should return (expression, StatementAnalysis_result_part)
+                # Expression is context.current_expression.
+                _, analysis_res_part = analyzer_component.process(context)
+                if analysis_res_part:  # Assuming StatementAnalyzer returns the analysis directly
+                    # Note: analysis_res_part might be ValidationResult from process signature,
+                    # but analyzers should store their analysis in context.analysis_result directly
+                    # The analyzer should have already set context.analysis_result
+                    break  # Assuming one primary analyzer for now
+
+        return StatementPipelineResult(
+            final_expression=context.current_expression,
+            merged_parameters=context.merged_parameters,  # This will be further updated by SQL._initialize_statement
+            parameter_info=context.parameter_info,
+            validation_result=context.validation_result,
+            analysis_result=context.analysis_result,
+            input_sql_had_placeholders=context.input_sql_had_placeholders,
         )
-
-
-class SQLValidation(ABC):
-    """Abstract base class for individual SQL validation checks."""
-
-    def __init__(self, risk_level: "RiskLevel", min_risk_to_raise: "Optional[RiskLevel]" = None) -> None:
-        self.risk_level = risk_level
-        self.min_risk_to_raise = min_risk_to_raise
-
-    @abstractmethod
-    def validate(
-        self,
-        expression: exp.Expression,
-        dialect: DialectType,
-        config: "SQLConfig",
-        **kwargs: Any,
-    ) -> "ValidationResult":
-        """Validate the SQL expression.
-
-        :param expression: The SQL expression to validate.
-        :param dialect: The SQL dialect.
-        :param config: The SQL configuration.
-        :param kwargs: Additional keyword arguments.
-        :return: A ValidationResult.
-        """
-        raise NotImplementedError
 
 
 class SQLValidator(ProcessorProtocol[exp.Expression]):
@@ -200,72 +233,103 @@ class SQLValidator(ProcessorProtocol[exp.Expression]):
 
     def __init__(
         self,
-        validators: "Optional[Sequence[SQLValidation]]" = None,
+        validators: "Optional[Sequence[ProcessorProtocol[exp.Expression]]]" = None,
         min_risk_to_raise: "Optional[RiskLevel]" = RiskLevel.HIGH,
     ) -> None:
-        self.validators: list[SQLValidation] = list(validators) if validators is not None else []
+        self.validators: list[ProcessorProtocol[exp.Expression]] = list(validators) if validators is not None else []
         self.min_risk_to_raise = min_risk_to_raise
-        # Ensure BaseSQLValidator is imported for the type hint at runtime if needed
 
-    def add_validator(self, validator: "SQLValidation") -> None:  # Type hint should now work
+    def add_validator(self, validator: "ProcessorProtocol[exp.Expression]") -> None:
         """Add a validator to the pipeline."""
         self.validators.append(validator)
 
-    def process(
-        self,
-        expression: "exp.Expression",
-        dialect: "Optional[DialectType]" = None,
-        config: "Optional[SQLConfig]" = None,
-        **kwargs: Any,
-    ) -> "tuple[exp.Expression, ValidationResult]":
-        """Process the SQL expression through all configured validators.
+    def _process_single_validator(
+        self, validator_instance: "ProcessorProtocol[exp.Expression]", context: "SQLProcessingContext"
+    ) -> "Optional[ValidationResult]":
+        """Process a single validator and handle any exceptions.
 
         Args:
-            expression: The SQL expression to validate.
-            dialect: The SQL dialect.
-            config: The SQL configuration.
-            kwargs: Additional keyword arguments.
+            validator_instance: The validator to process
+            context: The SQLProcessingContext
 
         Returns:
-            A tuple containing the final transformed expression and an aggregated ValidationResult.
+            ValidationResult or None if validation succeeded without issues
         """
-        from sqlspec.statement.sql import SQLConfig
+        try:
+            _, validation_result = validator_instance.process(context)
+        except Exception as e:
+            logger.warning("Individual validator %s failed: %s", validator_instance.__class__.__name__, e)
+            return ValidationResult(
+                is_safe=False,
+                risk_level=RiskLevel.CRITICAL,
+                issues=[f"Validator {validator_instance.__class__.__name__} error: {e}"],
+            )
+        return validation_result
 
-        active_config = config if config is not None else SQLConfig()
+    def process(
+        self, context: "SQLProcessingContext"
+    ) -> "tuple[exp.Expression, ValidationResult]":  # Always return ValidationResult, not Optional
+        """Process the expression through all configured validators.
 
-        if not active_config.enable_validation:
-            return expression, ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
+        Args:
+            context: The SQLProcessingContext holding the current state and config.
 
-        aggregated_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
+        Returns:
+            Tuple of (unchanged expression, aggregated validation result)
+        """
+        if not context.config.enable_validation:
+            return (
+                context.current_expression or exp.Placeholder(),
+                ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP),
+            )
 
+        if context.current_expression is None:
+            return exp.Placeholder(), ValidationResult(
+                is_safe=False, risk_level=RiskLevel.CRITICAL, issues=["SQLValidator received no expression in context."]
+            )
+
+        aggregated_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)  # Start with SKIP or SAFE
+
+        # All validators now implement ProcessorProtocol and use process(context)
         for validator_instance in self.validators:
-            result = validator_instance.validate(expression, dialect, active_config, **kwargs)
-            aggregated_result.merge(result)
+            validation_result = self._process_single_validator(validator_instance, context)
+            if validation_result is not None:
+                aggregated_result.merge(validation_result)
 
-        return expression, aggregated_result
+        # The SQLValidator processor itself doesn't modify the expression
+        return context.current_expression, aggregated_result
 
     def validate(
         self,
-        sql: "Statement",
+        sql: "Statement",  # This is the input string or expression
         dialect: "DialectType",
         config: "Optional[SQLConfig]" = None,
     ) -> "ValidationResult":
-        """Convenience method to validate a raw SQL string or expression.
-
-        Args:
-            sql: The SQL statement to validate.
-            dialect: The SQL dialect.
-            config: The SQL configuration.
-
-        Returns:
-            A ValidationResult.
-        """
-        from sqlspec.statement.sql import SQLConfig
+        """Convenience method to validate a raw SQL string or expression."""
+        from sqlspec.statement.pipelines.context import SQLProcessingContext  # Local import for context
+        from sqlspec.statement.sql import SQLConfig  # Local import for SQL.to_expression
 
         current_config = config or SQLConfig()
         expression_to_validate = UsesExpression.get_expression(sql, dialect=dialect)
 
-        _, validation_result = self.process(expression_to_validate, dialect, current_config)
+        # Create a context for this validation run
+        validation_context = SQLProcessingContext(
+            initial_sql_string=str(sql),
+            dialect=dialect,
+            config=current_config,
+            current_expression=expression_to_validate,
+            # Other context fields like parameters might not be strictly necessary for all validators
+            # but good to pass if available or if validators might need them.
+            # For a standalone validate() call, parameter context might be minimal.
+            input_sql_had_placeholders=False,  # Assume false for raw validation, or detect
+        )
+        if isinstance(sql, str):
+            with contextlib.suppress(Exception):
+                param_val = current_config.parameter_validator
+                if param_val.extract_parameters(sql):
+                    validation_context.input_sql_had_placeholders = True
+
+        _, validation_result = self.process(validation_context)
         return validation_result
 
 
@@ -331,67 +395,6 @@ class TransformationResult:
         return self.modified
 
 
-class SQLTransformer(ProcessorProtocol[exp.Expression], ABC):
-    """Base class for SQL transformers that implement ProcessorProtocol.
-
-    This provides a bridge between the old SQLTransformation pattern and
-    the new ProcessorProtocol pipeline architecture.
-    """
-
-    def process(
-        self,
-        expression: exp.Expression,
-        dialect: "Optional[DialectType]" = None,
-        config: "Optional[SQLConfig]" = None,
-    ) -> "tuple[exp.Expression, Optional[ValidationResult]]":
-        """Process the expression using the transform method.
-
-        Args:
-            expression: The SQL expression to transform.
-            dialect: The SQL dialect.
-            config: The SQL configuration.
-
-        Returns:
-            A tuple containing the transformed expression and None for ValidationResult.
-        """
-        from sqlspec.statement.sql import SQLConfig
-
-        active_config = config if config is not None else SQLConfig()
-
-        if not active_config.enable_transformations:
-            return expression, None
-
-        try:
-            result = self.transform(expression, dialect, active_config)
-        except Exception as e:  # noqa: BLE001
-            # If transformation fails, return original expression
-            logger.warning("Transformation failed: %s", e)
-            return expression, None
-        else:
-            return result.expression, None
-
-    @abstractmethod
-    def transform(
-        self,
-        expression: exp.Expression,
-        dialect: "DialectType",
-        config: "SQLConfig",
-        **kwargs: Any,
-    ) -> TransformationResult:
-        """Transform the SQL expression.
-
-        Args:
-            expression: The SQL expression to transform.
-            dialect: The SQL dialect.
-            config: The SQL configuration.
-            kwargs: Additional keyword arguments.
-
-        Returns:
-            A TransformationResult.
-        """
-        raise NotImplementedError
-
-
 class AnalysisResult:
     """Result of SQL analysis with detailed metrics and insights."""
 
@@ -416,426 +419,3 @@ class AnalysisResult:
 
     def __bool__(self) -> bool:
         return len(self.issues) == 0
-
-
-class SQLTransformation(ABC):
-    """Abstract base class for SQL transformations."""
-
-    @abstractmethod
-    def transform(
-        self,
-        expression: exp.Expression,
-        dialect: DialectType,
-        config: "SQLConfig",
-        **kwargs: Any,
-    ) -> TransformationResult:
-        """Transform the SQL expression.
-
-        Args:
-            expression: The SQL expression to transform.
-            dialect: The SQL dialect.
-            config: The SQL configuration.
-            kwargs: Additional keyword arguments.
-
-        Returns:
-            A TransformationResult.
-        """
-        raise NotImplementedError
-
-
-class SQLAnalysis(ABC):
-    """Abstract base class for SQL analysis."""
-
-    @abstractmethod
-    def analyze(
-        self,
-        expression: exp.Expression,
-        dialect: DialectType,
-        config: "SQLConfig",
-        **kwargs: Any,
-    ) -> AnalysisResult:
-        """Analyze the SQL expression.
-
-        Args:
-            expression: The SQL expression to analyze.
-            dialect: The SQL dialect.
-            config: The SQL configuration.
-            kwargs: Additional keyword arguments.
-
-        Returns:
-            An AnalysisResult.
-        """
-        raise NotImplementedError
-
-
-class UnifiedProcessor(ProcessorProtocol[exp.Expression]):
-    """Unified processor that combines analysis, transformation, and validation.
-
-    This processor performs analysis once and shares the results with all
-    transformers and validators to avoid redundant parsing and processing.
-    """
-
-    def __init__(
-        self,
-        analyzers: "Optional[Sequence[SQLAnalysis]]" = None,
-        transformers: "Optional[Sequence[SQLTransformer]]" = None,
-        validators: "Optional[Sequence[SQLValidation]]" = None,
-        cache_analysis: bool = True,
-    ) -> None:
-        """Initialize the unified processor.
-
-        Args:
-            analyzers: List of analysis components to run
-            transformers: List of transformation components to run
-            validators: List of validation components to run
-            cache_analysis: Whether to cache analysis results
-        """
-        self.analyzers = list(analyzers) if analyzers else []
-        self.transformers = list(transformers) if transformers else []
-        self.validators = list(validators) if validators else []
-        self.cache_analysis = cache_analysis
-        self._analysis_cache: dict[str, AnalysisResult] = {}
-
-    def process(
-        self,
-        expression: exp.Expression,
-        dialect: "Optional[DialectType]" = None,
-        config: "Optional[SQLConfig]" = None,
-    ) -> "tuple[exp.Expression, Optional[ValidationResult]]":
-        """Process the expression through unified analysis, transformation, and validation.
-
-        Args:
-            expression: The SQL expression to process
-            dialect: The SQL dialect
-            config: The SQL configuration
-
-        Returns:
-            Tuple of (transformed expression, validation result)
-        """
-        from sqlspec.statement.sql import SQLConfig
-
-        active_config = config if config is not None else SQLConfig()
-
-        # Step 1: Perform unified analysis once
-        analysis_result = self._perform_unified_analysis(expression, dialect, active_config)
-
-        # Step 2: Apply transformations (if enabled)
-        current_expression = expression
-        if active_config.enable_transformations:
-            current_expression = self._apply_transformations(
-                current_expression, analysis_result, dialect, active_config
-            )
-
-        # Step 3: Apply validations (if enabled)
-        validation_result = None
-        if active_config.enable_validation:
-            validation_result = self._apply_validations(current_expression, analysis_result, dialect, active_config)
-
-        return current_expression, validation_result
-
-    def _perform_unified_analysis(
-        self,
-        expression: exp.Expression,
-        dialect: "Optional[DialectType]",
-        config: "SQLConfig",
-    ) -> AnalysisResult:
-        """Perform comprehensive analysis once and cache results."""
-        # Check cache first
-        cache_key = expression.sql() if self.cache_analysis else None
-        if cache_key and cache_key in self._analysis_cache:
-            return self._analysis_cache[cache_key]
-
-        # Perform comprehensive analysis
-        analysis = AnalysisResult()
-
-        # Basic structural analysis
-        analysis.metrics.update(self._analyze_structure(expression))
-
-        # Join analysis (shared by multiple validators)
-        analysis.metrics.update(self._analyze_joins(expression))
-
-        # Subquery analysis
-        analysis.metrics.update(self._analyze_subqueries(expression))
-
-        # Function analysis
-        analysis.metrics.update(self._analyze_functions(expression))
-
-        # Table and column analysis
-        analysis.metrics.update(self._analyze_tables_and_columns(expression))
-
-        # Complexity scoring
-        analysis.metrics["complexity_score"] = self._calculate_complexity_score(analysis.metrics)
-
-        # Run custom analyzers
-        for analyzer in self.analyzers:
-            self._run_single_analyzer(analyzer, expression, dialect, config, analysis)
-
-        # Cache the result
-        if cache_key:
-            self._analysis_cache[cache_key] = analysis
-
-        return analysis
-
-    @staticmethod
-    def _run_single_analyzer(
-        analyzer: "SQLAnalysis",
-        expression: exp.Expression,
-        dialect: "Optional[DialectType]",
-        config: "SQLConfig",
-        analysis: AnalysisResult,
-    ) -> None:
-        """Run a single analyzer and update the analysis result."""
-        try:
-            custom_result = analyzer.analyze(expression, dialect, config)
-            analysis.metrics.update(custom_result.metrics)
-            analysis.warnings.extend(custom_result.warnings)
-            analysis.issues.extend(custom_result.issues)
-            analysis.notes.extend(custom_result.notes)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Analysis component failed: %s", e)
-            analysis.warnings.append(f"Analysis component failed: {e}")
-
-    def _apply_transformations(
-        self,
-        expression: exp.Expression,
-        analysis: AnalysisResult,
-        dialect: "Optional[DialectType]",
-        config: "SQLConfig",
-    ) -> exp.Expression:
-        """Apply transformations using shared analysis results."""
-        current_expression = expression
-
-        for transformer in self.transformers:
-            current_expression = self._run_single_transformer(
-                transformer, current_expression, analysis, dialect, config
-            )
-
-        return current_expression
-
-    @staticmethod
-    def _run_single_transformer(
-        transformer: "SQLTransformer",
-        expression: exp.Expression,
-        analysis: AnalysisResult,
-        dialect: "Optional[DialectType]",
-        config: "SQLConfig",
-    ) -> exp.Expression:
-        """Run a single transformer and return the transformed expression."""
-        try:
-            # Pass analysis results to transformer if it supports it
-            transform_with_analysis = getattr(transformer, "transform_with_analysis", None)
-            if transform_with_analysis is not None:
-                result = transform_with_analysis(expression, analysis, dialect, config)
-            else:
-                result = transformer.transform(expression, dialect, config)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Transformation component failed: %s", e)
-            return expression
-        else:
-            if result.modified:
-                return result.expression
-            return expression
-
-    def _apply_validations(
-        self,
-        expression: exp.Expression,
-        analysis: AnalysisResult,
-        dialect: "Optional[DialectType]",
-        config: "SQLConfig",
-    ) -> ValidationResult:
-        """Apply validations using shared analysis results."""
-        aggregated_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
-
-        for validator in self.validators:
-            self._run_single_validator(validator, expression, analysis, dialect, config, aggregated_result)
-
-        return aggregated_result
-
-    @staticmethod
-    def _run_single_validator(
-        validator: "SQLValidation",
-        expression: exp.Expression,
-        analysis: AnalysisResult,
-        dialect: "Optional[DialectType]",
-        config: "SQLConfig",
-        aggregated_result: ValidationResult,
-    ) -> None:
-        """Run a single validator and update the aggregated result."""
-        try:
-            # Pass analysis results to validator if it supports it
-            validate_with_analysis = getattr(validator, "validate_with_analysis", None)
-            if validate_with_analysis is not None:
-                result = validate_with_analysis(expression, analysis, dialect, config)
-            else:
-                result = validator.validate(expression, dialect, config)
-
-            aggregated_result.merge(result)
-
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Validation component failed: %s", e)
-            aggregated_result.warnings.append(f"Validation component failed: {e}")
-
-    @staticmethod
-    def _analyze_structure(expression: exp.Expression) -> dict[str, Any]:
-        """Analyze basic SQL structure."""
-        return {
-            "statement_type": type(expression).__name__,
-            "has_subqueries": bool(expression.find(exp.Subquery)),
-            "has_cte": bool(expression.find(exp.CTE)),
-            "has_window_functions": bool(expression.find(exp.Window)),
-            "has_aggregates": bool(expression.find(exp.AggFunc)),
-        }
-
-    def _analyze_joins(self, expression: exp.Expression) -> dict[str, Any]:
-        """Comprehensive join analysis shared by multiple components."""
-        joins = list(expression.find_all(exp.Join))
-        join_count = len(joins)
-
-        join_types = {}
-        cross_joins = 0
-        joins_without_conditions = 0
-
-        for join in joins:
-            # Analyze join type
-            join_type = self._get_join_type(join)
-            join_types[join_type] = join_types.get(join_type, 0) + 1
-
-            # Check for cross joins
-            if join_type == "CROSS":
-                cross_joins += 1
-
-            # Check for joins without conditions
-            if not join.on and not join.using and join_type != "CROSS":
-                joins_without_conditions += 1
-
-        # Analyze potential cartesian products
-        cartesian_risk = cross_joins + joins_without_conditions
-
-        return {
-            "join_count": join_count,
-            "join_types": join_types,
-            "cross_joins": cross_joins,
-            "joins_without_conditions": joins_without_conditions,
-            "cartesian_risk": cartesian_risk,
-        }
-
-    def _analyze_subqueries(self, expression: exp.Expression) -> dict[str, Any]:
-        """Analyze subquery complexity."""
-        subqueries = list(expression.find_all(exp.Subquery))
-        subquery_count = len(subqueries)
-
-        max_depth = self._calculate_subquery_depth(expression)
-        correlated_count = self._count_correlated_subqueries(subqueries)
-
-        return {
-            "subquery_count": subquery_count,
-            "max_subquery_depth": max_depth,
-            "correlated_subquery_count": correlated_count,
-        }
-
-    @staticmethod
-    def _analyze_functions(expression: exp.Expression) -> dict[str, Any]:
-        """Analyze function usage."""
-        functions = list(expression.find_all(exp.Func))
-        function_count = len(functions)
-
-        function_types = {}
-        expensive_functions = 0
-
-        expensive_func_names = {"regexp", "regex", "like", "concat_ws", "group_concat"}
-
-        for func in functions:
-            func_name = func.name.lower() if func.name else "unknown"
-            function_types[func_name] = function_types.get(func_name, 0) + 1
-
-            if func_name in expensive_func_names:
-                expensive_functions += 1
-
-        return {
-            "function_count": function_count,
-            "function_types": function_types,
-            "expensive_functions": expensive_functions,
-        }
-
-    @staticmethod
-    def _analyze_tables_and_columns(expression: exp.Expression) -> dict[str, Any]:
-        """Analyze table and column usage."""
-        tables = []
-        for table in expression.find_all(exp.Table):
-            if table.name and table.name not in tables:
-                tables.append(table.name)
-
-        columns = []
-        for column in expression.find_all(exp.Column):
-            if column.name and column.name not in columns:
-                columns.append(column.name)
-
-        return {
-            "table_count": len(tables),
-            "tables": tables,
-            "column_count": len(columns),
-            "columns": columns,
-        }
-
-    @staticmethod
-    def _calculate_complexity_score(metrics: dict[str, Any]) -> int:
-        """Calculate overall complexity score from metrics."""
-        score = 0
-
-        # Join complexity
-        score += metrics.get("join_count", 0) * 3
-        score += metrics.get("cartesian_risk", 0) * 20
-
-        # Subquery complexity
-        score += metrics.get("subquery_count", 0) * 5
-        score += metrics.get("max_subquery_depth", 0) * 10
-        score += metrics.get("correlated_subquery_count", 0) * 8
-
-        # Function complexity
-        score += metrics.get("function_count", 0) * 1
-        score += metrics.get("expensive_functions", 0) * 5
-
-        return score
-
-    @staticmethod
-    def _get_join_type(join: exp.Join) -> str:
-        """Determine the type of join."""
-        if join.side and join.side.upper() == "LEFT":
-            return "LEFT"
-        if join.side and join.side.upper() == "RIGHT":
-            return "RIGHT"
-        if join.side and join.side.upper() == "FULL":
-            return "FULL"
-        if join.kind and join.kind.upper() == "CROSS":
-            return "CROSS"
-        if not join.on and not join.using:
-            return "CROSS"  # Implicit cross join
-        return "INNER"
-
-    def _calculate_subquery_depth(self, expression: exp.Expression, current_depth: int = 0) -> int:
-        """Calculate maximum subquery nesting depth."""
-        max_depth = current_depth
-
-        for subquery in expression.find_all(exp.Subquery):
-            if subquery.parent == expression:  # Direct child
-                depth = self._calculate_subquery_depth(subquery, current_depth + 1)
-                max_depth = max(max_depth, depth)
-
-        return max_depth
-
-    @staticmethod
-    def _count_correlated_subqueries(subqueries: list[exp.Subquery]) -> int:
-        """Count correlated subqueries (simplified heuristic)."""
-        correlated_count = 0
-
-        for subquery in subqueries:
-            # Simple heuristic: check for EXISTS patterns
-            subquery_sql = subquery.sql().lower()
-            if any(keyword in subquery_sql for keyword in ["exists", "not exists"]):
-                correlated_count += 1
-
-        return correlated_count
-
-    def clear_cache(self) -> None:
-        """Clear the analysis cache."""
-        self._analysis_cache.clear()

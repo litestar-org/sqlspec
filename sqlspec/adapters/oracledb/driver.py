@@ -2,7 +2,7 @@
 import logging
 from collections.abc import AsyncGenerator, Generator, Sequence
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
+from typing import Any, ClassVar, Optional, Union, cast
 
 import pyarrow as pa
 from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
@@ -16,14 +16,11 @@ from sqlspec.statement.mixins import (
     SyncArrowMixin,
 )
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT, SQLParameterType
+from sqlspec.typing import DictRow, ModelDTOT
 from sqlspec.utils.sync_tools import ensure_async_
 from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
-
-if TYPE_CHECKING:
-    from sqlspec.statement.filters import StatementFilter
 
 __all__ = ("OracleAsyncConnection", "OracleAsyncDriver", "OracleSyncConnection", "OracleSyncDriver")
 
@@ -72,48 +69,28 @@ class OracleSyncDriver(
     def _execute_impl(
         self,
         statement: SQL,
-        parameters: Optional[SQLParameterType] = None,
         connection: Optional[OracleSyncConnection] = None,
-        config: Optional[SQLConfig] = None,
-        is_many: bool = False,
-        is_script: bool = False,
         **kwargs: Any,
     ) -> Any:
         with instrument_operation(self, "oracle_execute", "database"):
             conn = self._connection(connection)
-            if config is not None and config != statement.config:
-                statement = statement.copy(config=config)
 
             final_sql: str
-            final_driver_params: Union[dict[str, Any], list[dict[str, Any]], None] = None
+            final_driver_params: Union[dict[str, Any], list[Union[dict[str, Any], Sequence[Any]]], None] = None
 
-            if is_script:
+            if statement.is_script:
                 final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
             else:
                 final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-                if is_many:
-                    batch_params_list: list[dict[str, Any]] = []
-                    if parameters is not None and isinstance(parameters, Sequence):
-                        for param_set_item in parameters:
-                            if isinstance(param_set_item, dict):
-                                batch_params_list.append(param_set_item)
-                            elif isinstance(param_set_item, (list, tuple)):
-                                batch_params_list.append({f"p{i}": v for i, v in enumerate(param_set_item)})
-                            elif param_set_item is None:
-                                batch_params_list.append({})
-                            else:
-                                batch_params_list.append({"p0": param_set_item})
-                    final_driver_params = batch_params_list
-                else:
-                    single_params = statement.get_parameters(style=self._get_placeholder_style())
-                    if single_params is None:
-                        final_driver_params = None
-                    elif isinstance(single_params, dict):
-                        final_driver_params = single_params
-                    elif isinstance(single_params, (list, tuple)):
-                        final_driver_params = {f"p{i}": v for i, v in enumerate(single_params)}
+                params_to_execute = statement.parameters
+
+                if statement.is_many:
+                    if params_to_execute is not None and isinstance(params_to_execute, Sequence):
+                        final_driver_params = list(params_to_execute)  # type: ignore
                     else:
-                        final_driver_params = {"p0": single_params}
+                        final_driver_params = []
+                elif params_to_execute is not None:
+                    final_driver_params = params_to_execute  # type: ignore
 
             with self._get_cursor(conn) as cursor:
                 if self.instrumentation_config.log_queries:
@@ -122,29 +99,36 @@ class OracleSyncDriver(
                 if self.instrumentation_config.log_parameters and final_driver_params:
                     logger.debug("Query parameters: %s", final_driver_params)
 
-                if is_script:
+                if statement.is_script:
                     cursor.execute(final_sql)
                     return "SCRIPT EXECUTED"
-                if is_many:
+
+                if statement.is_many:
                     cursor.executemany(
                         final_sql,
-                        cast("list[dict[str, Any]]", final_driver_params) if final_driver_params is not None else [],
+                        cast("list[Any]", final_driver_params) if final_driver_params is not None else [],
                     )
+                elif final_driver_params is None:
+                    cursor.execute(final_sql)
+                elif isinstance(final_driver_params, dict):
+                    cursor.execute(final_sql, final_driver_params)
+                elif isinstance(final_driver_params, (list, tuple)):
+                    cursor.execute(final_sql, list(final_driver_params))
                 else:
-                    cursor.execute(final_sql, final_driver_params or {})
+                    cursor.execute(final_sql, [final_driver_params])
                 return cursor
 
     def _wrap_select_result(
         self,
         statement: SQL,
-        raw_driver_result: Any,
+        result: Any,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
-    ) -> Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]]]:
+    ) -> Union[SQLResult[ModelDTOT], SQLResult[dict[str, Any]]]:
         with instrument_operation(self, "oracle_wrap_select", "database"):
-            cursor = cast("Cursor", raw_driver_result)
+            cursor = cast("Cursor", result)
             if not cursor.description:
-                return SelectResult[dict[str, Any]](statement=statement, data=[], column_names=[])
+                return SQLResult[dict[str, Any]](statement=statement, data=[], column_names=[], operation_type="SELECT")
             column_names = [col[0] for col in cursor.description]
             fetched_tuples = cursor.fetchall()
             rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples]
@@ -153,112 +137,108 @@ class OracleSyncDriver(
                 logger.debug("Query returned %d rows", len(rows_as_dicts))
 
             if schema_type:
-                converted_data = self.to_schema(rows_as_dicts, schema_type=schema_type)
-                return SelectResult[ModelDTOT](
+                converted_data_seq = self.to_schema(rows_as_dicts, schema_type=schema_type)
+                converted_data_list = list(converted_data_seq) if converted_data_seq is not None else []
+                return SQLResult[ModelDTOT](
                     statement=statement,
-                    data=converted_data,
+                    data=converted_data_list,
                     column_names=column_names,
+                    operation_type="SELECT",
                 )
-            return SelectResult[dict[str, Any]](
+            return SQLResult[dict[str, Any]](
                 statement=statement,
                 data=rows_as_dicts,
                 column_names=column_names,
+                operation_type="SELECT",
             )
 
     def _wrap_execute_result(
         self,
         statement: SQL,
-        raw_driver_result: Any,
+        result: Any,
         **kwargs: Any,
-    ) -> ExecuteResult:
+    ) -> SQLResult[dict[str, Any]]:
         with instrument_operation(self, "oracle_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             if statement.expression and hasattr(statement.expression, "key"):
                 operation_type = str(statement.expression.key).upper()
+
             rows_affected = -1
-            if isinstance(raw_driver_result, str):
-                execute_data = {
-                    "rows_affected": 0,
-                    "last_inserted_id": None,
-                    "inserted_ids": [],
-                    "returning_data": None,
-                    "operation_type": operation_type or "SCRIPT",
-                }
-                return ExecuteResult(
-                    statement=statement,
-                    data=execute_data,
-                    rows_affected=0,
-                    operation_type=operation_type or "SCRIPT",
-                )
-            cursor = cast("Cursor", raw_driver_result)
-            if cursor and hasattr(cursor, "rowcount"):
-                rc = cursor.rowcount
-                if isinstance(rc, list):
-                    rows_affected = sum(rc)
-                elif isinstance(rc, int):
-                    rows_affected = rc
+            status_message: Optional[str] = None
+
+            if isinstance(result, str) and result == "SCRIPT EXECUTED":
+                operation_type = "SCRIPT"
+                rows_affected = 0  # No specific row count for script success message
+                status_message = result
+            else:
+                cursor = cast("Cursor", result)
+                if cursor and hasattr(cursor, "rowcount"):
+                    rc = cursor.rowcount
+                    if isinstance(rc, list):  # For batch operations, rowcount might be a list
+                        rows_affected = sum(rc)
+                    elif isinstance(rc, int):
+                        rows_affected = rc
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)
 
-            execute_data = {
-                "rows_affected": rows_affected,
-                "last_inserted_id": None,
-                "inserted_ids": [],
-                "returning_data": None,
-                "operation_type": operation_type,
-            }
-            return ExecuteResult(
-                statement=statement, data=execute_data, rows_affected=rows_affected, operation_type=operation_type
+            # Data is empty as DML with RETURNING needs special handling in Oracle (outparams)
+            # not covered by generic cursor.fetchall() in _wrap_execute_result.
+            # last_inserted_id is not standardly available from cursor.rowcount or cursor.lastrowid.
+            return SQLResult[dict[str, Any]](
+                statement=statement,
+                data=[],
+                rows_affected=rows_affected,
+                operation_type=operation_type,
+                metadata={"status_message": status_message} if status_message else {},
             )
 
-    def select_to_arrow(
+    def _select_to_arrow_impl(
         self,
-        statement: "Union[str, SQL, Any]",
-        parameters: Optional[SQLParameterType] = None,
-        *filters: "StatementFilter",
-        connection: Optional[OracleSyncConnection] = None,
-        config: Optional[SQLConfig] = None,
+        stmt_obj: "SQL",
+        connection: "OracleSyncConnection",
         **kwargs: Any,
     ) -> "ArrowResult":
-        with instrument_operation(self, "oracle_select_to_arrow", "database"):
-            conn = self._connection(connection)
-            current_config = config or self.config
-            stmt_obj = SQL(
-                statement, parameters, *(filters or ()), dialect=self.dialect, config=current_config, **kwargs
-            )
-            stmt_obj.validate()
-            if not SyncDriverAdapterProtocol.returns_rows(stmt_obj.expression):
-                op_type = (
-                    str(stmt_obj.expression.key).upper()
-                    if stmt_obj.expression and hasattr(stmt_obj.expression, "key")
-                    else "UNKNOWN"
-                )
-                msg = f"Cannot fetch Arrow table for a non-query statement. Command type: {op_type}"
-                raise TypeError(msg)
+        # SQL object (stmt_obj) is already built and validated by the mixin.
+        # returns_rows check is done by the mixin.
+        # Instrumentation is handled by the mixin (SyncArrowMixin).
+        # pyarrow as pa is imported at the top of the file.
 
-            final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
-            oracle_params = stmt_obj.get_parameters(style=self._get_placeholder_style())
-            oracle_params_dict: dict[str, Any]
-            if oracle_params is None:
-                oracle_params_dict = {}
-            elif isinstance(oracle_params, dict):
-                oracle_params_dict = oracle_params
-            elif isinstance(oracle_params, (list, tuple)):
-                oracle_params_dict = {f"p{i}": v for i, v in enumerate(oracle_params)}
-            else:
-                oracle_params_dict = {"p0": oracle_params}
+        final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
+        oracle_params = stmt_obj.get_parameters(style=self._get_placeholder_style())
 
-            # Use Oracle cursor for Arrow table generation
-            with self._get_cursor(conn) as cursor:
-                cursor.execute(final_sql, oracle_params_dict)
-                rows = cursor.fetchall()
-                if not rows:
-                    return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=[]))
-                column_names = [col[0] for col in cursor.description or []]
-                list_of_cols = list(zip(*rows)) if rows else [[] for _ in column_names]
-                arrow_table = pa.Table.from_arrays(list_of_cols, names=column_names)
-                return ArrowResult(statement=stmt_obj, data=arrow_table)
+        oracle_params_dict: dict[str, Any]
+        if oracle_params is None:
+            oracle_params_dict = {}
+        elif isinstance(oracle_params, dict):
+            oracle_params_dict = oracle_params
+        elif isinstance(oracle_params, (list, tuple)):
+            # Oracle named params are like :p0, :p1. SQL.get_parameters should ideally return a dict.
+            # If it returns a list/tuple for named style, this conversion is a fallback.
+            oracle_params_dict = {f"p{i}": v for i, v in enumerate(oracle_params)}
+        else:  # Single parameter
+            oracle_params_dict = {"p0": oracle_params}  # Fallback for a single non-dict/sequence param
+
+        if self.instrumentation_config.log_queries:
+            logger.debug("Executing Oracle Sync Arrow query: %s", final_sql)
+        if self.instrumentation_config.log_parameters and oracle_params_dict:
+            logger.debug("Query parameters for Oracle Sync Arrow: %s", oracle_params_dict)
+
+        with self._get_cursor(connection) as cursor:
+            cursor.execute(final_sql, oracle_params_dict)
+            rows = cursor.fetchall()  # list of tuples
+            if not rows:
+                column_names_from_desc = [col[0] for col in cursor.description or []]
+                return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=column_names_from_desc))
+
+            column_names = [col[0] for col in cursor.description or []]
+            # Transpose list of tuples (rows) into list of lists (columns)
+            list_of_cols = (
+                list(zip(*rows)) if rows else [[] for _ in column_names]
+            )  # Ensure inner lists if rows is empty but cols exist
+
+            arrow_table = pa.Table.from_arrays(list_of_cols, names=column_names)
+            return ArrowResult(statement=stmt_obj, data=arrow_table)
 
 
 class OracleAsyncDriver(
@@ -302,48 +282,28 @@ class OracleAsyncDriver(
     async def _execute_impl(
         self,
         statement: SQL,
-        parameters: Optional[SQLParameterType] = None,
         connection: Optional[OracleAsyncConnection] = None,
-        config: Optional[SQLConfig] = None,
-        is_many: bool = False,
-        is_script: bool = False,
         **kwargs: Any,
     ) -> Any:
         async with instrument_operation_async(self, "oracle_async_execute", "database"):
             conn = self._connection(connection)
-            if config is not None and config != statement.config:
-                statement = statement.copy(config=config)
 
             final_sql: str
-            final_driver_params: Union[dict[str, Any], list[dict[str, Any]], None] = None
+            final_driver_params: Union[dict[str, Any], list[Union[dict[str, Any], Sequence[Any]]], None] = None
 
-            if is_script:
+            if statement.is_script:
                 final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
             else:
                 final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-                if is_many:
-                    batch_params_list: list[dict[str, Any]] = []
-                    if parameters is not None and isinstance(parameters, Sequence):
-                        for param_set_item in parameters:
-                            if isinstance(param_set_item, dict):
-                                batch_params_list.append(param_set_item)
-                            elif isinstance(param_set_item, (list, tuple)):
-                                batch_params_list.append({f"p{i}": v for i, v in enumerate(param_set_item)})
-                            elif param_set_item is None:
-                                batch_params_list.append({})
-                            else:
-                                batch_params_list.append({"p0": param_set_item})
-                    final_driver_params = batch_params_list
-                else:
-                    single_params = statement.get_parameters(style=self._get_placeholder_style())
-                    if single_params is None:
-                        final_driver_params = None
-                    elif isinstance(single_params, dict):
-                        final_driver_params = single_params
-                    elif isinstance(single_params, (list, tuple)):
-                        final_driver_params = {f"p{i}": v for i, v in enumerate(single_params)}
+                params_to_execute = statement.parameters
+
+                if statement.is_many:
+                    if params_to_execute is not None and isinstance(params_to_execute, Sequence):
+                        final_driver_params = list(params_to_execute)  # type: ignore
                     else:
-                        final_driver_params = {"p0": single_params}
+                        final_driver_params = []
+                elif params_to_execute is not None:
+                    final_driver_params = params_to_execute  # type: ignore
 
             async with self._get_cursor(conn) as cursor:
                 if self.instrumentation_config.log_queries:
@@ -352,26 +312,35 @@ class OracleAsyncDriver(
                 if self.instrumentation_config.log_parameters and final_driver_params:
                     logger.debug("Query parameters: %s", final_driver_params)
 
-                if is_script:
+                if statement.is_script:
                     await cursor.execute(final_sql)
                     return "SCRIPT EXECUTED"
-                if is_many:
-                    await cursor.executemany(final_sql, cast("list[dict[str, Any]]", final_driver_params) or [])
+
+                if statement.is_many:
+                    await cursor.executemany(
+                        final_sql, cast("list[Any]", final_driver_params) if final_driver_params is not None else []
+                    )
+                elif final_driver_params is None:
+                    await cursor.execute(final_sql)
+                elif isinstance(final_driver_params, dict):
+                    await cursor.execute(final_sql, final_driver_params)
+                elif isinstance(final_driver_params, (list, tuple)):
+                    await cursor.execute(final_sql, list(final_driver_params))
                 else:
-                    await cursor.execute(final_sql, final_driver_params or {})
+                    await cursor.execute(final_sql, [final_driver_params])
                 return cursor
 
     async def _wrap_select_result(
         self,
         statement: SQL,
-        raw_driver_result: Any,
+        result: Any,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
-    ) -> Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]]]:
+    ) -> Union[SQLResult[ModelDTOT], SQLResult[dict[str, Any]]]:
         async with instrument_operation_async(self, "oracle_async_wrap_select", "database"):
-            cursor = cast("AsyncCursor", raw_driver_result)
+            cursor = cast("AsyncCursor", result)
             if not cursor.description:
-                return SelectResult[dict[str, Any]](statement=statement, data=[], column_names=[])
+                return SQLResult[dict[str, Any]](statement=statement, data=[], column_names=[], operation_type="SELECT")
             column_names = [col[0] for col in cursor.description]
             fetched_tuples = await cursor.fetchall()
             rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples]
@@ -380,109 +349,95 @@ class OracleAsyncDriver(
                 logger.debug("Query returned %d rows", len(rows_as_dicts))
 
             if schema_type:
-                converted_data = self.to_schema(rows_as_dicts, schema_type=schema_type)
-                return SelectResult[ModelDTOT](
+                converted_data_seq = self.to_schema(rows_as_dicts, schema_type=schema_type)
+                converted_data_list = list(converted_data_seq) if converted_data_seq is not None else []
+                return SQLResult[ModelDTOT](
                     statement=statement,
-                    data=converted_data,
+                    data=converted_data_list,
                     column_names=column_names,
+                    operation_type="SELECT",
                 )
-            return SelectResult[dict[str, Any]](
+            return SQLResult[dict[str, Any]](
                 statement=statement,
                 data=rows_as_dicts,
                 column_names=column_names,
+                operation_type="SELECT",
             )
 
     async def _wrap_execute_result(
         self,
         statement: SQL,
-        raw_driver_result: Any,
+        result: Any,
         **kwargs: Any,
-    ) -> ExecuteResult:
+    ) -> SQLResult[dict[str, Any]]:
         async with instrument_operation_async(self, "oracle_async_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             if statement.expression and hasattr(statement.expression, "key"):
                 operation_type = str(statement.expression.key).upper()
+
             rows_affected = -1
-            if isinstance(raw_driver_result, str):
-                execute_data = {
-                    "rows_affected": 0,
-                    "last_inserted_id": None,
-                    "inserted_ids": [],
-                    "returning_data": None,
-                    "operation_type": operation_type or "SCRIPT",
-                }
-                return ExecuteResult(
-                    statement=statement,
-                    data=execute_data,
-                    rows_affected=0,
-                    operation_type=operation_type or "SCRIPT",
-                )
-            cursor = cast("AsyncCursor", raw_driver_result)
-            if cursor and hasattr(cursor, "rowcount"):
-                rc = cursor.rowcount
-                if isinstance(rc, list):
-                    rows_affected = sum(rc)
-                elif isinstance(rc, int):
-                    rows_affected = rc
+            status_message: Optional[str] = None
+
+            if isinstance(result, str) and result == "SCRIPT EXECUTED":
+                operation_type = "SCRIPT"
+                rows_affected = 0
+                status_message = result
+            else:
+                cursor = cast("AsyncCursor", result)
+                if cursor and hasattr(cursor, "rowcount"):
+                    rc = cursor.rowcount
+                    if isinstance(rc, list):
+                        rows_affected = sum(rc)
+                    elif isinstance(rc, int):
+                        rows_affected = rc
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)
 
-            execute_data = {
-                "rows_affected": rows_affected,
-                "last_inserted_id": None,
-                "inserted_ids": [],
-                "returning_data": None,
-                "operation_type": operation_type,
-            }
-            return ExecuteResult(
-                statement=statement, data=execute_data, rows_affected=rows_affected, operation_type=operation_type
+            return SQLResult[dict[str, Any]](
+                statement=statement,
+                data=[],
+                rows_affected=rows_affected,
+                operation_type=operation_type,
+                metadata={"status_message": status_message} if status_message else {},
             )
 
-    async def select_to_arrow(
+    async def _select_to_arrow_impl(
         self,
-        statement: "Union[str, SQL, Any]",
-        parameters: Optional[SQLParameterType] = None,
-        *filters: "StatementFilter",
-        connection: Optional[OracleAsyncConnection] = None,
-        config: Optional[SQLConfig] = None,
+        stmt_obj: "SQL",
+        connection: "OracleAsyncConnection",
         **kwargs: Any,
     ) -> "ArrowResult":
-        async with instrument_operation_async(self, "oracle_async_select_to_arrow", "database"):
-            conn = self._connection(connection)
-            current_config = config or self.config
-            stmt_obj = SQL(
-                statement, parameters, *(filters or ()), dialect=self.dialect, config=current_config, **kwargs
-            )
-            stmt_obj.validate()
-            if not AsyncDriverAdapterProtocol.returns_rows(stmt_obj.expression):
-                op_type = (
-                    str(stmt_obj.expression.key).upper()
-                    if stmt_obj.expression and hasattr(stmt_obj.expression, "key")
-                    else "UNKNOWN"
-                )
-                msg = f"Cannot fetch Arrow table for a non-query statement. Command type: {op_type}"
-                raise TypeError(msg)
+        # SQL object (stmt_obj) is already built and validated by the mixin.
+        # returns_rows check is done by the mixin.
+        # Instrumentation is handled by the mixin (AsyncArrowMixin).
+        # pyarrow as pa is imported at the top of the file.
 
-            final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
-            oracle_params = stmt_obj.get_parameters(style=self._get_placeholder_style())
-            oracle_params_dict: dict[str, Any]
-            if oracle_params is None:
-                oracle_params_dict = {}
-            elif isinstance(oracle_params, dict):
-                oracle_params_dict = oracle_params
-            elif isinstance(oracle_params, (list, tuple)):
-                oracle_params_dict = {f"p{i}": v for i, v in enumerate(oracle_params)}
-            else:
-                oracle_params_dict = {"p0": oracle_params}
+        final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
+        oracle_params = stmt_obj.get_parameters(style=self._get_placeholder_style())
+        oracle_params_dict: dict[str, Any]
+        if oracle_params is None:
+            oracle_params_dict = {}
+        elif isinstance(oracle_params, dict):
+            oracle_params_dict = oracle_params
+        elif isinstance(oracle_params, (list, tuple)):
+            oracle_params_dict = {f"p{i}": v for i, v in enumerate(oracle_params)}
+        else:
+            oracle_params_dict = {"p0": oracle_params}
 
-            # Use Oracle cursor for Arrow table generation
-            async with self._get_cursor(conn) as cursor:
-                await cursor.execute(final_sql, oracle_params_dict)
-                rows = await cursor.fetchall()
-                if not rows:
-                    return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=[]))
-                column_names = [col[0] for col in cursor.description or []]
-                list_of_cols = list(zip(*rows)) if rows else [[] for _ in column_names]
-                arrow_table = pa.Table.from_arrays(list_of_cols, names=column_names)
-                return ArrowResult(statement=stmt_obj, data=arrow_table)
+        if self.instrumentation_config.log_queries:
+            logger.debug("Executing Oracle Async Arrow query: %s", final_sql)
+        if self.instrumentation_config.log_parameters and oracle_params_dict:
+            logger.debug("Query parameters for Oracle Async Arrow: %s", oracle_params_dict)
+
+        async with self._get_cursor(connection) as cursor:
+            await cursor.execute(final_sql, oracle_params_dict)
+            rows = await cursor.fetchall()
+            if not rows:
+                column_names_from_desc = [col[0] for col in cursor.description or []]
+                return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=column_names_from_desc))
+
+            column_names = [col[0] for col in cursor.description or []]
+            list_of_cols = list(zip(*rows)) if rows else [[] for _ in column_names]
+            arrow_table = pa.Table.from_arrays(list_of_cols, names=column_names)
+            return ArrowResult(statement=stmt_obj, data=arrow_table)

@@ -57,7 +57,7 @@ def translator_mixin() -> SQLTranslatorMixin[Any]:
 
 
 @pytest.mark.parametrize(
-    ("statement_input", "from_dialect", "to_dialect", "should_succeed"),
+    ("statement", "from_dialect", "to_dialect", "should_succeed"),
     [
         ("SELECT * FROM users", "mysql", "postgres", True),
         ("SELECT `column` FROM `table`", "mysql", "postgres", True),
@@ -69,31 +69,31 @@ def translator_mixin() -> SQLTranslatorMixin[Any]:
 )
 def test_convert_to_dialect(
     translator_mixin: SQLTranslatorMixin[Any],
-    statement_input: Any,
+    statement: Any,
     from_dialect: Optional[str],
     to_dialect: Optional[str],
     should_succeed: bool,
 ) -> None:
     """Test convert_to_dialect method with various inputs."""
     if should_succeed:
-        if isinstance(statement_input, str) and from_dialect:
+        if isinstance(statement, str) and from_dialect:
             # Mock the dialect parsing
             with patch("sqlspec.statement.mixins.parse_one") as mock_parse:
                 mock_expr = Mock(spec=exp.Expression)
                 mock_expr.sql.return_value = f"-- Converted from {from_dialect} to {to_dialect}"
                 mock_parse.return_value = mock_expr
 
-                result = translator_mixin.convert_to_dialect(statement_input, to_dialect)
+                result = translator_mixin.convert_to_dialect(statement, to_dialect)
 
                 assert isinstance(result, str)
-                mock_parse.assert_called_once_with(statement_input, dialect=translator_mixin.dialect)
+                mock_parse.assert_called_once_with(statement, dialect=translator_mixin.dialect)
         else:
             # Direct conversion
-            result = translator_mixin.convert_to_dialect(statement_input, to_dialect)
+            result = translator_mixin.convert_to_dialect(statement, to_dialect)
             assert isinstance(result, str)
     else:
         with pytest.raises(SQLConversionError):
-            translator_mixin.convert_to_dialect(statement_input, to_dialect)
+            translator_mixin.convert_to_dialect(statement, to_dialect)
 
 
 def test_convert_to_dialect_with_sql_instance(translator_mixin: SQLTranslatorMixin[Any]) -> None:
@@ -342,7 +342,7 @@ def arrow_mixin() -> SyncArrowMixin[Any]:
     class TestArrowMixin(SyncArrowMixin[Any]):
         pass
 
-    return TestArrowMixin()
+    return TestArrowMixin()  # type: ignore
 
 
 def test_select_to_arrow_not_implemented(arrow_mixin: SyncArrowMixin[Any]) -> None:
@@ -375,7 +375,7 @@ def async_arrow_mixin() -> AsyncArrowMixin[Any]:
     class TestAsyncArrowMixin(AsyncArrowMixin[Any]):
         pass
 
-    return TestAsyncArrowMixin()
+    return TestAsyncArrowMixin()  # type: ignore
 
 
 async def test_async_select_to_arrow_not_implemented(async_arrow_mixin: AsyncArrowMixin[Any]) -> None:
@@ -408,7 +408,7 @@ def parquet_mixin() -> SyncParquetMixin[Any]:
     class TestParquetMixin(SyncParquetMixin[Any]):
         pass
 
-    return TestParquetMixin()
+    return TestParquetMixin()  # type: ignore
 
 
 def test_to_parquet_not_implemented(parquet_mixin: SyncParquetMixin[Any]) -> None:
@@ -441,7 +441,7 @@ def async_parquet_mixin() -> AsyncParquetMixin[Any]:
     class TestAsyncParquetMixin(AsyncParquetMixin[Any]):
         pass
 
-    return TestAsyncParquetMixin()
+    return TestAsyncParquetMixin()  # type: ignore
 
 
 async def test_async_to_parquet_not_implemented(async_parquet_mixin: AsyncParquetMixin[Any]) -> None:
@@ -473,7 +473,7 @@ def test_sql_translator_mixin_inheritance() -> None:
     class CombinedMixin(SQLTranslatorMixin[Any], SyncArrowMixin[Any]):
         dialect = "postgres"
 
-    instance = CombinedMixin()
+    instance = CombinedMixin()  # type: ignore
 
     # Should have both translator and arrow capabilities
     assert hasattr(instance, "convert_to_dialect")

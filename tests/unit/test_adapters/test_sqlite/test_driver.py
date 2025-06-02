@@ -6,7 +6,7 @@ import pytest
 
 from sqlspec.adapters.sqlite import SqliteConnection, SqliteDriver
 from sqlspec.config import InstrumentationConfig
-from sqlspec.statement.result import ExecuteResult, SelectResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -76,17 +76,12 @@ def test_sqlite_driver_execute_impl_select(sqlite_driver: SqliteDriver, mock_sql
     mock_sqlite_connection.cursor.return_value = mock_cursor
 
     # Create SQL statement
-    statement = SQL("SELECT * FROM users WHERE id = ?")
-    parameters = (1,)
+    statement = SQL("SELECT * FROM users WHERE id = ?", parameters=(1,))
 
     # Execute
     result = sqlite_driver._execute_impl(
         statement=statement,
-        parameters=parameters,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify cursor was created and execute was called
@@ -102,17 +97,12 @@ def test_sqlite_driver_execute_impl_insert(sqlite_driver: SqliteDriver, mock_sql
     mock_sqlite_connection.cursor.return_value = mock_cursor
 
     # Create SQL statement
-    statement = SQL("INSERT INTO users (name) VALUES (?)")
-    parameters = ("John",)
+    statement = SQL("INSERT INTO users (name) VALUES (?)", parameters=("John",))
 
     # Execute
     result = sqlite_driver._execute_impl(
         statement=statement,
-        parameters=parameters,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify cursor was created and execute was called
@@ -124,16 +114,14 @@ def test_sqlite_driver_execute_impl_insert(sqlite_driver: SqliteDriver, mock_sql
 def test_sqlite_driver_execute_impl_script(sqlite_driver: SqliteDriver, mock_sqlite_connection: Mock) -> None:
     """Test SQLite driver _execute_impl for script execution."""
     # Create SQL statement
-    statement = SQL("CREATE TABLE test (id INTEGER); INSERT INTO test VALUES (1);")
+    statement = SQL(
+        "CREATE TABLE test (id INTEGER); INSERT INTO test VALUES (1);", config=sqlite_driver.config
+    ).as_script()
 
     # Execute script
     result = sqlite_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=True,
     )
 
     # Verify executescript was called
@@ -150,17 +138,15 @@ def test_sqlite_driver_execute_impl_many(sqlite_driver: SqliteDriver, mock_sqlit
     mock_sqlite_connection.cursor.return_value = mock_cursor
 
     # Create SQL statement
-    statement = SQL("INSERT INTO users (name) VALUES (?)")
-    parameters = [("John",), ("Jane",), ("Bob",)]
+    parameters_list = [("John",), ("Jane",), ("Bob",)]
+    statement = SQL(
+        "INSERT INTO users (name) VALUES (?)", parameters=parameters_list, config=sqlite_driver.config
+    ).as_many()
 
     # Execute many
     result = sqlite_driver._execute_impl(
         statement=statement,
-        parameters=parameters,
         connection=None,
-        config=None,
-        is_many=True,
-        is_script=False,
     )
 
     # Verify cursor was created and executemany was called
@@ -187,11 +173,11 @@ def test_sqlite_driver_wrap_select_result(sqlite_driver: SqliteDriver) -> None:
     # Wrap result
     result = sqlite_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.data == [{"id": 1, "name": "John"}, {"id": 2, "name": "Jane"}]
     assert result.column_names == ["id", "name"]
@@ -210,11 +196,11 @@ def test_sqlite_driver_wrap_select_result_empty(sqlite_driver: SqliteDriver) -> 
     # Wrap result
     result = sqlite_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.data == []
     assert result.column_names == []
@@ -232,11 +218,11 @@ def test_sqlite_driver_wrap_execute_result(sqlite_driver: SqliteDriver) -> None:
     # Wrap result
     result = sqlite_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 3
     assert result.operation_type == "UPDATE"
@@ -250,11 +236,11 @@ def test_sqlite_driver_wrap_execute_result_script(sqlite_driver: SqliteDriver) -
     # Wrap result for script
     result = sqlite_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result="SCRIPT EXECUTED",
+        result="SCRIPT EXECUTED",
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 0
     assert result.operation_type == "SCRIPT"
@@ -282,11 +268,7 @@ def test_sqlite_driver_error_handling(sqlite_driver: SqliteDriver, mock_sqlite_c
     with pytest.raises(Exception, match="Database error"):
         sqlite_driver._execute_impl(
             statement=statement,
-            parameters=None,
             connection=None,
-            config=None,
-            is_many=False,
-            is_script=False,
         )
 
 
@@ -301,6 +283,15 @@ def test_sqlite_driver_instrumentation(sqlite_driver: SqliteDriver) -> None:
     assert hasattr(sqlite_driver.instrumentation_config, "log_parameters")
     assert hasattr(sqlite_driver.instrumentation_config, "log_results_count")
 
+    # Test with tuple parameters
+    tuple_params = (1, "John")
+    # The SQL object should contain the parameters
+    statement_with_params = SQL("SELECT * FROM users WHERE id = ? AND name = ?", parameters=tuple_params)
+    sqlite_driver._execute_impl(
+        statement=statement_with_params,
+        connection=None,
+    )
+
 
 def test_sqlite_driver_parameter_processing(sqlite_driver: SqliteDriver, mock_sqlite_connection: Mock) -> None:
     """Test SQLite driver parameter processing."""
@@ -308,21 +299,19 @@ def test_sqlite_driver_parameter_processing(sqlite_driver: SqliteDriver, mock_sq
     mock_cursor = Mock()
     mock_sqlite_connection.cursor.return_value = mock_cursor
 
-    # Test with different parameter types
-    statement = SQL("SELECT * FROM users WHERE id = ? AND name = ?")
-
     # Test with tuple parameters
     tuple_params = (1, "John")
-    sqlite_driver._execute_impl(
-        statement=statement,
-        parameters=tuple_params,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
+    # The SQL object should contain the parameters
+    statement_with_params = SQL(
+        "SELECT * FROM users WHERE id = ? AND name = ?", parameters=tuple_params, config=sqlite_driver.config
     )
 
-    mock_cursor.execute.assert_called_with("SELECT * FROM users WHERE id = ? AND name = ?", (1, "John"))
+    sqlite_driver._execute_impl(
+        statement=statement_with_params,  # Use the statement with parameters
+        connection=None,
+    )
+
+    mock_cursor.execute.assert_called_with("SELECT * FROM users WHERE id = ? AND name = ?", tuple_params)
 
 
 def test_sqlite_driver_cursor_management(sqlite_driver: SqliteDriver, mock_sqlite_connection: Mock) -> None:
@@ -337,11 +326,7 @@ def test_sqlite_driver_cursor_management(sqlite_driver: SqliteDriver, mock_sqlit
     # Execute
     result = sqlite_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify cursor was created and returned
@@ -379,12 +364,12 @@ def test_sqlite_driver_with_schema_type(sqlite_driver: SqliteDriver) -> None:
     # Wrap result with schema type
     result = sqlite_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
         schema_type=User,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     # Data should be converted to schema type by the ResultConverter mixin
     assert result.column_names == ["id", "name"]
@@ -410,7 +395,7 @@ def test_sqlite_driver_operation_type_detection(sqlite_driver: SqliteDriver) -> 
 
         result = sqlite_driver._wrap_execute_result(
             statement=statement,
-            raw_driver_result=mock_cursor,
+            result=mock_cursor,
         )
 
         assert result.operation_type == expected_op_type

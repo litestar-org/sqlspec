@@ -1,15 +1,11 @@
 import re
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Optional
 
 from sqlglot import exp
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.base import SQLValidation, ValidationResult
-
-if TYPE_CHECKING:
-    from sqlglot.dialects.dialect import DialectType
-
-    from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.pipelines.base import ProcessorProtocol, ValidationResult
+from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 __all__ = ("TautologyConditions",)
 
@@ -18,7 +14,7 @@ NUMERIC_TAUTOLOGY_PATTERN = re.compile(r"^\s*(\d+)\s*$")
 STRING_TAUTOLOGY_PATTERN = re.compile(r"^\s*'([^']*)'\s*$")
 
 
-class TautologyConditions(SQLValidation):
+class TautologyConditions(ProcessorProtocol[exp.Expression]):
     """Validates against tautological conditions often used in SQL injection.
 
     Uses SQLGlot AST parsing to detect:
@@ -30,34 +26,33 @@ class TautologyConditions(SQLValidation):
 
     Args:
         risk_level: The risk level of the validator.
-        min_risk_to_raise: The minimum risk level to raise an issue.
         allow_mathematical_constants: Allow mathematical constant comparisons like 2+2=4.
         max_depth: Maximum AST depth to search (prevents infinite recursion).
     """
 
     def __init__(
         self,
-        risk_level: "RiskLevel" = RiskLevel.MEDIUM,
-        min_risk_to_raise: "Optional[RiskLevel]" = RiskLevel.MEDIUM,
+        risk_level: RiskLevel = RiskLevel.MEDIUM,
         allow_mathematical_constants: bool = False,
         max_depth: int = 10,
     ) -> None:
-        super().__init__(risk_level, min_risk_to_raise)
+        self.risk_level = risk_level
         self.allow_mathematical_constants = allow_mathematical_constants
         self.max_depth = max_depth
 
-    def validate(
-        self,
-        expression: exp.Expression,
-        dialect: "DialectType",
-        config: "SQLConfig",
-        **kwargs: Any,
-    ) -> ValidationResult:
+    def process(self, context: SQLProcessingContext) -> tuple[exp.Expression, Optional[ValidationResult]]:
         """Validate the expression for tautological conditions."""
+        if context.current_expression is None:
+            return exp.Placeholder(), ValidationResult(
+                is_safe=False, risk_level=RiskLevel.CRITICAL, issues=["TautologyConditions received no expression."]
+            )
+
+        expression = context.current_expression
+        dialect = context.dialect
+
         issues: list[str] = []
         warnings: list[str] = []
 
-        # Find all comparison expressions (=, <>, !=, <, >, <=, >=)
         comparison_types = [exp.EQ, exp.NEQ, exp.LT, exp.GT, exp.LTE, exp.GTE]
 
         for comparison_type in comparison_types:
@@ -70,22 +65,25 @@ class TautologyConditions(SQLValidation):
                         f"Tautological condition detected: {left_sql} {self._get_operator_symbol(comparison)} {right_sql}"
                     )
 
-        # Check for OR conditions with tautologies (classic injection pattern)
         for or_expr in expression.find_all(exp.Or):
             if self._contains_tautology_in_or(or_expr):
                 or_sql = or_expr.sql(dialect=dialect)
                 issues.append(f"OR clause contains tautological condition (potential injection): {or_sql[:100]}...")
 
-        # Check for AND conditions with contradictions
         for and_expr in expression.find_all(exp.And):
             if self._contains_contradiction_in_and(and_expr):
                 and_sql = and_expr.sql(dialect=dialect)
                 warnings.append(f"AND clause contains contradictory condition: {and_sql[:100]}...")
 
+        final_validation_result: Optional[ValidationResult] = None
         if issues:
-            return ValidationResult(is_safe=False, risk_level=self.risk_level, issues=issues, warnings=warnings)
+            final_validation_result = ValidationResult(
+                is_safe=False, risk_level=self.risk_level, issues=issues, warnings=warnings
+            )
+        else:
+            final_validation_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE, warnings=warnings)
 
-        return ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE, warnings=warnings)
+        return context.current_expression, final_validation_result
 
     def _is_tautology(self, comparison: exp.Expression) -> bool:
         """Check if a comparison is a tautology."""

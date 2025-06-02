@@ -61,7 +61,7 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
         connection_config: SqliteConnectionConfig,
         statement_config: Optional[SQLConfig] = None,
         instrumentation: Optional[InstrumentationConfig] = None,
-        default_row_type: type[DictRow] = DictRow,  # type: ignore[assignment]
+        default_row_type: type[DictRow] = DictRow,
     ) -> None:
         """Initialize SQLite configuration.
 

@@ -5,18 +5,17 @@ This module provides a fluent interface for building SQL queries safely,
 with automatic parameter binding and validation.
 """
 
-from __future__ import annotations
-
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._base import QueryBuilder
-from sqlspec.statement.result import ExecuteResult
+from sqlspec.statement.result import SQLResult
+from sqlspec.typing import RowT
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -36,7 +35,7 @@ ERR_MSG_EXPRESSION_NOT_INITIALIZED = "Internal error: base expression not initia
 
 
 @dataclass(unsafe_hash=True)
-class InsertBuilder(QueryBuilder[ExecuteResult]):
+class InsertBuilder(QueryBuilder[SQLResult[RowT]]):
     """Builder for INSERT statements.
 
     This builder facilitates the construction of SQL INSERT queries
@@ -87,7 +86,7 @@ class InsertBuilder(QueryBuilder[ExecuteResult]):
         ```
     """
 
-    _table: str | None = field(default=None, init=False)
+    _table: "Optional[str]" = field(default=None, init=False)
     _columns: list[str] = field(default_factory=list, init=False)
     _values_added_count: int = field(default=0, init=False)
 
@@ -102,13 +101,13 @@ class InsertBuilder(QueryBuilder[ExecuteResult]):
         return exp.Insert()
 
     @property
-    def _expected_result_type(self) -> type[ExecuteResult]:
+    def _expected_result_type(self) -> "type[SQLResult[RowT]]":
         """Specifies the expected result type for an INSERT query.
 
         Returns:
             The type of result expected for INSERT operations.
         """
-        return ExecuteResult
+        return SQLResult[RowT]
 
     def _get_insert_expression(self) -> exp.Insert:
         """Safely gets and casts the internal expression to exp.Insert.
@@ -125,7 +124,7 @@ class InsertBuilder(QueryBuilder[ExecuteResult]):
             raise SQLBuilderError(ERR_MSG_INTERNAL_EXPRESSION_TYPE)
         return self._expression
 
-    def into(self, table: str) -> Self:
+    def into(self, table: str) -> "Self":
         """Sets the target table for the INSERT statement.
 
         Args:
@@ -139,7 +138,7 @@ class InsertBuilder(QueryBuilder[ExecuteResult]):
         insert_expr.set("this", exp.to_table(table))
         return self
 
-    def columns(self, *columns: str) -> Self:
+    def columns(self, *columns: str) -> "Self":
         """Sets the columns for the INSERT statement.
 
         If specified, the `values` method will expect a corresponding number of values.
@@ -166,7 +165,7 @@ class InsertBuilder(QueryBuilder[ExecuteResult]):
 
         return self
 
-    def values(self, *values: Any) -> Self:
+    def values(self, *values: Any) -> "Self":
         """Adds a row of values to the INSERT statement.
 
         This method can be called multiple times to insert multiple rows,
@@ -218,7 +217,7 @@ class InsertBuilder(QueryBuilder[ExecuteResult]):
         self._values_added_count += 1
         return self
 
-    def values_from_dict(self, data: Mapping[str, Any]) -> Self:
+    def values_from_dict(self, data: "Mapping[str, Any]") -> "Self":
         """Adds a row of values from a dictionary.
 
         This is a convenience method that automatically sets columns based on
@@ -247,7 +246,7 @@ class InsertBuilder(QueryBuilder[ExecuteResult]):
         # Add values in the same order as columns
         return self.values(*[data[col] for col in self._columns])
 
-    def values_from_dicts(self, data: Sequence[Mapping[str, Any]]) -> Self:
+    def values_from_dicts(self, data: "Sequence[Mapping[str, Any]]") -> "Self":
         """Adds multiple rows of values from a sequence of dictionaries.
 
         This is a convenience method for bulk inserts from structured data.
@@ -286,7 +285,7 @@ class InsertBuilder(QueryBuilder[ExecuteResult]):
 
         return self
 
-    def from_select(self, select_builder: SelectBuilder) -> Self:
+    def from_select(self, select_builder: "SelectBuilder[RowT]") -> "Self":
         """Sets the INSERT source to a SELECT statement.
 
         This creates an INSERT ... SELECT statement.
@@ -320,7 +319,7 @@ class InsertBuilder(QueryBuilder[ExecuteResult]):
 
         return self
 
-    def on_conflict_do_nothing(self) -> Self:
+    def on_conflict_do_nothing(self) -> "Self":
         """Adds an ON CONFLICT DO NOTHING clause (PostgreSQL syntax).
 
         This is used to ignore rows that would cause a conflict.
@@ -342,7 +341,7 @@ class InsertBuilder(QueryBuilder[ExecuteResult]):
             logger.warning("OnConflict expression not available in this sqlglot version")
         return self
 
-    def on_duplicate_key_update(self, **set_values: Any) -> Self:
+    def on_duplicate_key_update(self, **set_values: Any) -> "Self":
         """Adds an ON DUPLICATE KEY UPDATE clause (MySQL syntax).
 
         Args:
@@ -350,12 +349,7 @@ class InsertBuilder(QueryBuilder[ExecuteResult]):
 
         Returns:
             The current builder instance for method chaining.
-
-        Note:
-            This is MySQL-specific syntax. Implementation may vary based on sqlglot version.
-            Currently this method is a placeholder as sqlglot may not fully support this syntax.
         """
-        # Note: This is MySQL-specific syntax that may not be fully supported
         if set_values:
             logger.warning(
                 "ON DUPLICATE KEY UPDATE syntax may not be fully supported by all sqlglot versions. "

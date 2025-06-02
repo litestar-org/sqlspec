@@ -1,10 +1,11 @@
+# ruff: noqa: PLC0105
 from collections.abc import Iterable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import Field, fields
 from functools import lru_cache
-from typing import TYPE_CHECKING, Annotated, Any, Optional, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Annotated, Any, Optional, Union, cast
 
-from typing_extensions import TypeAlias, TypeGuard
+from typing_extensions import TypeAlias, TypeGuard, TypeVar
 
 from sqlspec._typing import (
     AIOSQL_INSTALLED,
@@ -75,6 +76,7 @@ DictRow: TypeAlias = "dict[str, Any]"
 """Type variable for DictRow types."""
 TupleRow: TypeAlias = "tuple[Any, ...]"
 """Type variable for TupleRow types."""
+RowT = TypeVar("RowT", default=dict[str, Any], covariant=True)
 
 SupportedSchemaModel: TypeAlias = "Union[Struct, BaseModel, DataclassProtocol]"
 """Type alias for pydantic or msgspec models.
@@ -569,6 +571,7 @@ __all__ = (
     "PoolT",
     "PoolT_co",
     "PydanticOrMsgspecT",
+    "RowT",
     "SQLParameterType",
     "Span",
     "Status",

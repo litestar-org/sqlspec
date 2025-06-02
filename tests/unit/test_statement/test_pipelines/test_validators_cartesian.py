@@ -1,11 +1,25 @@
 """Tests for the CartesianProductDetector validator."""
 
+from typing import Optional
+
 from sqlglot import parse_one
 from sqlglot.dialects import Dialect
 
 from sqlspec.exceptions import RiskLevel
+from sqlspec.statement.pipelines.context import SQLProcessingContext
 from sqlspec.statement.pipelines.validators import CartesianProductDetector
 from sqlspec.statement.sql import SQLConfig
+
+
+def _create_test_context(sql: str, config: Optional[SQLConfig] = None) -> SQLProcessingContext:
+    """Helper function to create a SQLProcessingContext for testing."""
+    if config is None:
+        config = SQLConfig()
+
+    expression = parse_one(sql)
+    return SQLProcessingContext(
+        initial_sql_string=sql, dialect=Dialect.get_or_raise(""), config=config, current_expression=expression
+    )
 
 
 class TestCartesianProductDetector:
@@ -20,11 +34,11 @@ class TestCartesianProductDetector:
         """
 
         validator = CartesianProductDetector()
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
+        assert result is not None
         assert result.is_safe is True
         assert result.risk_level == RiskLevel.SAFE
         assert len(result.issues) == 0
@@ -38,11 +52,11 @@ class TestCartesianProductDetector:
         """
 
         validator = CartesianProductDetector(allow_explicit_cross_joins=False)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
+        assert result is not None
         assert result.is_safe is False
         assert result.risk_level == RiskLevel.HIGH
         assert len(result.issues) > 0
@@ -57,11 +71,11 @@ class TestCartesianProductDetector:
         """
 
         validator = CartesianProductDetector(allow_explicit_cross_joins=True)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
+        assert result is not None
         assert result.is_safe is True
         assert result.risk_level == RiskLevel.LOW
         assert len(result.issues) == 0
@@ -79,11 +93,11 @@ class TestCartesianProductDetector:
         """
 
         validator = CartesianProductDetector(allow_explicit_cross_joins=False)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
+        assert result is not None
         assert result.is_safe is False
         assert len(result.issues) > 0
         assert "3 occurrences" in result.issues[0]
@@ -98,10 +112,9 @@ class TestCartesianProductDetector:
         """
 
         validator = CartesianProductDetector()
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
         # May detect cartesian product issues
         # Actual detection depends on how SQLGlot parses comma-separated tables
@@ -115,10 +128,9 @@ class TestCartesianProductDetector:
         """
 
         validator = CartesianProductDetector()
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
         # Should detect potential cartesian product
         assert result is not None
@@ -132,10 +144,9 @@ class TestCartesianProductDetector:
         """
 
         validator = CartesianProductDetector()
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
         # Should be less problematic with proper correlations
         assert result is not None
@@ -149,10 +160,9 @@ class TestCartesianProductDetector:
         """
 
         validator = CartesianProductDetector()
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
         # Should detect problematic join condition
         assert result is not None
@@ -166,10 +176,9 @@ class TestCartesianProductDetector:
         """
 
         validator = CartesianProductDetector()
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
         # Should detect problematic join condition
         assert result is not None
@@ -183,10 +192,9 @@ class TestCartesianProductDetector:
         """
 
         validator = CartesianProductDetector()
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
         # May generate warnings about large result sets
         assert result is not None
@@ -204,10 +212,9 @@ class TestCartesianProductDetector:
         """
 
         validator = CartesianProductDetector(allow_explicit_cross_joins=False)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
         # Should detect cartesian risks in subqueries
         assert result is not None
@@ -229,10 +236,9 @@ class TestCartesianProductDetector:
         """
 
         validator = CartesianProductDetector(allow_explicit_cross_joins=False)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
         # Should detect multiple levels of cartesian risks
         assert result is not None
@@ -248,12 +254,12 @@ class TestCartesianProductDetector:
         """
 
         validator = CartesianProductDetector(allow_explicit_cross_joins=False)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
         # Should detect the CROSS JOIN while allowing other joins
+        assert result is not None
         assert result.is_safe is False
         assert "CROSS JOIN" in str(result.issues)
 
@@ -267,18 +273,19 @@ class TestCartesianProductDetector:
 
         # Strict settings
         strict_validator = CartesianProductDetector(allow_explicit_cross_joins=False, risk_level=RiskLevel.HIGH)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = strict_validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = strict_validator.process(context)
 
+        assert result is not None
         assert result.is_safe is False
         assert result.risk_level == RiskLevel.HIGH
 
         # Lenient settings
         lenient_validator = CartesianProductDetector(allow_explicit_cross_joins=True, risk_level=RiskLevel.LOW)
-        result = lenient_validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = lenient_validator.process(context)
 
+        assert result is not None
         assert result.is_safe is True
         assert len(result.warnings) > 0
 
@@ -287,11 +294,11 @@ class TestCartesianProductDetector:
         sql = "SELECT * FROM table1 WHERE id = 1"
 
         validator = CartesianProductDetector()
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
+        assert result is not None
         assert result.is_safe is True
         assert result.risk_level == RiskLevel.SAFE
         assert len(result.issues) == 0
@@ -310,12 +317,12 @@ class TestCartesianProductDetector:
         """
 
         validator = CartesianProductDetector()
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
         # Should handle complex but proper join conditions
+        assert result is not None
         assert result.is_safe is True
         assert len(result.issues) == 0
 
@@ -328,10 +335,9 @@ class TestCartesianProductDetector:
         """
 
         validator = CartesianProductDetector(allow_explicit_cross_joins=False)
-        expression = parse_one(sql)
-        config = SQLConfig()
+        context = _create_test_context(sql)
 
-        result = validator.validate(expression, Dialect.get_or_raise(""), config)
+        _, result = validator.process(context)
 
         # Should detect cartesian risks in both parts of UNION
         assert result is not None

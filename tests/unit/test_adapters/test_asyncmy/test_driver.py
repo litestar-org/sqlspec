@@ -1,12 +1,13 @@
 """Unit tests for Asyncmy driver."""
 
+from typing import Any, Union
 from unittest.mock import AsyncMock
 
 import pytest
 
 from sqlspec.adapters.asyncmy import AsyncmyConnection, AsyncmyDriver
 from sqlspec.config import InstrumentationConfig
-from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -107,11 +108,7 @@ async def test_asyncmy_driver_execute_impl_select(
     # Execute
     result = await asyncmy_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify cursor was created and execute was called
@@ -137,11 +134,7 @@ async def test_asyncmy_driver_execute_impl_insert(
     # Execute
     result = await asyncmy_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify cursor was created and execute was called
@@ -161,16 +154,14 @@ async def test_asyncmy_driver_execute_impl_script(
     mock_asyncmy_connection.cursor.return_value.__aexit__.return_value = None
 
     # Create SQL statement (DDL allowed with strict_mode=False)
-    statement = SQL("CREATE TABLE test (id INT); INSERT INTO test VALUES (1);", config=asyncmy_driver.config)
+    statement = SQL(
+        "CREATE TABLE test (id INT); INSERT INTO test VALUES (1);", config=asyncmy_driver.config
+    ).as_script()
 
     # Execute script
     result = await asyncmy_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=True,
     )
 
     # Verify cursor was created and execute was called with multi=True
@@ -194,17 +185,15 @@ async def test_asyncmy_driver_execute_impl_many(
     mock_asyncmy_connection.cursor.return_value.__aexit__.return_value = None
 
     # Create SQL statement with placeholder for parameters
-    statement = SQL("INSERT INTO users (name) VALUES (%s)", parameters=["dummy"], config=asyncmy_driver.config)
-    parameters = [["John"], ["Jane"], ["Bob"]]
+    parameters_list = [["John"], ["Jane"], ["Bob"]]
+    statement = SQL(
+        "INSERT INTO users (name) VALUES (%s)", parameters=parameters_list, config=asyncmy_driver.config
+    ).as_many()
 
     # Execute many
     result = await asyncmy_driver._execute_impl(
         statement=statement,
-        parameters=parameters,
         connection=None,
-        config=None,
-        is_many=True,
-        is_script=False,
     )
 
     # Verify cursor was created and executemany was called
@@ -235,11 +224,7 @@ async def test_asyncmy_driver_execute_impl_parameter_processing(
     # Execute
     result = await asyncmy_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify parameters were processed correctly
@@ -262,13 +247,13 @@ async def test_asyncmy_driver_wrap_select_result(asyncmy_driver: AsyncmyDriver) 
     statement = SQL("SELECT id, name FROM users")
 
     # Wrap result
-    result = await asyncmy_driver._wrap_select_result(
+    result: Union[SQLResult[Any], SQLResult[dict[str, Any]]] = await asyncmy_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.column_names == ["id", "name"]
     # Note: Asyncmy driver has specific data handling logic
@@ -287,13 +272,13 @@ async def test_asyncmy_driver_wrap_select_result_empty(asyncmy_driver: AsyncmyDr
     statement = SQL("SELECT * FROM empty_table")
 
     # Wrap result
-    result = await asyncmy_driver._wrap_select_result(
+    result: Union[SQLResult[Any], SQLResult[dict[str, Any]]] = await asyncmy_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.data == []
     assert result.column_names == []
@@ -323,12 +308,12 @@ async def test_asyncmy_driver_wrap_select_result_with_schema_type(asyncmy_driver
     # Wrap result with schema type
     result = await asyncmy_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
         schema_type=User,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.column_names == ["id", "name"]
 
@@ -346,11 +331,11 @@ async def test_asyncmy_driver_wrap_execute_result(asyncmy_driver: AsyncmyDriver)
     # Wrap result
     result = await asyncmy_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 3
     assert result.operation_type == "UPDATE"
@@ -360,16 +345,16 @@ async def test_asyncmy_driver_wrap_execute_result(asyncmy_driver: AsyncmyDriver)
 async def test_asyncmy_driver_wrap_execute_result_script(asyncmy_driver: AsyncmyDriver) -> None:
     """Test Asyncmy driver _wrap_execute_result method for script."""
     # Create SQL statement (DDL allowed with strict_mode=False)
-    statement = SQL("CREATE TABLE test (id INT)", config=asyncmy_driver.config)
+    statement = SQL("CREATE TABLE test (id INT)", config=asyncmy_driver.config).as_script()
 
     # Wrap result for script
     result = await asyncmy_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result="SCRIPT EXECUTED",
+        result="SCRIPT EXECUTED",
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 0
     assert result.operation_type == "CREATE"
@@ -398,24 +383,46 @@ async def test_asyncmy_driver_error_handling(asyncmy_driver: AsyncmyDriver, mock
     with pytest.raises(Exception, match="Database error"):
         await asyncmy_driver._execute_impl(
             statement=statement,
-            parameters=None,
             connection=None,
-            config=None,
-            is_many=False,
-            is_script=False,
         )
 
 
-def test_asyncmy_driver_instrumentation(asyncmy_driver: AsyncmyDriver) -> None:
+@pytest.mark.asyncio
+async def test_asyncmy_driver_instrumentation(
+    asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock
+) -> None:
     """Test Asyncmy driver instrumentation integration."""
     # Test instrumentation config is accessible
     assert asyncmy_driver.instrumentation_config is not None
     assert isinstance(asyncmy_driver.instrumentation_config, InstrumentationConfig)
 
-    # Test logging configuration
+    # Test logging configuration (attributes exist)
     assert hasattr(asyncmy_driver.instrumentation_config, "log_queries")
     assert hasattr(asyncmy_driver.instrumentation_config, "log_parameters")
     assert hasattr(asyncmy_driver.instrumentation_config, "log_results_count")
+
+    asyncmy_driver.instrumentation_config.log_results_count = True
+
+    # Create SQL statement with parameters
+    statement = SQL("SELECT * FROM users WHERE id = %s", parameters=[1], config=asyncmy_driver.config)
+
+    # Ensure mock_cursor is correctly available if used by the logging path of _execute_impl indirectly
+    # However, _execute_impl itself doesn't return the cursor directly for logging checks.
+    # The primary check is that the execute method on the connection's cursor was called.
+    # The mock_cursor setup is part of the mock_asyncmy_connection fixture.
+    # We need to access the mock_cursor that mock_asyncmy_connection.cursor().__aenter__() would yield.
+
+    # Re-access the mock_cursor that would be used internally
+    mock_cursor = mock_asyncmy_connection.cursor.return_value.__aenter__.return_value
+
+    # Execute with logging enabled
+    await asyncmy_driver._execute_impl(
+        statement=statement,
+        connection=None,
+    )
+
+    # Verify execution worked
+    mock_cursor.execute.assert_called_once_with("SELECT * FROM users WHERE id = %s", [1])
 
 
 @pytest.mark.asyncio
@@ -439,7 +446,7 @@ async def test_asyncmy_driver_operation_type_detection(asyncmy_driver: AsyncmyDr
 
         result = await asyncmy_driver._wrap_execute_result(
             statement=statement,
-            raw_driver_result=mock_cursor,
+            result=mock_cursor,
         )
 
         assert result.operation_type == expected_op_type
@@ -581,11 +588,7 @@ async def test_asyncmy_driver_logging_configuration(
     # Execute with logging enabled
     await asyncmy_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify execution worked

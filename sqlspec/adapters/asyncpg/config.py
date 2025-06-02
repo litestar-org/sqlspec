@@ -294,7 +294,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             import asyncpg
 
             config = self.connection_config_dict
-            return await asyncpg.connect(**config)
+            return await asyncpg.connect(**config)  # type: ignore[no-any-return]
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncpgConnection, None]:
@@ -314,7 +314,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                 yield connection
             finally:
                 if connection is not None:
-                    await self.pool_instance.release(connection)
+                    await self.pool_instance.release(connection)  # type: ignore[arg-type]
         else:
             connection = await self.create_connection()
             try:

@@ -1,18 +1,17 @@
 """Replaces literals in SQL with placeholders and extracts them."""
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Optional
 
 from sqlglot import exp
 
 from sqlspec.statement.pipelines.base import ProcessorProtocol, ValidationResult
-
-if TYPE_CHECKING:
-    from sqlglot.dialects.dialect import DialectType
-
-    from sqlspec.statement.sql import SQLConfig
-
+from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 __all__ = ("ParameterizeLiterals",)
+
+# Constants for literal parameterization
+DEFAULT_MAX_STRING_LENGTH = 1000
+"""Default maximum string length for literal parameterization."""
 
 
 class ParameterizeLiterals(ProcessorProtocol[exp.Expression]):
@@ -36,49 +35,45 @@ class ParameterizeLiterals(ProcessorProtocol[exp.Expression]):
         preserve_null: bool = True,
         preserve_boolean: bool = True,
         preserve_numbers_in_limit: bool = True,
-        max_string_length: int = 1000,
+        max_string_length: int = DEFAULT_MAX_STRING_LENGTH,
     ) -> None:
         self.placeholder_style = placeholder_style
         self.preserve_null = preserve_null
         self.preserve_boolean = preserve_boolean
         self.preserve_numbers_in_limit = preserve_numbers_in_limit
         self.max_string_length = max_string_length
-        self.extracted_parameters: list[Any] = []
+        self.extracted_parameters: list[Any] = []  # Instance variable to collect params for current run
+        self._parameter_counter = 0  # Instance variable for naming placeholders
 
-    def process(
-        self,
-        expression: exp.Expression,
-        dialect: "Optional[DialectType]" = None,
-        config: "Optional[SQLConfig]" = None,
-    ) -> "tuple[exp.Expression, Optional[ValidationResult]]":
-        """Replaces literals with placeholders in the given SQL expression.
+    def process(self, context: SQLProcessingContext) -> tuple[exp.Expression, Optional[ValidationResult]]:
+        """Replaces literals with placeholders if not already parameterized (based on context.config.input_sql_had_placeholders)."""
+        assert context.current_expression is not None, (
+            "ParameterizeLiterals expects a valid current_expression in context."
+        )
 
-        Args:
-            expression: The SQL expression to process.
-            dialect: The SQL dialect.
-            config: SQL configuration.
-
-        Returns:
-            A tuple containing the modified expression with literals parameterized
-            and None for ValidationResult. The extracted parameters are stored in
-            `self.extracted_parameters`.
-        """
         self.extracted_parameters = []
         self._parameter_counter = 0
 
-        # Create a copy to avoid modifying the original
-        parameterized_expression = expression.copy()
+        if context.config.input_sql_had_placeholders:
+            return context.current_expression, None
 
-        # Transform the expression to replace literals
-        def _parameterize_literal(node: exp.Expression) -> exp.Expression:
+        # Proceed with parameterizing literals
+        def _parameterize_literal_node(node: exp.Expression) -> exp.Expression:
             if isinstance(node, exp.Literal):
                 return self._process_literal(node)
             return node
 
-        # Apply transformation recursively
-        parameterized_expression = parameterized_expression.transform(_parameterize_literal, copy=False)
+        transformed_expression = context.current_expression.transform(_parameterize_literal_node, copy=True)
+        context.current_expression = transformed_expression
 
-        return parameterized_expression, None
+        if (
+            not hasattr(context, "extracted_parameters_from_pipeline")
+            or context.extracted_parameters_from_pipeline is None
+        ):
+            context.extracted_parameters_from_pipeline = []
+        context.extracted_parameters_from_pipeline.extend(self.extracted_parameters)
+
+        return context.current_expression, None
 
     def _process_literal(self, literal: exp.Literal) -> exp.Expression:
         """Process a single literal and decide whether to parameterize it."""
@@ -195,20 +190,6 @@ class ParameterizeLiterals(ProcessorProtocol[exp.Expression]):
             List of parameter values extracted during the last process() call.
         """
         return self.extracted_parameters.copy()
-
-    def get_parameterized_query(self, expression: exp.Expression, dialect: str) -> tuple[str, list[Any]]:
-        """Convenience method to get both parameterized SQL and parameters.
-
-        Args:
-            expression: The SQL expression to parameterize.
-            dialect: The SQL dialect to use for SQL generation.
-
-        Returns:
-            Tuple of (parameterized_sql, parameters_list).
-        """
-        parameterized_expr, _ = self.process(expression)
-        parameterized_sql = parameterized_expr.sql(dialect=dialect)
-        return parameterized_sql, self.get_parameters()
 
     def clear_parameters(self) -> None:
         """Clear the extracted parameters list."""

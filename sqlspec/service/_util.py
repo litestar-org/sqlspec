@@ -134,7 +134,7 @@ class ResultConverter:
                     "ModelDTOT",
                     get_type_adapter(schema_type).validate_python(data, from_attributes=True),  # pyright: ignore
                 )
-        assert isinstance(data, Sequence)  # noqa: S101
+        assert isinstance(data, Sequence)
         limit_offset = find_filter(LimitOffsetFilter, filters=filters)
         if schema_type is None:
             return OffsetPagination[ModelT](

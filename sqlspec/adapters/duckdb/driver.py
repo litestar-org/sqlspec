@@ -6,19 +6,17 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
 from duckdb import DuckDBPyConnection
 
-from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.exceptions import SQLConversionError
 from sqlspec.statement.mixins import ResultConverter, SQLTranslatorMixin, SyncArrowMixin
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
-from sqlspec.statement.sql import SQL, SQLConfig, Statement
-from sqlspec.typing import DictRow, ModelDTOT, SQLParameterType
+from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.typing import ModelDTOT, RowT
 from sqlspec.utils.telemetry import instrument_operation
 
 if TYPE_CHECKING:
-    from sqlspec.statement.filters import StatementFilter
-
+    from sqlspec.config import InstrumentationConfig
 
 __all__ = ("DuckDBConnection", "DuckDBDriver")
 
@@ -30,7 +28,7 @@ logger = logging.getLogger("sqlspec")
 
 
 class DuckDBDriver(
-    SyncDriverAdapterProtocol["DuckDBConnection", DictRow],
+    SyncDriverAdapterProtocol["DuckDBConnection", RowT],
     SQLTranslatorMixin["DuckDBConnection"],
     SyncArrowMixin["DuckDBConnection"],
     ResultConverter,
@@ -53,14 +51,15 @@ class DuckDBDriver(
     def __init__(
         self,
         connection: "DuckDBConnection",
-        config: Optional[SQLConfig] = None,
-        instrumentation_config: Optional[InstrumentationConfig] = None,
+        config: "Optional[SQLConfig]" = None,
+        instrumentation_config: "Optional[InstrumentationConfig]" = None,
+        default_row_type: "Optional[type[RowT]]" = None,
     ) -> None:
         super().__init__(
             connection=connection,
             config=config,
             instrumentation_config=instrumentation_config,
-            default_row_type=DictRow,
+            default_row_type=default_row_type or cast("type[RowT]", dict[str, Any]),
         )
 
     def _get_placeholder_style(self) -> ParameterStyle:
@@ -78,216 +77,144 @@ class DuckDBDriver(
     def _execute_impl(
         self,
         statement: SQL,
-        parameters: Optional[SQLParameterType] = None,
         connection: Optional["DuckDBConnection"] = None,
-        config: Optional[SQLConfig] = None,
-        is_many: bool = False,
-        is_script: bool = False,
         **kwargs: Any,
     ) -> Any:
         with instrument_operation(self, "duckdb_execute", "database"):
             conn = self._connection(connection)
-            if config is not None and config != statement.config:
-                statement = statement.copy(config=config)
+
+            if statement.is_script:
+                final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
+                if self.instrumentation_config.log_queries:
+                    logger.debug("Executing SQL script: %s", final_sql)
+                with self._get_cursor(conn) as cursor:
+                    cursor.execute(final_sql)
+                return "SCRIPT EXECUTED"
 
             final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
+            params_to_execute = statement.parameters
 
             final_exec_params: Optional[list[Any]] = None
-
-            if is_many:
-                if parameters and isinstance(parameters, Sequence):
-                    final_exec_params = [list(p) if isinstance(p, (list, tuple)) else [p] for p in parameters]
+            if statement.is_many:
+                if params_to_execute and isinstance(params_to_execute, Sequence):
+                    final_exec_params = [list(p) if isinstance(p, (list, tuple)) else [p] for p in params_to_execute]
                 else:
                     final_exec_params = []
-            # Use provided parameters if available, otherwise get from statement
-            elif parameters is not None:
-                if isinstance(parameters, list):
-                    final_exec_params = parameters
-                elif hasattr(parameters, "__iter__") and not isinstance(parameters, (str, bytes)):
-                    final_exec_params = list(parameters)
+            elif params_to_execute is not None:
+                if isinstance(params_to_execute, list):
+                    final_exec_params = params_to_execute
+                elif hasattr(params_to_execute, "__iter__") and not isinstance(params_to_execute, (str, bytes)):
+                    final_exec_params = list(params_to_execute)
                 else:
-                    final_exec_params = [parameters]
-            else:
-                single_params = statement.get_parameters(style=self._get_placeholder_style())
-                if single_params is not None:
-                    if isinstance(single_params, list):
-                        final_exec_params = single_params
-                    elif hasattr(single_params, "__iter__") and not isinstance(single_params, (str, bytes)):
-                        final_exec_params = list(single_params)
-                    else:
-                        final_exec_params = [single_params]
+                    final_exec_params = [params_to_execute]
 
             with self._get_cursor(conn) as cursor:
                 if self.instrumentation_config.log_queries:
                     logger.debug("Executing SQL: %s", final_sql)
-
                 if self.instrumentation_config.log_parameters and final_exec_params:
                     logger.debug("Query parameters: %s", final_exec_params)
 
-                if is_script:
-                    script_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-                    cursor.execute(script_sql)
-                    return "SCRIPT EXECUTED"
-                if is_many:
-                    cursor.executemany(final_sql, cast("list[list[Any]]", final_exec_params))
-                    # For executemany, return cursor info for execute result
-                    return {"rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1}
                 cursor.execute(final_sql, final_exec_params or [])
 
-                # For SELECT queries, fetch the data immediately since cursor will be closed
                 if self.returns_rows(statement.expression):
                     fetched_data = cursor.fetchall()
                     column_names = [col[0] for col in cursor.description or []]
-                    return {"data": fetched_data, "columns": column_names}
-                # For non-SELECT queries, return cursor info
+                    return {"data": fetched_data, "columns": column_names, "rowcount": cursor.rowcount}
+
                 return {"rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1}
 
     def _wrap_select_result(
         self,
         statement: SQL,
-        raw_driver_result: Any,
+        result: Any,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
-    ) -> Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]]]:
+    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "duckdb_wrap_select", "database"):
-            # Handle the new dictionary format from _execute_impl
-            if isinstance(raw_driver_result, dict) and "data" in raw_driver_result:
-                fetched_data = raw_driver_result["data"]
-                column_names = raw_driver_result["columns"]
-            elif not isinstance(raw_driver_result, dict):
-                # Fallback for backward compatibility (shouldn't happen with new implementation)
-                if hasattr(raw_driver_result, "fetchall") and hasattr(raw_driver_result, "description"):
-                    fetched_data = raw_driver_result.fetchall()
-                    column_names = [col[0] for col in raw_driver_result.description or []]
-                else:
-                    # Should not happen with current implementation
-                    fetched_data = []
-                    column_names = []
-            else:
-                # Should not happen with current implementation
-                fetched_data = []
-                column_names = []
+            if not isinstance(result, dict) or "data" not in result:
+                logger.warning("Unexpected result format in _wrap_select_result for DuckDB.")
+                return SQLResult[RowT](
+                    statement=statement,
+                    data=cast("list[RowT]", []),
+                    column_names=[],
+                    operation_type="SELECT",
+                    rows_affected=0,
+                )
 
-            # Convert to list of dicts
-            rows_as_dicts: list[dict[str, Any]] = []
-            if fetched_data:
-                rows_as_dicts = [dict(zip(column_names, row)) for row in fetched_data]
+            fetched_tuples: list[tuple[Any, ...]] = result.get("data", [])
+            column_names: list[str] = result.get("columns", [])
+
+            rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row)) for row in fetched_tuples]
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Query returned %d rows", len(rows_as_dicts))
 
             if schema_type:
-                converted_data = self.to_schema(data=rows_as_dicts, schema_type=schema_type)
-                return SelectResult[ModelDTOT](
+                converted_data_seq = self.to_schema(data=rows_as_dicts, schema_type=schema_type)
+                converted_data_list = list(converted_data_seq) if converted_data_seq is not None else []
+                return SQLResult[ModelDTOT](
                     statement=statement,
-                    data=converted_data,
+                    data=converted_data_list,
                     column_names=column_names,
+                    operation_type="SELECT",
                 )
-            return SelectResult[dict[str, Any]](
+            return SQLResult[RowT](
                 statement=statement,
-                data=rows_as_dicts,
+                data=cast("list[RowT]", rows_as_dicts),
                 column_names=column_names,
+                operation_type="SELECT",
             )
 
     def _wrap_execute_result(
         self,
         statement: SQL,
-        raw_driver_result: Any,
+        result: Any,
         **kwargs: Any,
-    ) -> ExecuteResult:
+    ) -> SQLResult[RowT]:
         with instrument_operation(self, "duckdb_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             if statement.expression and hasattr(statement.expression, "key"):
                 operation_type = str(statement.expression.key).upper()
 
-            if isinstance(raw_driver_result, str):
-                execute_data = {
-                    "rows_affected": 0,
-                    "last_inserted_id": None,
-                    "inserted_ids": [],
-                    "returning_data": None,
-                    "operation_type": operation_type or "SCRIPT",
-                }
-                return ExecuteResult(
-                    statement=statement,
-                    data=execute_data,
-                    rows_affected=0,
-                    operation_type=operation_type or "SCRIPT",
-                )
+            rows_affected = -1
 
-            # Handle the new dictionary format from _execute_impl
-            if isinstance(raw_driver_result, dict) and "rowcount" in raw_driver_result:
-                rows_affected = raw_driver_result["rowcount"]
+            if isinstance(result, str) and result == "SCRIPT EXECUTED":
+                operation_type = "SCRIPT"
+                rows_affected = 0
+                return SQLResult[RowT](
+                    statement=statement,
+                    data=cast("list[RowT]", []),
+                    rows_affected=rows_affected,
+                    operation_type=operation_type,
+                    metadata={"status_message": result},
+                )
+            if isinstance(result, dict) and "rowcount" in result:
+                rows_affected = result["rowcount"]
             else:
-                # Fallback for backward compatibility
-                rows_affected = getattr(raw_driver_result, "rowcount", -1)
+                logger.warning(
+                    "Unexpected result format in _wrap_execute_result for DuckDB DML. Expected dict with 'rowcount' or str 'SCRIPT EXECUTED'. Got: %s",
+                    type(result),
+                )
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)
 
-            execute_data = {
-                "rows_affected": rows_affected,
-                "last_inserted_id": None,
-                "inserted_ids": [],
-                "returning_data": None,
-                "operation_type": operation_type,
-            }
-            return ExecuteResult(
+            return SQLResult[RowT](
                 statement=statement,
-                data=execute_data,
+                data=cast("list[RowT]", []),
                 rows_affected=rows_affected,
                 operation_type=operation_type,
             )
 
-    def select_to_arrow(
+    def _select_to_arrow_impl(
         self,
-        statement: Statement,
-        parameters: Optional[SQLParameterType] = None,
-        *filters: "StatementFilter",
-        connection: Optional["DuckDBConnection"] = None,
-        config: Optional[SQLConfig] = None,
+        stmt_obj: "SQL",
+        connection: "DuckDBConnection",
         **kwargs: Any,
-    ) -> ArrowResult:
-        """Execute a SELECT statement and return results as an Apache Arrow Table.
+    ) -> "ArrowResult":
+        final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
+        ordered_params = stmt_obj.get_parameters(style=self._get_placeholder_style())
 
-        This method leverages DuckDB's excellent Arrow integration for high-performance
-        analytics workloads.
-
-        Args:
-            statement: The SQL query to execute.
-            parameters: Parameters for the query.
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            config: Optional statement configuration.
-            **kwargs: Additional keyword arguments.
-
-        Raises:
-            TypeError: If the SQL statement is not a valid query.
-            SQLConversionError: If DuckDB execute returned None for Arrow.
-
-        Returns:
-            An ArrowResult containing the query results as an Arrow Table.
-        """
-        # Build SQL statement if needed
-        if isinstance(statement, SQL):
-            sql_stmt = statement
-        else:
-            sql_stmt = self._build_statement(statement, config, *filters)
-            if parameters:
-                # Apply parameters to the statement
-                sql_stmt = SQL(sql_stmt.sql, parameters, dialect=self.dialect, config=config or self.config)
-
-        if not self.returns_rows(sql_stmt.expression):
-            op_type = "UNKNOWN"
-            if sql_stmt.expression and hasattr(sql_stmt.expression, "key"):
-                op_type = str(sql_stmt.expression.key).upper()
-            msg = f"Cannot fetch Arrow table for a non-query statement. Command type: {op_type}"
-            raise TypeError(msg)
-
-        final_sql = sql_stmt.to_sql(placeholder_style=self._get_placeholder_style())
-        ordered_params = sql_stmt.get_parameters(style=self._get_placeholder_style())
-
-        # Convert parameters to list format for DuckDB
         final_params: Optional[list[Any]] = None
         if ordered_params is not None:
             if isinstance(ordered_params, list):
@@ -297,19 +224,24 @@ class DuckDBDriver(
             else:
                 final_params = [ordered_params]
 
-        conn = self._connection(connection)
-        with self._get_cursor(conn) as cursor:
+        with self._get_cursor(connection) as cursor:
             if self.instrumentation_config.log_queries:
-                logger.debug("Executing Arrow query: %s", final_sql)
+                logger.debug("Executing DuckDB Arrow query: %s", final_sql)
+            if self.instrumentation_config.log_parameters and final_params:
+                logger.debug("Query parameters for DuckDB Arrow: %s", final_params)
 
             relation = cursor.execute(final_sql, final_params or [])
             if relation is None:
-                msg = "DuckDB execute returned None for a query expected to return rows for Arrow."
-                raise SQLConversionError(msg)
+                import pyarrow as pa  # type: ignore[unreachable]
+
+                logger.warning(
+                    "DuckDB execute returned None where a relation was expected for Arrow conversion. Returning empty table."
+                )
+                return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=[]))
 
             try:
                 arrow_table = cursor.fetch_arrow_table()
-                return ArrowResult(statement=sql_stmt, data=arrow_table)
+                return ArrowResult(statement=stmt_obj, data=arrow_table)
             except Exception as e:
                 msg = f"Failed to convert DuckDB result to Arrow table: {e}"
                 raise SQLConversionError(msg) from e

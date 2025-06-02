@@ -1,12 +1,13 @@
 """Unit tests for PSQLPy driver."""
 
+from typing import Any, Union
 from unittest.mock import AsyncMock
 
 import pytest
 
 from sqlspec.adapters.psqlpy import PsqlpyConnection, PsqlpyDriver
 from sqlspec.config import InstrumentationConfig
-from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -85,11 +86,7 @@ async def test_psqlpy_driver_execute_impl_select(
     # Execute
     result = await psqlpy_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify connection methods were called
@@ -111,11 +108,7 @@ async def test_psqlpy_driver_execute_impl_insert(
     # Execute
     result = await psqlpy_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify connection methods were called
@@ -132,16 +125,14 @@ async def test_psqlpy_driver_execute_impl_script(
     mock_psqlpy_connection.execute_script.return_value = None
 
     # Create SQL statement (DDL allowed with strict_mode=False)
-    statement = SQL("CREATE TABLE test (id INTEGER); INSERT INTO test VALUES (1);", config=psqlpy_driver.config)
+    statement = SQL(
+        "CREATE TABLE test (id INTEGER); INSERT INTO test VALUES (1);", config=psqlpy_driver.config
+    ).as_script()
 
     # Execute script
-    result = await psqlpy_driver._execute_impl(
+    result: Any = await psqlpy_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=True,
     )
 
     # Verify connection execute_script was called
@@ -156,17 +147,16 @@ async def test_psqlpy_driver_execute_impl_many(psqlpy_driver: PsqlpyDriver, mock
     mock_psqlpy_connection.execute_many.return_value = None
 
     # Create SQL statement with placeholder for parameters
-    statement = SQL("INSERT INTO users (name) VALUES ($1)", parameters=["dummy"], config=psqlpy_driver.config)
-    parameters = [["John"], ["Jane"], ["Bob"]]
+    statement = SQL(
+        "INSERT INTO users (name) VALUES ($1)",
+        parameters=[["John"], ["Jane"], ["Bob"]],
+        config=psqlpy_driver.config,
+    ).as_many()
 
     # Execute many
-    result = await psqlpy_driver._execute_impl(
+    result: Any = await psqlpy_driver._execute_impl(
         statement=statement,
-        parameters=parameters,
         connection=None,
-        config=None,
-        is_many=True,
-        is_script=False,
     )
 
     # Verify connection execute_many was called
@@ -191,13 +181,9 @@ async def test_psqlpy_driver_execute_impl_parameter_processing(
     )
 
     # Execute
-    result = await psqlpy_driver._execute_impl(
+    result: Any = await psqlpy_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify parameters were processed correctly
@@ -211,7 +197,7 @@ async def test_psqlpy_driver_execute_impl_parameter_processing(
 async def test_psqlpy_driver_wrap_select_result(psqlpy_driver: PsqlpyDriver) -> None:
     """Test PSQLPy driver _wrap_select_result method."""
     # Create mock data
-    mock_data = [
+    mock_data: list[dict[str, Any]] = [
         {"id": 1, "name": "John"},
         {"id": 2, "name": "Jane"},
     ]
@@ -220,13 +206,13 @@ async def test_psqlpy_driver_wrap_select_result(psqlpy_driver: PsqlpyDriver) -> 
     statement = SQL("SELECT id, name FROM users")
 
     # Wrap result
-    result = await psqlpy_driver._wrap_select_result(
+    result: SQLResult[dict[str, Any]] = await psqlpy_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_data,
+        result=mock_data,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.column_names == ["id", "name"]
     assert result.data == mock_data
@@ -236,19 +222,19 @@ async def test_psqlpy_driver_wrap_select_result(psqlpy_driver: PsqlpyDriver) -> 
 async def test_psqlpy_driver_wrap_select_result_empty(psqlpy_driver: PsqlpyDriver) -> None:
     """Test PSQLPy driver _wrap_select_result method with empty result."""
     # Create empty data
-    mock_data = []
+    mock_data: list[Any] = []
 
     # Create SQL statement
     statement = SQL("SELECT * FROM empty_table")
 
     # Wrap result
-    result = await psqlpy_driver._wrap_select_result(
+    result: Union[SQLResult[Any], SQLResult[dict[str, Any]]] = await psqlpy_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_data,
+        result=mock_data,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.data == []
     assert result.column_names == []
@@ -276,12 +262,12 @@ async def test_psqlpy_driver_wrap_select_result_with_schema_type(psqlpy_driver: 
     # Wrap result with schema type
     result = await psqlpy_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_data,
+        result=mock_data,
         schema_type=User,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.column_names == ["id", "name"]
 
@@ -293,13 +279,13 @@ async def test_psqlpy_driver_wrap_execute_result(psqlpy_driver: PsqlpyDriver) ->
     statement = SQL("UPDATE users SET active = 1", config=psqlpy_driver.config)
 
     # Wrap result with row count
-    result = await psqlpy_driver._wrap_execute_result(
+    result: SQLResult[dict[str, Any]] = await psqlpy_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result=3,
+        result=3,
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 3
     assert result.operation_type == "UPDATE"
@@ -314,11 +300,11 @@ async def test_psqlpy_driver_wrap_execute_result_script(psqlpy_driver: PsqlpyDri
     # Wrap result for script
     result = await psqlpy_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result="SCRIPT EXECUTED",
+        result="SCRIPT EXECUTED",
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 0
     assert result.operation_type == "CREATE"
@@ -333,11 +319,11 @@ async def test_psqlpy_driver_wrap_execute_result_integer(psqlpy_driver: PsqlpyDr
     # Wrap result with integer
     result = await psqlpy_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result=5,
+        result=5,
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 5
     assert result.operation_type == "INSERT"
@@ -366,11 +352,7 @@ async def test_psqlpy_driver_error_handling(psqlpy_driver: PsqlpyDriver, mock_ps
     with pytest.raises(Exception, match="Database error"):
         await psqlpy_driver._execute_impl(
             statement=statement,
-            parameters=None,
             connection=None,
-            config=None,
-            is_many=False,
-            is_script=False,
         )
 
 
@@ -404,7 +386,7 @@ async def test_psqlpy_driver_operation_type_detection(psqlpy_driver: PsqlpyDrive
         # Test with integer result
         result = await psqlpy_driver._wrap_execute_result(
             statement=statement,
-            raw_driver_result=1,
+            result=1,
         )
 
         assert result.operation_type == expected_op_type
@@ -525,11 +507,7 @@ async def test_psqlpy_driver_logging_configuration(
     # Execute with logging enabled
     await psqlpy_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify execution worked

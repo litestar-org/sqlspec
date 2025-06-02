@@ -6,7 +6,7 @@ import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConnection, DuckDBDriver
 from sqlspec.config import InstrumentationConfig
-from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -98,11 +98,6 @@ def test_duckdb_driver_execute_impl_select(duckdb_driver: DuckDBDriver, mock_duc
     # Execute
     result = duckdb_driver._execute_impl(
         statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify cursor was created and execute was called
@@ -123,11 +118,6 @@ def test_duckdb_driver_execute_impl_insert(duckdb_driver: DuckDBDriver, mock_duc
     # Execute
     result = duckdb_driver._execute_impl(
         statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify cursor was created and execute was called
@@ -142,24 +132,17 @@ def test_duckdb_driver_execute_impl_script(duckdb_driver: DuckDBDriver, mock_duc
     mock_cursor = Mock()
     mock_duckdb_connection.cursor.return_value = mock_cursor
 
-    # Create SQL statement (DDL allowed with strict_mode=False)
-    statement = SQL("CREATE TABLE test (id INTEGER); INSERT INTO test VALUES (1);", config=duckdb_driver.config)
-
-    # Execute script
-    result = duckdb_driver._execute_impl(
-        statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=True,
-    )
+    # Test script execution
+    script_statement = SQL(
+        "CREATE TABLE test (id INTEGER); INSERT INTO test VALUES (1);", config=duckdb_driver.config
+    ).as_script()
+    script_result = duckdb_driver._execute_impl(script_statement)
 
     # Verify cursor was created and execute was called with static SQL
     # Note: SQL may be transformed by the pipeline (INTEGER -> INT)
     mock_duckdb_connection.cursor.assert_called_once()
     mock_cursor.execute.assert_called_once()
-    assert result == "SCRIPT EXECUTED"
+    assert script_result == "SCRIPT EXECUTED"
 
 
 def test_duckdb_driver_execute_impl_many(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
@@ -168,19 +151,15 @@ def test_duckdb_driver_execute_impl_many(duckdb_driver: DuckDBDriver, mock_duckd
     mock_cursor = Mock()
     mock_duckdb_connection.cursor.return_value = mock_cursor
 
-    # Create SQL statement with placeholder for parameters - provide dummy parameters to avoid validation error
-    statement = SQL("INSERT INTO users (name) VALUES (?)", parameters=["dummy"], config=duckdb_driver.config)
+    # Test the new as_many() API that accepts parameters directly
     parameters = [["John"], ["Jane"], ["Bob"]]
+    statement = SQL("INSERT INTO users (name) VALUES (?)").as_many(parameters)
 
-    # Execute many
-    result = duckdb_driver._execute_impl(
-        statement=statement,
-        parameters=parameters,
-        connection=None,
-        config=None,
-        is_many=True,
-        is_script=False,
-    )
+    result = duckdb_driver._execute_impl(statement=statement)
+
+    # The statement should have is_many=True and the correct parameters
+    assert statement.is_many is True
+    assert statement.parameters == parameters
 
     # Verify cursor was created and executemany was called
     mock_duckdb_connection.cursor.assert_called_once()
@@ -204,11 +183,6 @@ def test_duckdb_driver_execute_impl_parameter_processing(
     # Execute
     result = duckdb_driver._execute_impl(
         statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify parameters were processed correctly
@@ -228,11 +202,6 @@ def test_duckdb_driver_execute_impl_single_parameter(duckdb_driver: DuckDBDriver
     # Execute
     result = duckdb_driver._execute_impl(
         statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify single parameter was processed correctly
@@ -256,11 +225,11 @@ def test_duckdb_driver_wrap_select_result(duckdb_driver: DuckDBDriver) -> None:
     # Wrap result
     result = duckdb_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.data == [{"id": 1, "name": "John"}, {"id": 2, "name": "Jane"}]
     assert result.column_names == ["id", "name"]
@@ -279,11 +248,11 @@ def test_duckdb_driver_wrap_select_result_empty(duckdb_driver: DuckDBDriver) -> 
     # Wrap result
     result = duckdb_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.data == []
     assert result.column_names == []
@@ -312,12 +281,12 @@ def test_duckdb_driver_wrap_select_result_with_schema_type(duckdb_driver: DuckDB
     # Wrap result with schema type
     result = duckdb_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
         schema_type=User,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     # Data should be converted to schema type by the ResultConverter mixin
     assert result.column_names == ["id", "name"]
@@ -335,11 +304,11 @@ def test_duckdb_driver_wrap_execute_result(duckdb_driver: DuckDBDriver) -> None:
     # Wrap result
     result = duckdb_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 3
     assert result.operation_type == "UPDATE"
@@ -353,11 +322,11 @@ def test_duckdb_driver_wrap_execute_result_script(duckdb_driver: DuckDBDriver) -
     # Wrap result for script
     result = duckdb_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result="SCRIPT EXECUTED",
+        result="SCRIPT EXECUTED",
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 0
     # Operation type is determined from the SQL statement, not the result type
@@ -376,11 +345,11 @@ def test_duckdb_driver_wrap_execute_result_no_rowcount(duckdb_driver: DuckDBDriv
     # Wrap result
     result = duckdb_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == -1  # Default when rowcount not available
     assert result.operation_type == "INSERT"
@@ -406,14 +375,7 @@ def test_duckdb_driver_error_handling(duckdb_driver: DuckDBDriver, mock_duckdb_c
 
     # Test error propagation
     with pytest.raises(Exception, match="Database error"):
-        duckdb_driver._execute_impl(
-            statement=statement,
-            parameters=None,
-            connection=None,
-            config=None,
-            is_many=False,
-            is_script=False,
-        )
+        duckdb_driver._execute_impl(statement=statement)
 
 
 def test_duckdb_driver_instrumentation(duckdb_driver: DuckDBDriver) -> None:
@@ -426,6 +388,21 @@ def test_duckdb_driver_instrumentation(duckdb_driver: DuckDBDriver) -> None:
     assert hasattr(duckdb_driver.instrumentation_config, "log_queries")
     assert hasattr(duckdb_driver.instrumentation_config, "log_parameters")
     assert hasattr(duckdb_driver.instrumentation_config, "log_results_count")
+
+    # Test logging enabled
+    statement = SQL("SELECT * FROM users WHERE id = ?", parameters=[1])
+    result = duckdb_driver._execute_impl(
+        statement=statement,
+    )
+
+    # Verify execution worked
+    assert result is not None
+    assert result.statement is statement
+    assert result.data == [{"id": 1}]
+    assert result.column_names == ["id"]
+    assert result.operation_type == "SELECT"
+    assert result.rows_affected == -1
+    assert result.metadata == {}
 
 
 def test_duckdb_driver_operation_type_detection(duckdb_driver: DuckDBDriver) -> None:
@@ -448,7 +425,7 @@ def test_duckdb_driver_operation_type_detection(duckdb_driver: DuckDBDriver) -> 
 
         result = duckdb_driver._wrap_execute_result(
             statement=statement,
-            raw_driver_result=mock_cursor,
+            result=mock_cursor,
         )
 
         assert result.operation_type == expected_op_type
@@ -622,11 +599,6 @@ def test_duckdb_driver_logging_configuration(duckdb_driver: DuckDBDriver, mock_d
     # Execute with logging enabled
     result = duckdb_driver._execute_impl(
         statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify execution worked

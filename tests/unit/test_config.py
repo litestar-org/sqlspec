@@ -20,7 +20,7 @@ from sqlspec.config import (
 )
 from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL
 from sqlspec.typing import DictRow
 
 # Test Fixtures and Mock Classes
@@ -87,21 +87,15 @@ class MockDriver(SyncDriverAdapterProtocol[MockConnection, DictRow]):
     def _execute_impl(
         self,
         statement: SQL,
-        parameters: Any = None,
         connection: MockConnection | None = None,
-        config: SQLConfig | None = None,
-        is_many: bool = False,
-        is_script: bool = False,
         **kwargs: Any,
     ) -> Any:
         return Mock()
 
-    def _wrap_select_result(
-        self, statement: SQL, raw_driver_result: Any, schema_type: type | None = None, **kwargs: Any
-    ) -> Mock:
+    def _wrap_select_result(self, statement: SQL, result: Any, schema_type: type | None = None, **kwargs: Any) -> Mock:
         return Mock()
 
-    def _wrap_execute_result(self, statement: SQL, raw_driver_result: Any, **kwargs: Any) -> Mock:
+    def _wrap_execute_result(self, statement: SQL, result: Any, **kwargs: Any) -> Mock:
         return Mock()
 
     def execute(self, *args: Any, **kwargs: Any) -> Any:
@@ -130,21 +124,17 @@ class MockAsyncDriver(AsyncDriverAdapterProtocol[MockAsyncConnection, DictRow]):
     async def _execute_impl(
         self,
         statement: SQL,
-        parameters: Any = None,
         connection: MockAsyncConnection | None = None,
-        config: SQLConfig | None = None,
-        is_many: bool = False,
-        is_script: bool = False,
         **kwargs: Any,
     ) -> Any:
         return AsyncMock()
 
     async def _wrap_select_result(
-        self, statement: SQL, raw_driver_result: Any, schema_type: type | None = None, **kwargs: Any
+        self, statement: SQL, result: Any, schema_type: type | None = None, **kwargs: Any
     ) -> AsyncMock:
         return AsyncMock()
 
-    async def _wrap_execute_result(self, statement: SQL, raw_driver_result: Any, **kwargs: Any) -> AsyncMock:
+    async def _wrap_execute_result(self, statement: SQL, result: Any, **kwargs: Any) -> AsyncMock:
         return AsyncMock()
 
     async def execute(self, *args: Any, **kwargs: Any) -> Any:

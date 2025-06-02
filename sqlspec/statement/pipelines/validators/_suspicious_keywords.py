@@ -1,14 +1,12 @@
 import re
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Optional
 
 from sqlglot import exp
 from sqlglot.dialects.dialect import DialectType
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.base import SQLValidation, ValidationResult
-
-if TYPE_CHECKING:
-    from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.pipelines.base import ProcessorProtocol, ValidationResult
+from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 __all__ = ("SuspiciousKeywords",)
 
@@ -24,7 +22,7 @@ DATABASE_INTROSPECTION_PATTERN = re.compile(
 )
 
 
-class SuspiciousKeywords(SQLValidation):
+class SuspiciousKeywords(ProcessorProtocol[exp.Expression]):
     """Validates against the use of suspicious system functions and database introspection.
 
     This validator focuses specifically on system-level functions and database introspection
@@ -33,7 +31,6 @@ class SuspiciousKeywords(SQLValidation):
 
     Args:
         risk_level: The risk level of the validator.
-        min_risk_to_raise: The minimum risk level to raise an issue.
         allow_system_functions: Whether to allow system functions like SLEEP, BENCHMARK.
         allow_file_operations: Whether to allow file operations like INTO OUTFILE.
         allow_introspection: Whether to allow database introspection queries.
@@ -44,8 +41,7 @@ class SuspiciousKeywords(SQLValidation):
 
     def __init__(
         self,
-        risk_level: "RiskLevel" = RiskLevel.MEDIUM,
-        min_risk_to_raise: "Optional[RiskLevel]" = RiskLevel.MEDIUM,
+        risk_level: RiskLevel = RiskLevel.MEDIUM,
         allow_system_functions: bool = False,
         allow_file_operations: bool = False,
         allow_introspection: bool = False,
@@ -53,42 +49,45 @@ class SuspiciousKeywords(SQLValidation):
         check_file_operations: bool = True,
         check_database_introspection: bool = True,
     ) -> None:
-        super().__init__(risk_level, min_risk_to_raise)
+        self.risk_level = risk_level
         self.allow_system_functions = allow_system_functions
         self.allow_file_operations = allow_file_operations
         self.allow_introspection = allow_introspection
-        # New parameters for explicit checking control
         self.check_system_functions = check_system_functions
         self.check_file_operations = check_file_operations
         self.check_database_introspection = check_database_introspection
 
-    def validate(
-        self,
-        expression: exp.Expression,
-        dialect: DialectType,
-        config: "SQLConfig",
-        **kwargs: Any,
-    ) -> ValidationResult:
+    def process(self, context: SQLProcessingContext) -> tuple[exp.Expression, Optional[ValidationResult]]:
         """Validate the expression for suspicious system functions and introspection."""
+        if context.current_expression is None:
+            return exp.Placeholder(), ValidationResult(
+                is_safe=False, risk_level=RiskLevel.CRITICAL, issues=["SuspiciousKeywords received no expression."]
+            )
+
+        expression = context.current_expression
+        dialect = context.dialect
+
         issues: list[str] = []
         warnings: list[str] = []
 
-        # Check function calls for system functions
         if self.check_system_functions:
             self._check_function_calls(expression, issues, warnings)
 
-        # Check table references for system schemas
         if self.check_database_introspection:
             self._check_table_references(expression, issues, warnings)
 
-        # Check for file operations in SQL text
         if self.check_file_operations:
             self._check_file_operations(expression, dialect, issues)
 
+        final_validation_result: Optional[ValidationResult] = None
         if issues:
-            return ValidationResult(is_safe=False, risk_level=self.risk_level, issues=issues, warnings=warnings)
+            final_validation_result = ValidationResult(
+                is_safe=False, risk_level=self.risk_level, issues=issues, warnings=warnings
+            )
+        else:
+            final_validation_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE, warnings=warnings)
 
-        return ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE, warnings=warnings)
+        return context.current_expression, final_validation_result
 
     def _check_function_calls(self, expression: exp.Expression, issues: list[str], warnings: list[str]) -> None:
         """Check function calls for suspicious system functions."""

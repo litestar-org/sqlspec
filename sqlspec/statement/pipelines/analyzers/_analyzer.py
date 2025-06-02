@@ -1,27 +1,37 @@
-# ruff: noqa: PLR6301, ARG004
-"""SQL Statement Analysis Pipeline Component.
-
-This module provides the StatementAnalyzer processor that can extract metadata
-and insights from SQL statements as part of the processing pipeline.
-"""
+"""SQL statement analyzer for extracting metadata and complexity metrics."""
 
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 from sqlglot import exp
-from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 
 from sqlspec.statement.pipelines.base import ProcessorProtocol, ValidationResult
 
 if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
+
+    from sqlspec.statement.pipelines.context import SQLProcessingContext
     from sqlspec.statement.sql import SQLConfig
 
 __all__ = (
     "StatementAnalysis",
     "StatementAnalyzer",
 )
+
+# Constants for statement analysis
+HIGH_SUBQUERY_COUNT_THRESHOLD = 10
+"""Threshold for flagging high number of subqueries."""
+
+HIGH_CORRELATED_SUBQUERY_THRESHOLD = 3
+"""Threshold for flagging multiple correlated subqueries."""
+
+EXPENSIVE_FUNCTION_THRESHOLD = 5
+"""Threshold for flagging multiple expensive functions."""
+
+NESTED_FUNCTION_THRESHOLD = 3
+"""Threshold for flagging multiple nested function calls."""
 
 logger = logging.getLogger("sqlspec.statement.analyzers")
 
@@ -34,17 +44,17 @@ class StatementAnalysis:
     """Type of SQL statement (Insert, Select, Update, Delete, etc.)"""
     expression: exp.Expression
     """Parsed SQLGlot expression"""
-    table_name: Optional[str] = None
+    table_name: "Optional[str]" = None
     """Primary table name if detected"""
-    columns: list[str] = field(default_factory=list)
+    columns: "list[str]" = field(default_factory=list)
     """Column names if detected"""
     has_returning: bool = False
     """Whether statement has RETURNING clause"""
     is_from_select: bool = False
     """Whether this is an INSERT FROM SELECT pattern"""
-    parameters: dict[str, Any] = field(default_factory=dict)
+    parameters: "dict[str, Any]" = field(default_factory=dict)
     """Extracted parameters from the SQL"""
-    tables: list[str] = field(default_factory=list)
+    tables: "list[str]" = field(default_factory=list)
     """All table names referenced in the query"""
     complexity_score: int = 0
     """Complexity score based on query structure"""
@@ -52,11 +62,11 @@ class StatementAnalysis:
     """Whether the query uses subqueries"""
     join_count: int = 0
     """Number of joins in the query"""
-    aggregate_functions: list[str] = field(default_factory=list)
+    aggregate_functions: "list[str]" = field(default_factory=list)
     """List of aggregate functions used"""
 
     # Enhanced complexity metrics
-    join_types: dict[str, int] = field(default_factory=dict)
+    join_types: "dict[str, int]" = field(default_factory=dict)
     """Types and counts of joins"""
     max_subquery_depth: int = 0
     """Maximum subquery nesting depth"""
@@ -68,9 +78,9 @@ class StatementAnalysis:
     """Number of WHERE conditions"""
     potential_cartesian_products: int = 0
     """Number of potential Cartesian products detected"""
-    complexity_warnings: list[str] = field(default_factory=list)
+    complexity_warnings: "list[str]" = field(default_factory=list)
     """Warnings about query complexity"""
-    complexity_issues: list[str] = field(default_factory=list)
+    complexity_issues: "list[str]" = field(default_factory=list)
     """Issues with query complexity"""
 
 
@@ -107,32 +117,27 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         self._parse_cache: dict[tuple[str, Optional[str]], exp.Expression] = {}
         self._analysis_cache: dict[str, StatementAnalysis] = {}
 
-    def process(
-        self,
-        expression: exp.Expression,
-        dialect: Optional[DialectType] = None,
-        config: Optional["SQLConfig"] = None,
-    ) -> tuple[exp.Expression, Optional[ValidationResult]]:
-        """Process the SQL expression to extract analysis metadata.
+    def process(self, context: "SQLProcessingContext") -> "tuple[exp.Expression, Optional[ValidationResult]]":
+        """Process the SQL expression to extract analysis metadata and store it in the context."""
 
-        Args:
-            expression: The SQL expression to analyze
-            dialect: SQL dialect for context
-            config: SQL configuration
+        if not context.config.enable_analysis:
+            if context.current_expression is None:
+                return exp.Placeholder(), None
+            return context.current_expression, None
 
-        Returns:
-            Tuple of (unchanged expression, None) - this processor doesn't validate
-        """
-        # Perform analysis and cache it internally
-        # The analysis result can be accessed via analyze_expression method
-        _ = self.analyze_expression(expression)
+        if context.current_expression is None:
+            logger.warning(
+                "StatementAnalyzer.process called with no current_expression in context when analysis is enabled."
+            )
+            return exp.Placeholder(), None
 
-        # Note: SQLGlot expressions are immutable, so we can't store metadata directly
-        # The analysis result should be accessed via the analyzer instance
+        analysis_result_obj = self.analyze_expression(
+            context.current_expression, context.dialect, context.config, context.validation_result
+        )
+        context.analysis_result = analysis_result_obj
+        return context.current_expression, None
 
-        return expression, None
-
-    def analyze_statement(self, sql_string: str, dialect: Optional[DialectType] = None) -> StatementAnalysis:
+    def analyze_statement(self, sql_string: str, dialect: "Optional[DialectType]" = None) -> StatementAnalysis:
         """Analyze SQL string and extract components efficiently.
 
         Args:
@@ -176,16 +181,23 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
 
         return self.analyze_expression(expr)
 
-    def analyze_expression(self, expression: exp.Expression) -> StatementAnalysis:
-        """Analyze a SQLGlot expression directly.
+    def analyze_expression(
+        self,
+        expression: exp.Expression,
+        dialect: "Optional[DialectType]" = None,
+        config: "Optional[SQLConfig]" = None,
+        validation_result: "Optional[ValidationResult]" = None,
+    ) -> StatementAnalysis:
+        """Analyze a SQLGlot expression directly, potentially using validation results for context."""
+        # Check cache first (using expression.sql() as key)
+        # This caching needs to be context-aware if analysis depends on prior steps (e.g. validation_result)
+        # For simplicity, let's assume for now direct expression analysis is cacheable if validation_result is not used deeply.
+        cache_key = expression.sql()  # Simplified cache key
+        if cache_key in self._analysis_cache:
+            # Potentially re-evaluate if critical context like validation_result changed, or make cache more sophisticated.
+            # For now, return cached if expression is identical.
+            return self._analysis_cache[cache_key]
 
-        Args:
-            expression: The expression to analyze
-
-        Returns:
-            StatementAnalysis with extracted components
-        """
-        # Basic analysis
         analysis = StatementAnalysis(
             statement_type=type(expression).__name__,
             expression=expression,
@@ -193,34 +205,34 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
             columns=self._extract_columns(expression),
             has_returning=bool(expression.find(exp.Returning)),
             is_from_select=self._is_insert_from_select(expression),
-            parameters=self._extract_parameters(expression),
+            parameters=self._extract_parameters(expression),  # This might use context.merged_parameters
             tables=self._extract_all_tables(expression),
             uses_subqueries=self._has_subqueries(expression),
-            join_count=self._count_joins(expression),
+            join_count=self._count_joins(expression),  # Simple count
             aggregate_functions=self._extract_aggregate_functions(expression),
         )
 
-        # Enhanced complexity analysis
-        self._analyze_complexity(expression, analysis)
-
-        # Calculate overall complexity score
+        # Enhanced complexity analysis, potentially using validation_result for context
+        self._analyze_complexity(expression, analysis, validation_result)
         analysis.complexity_score = self._calculate_comprehensive_complexity_score(analysis)
 
-        # Cache the analysis result
-        cache_key = expression.sql()
         if len(self._analysis_cache) < self.cache_size:
             self._analysis_cache[cache_key] = analysis
-
         return analysis
 
-    def _analyze_complexity(self, expression: exp.Expression, analysis: StatementAnalysis) -> None:
-        """Perform comprehensive complexity analysis on the expression."""
+    def _analyze_complexity(
+        self,
+        expression: exp.Expression,
+        analysis: StatementAnalysis,
+        validation_result: "Optional[ValidationResult]" = None,
+    ) -> None:
+        """Perform comprehensive complexity analysis, potentially using validation results."""
         # Analyze JOIN complexity
-        join_analysis = self._analyze_joins(expression)
-        analysis.join_types = join_analysis["join_types"]
-        analysis.potential_cartesian_products = join_analysis["potential_cartesian_products"]
-        analysis.complexity_warnings.extend(join_analysis["warnings"])
-        analysis.complexity_issues.extend(join_analysis["issues"])
+        join_analysis_res = self._analyze_joins(expression, validation_result)
+        analysis.join_types = join_analysis_res["join_types"]
+        analysis.potential_cartesian_products = join_analysis_res["potential_cartesian_products"]
+        analysis.complexity_warnings.extend(join_analysis_res["warnings"])
+        analysis.complexity_issues.extend(join_analysis_res["issues"])
 
         # Analyze subquery complexity
         subquery_analysis = self._analyze_subqueries(expression)
@@ -241,46 +253,50 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         analysis.complexity_warnings.extend(function_analysis["warnings"])
         analysis.complexity_issues.extend(function_analysis["issues"])
 
-    def _analyze_joins(self, expression: exp.Expression) -> dict[str, Any]:
-        """Analyze JOIN operations in the query."""
-        join_types = {}
+    def _analyze_joins(
+        self, expression: exp.Expression, validation_result: "Optional[ValidationResult]" = None
+    ) -> "dict[str, Any]":
+        """Analyze JOIN operations. Can use validation_result to check for pre-identified cartesian products."""
+        join_types: dict[str, int] = {}
         join_nodes = list(expression.find_all(exp.Join))
         join_count = len(join_nodes)
-
-        # Count different types of joins
-        for join in join_nodes:
-            join_type = type(join).__name__
-            join_types[join_type] = join_types.get(join_type, 0) + 1
-
-        # Analyze join complexity patterns
         warnings = []
         issues = []
+        cartesian_products = 0
+        for select in expression.find_all(exp.Select):
+            if select.from_ and hasattr(select.from_, "expressions"):  # type: ignore[truthy-function]
+                from_expressions = getattr(select.from_, "expressions", [])
+                if len(from_expressions) > 1 and not list(select.args.get("joins", [])):
+                    # Check if validation already flagged this specific type of implicit cartesian product
+                    cartesian_products += 1
+        if cartesian_products > 0:
+            issues.append(
+                f"Potential Cartesian product detected ({cartesian_products} instances from multiple FROM tables without JOIN)"
+            )
+
+        # Check explicit cross joins
+        for join_node in join_nodes:
+            if join_node.kind and join_node.kind.upper() == "CROSS":
+                issues.append("Explicit CROSS JOIN found, potential Cartesian product.")
+                cartesian_products += 1  # or a different counter for explicit cross joins
+            elif not join_node.on and not join_node.using:  # type: ignore[truthy-function]
+                issues.append(f"JOIN without ON/USING clause found ({join_node.sql()}), potential Cartesian product.")
+                cartesian_products += 1
 
         if join_count > self.max_join_count:
             issues.append(f"Excessive number of joins ({join_count}), may cause performance issues")
         elif join_count > self.max_join_count // 2:
             warnings.append(f"High number of joins ({join_count}), monitor performance")
 
-        # Check for potentially problematic join patterns
-        cartesian_products = 0
-        for select in expression.find_all(exp.Select):
-            if select.from_ and hasattr(select.from_, "expressions"):
-                # Multiple tables in FROM without explicit JOIN might create Cartesian products
-                from_expressions = getattr(select.from_, "expressions", [])
-                if len(from_expressions) > 1:
-                    cartesian_products += 1
-
-        if cartesian_products > 0:
-            issues.append(f"Potential Cartesian product detected ({cartesian_products} instances)")
-
         return {
             "join_types": join_types,
             "potential_cartesian_products": cartesian_products,
             "warnings": warnings,
             "issues": issues,
+            "join_count": join_count,  # Also return join_count for analysis.join_count
         }
 
-    def _analyze_subqueries(self, expression: exp.Expression) -> dict[str, Any]:
+    def _analyze_subqueries(self, expression: exp.Expression) -> "dict[str, Any]":
         """Analyze subquery complexity and nesting depth."""
         subqueries = list(expression.find_all(exp.Subquery))
         subquery_count = len(subqueries)
@@ -314,10 +330,10 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         elif max_depth > self.max_subquery_depth // 2:
             warnings.append(f"High subquery nesting depth ({max_depth})")
 
-        if subquery_count > 10:
+        if subquery_count > HIGH_SUBQUERY_COUNT_THRESHOLD:
             warnings.append(f"High number of subqueries ({subquery_count})")
 
-        if correlated_count > 3:
+        if correlated_count > HIGH_CORRELATED_SUBQUERY_THRESHOLD:
             warnings.append(f"Multiple correlated subqueries detected ({correlated_count})")
 
         return {
@@ -327,7 +343,7 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
             "issues": issues,
         }
 
-    def _analyze_where_clauses(self, expression: exp.Expression) -> dict[str, Any]:
+    def _analyze_where_clauses(self, expression: exp.Expression) -> "dict[str, Any]":
         """Analyze WHERE clause complexity."""
         where_clauses = list(expression.find_all(exp.Where))
         total_conditions = 0
@@ -357,23 +373,19 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
             "issues": issues,
         }
 
-    def _analyze_functions(self, expression: exp.Expression) -> dict[str, Any]:
+    def _analyze_functions(self, expression: exp.Expression) -> "dict[str, Any]":
         """Analyze function usage and complexity."""
-        functions = list(expression.find_all(exp.Func))
-        function_count = len(functions)
-        function_types = {}
-        nested_functions = 0
-
-        for func in functions:
+        function_types: dict[str, int] = {}
+        function_count, nested_functions = 0, 0
+        for func in expression.find_all(exp.Func):
             func_name = func.name.lower() if func.name else "unknown"
             function_types[func_name] = function_types.get(func_name, 0) + 1
-
-            # Check for nested functions
             if list(func.find_all(exp.Func)):
                 nested_functions += 1
+            function_count += 1
 
         # Check for expensive functions
-        expensive_functions = ["regexp", "regex", "like", "concat_ws", "group_concat"]
+        expensive_functions = {"regexp", "regex", "like", "concat_ws", "group_concat"}
         expensive_count = sum(function_types.get(func, 0) for func in expensive_functions)
 
         warnings = []
@@ -384,10 +396,10 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         elif function_count > self.max_function_calls // 2:
             warnings.append(f"High number of function calls ({function_count})")
 
-        if expensive_count > 5:
+        if expensive_count > EXPENSIVE_FUNCTION_THRESHOLD:
             warnings.append(f"Multiple expensive functions used ({expensive_count})")
 
-        if nested_functions > 3:
+        if nested_functions > NESTED_FUNCTION_THRESHOLD:
             warnings.append(f"Multiple nested function calls ({nested_functions})")
 
         return {
@@ -396,7 +408,8 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
             "issues": issues,
         }
 
-    def _calculate_comprehensive_complexity_score(self, analysis: StatementAnalysis) -> int:
+    @staticmethod
+    def _calculate_comprehensive_complexity_score(analysis: StatementAnalysis) -> int:
         """Calculate an overall complexity score based on various metrics."""
         score = 0
 
@@ -418,7 +431,7 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         return score
 
     @staticmethod
-    def _extract_primary_table_name(expr: exp.Expression) -> Optional[str]:
+    def _extract_primary_table_name(expr: exp.Expression) -> "Optional[str]":
         """Extract the primary table name from an expression."""
         if isinstance(expr, exp.Insert):
             if expr.this and hasattr(expr.this, "this"):
@@ -436,10 +449,9 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         return None
 
     @staticmethod
-    def _extract_columns(expr: exp.Expression) -> list[str]:
+    def _extract_columns(expr: exp.Expression) -> "list[str]":
         """Extract column names from an expression."""
-        columns = []
-
+        columns: list[str] = []
         if isinstance(expr, exp.Insert):
             if expr.this and hasattr(expr.this, "expressions"):
                 columns.extend(str(col_expr.name) for col_expr in expr.this.expressions if hasattr(col_expr, "name"))
@@ -456,9 +468,9 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         return columns
 
     @staticmethod
-    def _extract_all_tables(expr: exp.Expression) -> list[str]:
+    def _extract_all_tables(expr: exp.Expression) -> "list[str]":
         """Extract all table names referenced in the expression."""
-        tables = []
+        tables: list[str] = []
         for table in expr.find_all(exp.Table):
             if hasattr(table, "name"):
                 table_name = str(table.name)
@@ -474,7 +486,7 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         return bool(expr.expression and isinstance(expr.expression, exp.Select))
 
     @staticmethod
-    def _extract_parameters(expr: exp.Expression) -> dict[str, Any]:
+    def _extract_parameters(_expr: exp.Expression) -> "dict[str, Any]":
         """Extract parameters from the expression."""
         # This could be enhanced to extract actual parameter placeholders
         return {}
@@ -490,9 +502,9 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         return len(list(expr.find_all(exp.Join)))
 
     @staticmethod
-    def _extract_aggregate_functions(expr: exp.Expression) -> list[str]:
+    def _extract_aggregate_functions(expr: exp.Expression) -> "list[str]":
         """Extract aggregate function names from the expression."""
-        aggregates = []
+        aggregates: list[str] = []
 
         # Common aggregate function types in SQLGlot (using only those that exist)
         aggregate_types = [exp.Count, exp.Sum, exp.Avg, exp.Min, exp.Max]

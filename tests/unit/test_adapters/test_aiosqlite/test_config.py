@@ -1,6 +1,5 @@
 """Unit tests for AIOSQLite configuration."""
 
-from typing import NoReturn
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -157,7 +156,7 @@ async def test_aiosqlite_config_provide_connection(mock_connect: Mock) -> None:
 
 @patch("aiosqlite.connect")
 @pytest.mark.asyncio
-async def test_aiosqlite_config_provide_connection_error_handling(mock_connect: Mock) -> NoReturn:
+async def test_aiosqlite_config_provide_connection_error_handling(mock_connect: Mock) -> None:
     """Test AIOSQLite config provide_connection error handling."""
     mock_connection = AsyncMock()
     mock_connect.return_value = mock_connection

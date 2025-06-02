@@ -1,6 +1,5 @@
 """Unit tests for SQLite configuration."""
 
-from typing import NoReturn
 from unittest.mock import Mock, patch
 
 import pytest
@@ -39,11 +38,11 @@ def test_sqlite_connection_config_validation() -> None:
     """Test SQLite connection config parameter validation."""
     # Test with invalid timeout type
     with pytest.raises(TypeError):
-        SqliteConnectionConfig(database=":memory:", timeout="invalid")  # type: ignore[arg-type]
+        SqliteConnectionConfig(database=":memory:", timeout="invalid")  # type: ignore[typeddict-item]
 
     # Test with invalid detect_types
     with pytest.raises(TypeError):
-        SqliteConnectionConfig(database=":memory:", detect_types="invalid")  # type: ignore[arg-type]
+        SqliteConnectionConfig(database=":memory:", detect_types="invalid")  # type: ignore[typeddict-item]
 
 
 def test_sqlite_config_initialization() -> None:
@@ -116,7 +115,7 @@ def test_sqlite_config_provide_connection(mock_connect: Mock) -> None:
 
 
 @patch("sqlspec.adapters.sqlite.config.sqlite3.connect")
-def test_sqlite_config_provide_connection_error_handling(mock_connect: Mock) -> NoReturn:
+def test_sqlite_config_provide_connection_error_handling(mock_connect: Mock) -> None:
     """Test SQLite config provide_connection error handling."""
     mock_connection = Mock()
     mock_connect.return_value = mock_connection

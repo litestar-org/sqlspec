@@ -1,6 +1,7 @@
 """SQL utilities, validation, and parameter handling."""
 
 from sqlspec.statement import builder, filters, parameters, result, sql
+from sqlspec.statement.result import ArrowResult, SQLResult, StatementResult
 from sqlspec.statement.sql import (
     SQL,
     SQLConfig,
@@ -9,8 +10,11 @@ from sqlspec.statement.sql import (
 
 __all__ = (
     "SQL",
+    "ArrowResult",
     "SQLConfig",
+    "SQLResult",
     "Statement",
+    "StatementResult",
     "builder",
     "filters",
     "parameters",

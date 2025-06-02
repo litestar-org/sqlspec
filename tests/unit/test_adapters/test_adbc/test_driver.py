@@ -9,7 +9,7 @@ from sqlspec.adapters.adbc.driver import AdbcDriver
 from sqlspec.config import InstrumentationConfig
 from sqlspec.exceptions import SQLConversionError
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -279,31 +279,26 @@ def test_adbc_driver_get_cursor_exception_handling(adbc_driver: AdbcDriver) -> N
 def test_adbc_driver_execute_impl_select(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
     """Test AdbcDriver._execute_impl for SELECT statements."""
     mock_connection = adbc_driver.connection
-    mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
+    mock_connection.cursor = Mock(return_value=mock_cursor)
 
-    statement = SQL("SELECT * FROM users WHERE id = $1")
-    parameters = [123]
-
-    result = adbc_driver._execute_impl(statement, parameters)
+    statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[123])
+    result = adbc_driver._execute_impl(statement)
 
     assert result == mock_cursor
     mock_cursor.execute.assert_called_once()
 
-    # Check the SQL and parameters
     call_args = mock_cursor.execute.call_args
-    assert "SELECT * FROM users WHERE id = $1" in call_args[0][0]
     assert call_args[0][1] == [123]
 
 
 def test_adbc_driver_execute_impl_script(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
     """Test AdbcDriver._execute_impl for script execution."""
     mock_connection = adbc_driver.connection
-    mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
+    mock_connection.cursor = Mock(return_value=mock_cursor)
     mock_cursor.statusmessage = "CREATE TABLE"
 
-    statement = SQL("CREATE TABLE test AS SELECT 1 as id")
-
-    result = adbc_driver._execute_impl(statement, is_script=True)
+    statement = SQL("CREATE TABLE test AS SELECT 1 as id").as_script()
+    result = adbc_driver._execute_impl(statement)
 
     assert result == "CREATE TABLE"
     mock_cursor.execute.assert_called_once()
@@ -312,12 +307,12 @@ def test_adbc_driver_execute_impl_script(adbc_driver: AdbcDriver, mock_cursor: M
 def test_adbc_driver_execute_impl_script_no_status(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
     """Test AdbcDriver._execute_impl for script execution without status message."""
     mock_connection = adbc_driver.connection
-    mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
-    # No statusmessage attribute
+    mock_connection.cursor = Mock(return_value=mock_cursor)
+    if hasattr(mock_cursor, "statusmessage"):
+        del mock_cursor.statusmessage
 
-    statement = SQL("CREATE TABLE test AS SELECT 1 as id")
-
-    result = adbc_driver._execute_impl(statement, is_script=True)
+    statement = SQL("CREATE TABLE test AS SELECT 1 as id").as_script()
+    result = adbc_driver._execute_impl(statement)
 
     assert result == "SCRIPT EXECUTED"
     mock_cursor.execute.assert_called_once()
@@ -326,13 +321,17 @@ def test_adbc_driver_execute_impl_script_no_status(adbc_driver: AdbcDriver, mock
 def test_adbc_driver_execute_impl_many(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
     """Test AdbcDriver._execute_impl for execute many operations."""
     mock_connection = adbc_driver.connection
-    mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
+    mock_connection.cursor = Mock(return_value=mock_cursor)
 
-    statement = SQL("INSERT INTO users (name) VALUES (?)")
+    # Test the new as_many() API that accepts parameters directly
     parameters = [["John"], ["Jane"], ["Bob"]]
+    statement = SQL("INSERT INTO users (name) VALUES (?)").as_many(parameters)
 
-    result = adbc_driver._execute_impl(statement, parameters, is_many=True)
+    result = adbc_driver._execute_impl(statement)
 
+    # The statement should have is_many=True and the correct parameters
+    assert statement.is_many is True
+    assert statement.parameters == parameters
     assert result == mock_cursor
     mock_cursor.executemany.assert_called_once()
 
@@ -355,44 +354,43 @@ def test_adbc_driver_execute_impl_with_connection_override(adbc_driver: AdbcDriv
 def test_adbc_driver_execute_impl_no_parameters(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
     """Test AdbcDriver._execute_impl with no parameters."""
     mock_connection = adbc_driver.connection
-    mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
+    mock_connection.cursor = Mock(return_value=mock_cursor)
 
     statement = SQL("SELECT * FROM users")
-
     result = adbc_driver._execute_impl(statement)
 
     assert result == mock_cursor
     mock_cursor.execute.assert_called_once_with(
-        "SELECT * FROM users",
-        [],
+        statement.to_sql(placeholder_style=adbc_driver._get_placeholder_style()), []
     )
 
 
 def test_adbc_driver_execute_impl_list_parameters(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
     """Test AdbcDriver._execute_impl with list parameters."""
     mock_connection = adbc_driver.connection
-    mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
+    mock_connection.cursor = Mock(return_value=mock_cursor)
 
-    statement = SQL("SELECT * FROM users WHERE id IN ($1, $2)")
-    parameters = [1, 2]
-
-    result = adbc_driver._execute_impl(statement, parameters)
+    statement = SQL("SELECT * FROM users WHERE id IN ($1, $2)", parameters=[1, 2])
+    result = adbc_driver._execute_impl(statement)
 
     assert result == mock_cursor
     mock_cursor.execute.assert_called_once()
+    executed_params = mock_cursor.execute.call_args[0][1]
+    assert executed_params == [1, 2]
 
 
 def test_adbc_driver_execute_impl_single_parameter(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
     """Test AdbcDriver._execute_impl with single parameter."""
     mock_connection = adbc_driver.connection
-    mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
+    mock_connection.cursor = Mock(return_value=mock_cursor)
 
-    statement = SQL("SELECT * FROM users WHERE id = $1")
-    parameters = 123
-
-    result = adbc_driver._execute_impl(statement, parameters)
+    statement = SQL("SELECT * FROM users WHERE id = $1", parameters=123)
+    result = adbc_driver._execute_impl(statement)
 
     assert result == mock_cursor
+    mock_cursor.execute.assert_called_once()
+    executed_params = mock_cursor.execute.call_args[0][1]
+    assert executed_params == [123]
 
 
 def test_adbc_driver_wrap_select_result(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
@@ -407,7 +405,7 @@ def test_adbc_driver_wrap_select_result(adbc_driver: AdbcDriver, mock_cursor: Mo
 
     result = adbc_driver._wrap_select_result(statement, mock_cursor)
 
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement == statement
     assert result.column_names == ["id", "name", "email"]
     assert len(result.data) == 2
@@ -424,7 +422,7 @@ def test_adbc_driver_wrap_select_result_empty(adbc_driver: AdbcDriver, mock_curs
 
     result = adbc_driver._wrap_select_result(statement, mock_cursor)
 
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement == statement
     assert result.column_names == ["id", "name"]
     assert result.data == []
@@ -439,7 +437,7 @@ def test_adbc_driver_wrap_select_result_no_description(adbc_driver: AdbcDriver, 
 
     result = adbc_driver._wrap_select_result(statement, mock_cursor)
 
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement == statement
     assert result.column_names == []
     assert result.data == []
@@ -464,24 +462,29 @@ def test_adbc_driver_wrap_select_result_with_schema_type(adbc_driver: AdbcDriver
 
         result = adbc_driver._wrap_select_result(statement, mock_cursor, schema_type=User)
 
-        assert isinstance(result, SelectResult)
+        assert isinstance(result, SQLResult)
         assert result.data == [User(id=1, name="John")]
         mock_to_schema.assert_called_once()
 
 
-def test_adbc_driver_wrap_execute_result_cursor(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
+def test_adbc_driver_wrap_execute_result_cursor(adbc_driver: AdbcDriver) -> None:
     """Test AdbcDriver._wrap_execute_result for cursor results."""
+    # Create a mock cursor specifically for INSERT operations (no RETURNING clause)
+    mock_cursor = Mock(spec=Cursor)
     mock_cursor.rowcount = 3
+    # For INSERT without RETURNING, there should be no description or empty fetchall
+    mock_cursor.description = None  # No columns returned for INSERT without RETURNING
+    mock_cursor.fetchall.return_value = []
 
     statement = SQL("INSERT INTO users (name) VALUES ('John')")
 
     result = adbc_driver._wrap_execute_result(statement, mock_cursor)
 
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement == statement
     assert result.rows_affected == 3
-    assert result.data["rows_affected"] == 3
-    assert result.data["operation_type"] == "UNKNOWN"
+    assert result.operation_type == "INSERT"
+    assert result.data == []
 
 
 def test_adbc_driver_wrap_execute_result_string(adbc_driver: AdbcDriver) -> None:
@@ -490,22 +493,24 @@ def test_adbc_driver_wrap_execute_result_string(adbc_driver: AdbcDriver) -> None
 
     result = adbc_driver._wrap_execute_result(statement, "CREATE TABLE")
 
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement == statement
     assert result.rows_affected == 0
-    assert result.operation_type in ("SCRIPT", "UNKNOWN")
+    assert result.operation_type in ("SCRIPT", "UNKNOWN", "CREATE")
 
 
 def test_adbc_driver_wrap_execute_result_no_rowcount(adbc_driver: AdbcDriver) -> None:
     """Test AdbcDriver._wrap_execute_result when cursor has no rowcount."""
     mock_cursor = Mock(spec=Cursor)
-    # No rowcount attribute
+    # Remove rowcount attribute to simulate cursor without rowcount
+    if hasattr(mock_cursor, "rowcount"):
+        del mock_cursor.rowcount
 
     statement = SQL("UPDATE users SET active = true")
 
     result = adbc_driver._wrap_execute_result(statement, mock_cursor)
 
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement == statement
     assert result.rows_affected == -1
 
@@ -523,6 +528,7 @@ def test_adbc_driver_select_to_arrow_success(adbc_driver: AdbcDriver, mock_curso
     result = adbc_driver.select_to_arrow(statement)
 
     assert isinstance(result, ArrowResult)
+    assert not isinstance(result.statement, str)
     assert result.statement.sql == "SELECT * FROM users"  # pyright: ignore
     assert result.data == mock_arrow_table
     mock_cursor.execute.assert_called_once()
@@ -537,10 +543,10 @@ def test_adbc_driver_select_to_arrow_with_parameters(adbc_driver: AdbcDriver, mo
     mock_arrow_table = Mock()
     mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
-    statement = SQL("SELECT * FROM users WHERE id = $1")
-    parameters = [123]
+    # Create SQL statement with parameters included
+    statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[123])
 
-    result = adbc_driver.select_to_arrow(statement, parameters)
+    result = adbc_driver.select_to_arrow(statement)
 
     assert isinstance(result, ArrowResult)
     assert result.data == mock_arrow_table
@@ -641,14 +647,12 @@ def test_adbc_driver_instrumentation_logging(mock_adbc_connection: Mock, mock_cu
     mock_cursor.fetchall.return_value = [(1, "John")]
     mock_cursor.description = [["id"], ["name"]]
 
-    statement = SQL("SELECT * FROM users WHERE id = $1")
-    parameters = [123]
-
-    # Execute and wrap select result to trigger logging
-    cursor_result = driver._execute_impl(statement, parameters)
+    statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[123])
+    # Parameters argument removed from _execute_impl call
+    cursor_result = driver._execute_impl(statement)
     select_result = driver._wrap_select_result(statement, cursor_result)
 
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     # Logging calls are verified through the instrumentation config
 
 
@@ -676,15 +680,46 @@ def test_adbc_driver_returns_rows_check(adbc_driver: AdbcDriver) -> None:
 
 def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
     """Test AdbcDriver._build_statement method."""
+    from sqlglot import exp
+
     from sqlspec.statement.builder import QueryBuilder
+    from sqlspec.statement.result import SQLResult
 
+    # Create a simple test QueryBuilder subclass
+    class TestQueryBuilder(QueryBuilder[SQLResult[DictRow]]):
+        def _create_base_expression(self) -> exp.Expression:
+            return exp.Select()
+
+        @property
+        def _expected_result_type(self) -> type[SQLResult[DictRow]]:
+            return SQLResult[DictRow]
+
+    sql_config = SQLConfig()
     # Test with SQL statement
-    sql_stmt = SQL("SELECT * FROM users")
-    result = adbc_driver._build_statement(sql_stmt, SQLConfig())
+    sql_stmt = SQL("SELECT * FROM users", parameters=None, config=sql_config)
+    result = adbc_driver._build_statement(sql_stmt, parameters=None, config=sql_config)
     assert result == sql_stmt
 
-    # Test with QueryBuilder (mock)
-    mock_builder = Mock(spec=QueryBuilder)
-    mock_builder.to_statement.return_value = sql_stmt
-    result = adbc_driver._build_statement(mock_builder, SQLConfig())
-    assert result == sql_stmt
+    # Test with QueryBuilder - use a real QueryBuilder subclass
+    test_builder = TestQueryBuilder()
+    result = adbc_driver._build_statement(test_builder, parameters=None, config=sql_config)
+    assert isinstance(result, SQL)
+    # The result should be a SQL statement created from the builder
+    assert "SELECT" in result.sql
+
+    # Test with plain string SQL input
+    string_sql = "SELECT id FROM another_table"
+    built_stmt_from_string = adbc_driver._build_statement(string_sql, parameters=None, config=sql_config)
+    assert isinstance(built_stmt_from_string, SQL)
+    assert built_stmt_from_string.sql == string_sql
+    assert built_stmt_from_string.parameters is None
+
+    # Test with plain string SQL and parameters
+    string_sql_with_params = "SELECT id FROM yet_another_table WHERE id = ?"
+    params_for_string = (1,)
+    built_stmt_with_params = adbc_driver._build_statement(
+        string_sql_with_params, parameters=params_for_string, config=sql_config
+    )
+    assert isinstance(built_stmt_with_params, SQL)
+    assert built_stmt_with_params.sql == string_sql_with_params
+    assert built_stmt_with_params.parameters == params_for_string

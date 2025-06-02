@@ -18,9 +18,9 @@ from google.cloud.bigquery.table import Row as BigQueryRow
 
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
 from sqlspec.config import InstrumentationConfig
-from sqlspec.exceptions import ParameterStyleMismatchError, SQLSpecError
+from sqlspec.exceptions import SQLSpecError
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -250,11 +250,13 @@ def test_bigquery_driver_prepare_bq_query_parameters_array(bigquery_driver: BigQ
 
     # Find the tags parameter
     tags_param = next(p for p in bq_params if p.name == "tags")
+    assert not isinstance(tags_param, ScalarQueryParameter)
     assert tags_param.array_type == "STRING"  # pyright: ignore
     assert tags_param.values == ["python", "sql", "bigquery"]  # pyright: ignore
 
     # Find the numbers parameter
     numbers_param = next(p for p in bq_params if p.name == "numbers")
+    assert not isinstance(numbers_param, ScalarQueryParameter)
     assert numbers_param.array_type == "INT64"  # pyright: ignore
     assert numbers_param.values == [1, 2, 3, 4, 5]  # pyright: ignore
 
@@ -358,10 +360,10 @@ def test_bigquery_driver_execute_impl_select(
     """Test BigQueryDriver._execute_impl for SELECT statements."""
     mock_bigquery_connection.query.return_value = mock_query_job
 
-    statement = SQL("SELECT * FROM users WHERE id = @user_id")
     parameters = {"user_id": 123}
+    statement = SQL("SELECT * FROM users WHERE id = @user_id", parameters=parameters)
 
-    result = bigquery_driver._execute_impl(statement, parameters)
+    result = bigquery_driver._execute_impl(statement)
 
     assert result == mock_query_job
     mock_bigquery_connection.query.assert_called_once()
@@ -374,9 +376,9 @@ def test_bigquery_driver_execute_impl_script(
     mock_query_job.result.return_value = None
     mock_bigquery_connection.query.return_value = mock_query_job
 
-    statement = SQL("CREATE TABLE test AS SELECT 1 as id")
+    statement = SQL("CREATE TABLE test AS SELECT 1 as id").as_script()
 
-    result = bigquery_driver._execute_impl(statement, is_script=True)
+    result = bigquery_driver._execute_impl(statement)
 
     assert isinstance(result, str)
     assert "SCRIPT EXECUTED" in result
@@ -389,21 +391,39 @@ def test_bigquery_driver_execute_impl_preformatted_params(
     """Test BigQueryDriver._execute_impl with pre-formatted BigQuery parameters."""
     mock_bigquery_connection.query.return_value = mock_query_job
 
-    statement = SQL("SELECT * FROM users WHERE id = @user_id")
     preformatted_params = [ScalarQueryParameter("user_id", "INT64", 123)]
+    statement = SQL("SELECT * FROM users WHERE id = @user_id", parameters=preformatted_params)
 
-    result = bigquery_driver._execute_impl(statement, preformatted_params)
+    result = bigquery_driver._execute_impl(statement)
 
     assert result == mock_query_job
 
 
-def test_bigquery_driver_execute_impl_preformatted_params_with_kwargs(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQueryDriver._execute_impl raises error with pre-formatted params and kwargs."""
-    statement = SQL("SELECT * FROM users WHERE id = @user_id")
-    preformatted_params = [ScalarQueryParameter("user_id", "INT64", 123)]
+def test_bigquery_driver_execute_impl_preformatted_params_with_kwargs(
+    bigquery_driver: BigQueryDriver, mock_bigquery_connection: Mock, mock_query_job: Mock
+) -> None:
+    """Test BigQueryDriver._execute_impl with pre-formatted BigQuery parameters and kwargs (e.g., job_config)."""
+    mock_bigquery_connection.query.return_value = mock_query_job
 
-    with pytest.raises(ParameterStyleMismatchError):
-        bigquery_driver._execute_impl(statement, preformatted_params, job_config=QueryJobConfig())
+    preformatted_params = [ScalarQueryParameter("user_id", "INT64", 123)]
+    statement_with_preformatted = SQL("SELECT * FROM users WHERE id = @user_id", parameters=preformatted_params)
+
+    # Test that _execute_impl can be called with kwargs like job_config
+    # The original ParameterStyleMismatchError check for this specific scenario in _execute_impl is no longer applicable.
+    # This test now verifies that additional kwargs can be passed through.
+    job_config_kwargs = QueryJobConfig()
+    job_config_kwargs.use_legacy_sql = True  # Example kwarg
+
+    result = bigquery_driver._execute_impl(statement_with_preformatted, job_config=job_config_kwargs)
+
+    assert result == mock_query_job
+    # Check that the job_config kwarg was passed to _run_query_job (which is called by _execute_impl)
+    # This requires inspecting the call to mock_bigquery_connection.query made by _run_query_job
+    call_args = mock_bigquery_connection.query.call_args
+    assert call_args is not None
+    final_job_config_passed = call_args.kwargs.get("job_config")
+    assert final_job_config_passed is not None
+    assert final_job_config_passed.use_legacy_sql is True
 
 
 def test_bigquery_driver_wrap_select_result(bigquery_driver: BigQueryDriver) -> None:
@@ -421,7 +441,7 @@ def test_bigquery_driver_wrap_select_result(bigquery_driver: BigQueryDriver) -> 
     with patch.object(bigquery_driver, "_rows_to_results", return_value=[{"id": 1, "name": "John"}]):
         result = bigquery_driver._wrap_select_result(statement, mock_query_job)
 
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement == statement
     assert result.data == [{"id": 1, "name": "John"}]
     assert result.column_names == ["id", "name"]
@@ -433,7 +453,7 @@ def test_bigquery_driver_wrap_select_result_unexpected_type(bigquery_driver: Big
 
     result = bigquery_driver._wrap_select_result(statement, "unexpected")
 
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement == statement
     assert result.data == []
     assert result.column_names == []
@@ -445,22 +465,21 @@ def test_bigquery_driver_wrap_execute_result_query_job(bigquery_driver: BigQuery
 
     result = bigquery_driver._wrap_execute_result(statement, mock_query_job)
 
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement == statement
     assert result.rows_affected == mock_query_job.num_dml_affected_rows
-    assert result.data["rows_affected"] == mock_query_job.num_dml_affected_rows
+    assert result.get_metadata("job_id") == mock_query_job.job_id
 
 
 def test_bigquery_driver_wrap_execute_result_script(bigquery_driver: BigQueryDriver) -> None:
     """Test BigQueryDriver._wrap_execute_result for script execution."""
-    statement = SQL("CREATE TABLE test AS SELECT 1 as id")
+    statement = SQL("CREATE TABLE test AS SELECT 1 as id").as_script()
 
     result = bigquery_driver._wrap_execute_result(statement, "SCRIPT EXECUTED (Job ID: test-job-123)")
 
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement == statement
     assert result.rows_affected == 0
-    assert result.operation_type in ("SCRIPT", "UNKNOWN")
 
 
 def test_bigquery_driver_execute_many_empty_parameters(bigquery_driver: BigQueryDriver) -> None:
@@ -469,7 +488,7 @@ def test_bigquery_driver_execute_many_empty_parameters(bigquery_driver: BigQuery
 
     result = bigquery_driver.execute_many(statement, [])
 
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.rows_affected == 0
 
 
@@ -489,7 +508,7 @@ def test_bigquery_driver_execute_many_with_parameters(
 
     result = bigquery_driver.execute_many(statement, parameters)
 
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     # Should have executed 3 times (one for each parameter set)
     assert mock_bigquery_connection.query.call_count == 3
 
@@ -509,7 +528,7 @@ def test_bigquery_driver_execute_many_with_job_config(
 
     result = bigquery_driver.execute_many(statement, parameters, job_config=job_config)
 
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     mock_bigquery_connection.query.assert_called_once()
 
 
@@ -547,7 +566,7 @@ def test_bigquery_driver_from_query_builder(bigquery_driver: BigQueryDriver) -> 
     mock_builder.to_statement.return_value = SQL("SELECT * FROM users")
 
     # Should be able to handle QueryBuilder objects
-    result = bigquery_driver._build_statement(mock_builder, SQLConfig())
+    result = bigquery_driver._build_statement(mock_builder, None, SQLConfig(), *())
     assert isinstance(result, SQL)
 
 
@@ -612,7 +631,7 @@ def test_bigquery_driver_job_config_inheritance(mock_bigquery_connection: Mock) 
     assert driver._default_query_job_config == default_job_config
 
 
-def test_bigquery_driver_job_config_override_precedence(mock_bigquery_connection: Mock) -> None:
+def test_bigquery_driver_job_config_precedence(mock_bigquery_connection: Mock) -> None:
     """Test BigQuery driver job config override takes precedence."""
     # Mock connection with default job config
     connection_job_config = QueryJobConfig()

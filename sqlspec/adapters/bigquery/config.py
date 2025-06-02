@@ -332,7 +332,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
                 if self.instrumentation.log_pool_operations:
                     # Log config without sensitive data
                     safe_config = {k: v for k, v in config_dict.items() if k != "credentials"}
-                    logger.debug(f"BigQuery connection config: {safe_config}", extra={"adapter": "bigquery"})
+                    logger.debug("BigQuery connection config: %s", safe_config, extra={"adapter": "bigquery"})
 
                 connection = self.connection_type(**config_dict)
 
@@ -342,7 +342,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
                         self.on_connection_create(connection)
                         if self.instrumentation.log_pool_operations:
                             logger.debug("Executed connection creation hook", extra={"adapter": "bigquery"})
-                    except Exception as e:  # noqa: BLE001
+                    except Exception as e:
                         if self.instrumentation.log_pool_operations:
                             logger.warning(
                                 "Connection creation hook failed", extra={"adapter": "bigquery", "error": str(e)}

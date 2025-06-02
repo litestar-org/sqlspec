@@ -10,7 +10,7 @@ import pytest
 from pytest_databases.docker.bigquery import BigQueryService
 
 from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver
-from sqlspec.statement.result import ExecuteResult, SelectResult
+from sqlspec.statement.result import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -46,12 +46,12 @@ def test_bigquery_basic_crud(bigquery_session: BigQueryDriver, bigquery_service:
     insert_result = bigquery_session.execute(
         f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", (1, "test_name", 42)
     )
-    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
-    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
+    assert isinstance(insert_result, SQLResult)
+    assert insert_result.rows_affected == 1
 
     # SELECT
     select_result = bigquery_session.execute(f"SELECT name, value FROM {table_name} WHERE name = ?", ("test_name",))
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
     assert select_result.data[0]["name"] == "test_name"
@@ -59,23 +59,23 @@ def test_bigquery_basic_crud(bigquery_session: BigQueryDriver, bigquery_service:
 
     # UPDATE
     update_result = bigquery_session.execute(f"UPDATE {table_name} SET value = ? WHERE name = ?", (100, "test_name"))
-    assert isinstance(update_result, ExecuteResult)
+    assert isinstance(update_result, SQLResult)
     assert update_result.rows_affected == 1
 
     # Verify UPDATE
     verify_result = bigquery_session.execute(f"SELECT value FROM {table_name} WHERE name = ?", ("test_name",))
-    assert isinstance(verify_result, SelectResult)
+    assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
     delete_result = bigquery_session.execute(f"DELETE FROM {table_name} WHERE name = ?", ("test_name",))
-    assert isinstance(delete_result, ExecuteResult)
+    assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 
     # Verify DELETE
     empty_result = bigquery_session.execute(f"SELECT COUNT(*) as count FROM {table_name}")
-    assert isinstance(empty_result, SelectResult)
+    assert isinstance(empty_result, SQLResult)
     assert empty_result.data is not None
     assert empty_result.data[0]["count"] == 0
 
@@ -104,7 +104,7 @@ def test_bigquery_parameter_styles(
         sql = f"SELECT name FROM {table_name} WHERE name = @name"
 
     result = bigquery_session.execute(sql, params)
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
     assert result.data[0]["name"] == "test_value"
@@ -117,18 +117,18 @@ def test_bigquery_execute_many(bigquery_session: BigQueryDriver, bigquery_servic
     params_list = [(1, "name1", 1), (2, "name2", 2), (3, "name3", 3)]
 
     result = bigquery_session.execute_many(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", params_list)
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.rows_affected == len(params_list)
 
     # Verify all records were inserted
     select_result = bigquery_session.execute(f"SELECT COUNT(*) as count FROM {table_name}")
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert select_result.data[0]["count"] == len(params_list)
 
     # Verify data integrity
     ordered_result = bigquery_session.execute(f"SELECT name, value FROM {table_name} ORDER BY name")
-    assert isinstance(ordered_result, SelectResult)
+    assert isinstance(ordered_result, SQLResult)
     assert ordered_result.data is not None
     assert len(ordered_result.data) == 3
     assert ordered_result.data[0]["name"] == "name1"
@@ -153,7 +153,7 @@ def test_bigquery_execute_script(bigquery_session: BigQueryDriver, bigquery_serv
     select_result = bigquery_session.execute(
         f"SELECT name, value FROM {table_name} WHERE name LIKE 'script_test%' ORDER BY name"
     )
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 2
     assert select_result.data[0]["name"] == "script_test1"
@@ -175,7 +175,7 @@ def test_bigquery_result_methods(bigquery_session: BigQueryDriver, bigquery_serv
 
     # Test SelectResult methods
     result = bigquery_session.execute(f"SELECT * FROM {table_name} ORDER BY name")
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
 
     # Test get_first()
     first_row = result.get_first()
@@ -190,7 +190,7 @@ def test_bigquery_result_methods(bigquery_session: BigQueryDriver, bigquery_serv
 
     # Test empty result
     empty_result = bigquery_session.execute(f"SELECT * FROM {table_name} WHERE name = ?", ("nonexistent",))
-    assert isinstance(empty_result, SelectResult)
+    assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None
 
@@ -260,7 +260,7 @@ def test_bigquery_data_types(bigquery_session: BigQueryDriver, bigquery_service:
         SELECT string_col, int_col, float_col, bool_col, array_col
         FROM `{bigquery_service.project}.{bigquery_service.dataset}.data_types_test`
     """)
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
@@ -300,7 +300,7 @@ def test_bigquery_complex_queries(bigquery_session: BigQueryDriver, bigquery_ser
         ORDER BY t1.name, t2.name
         LIMIT 3
     """)
-    assert isinstance(join_result, SelectResult)
+    assert isinstance(join_result, SQLResult)
     assert join_result.data is not None
     assert len(join_result.data) == 3
 
@@ -313,7 +313,7 @@ def test_bigquery_complex_queries(bigquery_session: BigQueryDriver, bigquery_ser
             MAX(value) as max_value
         FROM {table_name}
     """)
-    assert isinstance(agg_result, SelectResult)
+    assert isinstance(agg_result, SQLResult)
     assert agg_result.data is not None
     assert agg_result.data[0]["total_count"] == 4
     assert agg_result.data[0]["avg_value"] == 29.5
@@ -327,7 +327,7 @@ def test_bigquery_complex_queries(bigquery_session: BigQueryDriver, bigquery_ser
         WHERE value > (SELECT AVG(value) FROM {table_name})
         ORDER BY value
     """)
-    assert isinstance(subquery_result, SelectResult)
+    assert isinstance(subquery_result, SQLResult)
     assert subquery_result.data is not None
     assert len(subquery_result.data) == 2  # Bob and Charlie
     assert subquery_result.data[0]["name"] == "Bob"
@@ -351,8 +351,8 @@ def test_bigquery_schema_operations(bigquery_session: BigQueryDriver, bigquery_s
         f"INSERT INTO `{bigquery_service.project}.{bigquery_service.dataset}.schema_test` (id, description) VALUES (?, ?)",
         (1, "test description"),
     )
-    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
-    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
+    assert isinstance(insert_result, SQLResult)
+    assert insert_result.rows_affected == 1
 
     # Verify table structure using INFORMATION_SCHEMA
     info_result = bigquery_session.execute(f"""
@@ -361,7 +361,7 @@ def test_bigquery_schema_operations(bigquery_session: BigQueryDriver, bigquery_s
         WHERE table_name = 'schema_test'
         ORDER BY ordinal_position
     """)
-    assert isinstance(info_result, SelectResult)
+    assert isinstance(info_result, SQLResult)
     assert info_result.data is not None
     assert len(info_result.data) == 3  # id, description, created_at
 
@@ -383,7 +383,7 @@ def test_bigquery_column_names_and_metadata(
     result = bigquery_session.execute(
         f"SELECT id, name, value, created_at FROM {table_name} WHERE name = ?", ("metadata_test",)
     )
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
     assert result.data is not None
     assert len(result.data) == 1
@@ -417,7 +417,7 @@ def test_bigquery_with_schema_type(bigquery_session: BigQueryDriver, bigquery_se
         f"SELECT id, name, value FROM {table_name} WHERE name = ?", ("schema_test",), schema_type=TestRecord
     )
 
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
 
@@ -437,14 +437,14 @@ def test_bigquery_performance_bulk_operations(
 
     # Bulk insert
     result = bigquery_session.execute_many(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", bulk_data)
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.rows_affected == 100
 
     # Bulk select
     select_result = bigquery_session.execute(
         f"SELECT COUNT(*) as count FROM {table_name} WHERE name LIKE 'bulk_user_%'"
     )
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert select_result.data[0]["count"] == 100
 
@@ -455,7 +455,7 @@ def test_bigquery_performance_bulk_operations(
         ORDER BY value
         LIMIT 10 OFFSET 20
     """)
-    assert isinstance(page_result, SelectResult)
+    assert isinstance(page_result, SQLResult)
     assert page_result.data is not None
     assert len(page_result.data) == 10
     assert page_result.data[0]["name"] == "bulk_user_21"
@@ -471,7 +471,7 @@ def test_bigquery_specific_features(bigquery_session: BigQueryDriver, bigquery_s
             GENERATE_UUID() as uuid_val,
             FARM_FINGERPRINT('test') as fingerprint
     """)
-    assert isinstance(functions_result, SelectResult)
+    assert isinstance(functions_result, SQLResult)
     assert functions_result.data is not None
     assert functions_result.data[0]["current_ts"] is not None
     assert functions_result.data[0]["uuid_val"] is not None
@@ -483,7 +483,7 @@ def test_bigquery_specific_features(bigquery_session: BigQueryDriver, bigquery_s
             ARRAY[1, 2, 3, 4, 5] as numbers,
             ARRAY_LENGTH(ARRAY[1, 2, 3, 4, 5]) as array_len
     """)
-    assert isinstance(array_result, SelectResult)
+    assert isinstance(array_result, SQLResult)
     assert array_result.data is not None
     assert array_result.data[0]["numbers"] == [1, 2, 3, 4, 5]
     assert array_result.data[0]["array_len"] == 5
@@ -494,7 +494,7 @@ def test_bigquery_specific_features(bigquery_session: BigQueryDriver, bigquery_s
             STRUCT('Alice' as name, 25 as age) as person,
             STRUCT('Alice' as name, 25 as age).name as person_name
     """)
-    assert isinstance(struct_result, SelectResult)
+    assert isinstance(struct_result, SQLResult)
     assert struct_result.data is not None
     assert struct_result.data[0]["person"]["name"] == "Alice"
     assert struct_result.data[0]["person"]["age"] == 25
@@ -529,7 +529,7 @@ def test_bigquery_analytical_functions(bigquery_session: BigQueryDriver, bigquer
         FROM {table_name}
         ORDER BY id
     """)
-    assert isinstance(window_result, SelectResult)
+    assert isinstance(window_result, SQLResult)
     assert window_result.data is not None
     assert len(window_result.data) == 5
 

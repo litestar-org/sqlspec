@@ -11,7 +11,7 @@ from sqlspec.adapters.psycopg import (
     PsycopgSyncDriver,
 )
 from sqlspec.config import InstrumentationConfig
-from sqlspec.statement.result import ExecuteResult, SelectResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -193,11 +193,7 @@ def test_psycopg_sync_driver_execute_impl_select(
     # Execute
     result = psycopg_sync_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify cursor was created and execute was called
@@ -226,11 +222,7 @@ async def test_psycopg_async_driver_execute_impl_select(
     # Execute
     result = await psycopg_async_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify cursor was created and execute was called
@@ -257,11 +249,7 @@ def test_psycopg_sync_driver_execute_impl_insert(
     # Execute
     result = psycopg_sync_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify cursor was created and execute was called
@@ -281,16 +269,14 @@ def test_psycopg_sync_driver_execute_impl_script(
     mock_psycopg_sync_connection.cursor.return_value.__exit__.return_value = None  # pyright: ignore
 
     # Create SQL statement (DDL allowed with strict_mode=False)
-    statement = SQL("CREATE TABLE test (id INTEGER); INSERT INTO test VALUES (1);", config=psycopg_sync_driver.config)
+    statement = SQL(
+        "CREATE TABLE test (id INTEGER); INSERT INTO test VALUES (1);", config=psycopg_sync_driver.config
+    ).as_script()
 
     # Execute script
     result = psycopg_sync_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=True,
     )
 
     # Verify cursor was created and execute was called
@@ -310,19 +296,15 @@ def test_psycopg_sync_driver_execute_impl_many(
     mock_psycopg_sync_connection.cursor.return_value.__exit__.return_value = None  # pyright: ignore
 
     # Create SQL statement with placeholder for parameters
+    parameters_list = [{"name": "John"}, {"name": "Jane"}, {"name": "Bob"}]
     statement = SQL(
-        "INSERT INTO users (name) VALUES (%(name)s)", parameters={"name": "dummy"}, config=psycopg_sync_driver.config
-    )
-    parameters = [{"name": "John"}, {"name": "Jane"}, {"name": "Bob"}]
+        "INSERT INTO users (name) VALUES (%(name)s)", parameters=parameters_list, config=psycopg_sync_driver.config
+    ).as_many()
 
     # Execute many
     result = psycopg_sync_driver._execute_impl(
         statement=statement,
-        parameters=parameters,
         connection=None,
-        config=None,
-        is_many=True,
-        is_script=False,
     )
 
     # Verify cursor was created and executemany was called
@@ -349,11 +331,11 @@ def test_psycopg_sync_driver_wrap_select_result(psycopg_sync_driver: PsycopgSync
     # Wrap result
     result = psycopg_sync_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.column_names == ["id", "name"]
     assert result.data == [{"id": 1, "name": "John"}, {"id": 2, "name": "Jane"}]
@@ -372,11 +354,11 @@ def test_psycopg_sync_driver_wrap_select_result_empty(psycopg_sync_driver: Psyco
     # Wrap result
     result = psycopg_sync_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.data == []
     assert result.column_names == []
@@ -394,11 +376,11 @@ def test_psycopg_sync_driver_wrap_execute_result(psycopg_sync_driver: PsycopgSyn
     # Wrap result
     result = psycopg_sync_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 3
     assert result.operation_type == "UPDATE"
@@ -412,11 +394,11 @@ def test_psycopg_sync_driver_wrap_execute_result_script(psycopg_sync_driver: Psy
     # Wrap result for script
     result = psycopg_sync_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result="CREATE TABLE",
+        result="CREATE TABLE",
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 0
     assert result.operation_type == "CREATE"
@@ -461,11 +443,7 @@ def test_psycopg_sync_driver_error_handling(
     with pytest.raises(Exception, match="Database error"):
         psycopg_sync_driver._execute_impl(
             statement=statement,
-            parameters=None,
             connection=None,
-            config=None,
-            is_many=False,
-            is_script=False,
         )
 
 
@@ -484,11 +462,7 @@ async def test_psycopg_async_driver_error_handling(
     with pytest.raises(Exception, match="Database error"):
         await psycopg_async_driver._execute_impl(
             statement=statement,
-            parameters=None,
             connection=None,
-            config=None,
-            is_many=False,
-            is_script=False,
         )
 
 
@@ -503,8 +477,30 @@ def test_psycopg_sync_driver_instrumentation(psycopg_sync_driver: PsycopgSyncDri
     assert hasattr(psycopg_sync_driver.instrumentation_config, "log_parameters")
     assert hasattr(psycopg_sync_driver.instrumentation_config, "log_results_count")
 
+    # Setup mock cursor and statement for the test
+    mock_cursor = Mock()
+    # Mock the connection's cursor() method to return a context manager
+    mock_cursor_cm = Mock()
+    mock_cursor_cm.__enter__.return_value = mock_cursor
+    mock_cursor_cm.__exit__.return_value = None
+    psycopg_sync_driver.connection.cursor = Mock(return_value=mock_cursor_cm)
 
-def test_psycopg_async_driver_instrumentation(psycopg_async_driver: PsycopgAsyncDriver) -> None:
+    statement = SQL(
+        "SELECT * FROM users WHERE id = %(user_id)s", parameters={"user_id": 1}, config=psycopg_sync_driver.config
+    )
+
+    # Execute with logging enabled
+    psycopg_sync_driver._execute_impl(
+        statement=statement,
+        connection=None,
+    )
+
+    # Verify execution worked
+    mock_cursor.execute.assert_called_once_with("SELECT * FROM users WHERE id = %(user_id)s", {"user_id": 1})
+
+
+@pytest.mark.asyncio
+async def test_psycopg_async_driver_instrumentation(psycopg_async_driver: PsycopgAsyncDriver) -> None:
     """Test Psycopg async driver instrumentation integration."""
     # Test instrumentation config is accessible
     assert psycopg_async_driver.instrumentation_config is not None
@@ -514,6 +510,27 @@ def test_psycopg_async_driver_instrumentation(psycopg_async_driver: PsycopgAsync
     assert hasattr(psycopg_async_driver.instrumentation_config, "log_queries")
     assert hasattr(psycopg_async_driver.instrumentation_config, "log_parameters")
     assert hasattr(psycopg_async_driver.instrumentation_config, "log_results_count")
+
+    # Setup mock cursor and statement for the test
+    mock_cursor = AsyncMock()
+    # Mock the async connection's cursor() method to return an async context manager
+    mock_async_cursor_cm = AsyncMock()
+    mock_async_cursor_cm.__aenter__.return_value = mock_cursor
+    mock_async_cursor_cm.__aexit__.return_value = None
+    psycopg_async_driver.connection.cursor = AsyncMock(return_value=mock_async_cursor_cm)
+
+    statement = SQL(
+        "SELECT * FROM users WHERE id = %(user_id)s", parameters={"user_id": 1}, config=psycopg_async_driver.config
+    )
+
+    # Execute with logging enabled
+    await psycopg_async_driver._execute_impl(
+        statement=statement,
+        connection=None,
+    )
+
+    # Verify execution worked
+    mock_cursor.execute.assert_called_once_with("SELECT * FROM users WHERE id = %(user_id)s", {"user_id": 1})
 
 
 def test_psycopg_sync_driver_operation_type_detection(psycopg_sync_driver: PsycopgSyncDriver) -> None:
@@ -536,7 +553,7 @@ def test_psycopg_sync_driver_operation_type_detection(psycopg_sync_driver: Psyco
 
         result = psycopg_sync_driver._wrap_execute_result(
             statement=statement,
-            raw_driver_result=mock_cursor,
+            result=mock_cursor,
         )
 
         assert result.operation_type == expected_op_type
@@ -564,11 +581,7 @@ def test_psycopg_sync_driver_logging_configuration(
     # Execute with logging enabled
     psycopg_sync_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify execution worked
@@ -644,11 +657,7 @@ def test_psycopg_sync_driver_named_parameters(
     # Execute
     psycopg_sync_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify named parameters were processed correctly
@@ -677,11 +686,7 @@ async def test_psycopg_async_driver_named_parameters(
     # Execute
     await psycopg_async_driver._execute_impl(
         statement=statement,
-        parameters=None,
         connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
     )
 
     # Verify named parameters were processed correctly
@@ -705,11 +710,11 @@ def test_psycopg_sync_driver_dict_row_handling(psycopg_sync_driver: PsycopgSyncD
     # Wrap result
     result = psycopg_sync_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=mock_cursor,
+        result=mock_cursor,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.column_names == ["id", "name"]
     # Data should be converted to dict format

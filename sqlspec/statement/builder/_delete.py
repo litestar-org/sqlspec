@@ -12,7 +12,8 @@ from sqlglot import exp
 from typing_extensions import LiteralString, Self
 
 from sqlspec.statement.builder._base import QueryBuilder, WhereClauseMixin
-from sqlspec.statement.result import ExecuteResult
+from sqlspec.statement.result import SQLResult
+from sqlspec.typing import RowT
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder._select import SelectBuilder
@@ -21,7 +22,7 @@ __all__ = ("DeleteBuilder",)
 
 
 @dataclass(unsafe_hash=True)
-class DeleteBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
+class DeleteBuilder(QueryBuilder[SQLResult[RowT]], WhereClauseMixin):  # pyright: ignore[reportInvalidTypeArguments]
     """Builder for DELETE statements.
 
     This builder provides a fluent interface for constructing SQL DELETE statements
@@ -48,13 +49,13 @@ class DeleteBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
     _table: "Optional[str]" = field(default=None, init=False)
 
     @property
-    def _expected_result_type(self) -> "type[ExecuteResult]":
+    def _expected_result_type(self) -> "type[SQLResult[RowT]]":
         """Get the expected result type for DELETE operations.
 
         Returns:
             The ExecuteResult type for DELETE statements.
         """
-        return ExecuteResult
+        return SQLResult[RowT]
 
     def _create_base_expression(self) -> "exp.Delete":
         """Create a new sqlglot Delete expression.
@@ -118,7 +119,7 @@ class DeleteBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
     def where_in(
         self,
         column: "Union[str, exp.Column]",
-        values: "Union[tuple[Any, ...], list[Any], SelectBuilder]",
+        values: "Union[tuple[Any, ...], list[Any], SelectBuilder[RowT]]",
     ) -> "Self":
         """Add an IN condition to the WHERE clause.
 
@@ -158,7 +159,7 @@ class DeleteBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
     def where_not_in(
         self,
         column: "Union[str, exp.Column]",
-        values: "Union[tuple[Any, ...], list[Any], SelectBuilder]",
+        values: "Union[tuple[Any, ...], list[Any], SelectBuilder[RowT]]",
     ) -> "Self":
         """Add a NOT IN condition to the WHERE clause.
 
@@ -274,7 +275,7 @@ class DeleteBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
         condition: exp.Expression = col_expr.is_(exp.null()).not_()
         return self.where(condition)
 
-    def where_exists(self, subquery: "Union[SelectBuilder, str]") -> "Self":
+    def where_exists(self, subquery: "Union[SelectBuilder[RowT], str]") -> "Self":
         """Add a WHERE EXISTS clause.
 
         Args:
@@ -303,7 +304,7 @@ class DeleteBuilder(QueryBuilder[ExecuteResult], WhereClauseMixin):
         exists_expr = exp.Exists(this=sub_expr)
         return self.where(exists_expr)
 
-    def where_not_exists(self, subquery: "Union[SelectBuilder, str]") -> "Self":
+    def where_not_exists(self, subquery: "Union[SelectBuilder[RowT], str]") -> "Self":
         """Add a WHERE NOT EXISTS clause.
 
         Args:

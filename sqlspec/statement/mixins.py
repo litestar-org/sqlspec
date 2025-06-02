@@ -1,5 +1,6 @@
-# ruff: noqa: DOC202
+# Test comment for re-linting
 import datetime
+from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from enum import Enum
 from functools import partial
@@ -10,6 +11,7 @@ from typing import (
     Callable,
     Generic,
     Optional,
+    Protocol,
     Union,
     cast,
     overload,
@@ -23,17 +25,23 @@ from sqlspec.exceptions import SQLConversionError, SQLSpecError
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
 from sqlspec.typing import (
     ConnectionT,
+    Counter,
+    Histogram,
     ModelDTOT,
     ModelT,
     SQLParameterType,
+    Tracer,
     convert,
     get_type_adapter,
     is_dataclass,
     is_msgspec_struct,
     is_pydantic_model,
 )
+from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
 
 if TYPE_CHECKING:
+    from sqlspec.config import InstrumentationConfig
+    from sqlspec.statement.builder import QueryBuilder
     from sqlspec.statement.filters import StatementFilter
     from sqlspec.statement.result import ArrowResult
 
@@ -43,9 +51,31 @@ __all__ = (
     "ResultConverter",
     "SQLTranslatorMixin",
     "SyncArrowMixin",
-    "SyncArrowMixin",
     "SyncParquetMixin",
 )
+
+
+class ExporterMixinProtocol(Protocol[ConnectionT]):
+    dialect: str
+    config: SQLConfig
+    instrumentation_config: "InstrumentationConfig"
+    _tracer: "Optional[Tracer]"
+    _query_counter: "Optional[Counter]"
+    _error_counter: "Optional[Counter]"
+    _latency_histogram: "Optional[Histogram]"
+
+    def _build_statement(
+        self,
+        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
+        parameters: "Optional[SQLParameterType]",
+        config: "Optional[SQLConfig]",
+        *filters: "StatementFilter",
+    ) -> "SQL": ...
+
+    def _connection(self, connection: "Optional[ConnectionT]" = None) -> "ConnectionT": ...
+
+    @staticmethod
+    def returns_rows(expression: "Optional[exp.Expression]") -> bool: ...
 
 
 class SQLTranslatorMixin(Generic[ConnectionT]):
@@ -232,16 +262,27 @@ class ResultConverter:
         raise SQLSpecError(msg)
 
 
-class SyncArrowMixin(Generic[ConnectionT]):
+class SyncArrowMixin(ExporterMixinProtocol[ConnectionT], ABC, Generic[ConnectionT]):
     """Optional mixin for sync drivers that support Apache Arrow data format.
 
     Provides methods to select data and return it in Arrow format for high-performance
     data interchange and analytics workflows.
     """
 
+    @abstractmethod
+    def _select_to_arrow_impl(
+        self,
+        stmt_obj: "SQL",
+        connection: "ConnectionT",
+        **kwargs: "Any",
+    ) -> "ArrowResult":
+        """Actual implementation for fetching Arrow data. To be implemented by drivers."""
+        msg = "Arrow support's _select_to_arrow_impl not implemented by this driver"
+        raise NotImplementedError(msg)
+
     def select_to_arrow(
         self,
-        statement: "Statement",
+        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
         parameters: "Optional[SQLParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
@@ -251,30 +292,70 @@ class SyncArrowMixin(Generic[ConnectionT]):
         """Execute a SELECT statement and return results in Apache Arrow format.
 
         Args:
-            statement: The SELECT statement to execute.
+            statement: The SELECT statement or builder to execute.
             parameters: Optional parameters for the statement.
             *filters: Statement filters to apply.
             connection: Optional connection override.
             config: Optional statement configuration.
-            **kwargs: Additional keyword arguments.
+            **kwargs: Additional keyword arguments for the driver's implementation.
+
+        Raises:
+            TypeError: If the driver does not support Arrow.
 
         Returns:
             ArrowResult containing the query results in Arrow format.
         """
-        msg = "Arrow support not implemented by this driver"
-        raise NotImplementedError(msg)
+        if (
+            not hasattr(self, "_build_statement")
+            or not hasattr(self, "_connection")
+            or not hasattr(self, "returns_rows")
+            or not hasattr(self, "config")
+            or not hasattr(self, "dialect")
+        ):
+            msg = "SyncArrowMixin used with a class missing required DriverAdapter attributes/methods."
+            raise TypeError(msg)
+
+        with instrument_operation(self, "select_to_arrow", "database"):
+            # The 'self.config' refers to the default config on the driver.
+            # 'config' param is an override.
+            stmt_obj = self._build_statement(statement, parameters, config or self.config, *filters)
+            # Validation is typically handled by _build_statement via SQLConfig
+            # or can be called explicitly if needed: stmt_obj.validate()
+
+            if not self.returns_rows(stmt_obj.expression):
+                op_type = (
+                    str(stmt_obj.expression.key).upper()
+                    if stmt_obj.expression and hasattr(stmt_obj.expression, "key")
+                    else "UNKNOWN"
+                )
+                msg = f"Cannot fetch Arrow table for a non-query statement. Command type: {op_type}"
+                raise TypeError(msg)
+
+            conn_to_use = self._connection(connection)
+            return self._select_to_arrow_impl(stmt_obj, conn_to_use, **kwargs)
 
 
-class AsyncArrowMixin(Generic[ConnectionT]):
+class AsyncArrowMixin(ExporterMixinProtocol[ConnectionT], ABC, Generic[ConnectionT]):
     """Optional mixin for async drivers that support Apache Arrow data format.
 
     Provides methods to select data and return it in Arrow format for high-performance
     data interchange and analytics workflows.
     """
 
+    @abstractmethod
+    async def _select_to_arrow_impl(
+        self,
+        stmt_obj: "SQL",
+        connection: "ConnectionT",
+        **kwargs: "Any",
+    ) -> "ArrowResult":
+        """Actual implementation for fetching Arrow data. To be implemented by drivers."""
+        msg = "Arrow support's _select_to_arrow_impl not implemented by this driver"
+        raise NotImplementedError(msg)
+
     async def select_to_arrow(
         self,
-        statement: "Statement",
+        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
         parameters: "Optional[SQLParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
@@ -284,89 +365,183 @@ class AsyncArrowMixin(Generic[ConnectionT]):
         """Execute a SELECT statement and return results in Apache Arrow format.
 
         Args:
-            statement: The SELECT statement to execute.
+            statement: The SELECT statement or builder to execute.
             parameters: Optional parameters for the statement.
             *filters: Statement filters to apply.
             connection: Optional connection override.
             config: Optional statement configuration.
-            **kwargs: Additional keyword arguments.
+            **kwargs: Additional keyword arguments for the driver's implementation.
+
+
+        Raises:
+            TypeError: If the driver does not support Arrow.
 
         Returns:
             ArrowResult containing the query results in Arrow format.
         """
-        msg = "Arrow support not implemented by this driver"
-        raise NotImplementedError(msg)
+        if (
+            not hasattr(self, "_build_statement")
+            or not hasattr(self, "_connection")
+            or not hasattr(self, "returns_rows")
+            or not hasattr(self, "config")
+            or not hasattr(self, "dialect")
+        ):
+            msg = "AsyncArrowMixin used with a class missing required DriverAdapter attributes/methods."
+            raise TypeError(msg)
+
+        async with instrument_operation_async(self, "select_to_arrow", "database"):
+            stmt_obj = self._build_statement(statement, parameters, config or self.config, *filters)
+
+            if not self.returns_rows(stmt_obj.expression):
+                op_type = (
+                    str(stmt_obj.expression.key).upper()
+                    if stmt_obj.expression and hasattr(stmt_obj.expression, "key")
+                    else "UNKNOWN"
+                )
+                msg = f"Cannot fetch Arrow table for a non-query statement. Command type: {op_type}"
+                raise TypeError(msg)
+
+            conn_to_use = self._connection(connection)
+            return await self._select_to_arrow_impl(stmt_obj, conn_to_use, **kwargs)
 
 
-class SyncParquetMixin(Generic[ConnectionT]):
+class SyncParquetMixin(ExporterMixinProtocol[ConnectionT], ABC, Generic[ConnectionT]):
     """Optional mixin for drivers that support Parquet file format operations.
 
     Provides methods to select data and export it directly to Parquet format,
     or to read from Parquet files into the database.
     """
+
+    @abstractmethod
+    def _to_parquet_impl(
+        self,
+        stmt_obj: "SQL",
+        connection: "ConnectionT",
+        **kwargs: "Any",  # e.g., file_path
+    ) -> "Union[bytes, None]":
+        """Actual implementation for exporting to Parquet. To be implemented by drivers."""
+        msg = "Parquet support's _to_parquet_impl not implemented by this driver"
+        raise NotImplementedError(msg)
 
     def to_parquet(
         self,
-        statement: "Statement",
+        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
         parameters: "Optional[SQLParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
-        **kwargs: "Any",
+        **kwargs: "Any",  # e.g., file_path for saving, or options for pyarrow.parquet.write_table
     ) -> "Union[bytes, None]":
         """Execute a SELECT statement and return/save results in Parquet format.
 
         Args:
-            statement: The SELECT statement to execute.
+            statement: The SELECT statement or builder to execute.
             parameters: Optional parameters for the statement.
             *filters: Statement filters to apply.
             connection: Optional connection override.
             config: Optional statement configuration.
-            **kwargs: Additional keyword arguments.
+            **kwargs: Additional keyword arguments, such as `file_path` to save the
+                      Parquet data to a file. If `file_path` is not provided,
+                      the Parquet data may be returned as bytes.
+
+        Raises:
+            TypeError: If the driver does not support Parquet.
 
         Returns:
-            Parquet data as bytes if file_path is None, otherwise None after saving.
-
-        Note:
-            This is an optional capability. Drivers that support Parquet should
-            implement this method to provide efficient columnar data export.
+            Parquet data as bytes if `file_path` is not in `kwargs`, otherwise None after saving.
         """
-        msg = "Parquet support not implemented by this driver"
-        raise NotImplementedError(msg)
+        if (
+            not hasattr(self, "_build_statement")
+            or not hasattr(self, "_connection")
+            or not hasattr(self, "returns_rows")
+            or not hasattr(self, "config")
+            or not hasattr(self, "dialect")
+        ):
+            msg = "SyncParquetMixin used with a class missing required DriverAdapter attributes/methods."
+            raise TypeError(msg)
+
+        with instrument_operation(self, "to_parquet", "database"):
+            stmt_obj = self._build_statement(statement, parameters, config or self.config, *filters)
+
+            if not self.returns_rows(stmt_obj.expression):
+                op_type = (
+                    str(stmt_obj.expression.key).upper()
+                    if stmt_obj.expression and hasattr(stmt_obj.expression, "key")
+                    else "UNKNOWN"
+                )
+                msg = f"Cannot export Parquet for a non-query statement. Command type: {op_type}"
+                raise TypeError(msg)
+
+            conn_to_use = self._connection(connection)
+            return self._to_parquet_impl(stmt_obj, conn_to_use, **kwargs)
 
 
-class AsyncParquetMixin(Generic[ConnectionT]):
+class AsyncParquetMixin(ExporterMixinProtocol[ConnectionT], ABC, Generic[ConnectionT]):
     """Optional mixin for drivers that support Parquet file format operations.
 
     Provides methods to select data and export it directly to Parquet format,
     or to read from Parquet files into the database.
     """
 
+    @abstractmethod
+    async def _to_parquet_impl(
+        self,
+        stmt_obj: "SQL",
+        connection: "ConnectionT",
+        **kwargs: "Any",  # e.g., file_path
+    ) -> "Union[bytes, None]":
+        """Actual implementation for exporting to Parquet. To be implemented by drivers."""
+        msg = "Parquet support's _to_parquet_impl not implemented by this driver"
+        raise NotImplementedError(msg)
+
     async def to_parquet(
         self,
-        statement: "Statement",
+        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
         parameters: "Optional[SQLParameterType]" = None,
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
-        **kwargs: "Any",
+        **kwargs: "Any",  # e.g., file_path
     ) -> "Union[bytes, None]":
         """Execute a SELECT statement and return/save results in Parquet format.
 
         Args:
-            statement: The SELECT statement to execute.
+            statement: The SELECT statement or builder to execute.
             parameters: Optional parameters for the statement.
             *filters: Statement filters to apply.
             connection: Optional connection override.
             config: Optional statement configuration.
-            **kwargs: Additional keyword arguments.
+            **kwargs: Additional keyword arguments, such as `file_path` to save the
+                      Parquet data to a file. If `file_path` is not provided,
+                      the Parquet data may be returned as bytes.
+
+        Raises:
+            TypeError: If the driver does not support Parquet.
 
         Returns:
-            Parquet data as bytes if file_path is None, otherwise None after saving.
-
-        Note:
-            This is an optional capability. Drivers that support Parquet should
-            implement this method to provide efficient columnar data export.
+            Parquet data as bytes if `file_path` is not in `kwargs`, otherwise None after saving.
         """
-        msg = "Parquet support not implemented by this driver"
-        raise NotImplementedError(msg)
+        if (
+            not hasattr(self, "_build_statement")
+            or not hasattr(self, "_connection")
+            or not hasattr(self, "returns_rows")
+            or not hasattr(self, "config")
+            or not hasattr(self, "dialect")
+        ):
+            msg = "AsyncParquetMixin used with a class missing required DriverAdapter attributes/methods."
+            raise TypeError(msg)
+
+        async with instrument_operation_async(self, "to_parquet", "database"):
+            stmt_obj = self._build_statement(statement, parameters, config or self.config, *filters)
+
+            if not self.returns_rows(stmt_obj.expression):
+                op_type = (
+                    str(stmt_obj.expression.key).upper()
+                    if stmt_obj.expression and hasattr(stmt_obj.expression, "key")
+                    else "UNKNOWN"
+                )
+                msg = f"Cannot export Parquet for a non-query statement. Command type: {op_type}"
+                raise TypeError(msg)
+
+            conn_to_use = self._connection(connection)
+            return await self._to_parquet_impl(stmt_obj, conn_to_use, **kwargs)

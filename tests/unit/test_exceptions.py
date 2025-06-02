@@ -587,7 +587,7 @@ def test_multiple_results_found_error() -> None:
 def test_exception_hierarchy() -> None:
     """Test exception inheritance hierarchy."""
     # All custom exceptions should inherit from SQLSpecError
-    exceptions_to_test = [
+    exceptions_to_test: list[SQLSpecError] = [
         MissingDependencyError("test"),
         SQLLoadingError(),
         SQLParsingError(),
@@ -629,27 +629,27 @@ def test_specialized_inheritance() -> None:
         MultipleResultsFoundError("test"),
     ]
 
-    for exception in repository_exceptions:
-        assert isinstance(exception, RepositoryError)
+    for repo_exception in repository_exceptions:
+        assert isinstance(repo_exception, RepositoryError)
 
     # Parameter exceptions should inherit from ParameterError
-    parameter_exceptions = [
+    parameter_exceptions: list[ParameterError] = [
         UnknownParameterError("test"),
         MissingParameterError("test"),
         ExtraParameterError("test"),
     ]
 
-    for exception in parameter_exceptions:  # type: ignore[assignment]
-        assert isinstance(exception, ParameterError)
+    for param_exception in parameter_exceptions:
+        assert isinstance(param_exception, ParameterError)
 
     # Validation exceptions should inherit from SQLValidationError
-    validation_exceptions = [
+    validation_exceptions: list[SQLValidationError] = [
         SQLInjectionError("test"),
         UnsafeSQLError("test"),
     ]
 
-    for exception in validation_exceptions:  # type: ignore[assignment]
-        assert isinstance(exception, SQLValidationError)
+    for validation_exception in validation_exceptions:
+        assert isinstance(validation_exception, SQLValidationError)
 
 
 # wrap_exceptions Context Manager Tests
@@ -813,7 +813,7 @@ def test_risk_level_enum_completeness() -> None:
 
     # Ensure they have the expected ordering
     for i in range(len(all_risk_levels) - 1):
-        assert all_risk_levels[i] < all_risk_levels[i + 1]  # type: ignore[operator]
+        assert all_risk_levels[i] < all_risk_levels[i + 1]
 
 
 def test_exception_chaining() -> None:

@@ -931,9 +931,11 @@ async def test_oracle_async_config_close_pool_impl() -> None:
     mock_pool.close.assert_called_once()
 
 
-def test_oracle_sync_config_provide_pool() -> None:
+@patch.object(OracleSyncConfig, "create_pool")
+def test_oracle_sync_config_provide_pool(mock_create_pool: Mock) -> None:
     """Test Oracle sync config provide_pool method."""
     mock_pool = Mock()
+    mock_create_pool.return_value = mock_pool
 
     pool_config = OraclePoolConfig(
         user="test_user",
@@ -942,26 +944,25 @@ def test_oracle_sync_config_provide_pool() -> None:
     )
     config = OracleSyncConfig(pool_config=pool_config)
 
-    # Mock the create_pool method
-    config.create_pool = Mock(return_value=mock_pool)
-
     # First call should create pool
     pool = config.provide_pool()
     assert pool is mock_pool
     assert config.pool_instance is mock_pool
-    config.create_pool.assert_called_once()
+    mock_create_pool.assert_called_once()
 
     # Second call should return existing pool
-    config.create_pool.reset_mock()
+    mock_create_pool.reset_mock()
     pool2 = config.provide_pool()
     assert pool2 is mock_pool
-    config.create_pool.assert_not_called()
+    mock_create_pool.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_oracle_async_config_provide_pool() -> None:
+@patch.object(OracleAsyncConfig, "create_pool")
+async def test_oracle_async_config_provide_pool(mock_create_pool: AsyncMock) -> None:
     """Test Oracle async config provide_pool method."""
     mock_pool = AsyncMock()
+    mock_create_pool.return_value = mock_pool
 
     pool_config = OraclePoolConfig(
         user="test_user",
@@ -970,20 +971,17 @@ async def test_oracle_async_config_provide_pool() -> None:
     )
     config = OracleAsyncConfig(pool_config=pool_config)
 
-    # Mock the create_pool method
-    config.create_pool = AsyncMock(return_value=mock_pool)
-
     # First call should create pool
     pool = await config.provide_pool()
     assert pool is mock_pool
     assert config.pool_instance is mock_pool
-    config.create_pool.assert_called_once()
+    mock_create_pool.assert_called_once()
 
     # Second call should return existing pool
-    config.create_pool.reset_mock()
+    mock_create_pool.reset_mock()
     pool2 = await config.provide_pool()
     assert pool2 is mock_pool
-    config.create_pool.assert_not_called()
+    mock_create_pool.assert_not_called()
 
 
 def test_oracle_config_dsn_connection() -> None:

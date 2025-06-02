@@ -532,9 +532,9 @@ def test_insert_mixed_value_methods() -> None:
 def test_insert_expected_result_type() -> None:
     """Test that _expected_result_type returns correct type."""
     builder = InsertBuilder()
-    from sqlspec.statement.result import ExecuteResult
+    from sqlspec.statement.result import SQLResult
 
-    assert builder._expected_result_type == ExecuteResult
+    assert builder._expected_result_type == SQLResult
 
 
 def test_insert_create_base_expression() -> None:

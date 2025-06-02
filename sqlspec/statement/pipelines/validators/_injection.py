@@ -1,19 +1,32 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from sqlglot import exp
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.base import SQLValidation, ValidationResult
+from sqlspec.statement.pipelines.base import ProcessorProtocol, ValidationResult
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.statement.sql import SQLConfig
+    from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 __all__ = ("PreventInjection",)
+
+# Constants for injection validation
+TRIGGER_LITERAL_LENGTH = 100
+"""Length threshold for string literals that might contain encoded payloads."""
+
+MAX_UNION_SELECTS_DEFAULT = 3
+"""Default maximum number of UNION SELECT statements allowed."""
+
+NULL_PADDING_THRESHOLD = 5
+"""Threshold for number of SELECT expressions before checking for NULL padding."""
+
+HALF_THRESHOLD_DIVISOR = 2
+"""Divisor used to determine if more than half of expressions are NULLs."""
 
 # Compiled regex patterns for performance - focused on injection-specific patterns
 STACKED_QUERY_PATTERN = re.compile(r";\s*(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER)", re.IGNORECASE)
@@ -21,10 +34,9 @@ BYPASS_AUTHENTICATION_PATTERN = re.compile(r"(admin|administrator)\s*['\"]?\s*(?
 UNION_INJECTION_PATTERN = re.compile(
     r"UNION\s+(?:ALL\s+)?SELECT.*(?:NULL|0x\w+|CHAR\(|CHR\()", re.IGNORECASE | re.DOTALL
 )
-TRIGGER_LITERAL_LENGTH = 100
 
 
-class PreventInjection(SQLValidation):
+class PreventInjection(ProcessorProtocol[exp.Expression]):
     """Advanced SQL injection validator using SQLGlot AST analysis.
 
     This validator leverages SQLGlot's parsing to detect injection patterns that would be
@@ -39,7 +51,6 @@ class PreventInjection(SQLValidation):
 
     Args:
         risk_level: The risk level of the validator.
-        min_risk_to_raise: The minimum risk level to raise an issue.
         check_union_injection: Whether to check for UNION-based injection.
         check_stacked_queries: Whether to check for stacked query injection.
         max_union_selects: Maximum allowed UNION SELECT statements.
@@ -48,57 +59,57 @@ class PreventInjection(SQLValidation):
     def __init__(
         self,
         risk_level: RiskLevel = RiskLevel.HIGH,
-        min_risk_to_raise: RiskLevel | None = RiskLevel.HIGH,
         check_union_injection: bool = True,
         check_stacked_queries: bool = True,
-        max_union_selects: int = 3,
+        max_union_selects: int = MAX_UNION_SELECTS_DEFAULT,
     ) -> None:
-        super().__init__(risk_level, min_risk_to_raise)
+        self.risk_level = risk_level
         self.check_union_injection = check_union_injection
         self.check_stacked_queries = check_stacked_queries
         self.max_union_selects = max_union_selects
 
-    def validate(
-        self,
-        expression: exp.Expression,
-        dialect: DialectType,
-        config: SQLConfig,
-        **kwargs: Any,
-    ) -> ValidationResult:
+    def process(self, context: SQLProcessingContext) -> tuple[exp.Expression, ValidationResult | None]:
         """Validate the expression for SQL injection patterns using AST analysis."""
+        if context.current_expression is None:
+            return exp.Placeholder(), ValidationResult(
+                is_safe=False, risk_level=RiskLevel.CRITICAL, issues=["PreventInjection received no expression."]
+            )
+
+        expression = context.current_expression
+        dialect = context.dialect
+
         issues: list[str] = []
         warnings: list[str] = []
 
-        # 1. Check for UNION injection using AST structure
         if self.check_union_injection:
             union_issues = self._check_union_injection(expression, dialect)
             issues.extend(union_issues)
 
-        # 2. Check for stacked queries (multiple statements)
         if self.check_stacked_queries:
             stacked_issues = self._check_stacked_queries(expression, dialect)
             issues.extend(stacked_issues)
 
-        # 3. Check for suspicious literal patterns in string values
         literal_issues = self._check_suspicious_literals(expression)
         issues.extend(literal_issues)
 
-        # 4. Check for comment-based evasion in the AST
         comment_issues = self._check_comment_evasion(expression, dialect)
         issues.extend(comment_issues)
 
-        # 5. Check for parameter binding anomalies
         binding_warnings = self._check_parameter_binding_anomalies(expression)
         warnings.extend(binding_warnings)
 
-        # 6. Check for basic injection patterns that should always fail
         basic_issues = self._check_basic_injection_patterns(expression, dialect)
         issues.extend(basic_issues)
 
+        final_validation_result: ValidationResult | None = None
         if issues:
-            return ValidationResult(is_safe=False, risk_level=self.risk_level, issues=issues, warnings=warnings)
+            final_validation_result = ValidationResult(
+                is_safe=False, risk_level=self.risk_level, issues=issues, warnings=warnings
+            )
+        else:
+            final_validation_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE, warnings=warnings)
 
-        return ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE, warnings=warnings)
+        return context.current_expression, final_validation_result
 
     def _check_union_injection(self, expression: exp.Expression, dialect: DialectType) -> list[str]:
         """Check for UNION-based injection patterns using AST analysis."""
@@ -123,9 +134,9 @@ class PreventInjection(SQLValidation):
 
                 # Check for NULL padding (common injection technique)
                 select_exprs = select_expr.expressions
-                if select_exprs and len(select_exprs) > 5:  # Arbitrary threshold
+                if select_exprs and len(select_exprs) > NULL_PADDING_THRESHOLD:  # Arbitrary threshold
                     null_count = sum(1 for expr in select_exprs if isinstance(expr, exp.Null))
-                    if null_count > len(select_exprs) // 2:  # More than half are NULLs
+                    if null_count > len(select_exprs) // HALF_THRESHOLD_DIVISOR:  # More than half are NULLs
                         issues.append("UNION SELECT with excessive NULL padding detected (injection technique)")
 
                 # Check for suspicious column patterns in UNION SELECT

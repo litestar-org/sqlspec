@@ -9,7 +9,7 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
-from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQLConfig
 
 # Import the decorator
@@ -107,14 +107,14 @@ def test_adbc_postgresql_basic_crud(adbc_postgresql_session: AdbcDriver) -> None
     insert_result = adbc_postgresql_session.execute(
         "INSERT INTO test_table (name, value) VALUES ($1, $2)", ("test_name", 42)
     )
-    assert isinstance(insert_result, ExecuteResult)
+    assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
     # SELECT
     select_result = adbc_postgresql_session.execute(
         "SELECT name, value FROM test_table WHERE name = $1", ("test_name",)
     )
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
     assert select_result.data[0]["name"] == "test_name"
@@ -124,23 +124,23 @@ def test_adbc_postgresql_basic_crud(adbc_postgresql_session: AdbcDriver) -> None
     update_result = adbc_postgresql_session.execute(
         "UPDATE test_table SET value = $1 WHERE name = $2", (100, "test_name")
     )
-    assert isinstance(update_result, ExecuteResult)
+    assert isinstance(update_result, SQLResult)
     assert update_result.rows_affected == 1
 
     # Verify UPDATE
     verify_result = adbc_postgresql_session.execute("SELECT value FROM test_table WHERE name = $1", ("test_name",))
-    assert isinstance(verify_result, SelectResult)
+    assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
     delete_result = adbc_postgresql_session.execute("DELETE FROM test_table WHERE name = $1", ("test_name",))
-    assert isinstance(delete_result, ExecuteResult)
+    assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 
     # Verify DELETE
     empty_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM test_table")
-    assert isinstance(empty_result, SelectResult)
+    assert isinstance(empty_result, SQLResult)
     assert empty_result.data is not None
     assert empty_result.data[0]["count"] == 0
 
@@ -150,12 +150,12 @@ def test_adbc_sqlite_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
     """Test basic CRUD operations with ADBC SQLite."""
     # INSERT
     insert_result = adbc_sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("test_name", 42))
-    assert isinstance(insert_result, ExecuteResult)
+    assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
     # SELECT
     select_result = adbc_sqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name",))
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
     assert select_result.data[0]["name"] == "test_name"
@@ -163,23 +163,23 @@ def test_adbc_sqlite_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
 
     # UPDATE
     update_result = adbc_sqlite_session.execute("UPDATE test_table SET value = ? WHERE name = ?", (100, "test_name"))
-    assert isinstance(update_result, ExecuteResult)
+    assert isinstance(update_result, SQLResult)
     assert update_result.rows_affected == 1
 
     # Verify UPDATE
     verify_result = adbc_sqlite_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name",))
-    assert isinstance(verify_result, SelectResult)
+    assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
     delete_result = adbc_sqlite_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name",))
-    assert isinstance(delete_result, ExecuteResult)
+    assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 
     # Verify DELETE
     empty_result = adbc_sqlite_session.execute("SELECT COUNT(*) as count FROM test_table")
-    assert isinstance(empty_result, SelectResult)
+    assert isinstance(empty_result, SQLResult)
     assert empty_result.data is not None
     assert empty_result.data[0]["count"] == 0
 
@@ -191,12 +191,12 @@ def test_adbc_duckdb_basic_crud(adbc_duckdb_session: AdbcDriver) -> None:
     """Test basic CRUD operations with ADBC DuckDB."""
     # INSERT
     insert_result = adbc_duckdb_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("test_name", 42))
-    assert isinstance(insert_result, ExecuteResult)
+    assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
     # SELECT
     select_result = adbc_duckdb_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name",))
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
     assert select_result.data[0]["name"] == "test_name"
@@ -204,23 +204,23 @@ def test_adbc_duckdb_basic_crud(adbc_duckdb_session: AdbcDriver) -> None:
 
     # UPDATE
     update_result = adbc_duckdb_session.execute("UPDATE test_table SET value = ? WHERE name = ?", (100, "test_name"))
-    assert isinstance(update_result, ExecuteResult)
+    assert isinstance(update_result, SQLResult)
     assert update_result.rows_affected == 1
 
     # Verify UPDATE
     verify_result = adbc_duckdb_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name",))
-    assert isinstance(verify_result, SelectResult)
+    assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
     delete_result = adbc_duckdb_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name",))
-    assert isinstance(delete_result, ExecuteResult)
+    assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 
     # Verify DELETE
     empty_result = adbc_duckdb_session.execute("SELECT COUNT(*) as count FROM test_table")
-    assert isinstance(empty_result, SelectResult)
+    assert isinstance(empty_result, SQLResult)
     assert empty_result.data is not None
     assert empty_result.data[0]["count"] == 0
 
@@ -258,12 +258,12 @@ def test_adbc_duckdb_data_types(adbc_duckdb_session: AdbcDriver) -> None:
         )
     """
     result = adbc_duckdb_session.execute(insert_sql)
-    assert isinstance(result, ExecuteResult)  # type: ignore[unreachable]
-    assert result.rows_affected == 1  # type: ignore[unreachable]
+    assert isinstance(result, SQLResult)
+    assert result.rows_affected == 1
 
     # Query and verify data types
     select_result = adbc_duckdb_session.execute("SELECT * FROM data_types_test")
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
     row = select_result.data[0]
@@ -321,7 +321,7 @@ def test_adbc_duckdb_complex_queries(adbc_duckdb_session: AdbcDriver) -> None:
     """
 
     result = adbc_duckdb_session.execute(complex_query)
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 3
 
@@ -339,7 +339,7 @@ def test_adbc_duckdb_complex_queries(adbc_duckdb_session: AdbcDriver) -> None:
     """
 
     subquery_result = adbc_duckdb_session.execute(subquery)
-    assert isinstance(subquery_result, SelectResult)
+    assert isinstance(subquery_result, SQLResult)
     assert subquery_result.data is not None
     assert len(subquery_result.data) >= 1  # At least one employee above average
 
@@ -388,14 +388,14 @@ def test_adbc_duckdb_performance_bulk_operations(adbc_duckdb_session: AdbcDriver
 
     # Bulk insert
     result = adbc_duckdb_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", bulk_data)
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.rows_affected == 100
 
     # Bulk select
     select_result = adbc_duckdb_session.execute(
         "SELECT COUNT(*) as count FROM test_table WHERE name LIKE 'bulk_user_%'"
     )
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert select_result.data[0]["count"] == 100
 
@@ -410,7 +410,7 @@ def test_adbc_duckdb_performance_bulk_operations(adbc_duckdb_session: AdbcDriver
         WHERE name LIKE 'bulk_user_%'
     """)
 
-    assert isinstance(agg_result, SelectResult)
+    assert isinstance(agg_result, SQLResult)
     assert agg_result.data is not None
     assert agg_result.data[0]["count"] == 100
     assert agg_result.data[0]["avg_value"] > 0
@@ -446,7 +446,7 @@ def test_adbc_bigquery_basic_operations() -> None:
     with config.provide_session() as session:
         # Test basic query that would work in BigQuery
         result = session.execute("SELECT 1 as test_value")
-        assert isinstance(result, SelectResult)
+        assert isinstance(result, SQLResult)
         assert result.data is not None
         assert result.data[0]["test_value"] == 1
 
@@ -475,7 +475,7 @@ def test_adbc_bigquery_data_types() -> None:
                 GENERATE_UUID() as uuid_val,
                 FARM_FINGERPRINT('test') as fingerprint
         """)
-        assert isinstance(functions_result, SelectResult)
+        assert isinstance(functions_result, SQLResult)
         assert functions_result.data is not None
         assert functions_result.data[0]["current_ts"] is not None
         assert functions_result.data[0]["uuid_val"] is not None
@@ -487,7 +487,7 @@ def test_adbc_bigquery_data_types() -> None:
                 ARRAY[1, 2, 3, 4, 5] as numbers,
                 ARRAY_LENGTH(ARRAY[1, 2, 3, 4, 5]) as array_len
         """)
-        assert isinstance(array_result, SelectResult)
+        assert isinstance(array_result, SQLResult)
         assert array_result.data is not None
         assert array_result.data[0]["numbers"] == [1, 2, 3, 4, 5]
         assert array_result.data[0]["array_len"] == 5
@@ -514,7 +514,7 @@ def test_adbc_postgresql_parameter_styles(adbc_postgresql_session: AdbcDriver, p
         params = (params["name"],) if isinstance(params, dict) else params
 
     result = adbc_postgresql_session.execute(sql, params)
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
     assert result.data[0]["name"] == "test_value"
@@ -526,18 +526,18 @@ def test_adbc_postgresql_execute_many(adbc_postgresql_session: AdbcDriver) -> No
     params_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
     result = adbc_postgresql_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", params_list)
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.rows_affected == len(params_list)
 
     # Verify all records were inserted
     select_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM test_table")
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert select_result.data[0]["count"] == len(params_list)
 
     # Verify data integrity
     ordered_result = adbc_postgresql_session.execute("SELECT name, value FROM test_table ORDER BY name")
-    assert isinstance(ordered_result, SelectResult)
+    assert isinstance(ordered_result, SQLResult)
     assert ordered_result.data is not None
     assert len(ordered_result.data) == 3
     assert ordered_result.data[0]["name"] == "name1"
@@ -561,7 +561,7 @@ def test_adbc_postgresql_execute_script(adbc_postgresql_session: AdbcDriver) -> 
     select_result = adbc_postgresql_session.execute(
         "SELECT name, value FROM test_table WHERE name LIKE 'script_test%' ORDER BY name"
     )
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 2
     assert select_result.data[0]["name"] == "script_test1"
@@ -580,7 +580,7 @@ def test_adbc_postgresql_result_methods(adbc_postgresql_session: AdbcDriver) -> 
 
     # Test SelectResult methods
     result = adbc_postgresql_session.execute("SELECT * FROM test_table ORDER BY name")
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
 
     # Test get_first()
     first_row = result.get_first()
@@ -595,7 +595,7 @@ def test_adbc_postgresql_result_methods(adbc_postgresql_session: AdbcDriver) -> 
 
     # Test empty result
     empty_result = adbc_postgresql_session.execute("SELECT * FROM test_table WHERE name = $1", ("nonexistent",))
-    assert isinstance(empty_result, SelectResult)
+    assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None
 
@@ -649,7 +649,7 @@ def test_adbc_postgresql_data_types(adbc_postgresql_session: AdbcDriver) -> None
     select_result = adbc_postgresql_session.execute(
         "SELECT text_col, integer_col, numeric_col, boolean_col, array_col FROM data_types_test"
     )
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
@@ -714,7 +714,7 @@ def test_adbc_postgresql_complex_queries(adbc_postgresql_session: AdbcDriver) ->
         ORDER BY t1.name, t2.name
         LIMIT 3
     """)
-    assert isinstance(join_result, SelectResult)
+    assert isinstance(join_result, SQLResult)
     assert join_result.data is not None
     assert len(join_result.data) == 3
 
@@ -727,7 +727,7 @@ def test_adbc_postgresql_complex_queries(adbc_postgresql_session: AdbcDriver) ->
             MAX(value) as max_value
         FROM test_table
     """)
-    assert isinstance(agg_result, SelectResult)
+    assert isinstance(agg_result, SQLResult)
     assert agg_result.data is not None
     assert agg_result.data[0]["total_count"] == 4
     assert agg_result.data[0]["avg_value"] == 29.5
@@ -744,7 +744,7 @@ def test_adbc_postgresql_complex_queries(adbc_postgresql_session: AdbcDriver) ->
         FROM test_table
         ORDER BY value
     """)
-    assert isinstance(window_result, SelectResult)
+    assert isinstance(window_result, SQLResult)
     assert window_result.data is not None
     assert len(window_result.data) == 4
     assert window_result.data[0]["row_num"] == 1
@@ -767,8 +767,8 @@ def test_adbc_postgresql_schema_operations(adbc_postgresql_session: AdbcDriver) 
     insert_result = adbc_postgresql_session.execute(
         "INSERT INTO schema_test (description) VALUES ($1)", ("test description",)
     )
-    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
-    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
+    assert isinstance(insert_result, SQLResult)
+    assert insert_result.rows_affected == 1
 
     # Verify table structure
     info_result = adbc_postgresql_session.execute("""
@@ -777,7 +777,7 @@ def test_adbc_postgresql_schema_operations(adbc_postgresql_session: AdbcDriver) 
         WHERE table_name = 'schema_test'
         ORDER BY ordinal_position
     """)
-    assert isinstance(info_result, SelectResult)
+    assert isinstance(info_result, SQLResult)
     assert info_result.data is not None
     assert len(info_result.data) == 3  # id, description, created_at
 
@@ -795,7 +795,7 @@ def test_adbc_postgresql_column_names_and_metadata(adbc_postgresql_session: Adbc
     result = adbc_postgresql_session.execute(
         "SELECT id, name, value, created_at FROM test_table WHERE name = $1", ("metadata_test",)
     )
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
     assert result.data is not None
     assert len(result.data) == 1
@@ -827,7 +827,7 @@ def test_adbc_postgresql_with_schema_type(adbc_postgresql_session: AdbcDriver) -
         "SELECT id, name, value FROM test_table WHERE name = $1", ("schema_test",), schema_type=TestRecord
     )
 
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
 
@@ -843,14 +843,14 @@ def test_adbc_postgresql_performance_bulk_operations(adbc_postgresql_session: Ad
 
     # Bulk insert
     result = adbc_postgresql_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", bulk_data)
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.rows_affected == 100
 
     # Bulk select
     select_result = adbc_postgresql_session.execute(
         "SELECT COUNT(*) as count FROM test_table WHERE name LIKE 'bulk_user_%'"
     )
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert select_result.data[0]["count"] == 100
 
@@ -858,7 +858,7 @@ def test_adbc_postgresql_performance_bulk_operations(adbc_postgresql_session: Ad
     page_result = adbc_postgresql_session.execute(
         "SELECT name, value FROM test_table WHERE name LIKE 'bulk_user_%' ORDER BY value LIMIT 10 OFFSET 20"
     )
-    assert isinstance(page_result, SelectResult)
+    assert isinstance(page_result, SQLResult)
     assert page_result.data is not None
     assert len(page_result.data) == 10
     assert page_result.data[0]["name"] == "bulk_user_20"
@@ -873,7 +873,7 @@ def test_adbc_multiple_backends_consistency(adbc_sqlite_session: AdbcDriver) -> 
 
     # Test basic query
     result = adbc_sqlite_session.execute("SELECT name, value FROM test_table ORDER BY name")
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 2
     assert result.data[0]["name"] == "backend_test1"
@@ -881,7 +881,7 @@ def test_adbc_multiple_backends_consistency(adbc_sqlite_session: AdbcDriver) -> 
 
     # Test aggregation
     agg_result = adbc_sqlite_session.execute("SELECT COUNT(*) as count, SUM(value) as total FROM test_table")
-    assert isinstance(agg_result, SelectResult)
+    assert isinstance(agg_result, SQLResult)
     assert agg_result.data is not None
     assert agg_result.data[0]["count"] == 2
     assert agg_result.data[0]["total"] == 300

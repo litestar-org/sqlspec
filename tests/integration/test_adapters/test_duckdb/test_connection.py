@@ -6,7 +6,7 @@ import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBConnection, DuckDBConnectionConfig
 from sqlspec.config import InstrumentationConfig
-from sqlspec.statement.result import SelectResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQLConfig
 
 
@@ -40,7 +40,7 @@ def test_basic_connection() -> None:
         assert session is not None
         # Test basic query through session
         select_result = session.execute("SELECT 1")
-        assert isinstance(select_result, SelectResult)
+        assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert len(select_result.data) == 1
         assert select_result.column_names is not None

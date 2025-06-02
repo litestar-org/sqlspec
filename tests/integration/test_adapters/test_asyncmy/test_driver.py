@@ -9,7 +9,7 @@ import pytest
 from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, AsyncmyPoolConfig
-from sqlspec.statement.result import ExecuteResult, SelectResult
+from sqlspec.statement.result import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -49,12 +49,12 @@ async def test_asyncmy_basic_crud(asyncmy_session: AsyncmyDriver) -> None:
     insert_result = await asyncmy_session.execute(
         "INSERT INTO test_table (name, value) VALUES (%s, %s)", ("test_name", 42)
     )
-    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
-    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
+    assert isinstance(insert_result, SQLResult)
+    assert insert_result.rows_affected == 1
 
     # SELECT
     select_result = await asyncmy_session.execute("SELECT name, value FROM test_table WHERE name = %s", ("test_name",))
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
     assert select_result.data[0]["name"] == "test_name"
@@ -64,23 +64,23 @@ async def test_asyncmy_basic_crud(asyncmy_session: AsyncmyDriver) -> None:
     update_result = await asyncmy_session.execute(
         "UPDATE test_table SET value = %s WHERE name = %s", (100, "test_name")
     )
-    assert isinstance(update_result, ExecuteResult)
+    assert isinstance(update_result, SQLResult)
     assert update_result.rows_affected == 1
 
     # Verify UPDATE
     verify_result = await asyncmy_session.execute("SELECT value FROM test_table WHERE name = %s", ("test_name",))
-    assert isinstance(verify_result, SelectResult)
+    assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
     delete_result = await asyncmy_session.execute("DELETE FROM test_table WHERE name = %s", ("test_name",))
-    assert isinstance(delete_result, ExecuteResult)
+    assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 
     # Verify DELETE
     empty_result = await asyncmy_session.execute("SELECT COUNT(*) as count FROM test_table")
-    assert isinstance(empty_result, SelectResult)
+    assert isinstance(empty_result, SQLResult)
     assert empty_result.data is not None
     assert empty_result.data[0]["count"] == 0
 
@@ -105,7 +105,7 @@ async def test_asyncmy_parameter_styles(asyncmy_session: AsyncmyDriver, params: 
         sql = "SELECT name FROM test_table WHERE name = %(name)s"
 
     result = await asyncmy_session.execute(sql, params)
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
     assert result.data[0]["name"] == "test_value"
@@ -117,18 +117,18 @@ async def test_asyncmy_execute_many(asyncmy_session: AsyncmyDriver) -> None:
     params_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
     result = await asyncmy_session.execute_many("INSERT INTO test_table (name, value) VALUES (%s, %s)", params_list)
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.rows_affected == len(params_list)
 
     # Verify all records were inserted
     select_result = await asyncmy_session.execute("SELECT COUNT(*) as count FROM test_table")
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert select_result.data[0]["count"] == len(params_list)
 
     # Verify data integrity
     ordered_result = await asyncmy_session.execute("SELECT name, value FROM test_table ORDER BY name")
-    assert isinstance(ordered_result, SelectResult)
+    assert isinstance(ordered_result, SQLResult)
     assert ordered_result.data is not None
     assert len(ordered_result.data) == 3
     assert ordered_result.data[0]["name"] == "name1"
@@ -152,7 +152,7 @@ async def test_asyncmy_execute_script(asyncmy_session: AsyncmyDriver) -> None:
     select_result = await asyncmy_session.execute(
         "SELECT name, value FROM test_table WHERE name LIKE 'script_test%' ORDER BY name"
     )
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 2
     assert select_result.data[0]["name"] == "script_test1"
@@ -171,7 +171,7 @@ async def test_asyncmy_result_methods(asyncmy_session: AsyncmyDriver) -> None:
 
     # Test SelectResult methods
     result = await asyncmy_session.execute("SELECT * FROM test_table ORDER BY name")
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
 
     # Test get_first()
     first_row = result.get_first()
@@ -186,7 +186,7 @@ async def test_asyncmy_result_methods(asyncmy_session: AsyncmyDriver) -> None:
 
     # Test empty result
     empty_result = await asyncmy_session.execute("SELECT * FROM test_table WHERE name = %s", ("nonexistent",))
-    assert isinstance(empty_result, SelectResult)
+    assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None
 
@@ -252,7 +252,7 @@ async def test_asyncmy_data_types(asyncmy_session: AsyncmyDriver) -> None:
     select_result = await asyncmy_session.execute(
         "SELECT text_col, varchar_col, int_col, decimal_col, boolean_col, json_col FROM data_types_test"
     )
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
 
@@ -276,7 +276,7 @@ async def test_asyncmy_transactions(asyncmy_session: AsyncmyDriver) -> None:
     result = await asyncmy_session.execute(
         "SELECT COUNT(*) as count FROM test_table WHERE name = %s", ("transaction_test",)
     )
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.data is not None
     assert result.data[0]["count"] == 1
 
@@ -303,7 +303,7 @@ async def test_asyncmy_complex_queries(asyncmy_session: AsyncmyDriver) -> None:
         ORDER BY t1.name, t2.name
         LIMIT 3
     """)
-    assert isinstance(join_result, SelectResult)
+    assert isinstance(join_result, SQLResult)
     assert join_result.data is not None
     assert len(join_result.data) == 3
 
@@ -316,7 +316,7 @@ async def test_asyncmy_complex_queries(asyncmy_session: AsyncmyDriver) -> None:
             MAX(value) as max_value
         FROM test_table
     """)
-    assert isinstance(agg_result, SelectResult)
+    assert isinstance(agg_result, SQLResult)
     assert agg_result.data is not None
     assert agg_result.data[0]["total_count"] == 4
     assert agg_result.data[0]["avg_value"] == 29.5
@@ -330,7 +330,7 @@ async def test_asyncmy_complex_queries(asyncmy_session: AsyncmyDriver) -> None:
         WHERE value > (SELECT AVG(value) FROM test_table)
         ORDER BY value
     """)
-    assert isinstance(subquery_result, SelectResult)
+    assert isinstance(subquery_result, SQLResult)
     assert subquery_result.data is not None
     assert len(subquery_result.data) == 2  # Bob and Charlie
     assert subquery_result.data[0]["name"] == "Bob"
@@ -353,8 +353,8 @@ async def test_asyncmy_schema_operations(asyncmy_session: AsyncmyDriver) -> None
     insert_result = await asyncmy_session.execute(
         "INSERT INTO schema_test (description) VALUES (%s)", ("test description",)
     )
-    assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
-    assert insert_result.rows_affected == 1  # type: ignore[unreachable]
+    assert isinstance(insert_result, SQLResult)
+    assert insert_result.rows_affected == 1
 
     # Verify table structure
     info_result = await asyncmy_session.execute("""
@@ -363,7 +363,7 @@ async def test_asyncmy_schema_operations(asyncmy_session: AsyncmyDriver) -> None
         WHERE TABLE_NAME = 'schema_test'
         ORDER BY ORDINAL_POSITION
     """)
-    assert isinstance(info_result, SelectResult)
+    assert isinstance(info_result, SQLResult)
     assert info_result.data is not None
     assert len(info_result.data) == 3  # id, description, created_at
 
@@ -381,7 +381,7 @@ async def test_asyncmy_column_names_and_metadata(asyncmy_session: AsyncmyDriver)
     result = await asyncmy_session.execute(
         "SELECT id, name, value, created_at FROM test_table WHERE name = %s", ("metadata_test",)
     )
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
     assert result.data is not None
     assert len(result.data) == 1
@@ -413,7 +413,7 @@ async def test_asyncmy_with_schema_type(asyncmy_session: AsyncmyDriver) -> None:
         "SELECT id, name, value FROM test_table WHERE name = %s", ("schema_test",), schema_type=TestRecord
     )
 
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
 
@@ -429,14 +429,14 @@ async def test_asyncmy_performance_bulk_operations(asyncmy_session: AsyncmyDrive
 
     # Bulk insert
     result = await asyncmy_session.execute_many("INSERT INTO test_table (name, value) VALUES (%s, %s)", bulk_data)
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.rows_affected == 100
 
     # Bulk select
     select_result = await asyncmy_session.execute(
         "SELECT COUNT(*) as count FROM test_table WHERE name LIKE 'bulk_user_%'"
     )
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert select_result.data[0]["count"] == 100
 
@@ -444,7 +444,7 @@ async def test_asyncmy_performance_bulk_operations(asyncmy_session: AsyncmyDrive
     page_result = await asyncmy_session.execute(
         "SELECT name, value FROM test_table WHERE name LIKE 'bulk_user_%' ORDER BY value LIMIT 10 OFFSET 20"
     )
-    assert isinstance(page_result, SelectResult)
+    assert isinstance(page_result, SQLResult)
     assert page_result.data is not None
     assert len(page_result.data) == 10
     assert page_result.data[0]["name"] == "bulk_user_20"
@@ -455,13 +455,13 @@ async def test_asyncmy_mysql_specific_features(asyncmy_session: AsyncmyDriver) -
     """Test MySQL-specific features."""
     # Test MySQL functions
     mysql_result = await asyncmy_session.execute("SELECT VERSION() as version")
-    assert isinstance(mysql_result, SelectResult)
+    assert isinstance(mysql_result, SQLResult)
     assert mysql_result.data is not None
     assert mysql_result.data[0]["version"] is not None
 
     # Test MySQL SHOW statements
     show_result = await asyncmy_session.execute("SHOW TABLES")
-    assert isinstance(show_result, SelectResult)
+    assert isinstance(show_result, SQLResult)
     assert show_result.data is not None
 
     # Test ON DUPLICATE KEY UPDATE
@@ -484,11 +484,11 @@ async def test_asyncmy_mysql_specific_features(asyncmy_session: AsyncmyDriver) -
     """,
         (1, "test", 1),
     )
-    assert isinstance(update_result, ExecuteResult)  # type: ignore[unreachable]
+    assert isinstance(update_result, SQLResult)
 
     # Verify the update
-    verify_result = await asyncmy_session.execute("SELECT counter FROM unique_test WHERE id = %s", (1,))  # type: ignore[unreachable]
-    assert isinstance(verify_result, SelectResult)
+    verify_result = await asyncmy_session.execute("SELECT counter FROM unique_test WHERE id = %s", (1,))
+    assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["counter"] == 2
 
@@ -519,7 +519,7 @@ async def test_asyncmy_json_operations(asyncmy_session: AsyncmyDriver) -> None:
             JSON_LENGTH(JSON_EXTRACT(data, '$.tags')) as tag_count
         FROM json_test
     """)
-    assert isinstance(json_result, SelectResult)
+    assert isinstance(json_result, SQLResult)
     assert json_result.data is not None
     assert json_result.data[0]["name"] == '"test"'  # JSON_EXTRACT returns quoted strings
     assert json_result.data[0]["age"] == 30
@@ -546,7 +546,7 @@ async def test_asyncmy_mysql_charset_collation(asyncmy_session: AsyncmyDriver) -
 
     # Retrieve and verify Unicode data
     select_result = await asyncmy_session.execute("SELECT text_utf8 FROM charset_test")
-    assert isinstance(select_result, SelectResult)
+    assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert select_result.data[0]["text_utf8"] == unicode_text
 

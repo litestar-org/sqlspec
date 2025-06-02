@@ -994,7 +994,7 @@ def main() -> None:
         # 🎉 Conclusion
         demo_conclusion()
 
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         console.print(f"[red]❌ Demo error: {e}[/red]")
         console.print_exception()
     finally:

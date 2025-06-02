@@ -2,12 +2,11 @@
 
 import contextlib
 import logging
-from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict
 
 from psycopg import Connection, connect
-from psycopg.rows import DictRow
+from psycopg.rows import DictRow as PsycopgDictRow
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
@@ -19,11 +18,10 @@ from sqlspec.adapters.psycopg.driver import (
 )
 from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig, SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow as SQLSpecDictRow
-from sqlspec.typing import Empty
+from sqlspec.typing import Empty, RowT
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
+    from collections.abc import AsyncGenerator, Callable, Generator
 
 logger = logging.getLogger("sqlspec.adapters.psycopg")
 
@@ -181,7 +179,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         connection_config: "Optional[PsycopgConnectionConfig]" = None,
         statement_config: "Optional[SQLConfig]" = None,
         instrumentation: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "type[SQLSpecDictRow]" = SQLSpecDictRow,  # type: ignore[assignment]
+        default_row_type: "type[RowT]" = dict[str, Any],
     ) -> None:
         """Initialize Psycopg synchronous configuration.
 
@@ -202,12 +200,12 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         )
 
     @property
-    def connection_type(self) -> type[PsycopgSyncConnection]:  # type: ignore[override]
+    def connection_type(self) -> "type[PsycopgSyncConnection]":  # type: ignore[override]
         """Return the connection type."""
         return Connection  # type: ignore[return-value]
 
     @property
-    def driver_type(self) -> type[PsycopgSyncDriver]:  # type: ignore[override]
+    def driver_type(self) -> "type[PsycopgSyncDriver]":  # type: ignore[override]
         """Return the driver type."""
         return PsycopgSyncDriver
 
@@ -219,11 +217,11 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         config_dict = {k: v for k, v in merged_config.items() if v is not Empty}
 
         # Ensure DictRow is used for consistent row types
-        config_dict["row_factory"] = DictRow
+        config_dict["row_factory"] = PsycopgDictRow
 
         return config_dict
 
-    def _create_pool_impl(self) -> ConnectionPool:
+    def _create_pool_impl(self) -> "ConnectionPool":
         """Create the actual connection pool."""
         if self.instrumentation.log_pool_operations:
             logger.info("Creating Psycopg connection pool", extra={"adapter": "psycopg"})
@@ -253,14 +251,14 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             logger.exception("Failed to close Psycopg connection pool", extra={"adapter": "psycopg", "error": str(e)})
             raise
 
-    def create_connection(self) -> PsycopgSyncConnection:
+    def create_connection(self) -> "PsycopgSyncConnection":
         """Create a single connection (not from pool).
 
         Returns:
             A psycopg Connection instance configured with DictRow.
         """
         conn_dict = {k: v for k, v in self.connection_config.items() if v is not Empty}
-        conn_dict["row_factory"] = DictRow
+        conn_dict["row_factory"] = PsycopgDictRow
         return connect(**conn_dict)  # type: ignore[return-value,arg-type]
 
     @contextlib.contextmanager
@@ -303,7 +301,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             )
             yield driver
 
-    def provide_pool(self, *args: Any, **kwargs: Any) -> ConnectionPool:
+    def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         """Provide pool instance.
 
         Returns:
@@ -322,11 +320,11 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
     def __init__(
         self,
-        pool_config: PsycopgPoolConfig,
-        connection_config: Optional[PsycopgConnectionConfig] = None,
-        statement_config: Optional[SQLConfig] = None,
-        instrumentation: Optional[InstrumentationConfig] = None,
-        default_row_type: type[SQLSpecDictRow] = SQLSpecDictRow,  # type: ignore[assignment]
+        pool_config: "PsycopgPoolConfig",
+        connection_config: "Optional[PsycopgConnectionConfig]" = None,
+        statement_config: "Optional[SQLConfig]" = None,
+        instrumentation: "Optional[InstrumentationConfig]" = None,
+        default_row_type: "type[RowT]" = dict[str, Any],
     ) -> None:
         """Initialize Psycopg asynchronous configuration.
 
@@ -347,14 +345,14 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         )
 
     @property
-    def connection_type(self) -> type[PsycopgAsyncConnection]:  # type: ignore[override]
+    def connection_type(self) -> "type[PsycopgAsyncConnection]":  # type: ignore[override]
         """Return the connection type."""
         from psycopg import AsyncConnection
 
         return AsyncConnection  # type: ignore[return-value]
 
     @property
-    def driver_type(self) -> type[PsycopgAsyncDriver]:  # type: ignore[override]
+    def driver_type(self) -> "type[PsycopgAsyncDriver]":  # type: ignore[override]
         """Return the driver type."""
         return PsycopgAsyncDriver
 
@@ -366,11 +364,11 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         config_dict = {k: v for k, v in merged_config.items() if v is not Empty}
 
         # Ensure DictRow is used for consistent row types
-        config_dict["row_factory"] = DictRow
+        config_dict["row_factory"] = PsycopgDictRow
 
         return config_dict
 
-    async def _create_pool_impl(self) -> AsyncConnectionPool:
+    async def _create_pool_impl(self) -> "AsyncConnectionPool":
         """Create the actual async connection pool."""
         if self.instrumentation.log_pool_operations:
             logger.info("Creating async Psycopg connection pool", extra={"adapter": "psycopg"})
@@ -405,7 +403,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             )
             raise
 
-    async def create_connection(self) -> PsycopgAsyncConnection:
+    async def create_connection(self) -> "PsycopgAsyncConnection":
         """Create a single async connection (not from pool).
 
         Returns:
@@ -414,11 +412,11 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         from psycopg import AsyncConnection
 
         conn_dict = {k: v for k, v in self.connection_config.items() if v is not Empty}
-        conn_dict["row_factory"] = DictRow
+        conn_dict["row_factory"] = PsycopgDictRow
         return await AsyncConnection.connect(**conn_dict)  # type: ignore[return-value]
 
     @asynccontextmanager
-    async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[PsycopgAsyncConnection, None]:
+    async def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[PsycopgAsyncConnection, None]":
         """Provide an async connection context manager.
 
         Args:
@@ -432,14 +430,14 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             async with self.pool_instance.connection() as conn:
                 yield conn  # type: ignore[misc]
         else:
-            conn = await self.create_connection()
+            conn = await self.create_connection()  # type: ignore[assignment]
             try:
-                yield conn
+                yield conn  # type: ignore[misc]
             finally:
                 await conn.close()
 
     @asynccontextmanager
-    async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[PsycopgAsyncDriver, None]:
+    async def provide_session(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[PsycopgAsyncDriver, None]":
         """Provide an async driver session context manager.
 
         Args:
@@ -457,7 +455,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             )
             yield driver
 
-    async def provide_pool(self, *args: Any, **kwargs: Any) -> AsyncConnectionPool:
+    async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
         """Provide async pool instance.
 
         Returns:

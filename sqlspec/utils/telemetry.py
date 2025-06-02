@@ -1,3 +1,4 @@
+# ruff: noqa: SLF001
 import logging
 import time
 from collections.abc import Generator

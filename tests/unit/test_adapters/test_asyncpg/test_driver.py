@@ -1,13 +1,13 @@
 """Unit tests for AsyncPG driver."""
 
-from typing import Any
+from typing import Any, Union
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from sqlspec.adapters.asyncpg import AsyncpgDriver
 from sqlspec.config import InstrumentationConfig
-from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -86,15 +86,8 @@ async def test_asyncpg_driver_execute_impl_select(
     # Create SQL statement with parameters
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[1], config=asyncpg_driver.config)
 
-    # Execute
-    result = await asyncpg_driver._execute_impl(
-        statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
-    )
+    # Execute - parameters, is_many, is_script are part of SQL object
+    result = await asyncpg_driver._execute_impl(statement=statement)
 
     # Verify connection methods were called
     mock_asyncpg_connection.fetch.assert_called_once_with("SELECT * FROM users WHERE id = $1", 1)
@@ -112,15 +105,8 @@ async def test_asyncpg_driver_execute_impl_insert(
     # Create SQL statement with parameters
     statement = SQL("INSERT INTO users (name) VALUES ($1)", parameters=["John"], config=asyncpg_driver.config)
 
-    # Execute
-    result = await asyncpg_driver._execute_impl(
-        statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
-    )
+    # Execute - parameters, is_many, is_script are part of SQL object
+    result = await asyncpg_driver._execute_impl(statement=statement)
 
     # Verify connection methods were called
     mock_asyncpg_connection.execute.assert_called_once_with("INSERT INTO users (name) VALUES ($1)", "John")
@@ -136,21 +122,17 @@ async def test_asyncpg_driver_execute_impl_script(
     mock_asyncpg_connection.execute.return_value = "CREATE TABLE"
 
     # Create SQL statement (DDL allowed with strict_mode=False)
-    statement = SQL("CREATE TABLE test (id INTEGER); INSERT INTO test VALUES (1);", config=asyncpg_driver.config)
+    # is_script should be part of the SQL object
+    script_statement = SQL(
+        "CREATE TABLE test (id INTEGER); INSERT INTO test VALUES (1);", config=asyncpg_driver.config
+    ).as_script()
 
-    # Execute script
-    result = await asyncpg_driver._execute_impl(
-        statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=True,
-    )
+    # Execute script - parameters, is_many, is_script are part of SQL object
+    script_result = await asyncpg_driver._execute_impl(script_statement)
 
     # Verify connection execute was called
     mock_asyncpg_connection.execute.assert_called_once()
-    assert result == "CREATE TABLE"
+    assert script_result == "CREATE TABLE"
 
 
 @pytest.mark.asyncio
@@ -161,23 +143,19 @@ async def test_asyncpg_driver_execute_impl_many(
     # Setup mock connection
     mock_asyncpg_connection.executemany.return_value = None
 
-    # Create SQL statement with placeholder for parameters
-    statement = SQL("INSERT INTO users (name) VALUES ($1)", parameters=["dummy"], config=asyncpg_driver.config)
+    # Test the new as_many() API that accepts parameters directly
     parameters = [["John"], ["Jane"], ["Bob"]]
+    statement = SQL("INSERT INTO users (name) VALUES ($1)").as_many(parameters)
 
-    # Execute many
-    result = await asyncpg_driver._execute_impl(
-        statement=statement,
-        parameters=parameters,
-        connection=None,
-        config=None,
-        is_many=True,
-        is_script=False,
-    )
+    result = await asyncpg_driver._execute_impl(statement=statement)
 
-    # Verify connection executemany was called
+    # The statement should have is_many=True and the correct parameters
+    assert statement.is_many is True
+    assert statement.parameters == parameters
+
+    # The execute_impl method should internally call executemany on the connection
     mock_asyncpg_connection.executemany.assert_called_once_with(
-        "INSERT INTO users (name) VALUES ($1)", [["John"], ["Jane"], ["Bob"]]
+        "INSERT INTO users (name) VALUES ($1)", [("John",), ("Jane",), ("Bob",)]
     )
     assert result == 3  # Should return length of parameters list
 
@@ -200,15 +178,8 @@ async def test_asyncpg_driver_execute_impl_parameter_processing(
         "SELECT * FROM users WHERE id = $1 AND name = $2", parameters=[1, "John"], config=asyncpg_driver.config
     )
 
-    # Execute
-    result = await asyncpg_driver._execute_impl(
-        statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
-    )
+    # Execute - parameters, is_many, is_script are part of SQL object
+    result = await asyncpg_driver._execute_impl(statement=statement)
 
     # Verify parameters were processed correctly
     mock_asyncpg_connection.fetch.assert_called_once_with("SELECT * FROM users WHERE id = $1 AND name = $2", 1, "John")
@@ -238,13 +209,13 @@ async def test_asyncpg_driver_wrap_select_result(asyncpg_driver: AsyncpgDriver) 
     statement = SQL("SELECT id, name FROM users")
 
     # Wrap result
-    result = await asyncpg_driver._wrap_select_result(
+    result: Union[SQLResult[Any], SQLResult[dict[str, Any]]] = await asyncpg_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=records,
+        result=records,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.column_names == ["id", "name"]
     # Data should be converted to dict format
@@ -261,13 +232,13 @@ async def test_asyncpg_driver_wrap_select_result_empty(asyncpg_driver: AsyncpgDr
     statement = SQL("SELECT * FROM empty_table")
 
     # Wrap result
-    result = await asyncpg_driver._wrap_select_result(
+    result: Union[SQLResult[Any], SQLResult[dict[str, Any]]] = await asyncpg_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=records,
+        result=records,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.data == []
     assert result.column_names == []
@@ -298,12 +269,12 @@ async def test_asyncpg_driver_wrap_select_result_with_schema_type(asyncpg_driver
     # Wrap result with schema type
     result = await asyncpg_driver._wrap_select_result(
         statement=statement,
-        raw_driver_result=records,
+        result=records,
         schema_type=User,
     )
 
     # Verify result
-    assert isinstance(result, SelectResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.column_names == ["id", "name"]
 
@@ -317,11 +288,11 @@ async def test_asyncpg_driver_wrap_execute_result(asyncpg_driver: AsyncpgDriver)
     # Wrap result with status string
     result = await asyncpg_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result="UPDATE 3",
+        result="UPDATE 3",
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 3
     assert result.operation_type == "UPDATE"
@@ -336,11 +307,11 @@ async def test_asyncpg_driver_wrap_execute_result_script(asyncpg_driver: Asyncpg
     # Wrap result for script
     result = await asyncpg_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result="CREATE TABLE",
+        result="CREATE TABLE",
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 0
     assert result.operation_type == "CREATE"
@@ -355,11 +326,11 @@ async def test_asyncpg_driver_wrap_execute_result_integer(asyncpg_driver: Asyncp
     # Wrap result with integer
     result = await asyncpg_driver._wrap_execute_result(
         statement=statement,
-        raw_driver_result=5,
+        result=5,
     )
 
     # Verify result
-    assert isinstance(result, ExecuteResult)
+    assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 5
     assert result.operation_type == "INSERT"
@@ -386,17 +357,11 @@ async def test_asyncpg_driver_error_handling(asyncpg_driver: AsyncpgDriver, mock
 
     # Test error propagation
     with pytest.raises(Exception, match="Database error"):
-        await asyncpg_driver._execute_impl(
-            statement=statement,
-            parameters=None,
-            connection=None,
-            config=None,
-            is_many=False,
-            is_script=False,
-        )
+        await asyncpg_driver._execute_impl(statement=statement)
 
 
-def test_asyncpg_driver_instrumentation(asyncpg_driver: AsyncpgDriver) -> None:
+@pytest.mark.asyncio
+async def test_asyncpg_driver_instrumentation(asyncpg_driver: AsyncpgDriver) -> None:
     """Test AsyncPG driver instrumentation integration."""
     # Test instrumentation config is accessible
     assert asyncpg_driver.instrumentation_config is not None
@@ -406,6 +371,10 @@ def test_asyncpg_driver_instrumentation(asyncpg_driver: AsyncpgDriver) -> None:
     assert hasattr(asyncpg_driver.instrumentation_config, "log_queries")
     assert hasattr(asyncpg_driver.instrumentation_config, "log_parameters")
     assert hasattr(asyncpg_driver.instrumentation_config, "log_results_count")
+
+    # Test basic execution works (no need to test executemany here)
+    # This test is about instrumentation, not executemany functionality
+    pass
 
 
 @pytest.mark.asyncio
@@ -426,7 +395,7 @@ async def test_asyncpg_driver_operation_type_detection(asyncpg_driver: AsyncpgDr
         # Test with string result
         result = await asyncpg_driver._wrap_execute_result(
             statement=statement,
-            raw_driver_result="COMMAND COMPLETED",
+            result="COMMAND COMPLETED",
         )
 
         assert result.operation_type == expected_op_type
@@ -565,14 +534,7 @@ async def test_asyncpg_driver_logging_configuration(
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[1], config=asyncpg_driver.config)
 
     # Execute with logging enabled
-    await asyncpg_driver._execute_impl(
-        statement=statement,
-        parameters=None,
-        connection=None,
-        config=None,
-        is_many=False,
-        is_script=False,
-    )
+    await asyncpg_driver._execute_impl(statement=statement)
 
     # Verify execution worked
     mock_asyncpg_connection.fetch.assert_called_once_with("SELECT * FROM users WHERE id = $1", 1)
@@ -620,12 +582,11 @@ async def test_asyncpg_driver_status_string_parsing(asyncpg_driver: AsyncpgDrive
 
         result = await asyncpg_driver._wrap_execute_result(
             statement=statement,
-            raw_driver_result=status_string,
+            result=status_string,
         )
 
         assert result.operation_type == expected_op
-        if "TABLE" not in status_string:  # DDL operations don't have row counts
-            assert result.rows_affected == expected_rows
+        assert result.rows_affected == expected_rows
 
 
 @pytest.mark.asyncio
@@ -633,27 +594,15 @@ async def test_asyncpg_driver_dict_parameter_handling(
     asyncpg_driver: AsyncpgDriver, mock_asyncpg_connection: AsyncMock
 ) -> None:
     """Test AsyncPG driver parameter handling with dict parameters."""
-    # Setup mock connection
     mock_asyncpg_connection.executemany.return_value = None
 
-    # Create SQL statement with parameters
     statement = SQL(
-        "INSERT INTO users (name, age) VALUES ($1, $2)", parameters=["dummy", 25], config=asyncpg_driver.config
-    )
+        "INSERT INTO users (name, age) VALUES ($1, $2)",
+        parameters=[{"name": "John", "age": 30}, {"name": "Jane", "age": 25}],
+        config=asyncpg_driver.config,
+    ).as_many()
 
-    # Test with dict parameters in many execution
-    dict_params = [{"name": "John", "age": 30}, {"name": "Jane", "age": 25}]
+    result_val = await asyncpg_driver._execute_impl(statement=statement)
 
-    # Execute many with dict parameters
-    result = await asyncpg_driver._execute_impl(
-        statement=statement,
-        parameters=dict_params,
-        connection=None,
-        config=None,
-        is_many=True,
-        is_script=False,
-    )
-
-    # Verify executemany was called
     mock_asyncpg_connection.executemany.assert_called_once()
-    assert result == 2
+    assert result_val == 2

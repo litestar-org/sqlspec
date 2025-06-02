@@ -11,9 +11,9 @@ from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import AsyncDriverAdapterProtocol
 from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ExecuteResult, SelectResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import ModelDTOT, SQLParameterType
+from sqlspec.typing import ModelDTOT
 from sqlspec.utils.telemetry import instrument_operation_async
 
 __all__ = ("PsqlpyConnection", "PsqlpyDriver")
@@ -63,88 +63,82 @@ class PsqlpyDriver(
     async def _execute_impl(
         self,
         statement: SQL,
-        parameters: Optional[SQLParameterType] = None,
         connection: Optional[PsqlpyConnection] = None,
-        config: Optional[SQLConfig] = None,
-        is_many: bool = False,
-        is_script: bool = False,
         **kwargs: Any,
     ) -> Any:
         async with instrument_operation_async(self, "psqlpy_execute", "database"):
             conn = self._connection(connection)
-            if config is not None and config != statement.config:
-                statement = statement.copy(config=config)
+            # config parameter removed, statement.config is the source of truth
 
-            final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
+            final_sql: str
+            # psqlpy expects parameters as a list for its `parameters` argument.
+            # statement.parameters should provide this after processing.
+            final_driver_params: Optional[list[Any]] = None
+
+            if statement.is_script:
+                final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
+            else:
+                final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
+                params_to_execute = statement.parameters  # This should be a list or tuple
+
+                if statement.is_many:
+                    # psqlpy does not have a direct executemany that takes a list of lists.
+                    # It executes one by one. So params_to_execute here will be a list of parameter lists.
+                    if params_to_execute and isinstance(params_to_execute, list):
+                        # We expect a list of lists/tuples. Each inner list/tuple is for one execution.
+                        final_driver_params = params_to_execute  # type: ignore
+                    else:
+                        final_driver_params = []
+                elif params_to_execute is not None:
+                    if isinstance(params_to_execute, (list, tuple)):
+                        final_driver_params = list(params_to_execute)
+                    else:  # Single parameter value
+                        final_driver_params = [params_to_execute]
+                    # else final_driver_params remains None, meaning no parameters
 
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing psqlpy SQL: %s", final_sql)
 
-            # Convert parameters to list format for psqlpy
-            final_exec_params = None
-            if is_many:
-                # For batch operations, convert sequence of parameters
-                if parameters and hasattr(parameters, "__iter__"):
-                    batch_params = []
-                    for param_set in parameters:
-                        if isinstance(param_set, (list, tuple)):
-                            batch_params.append(list(param_set))
-                        elif isinstance(param_set, dict):
-                            # Convert dict to list based on parameter order from statement
-                            stmt_params = statement.get_parameters(style=self._get_placeholder_style())
-                            if isinstance(stmt_params, (list, tuple)):
-                                batch_params.append(list(param_set.values()))
-                            else:
-                                batch_params.append([param_set])
-                        else:
-                            batch_params.append([param_set])
-                    final_exec_params = batch_params
+            if self.instrumentation_config.log_parameters and final_driver_params:
+                # For is_many, final_driver_params is a list of lists. Log appropriately.
+                if statement.is_many:
+                    logger.debug("Psqlpy query parameters (batch): %s", final_driver_params)
                 else:
-                    final_exec_params = []
-            else:
-                # Single execution
-                single_params = statement.get_parameters(style=self._get_placeholder_style())
-                if isinstance(single_params, (list, tuple)):
-                    final_exec_params = list(single_params)
-                elif single_params is not None:
-                    final_exec_params = [single_params]  # type: ignore[list-item]
+                    logger.debug("Psqlpy query parameters: %s", final_driver_params)
 
-            if self.instrumentation_config.log_parameters and final_exec_params:
-                logger.debug("Psqlpy query parameters: %s", final_exec_params)
-
-            if is_script:
-                # For scripts, use static SQL without parameters
-                script_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-                await conn.execute(script_sql, parameters=None)
+            if statement.is_script:
+                await conn.execute(final_sql, parameters=None)  # Explicitly None for scripts
                 return "SCRIPT EXECUTED"
-            if is_many:
-                # Execute batch operation - psqlpy doesn't have executemany, so execute individually
+
+            if statement.is_many:
                 total_affected = 0
-                for param_set in final_exec_params or []:
-                    result = await conn.execute(final_sql, parameters=param_set)
+                # final_driver_params is a list of parameter lists
+                for param_set in final_driver_params or []:
+                    current_param_list = list(param_set) if isinstance(param_set, (list, tuple)) else [param_set]
+                    result = await conn.execute(final_sql, parameters=current_param_list)
                     affected = getattr(result, "affected_rows", None) or getattr(result, "rowcount", 0)
                     if affected and affected != -1:
                         total_affected += affected
-                    elif not self.returns_rows(statement.expression):
-                        total_affected += 1  # Heuristic for DML operations
-
-                # Return a mock result for batch operations
-
+                    elif not self.returns_rows(statement.expression):  # Heuristic for DML
+                        total_affected += 1
                 return BatchResult(total_affected)
+
             # Single execution
             if self.returns_rows(statement.expression):
-                return await conn.fetch(final_sql, parameters=final_exec_params)
-            return await conn.execute(final_sql, parameters=final_exec_params)
+                # final_driver_params should be a list here or None
+                return await conn.fetch(final_sql, parameters=final_driver_params)
+            # For DML or other non-select queries
+            return await conn.execute(final_sql, parameters=final_driver_params)
 
     async def _wrap_select_result(
         self,
         statement: SQL,
-        raw_driver_result: Any,
+        result: Any,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
-    ) -> Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]]]:
+    ) -> Union[SQLResult[ModelDTOT], SQLResult[dict[str, Any]]]:
         async with instrument_operation_async(self, "psqlpy_wrap_select", "database"):
-            query_result = cast("QueryResult", raw_driver_result)
+            query_result = cast("QueryResult", result)
             dict_rows: list[dict[str, Any]] = query_result.result()
             column_names = list(dict_rows[0].keys()) if dict_rows else []
 
@@ -152,67 +146,82 @@ class PsqlpyDriver(
                 logger.debug("Psqlpy query returned %d rows", len(dict_rows))
 
             if schema_type:
-                converted_data = self.to_schema(data=dict_rows, schema_type=schema_type)
-                return SelectResult[ModelDTOT](
+                converted_data_seq = self.to_schema(data=dict_rows, schema_type=schema_type)
+                converted_data_list = list(converted_data_seq) if converted_data_seq is not None else []
+                return SQLResult[ModelDTOT](
                     statement=statement,
-                    data=converted_data,
+                    data=converted_data_list,
                     column_names=column_names,
+                    operation_type="SELECT",
                 )
-            return SelectResult[dict[str, Any]](
+            return SQLResult[dict[str, Any]](
                 statement=statement,
                 data=dict_rows,
                 column_names=column_names,
+                operation_type="SELECT",
             )
 
     async def _wrap_execute_result(
         self,
         statement: SQL,
-        raw_driver_result: Any,
+        result: Any,
         **kwargs: Any,
-    ) -> ExecuteResult:
+    ) -> SQLResult[dict[str, Any]]:
         async with instrument_operation_async(self, "psqlpy_async_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             if statement.expression and hasattr(statement.expression, "key"):
                 operation_type = str(statement.expression.key).upper()
 
-            if isinstance(raw_driver_result, str):
-                return ExecuteResult(
-                    statement=statement,
-                    data={
-                        "rows_affected": 0,
-                        "last_inserted_id": None,
-                        "inserted_ids": [],
-                        "returning_data": None,
-                        "operation_type": operation_type or "SCRIPT",
-                    },
-                    rows_affected=0,
-                    operation_type=operation_type or "SCRIPT",
-                )
+            rows_affected = -1
+            status_message: Optional[str] = None
 
-            # Handle both QueryResult and mock BatchResult
-            if hasattr(raw_driver_result, "affected_rows"):
-                rows_affected = raw_driver_result.affected_rows
-            elif hasattr(raw_driver_result, "rowcount"):
-                rows_affected = raw_driver_result.rowcount
+            if isinstance(result, str) and result == "SCRIPT EXECUTED":
+                operation_type = "SCRIPT"
+                rows_affected = 0
+                status_message = result
+            elif isinstance(result, BatchResult):
+                rows_affected = result.affected_rows
+            elif isinstance(result, QueryResult):
+                rows_affected = getattr(result, "affected_rows", -1)
+                if rows_affected == -1:
+                    rows_affected = getattr(result, "rowcount", -1)
             else:
-                rows_affected = -1
+                logger.warning("Psqlpy _wrap_execute_result: Unexpected result type: %s", type(result))
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Psqlpy execute operation affected %d rows", rows_affected)
 
-            return ExecuteResult(
+            return SQLResult[dict[str, Any]](
                 statement=statement,
-                data={
-                    "rows_affected": rows_affected,
-                    "last_inserted_id": None,
-                    "inserted_ids": [],
-                    "returning_data": None,
-                    "operation_type": operation_type,
-                },
+                data=[],
                 rows_affected=rows_affected,
                 operation_type=operation_type,
+                metadata={"status_message": status_message} if status_message else {},
             )
 
     def _connection(self, connection: Optional[PsqlpyConnection] = None) -> PsqlpyConnection:
         """Get the connection to use for the operation."""
         return connection or self.connection
+
+    async def _select_to_arrow_impl(
+        self,
+        stmt_obj: SQL,
+        connection: Optional[PsqlpyConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Implementation for select_to_arrow method."""
+        async with instrument_operation_async(self, "psqlpy_select_to_arrow", "database"):
+            conn = self._connection(connection)
+
+            final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
+            final_driver_params: Optional[list[Any]] = None
+
+            params_to_execute = stmt_obj.parameters
+            if params_to_execute is not None:
+                if isinstance(params_to_execute, (list, tuple)):
+                    final_driver_params = list(params_to_execute)
+                else:
+                    final_driver_params = [params_to_execute]
+
+            # Fetch data for Arrow conversion using the correct psqlpy method
+            return await conn.fetch(final_sql, parameters=final_driver_params)

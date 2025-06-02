@@ -1,21 +1,21 @@
 """Unit tests for improved Aiosql adapters with record_class removal."""
 
 import logging
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 from sqlspec.extensions.aiosql.adapter import AiosqlAsyncAdapter, AiosqlSyncAdapter
 from sqlspec.statement.filters import LimitOffsetFilter, SearchFilter
-from sqlspec.statement.result import SelectResult
+from sqlspec.statement.result import SQLResult
 
 
 @pytest.fixture
 def mock_sync_driver() -> Mock:
     """Create a mock sync driver."""
     driver = Mock()
-    driver.dialect = "postgresql"
-    driver.execute = Mock(return_value=Mock(spec=SelectResult))
+    driver.dialect = "postgres"
+    driver.execute = Mock(return_value=Mock(spec=SQLResult))
     driver.execute_many = Mock(return_value=Mock())
     return driver
 
@@ -87,7 +87,7 @@ def test_sync_adapter_select_with_record_class_warning(
     sync_adapter: AiosqlSyncAdapter, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Test that record_class parameter triggers warning."""
-    mock_result = Mock(spec=SelectResult)
+    mock_result = Mock(spec=SQLResult)
     mock_result.data = [{"id": 1, "name": "John"}]
     sync_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
@@ -113,7 +113,7 @@ def test_sync_adapter_select_with_schema_type_in_params(sync_adapter: AiosqlSync
         id: int
         name: str
 
-    mock_result = Mock(spec=SelectResult)
+    mock_result = Mock(spec=SQLResult)
     mock_result.data = [User(id=1, name="John")]
     sync_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
@@ -140,7 +140,7 @@ def test_sync_adapter_select_with_schema_type_in_params(sync_adapter: AiosqlSync
 
 def test_sync_adapter_select_one_with_limit_filter(sync_adapter: AiosqlSyncAdapter) -> None:
     """Test select_one applies implicit limit."""
-    mock_result = Mock(spec=SelectResult)
+    mock_result = Mock(spec=SQLResult)
     mock_result.data = [{"id": 1, "name": "John"}]
     sync_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
@@ -157,7 +157,7 @@ def test_sync_adapter_select_one_with_limit_filter(sync_adapter: AiosqlSyncAdapt
 
 def test_sync_adapter_select_value_dict_result(sync_adapter: AiosqlSyncAdapter) -> None:
     """Test select_value with dict result."""
-    mock_result = Mock(spec=SelectResult)
+    mock_result = Mock(spec=SQLResult)
     mock_result.data = [{"count": 42}]
     sync_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
@@ -201,7 +201,7 @@ def test_sync_adapter_select_value_none_result(sync_adapter: AiosqlSyncAdapter) 
 
 def test_sync_adapter_select_cursor(sync_adapter: AiosqlSyncAdapter) -> None:
     """Test select_cursor context manager."""
-    mock_result = Mock(spec=SelectResult)
+    mock_result = Mock(spec=SQLResult)
     mock_result.data = [{"id": 1}, {"id": 2}]
     sync_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
@@ -271,9 +271,10 @@ def test_sync_adapter_insert_returning(sync_adapter: AiosqlSyncAdapter) -> None:
 def mock_async_driver() -> Mock:
     """Create a mock async driver."""
     driver = Mock()
-    driver.dialect = "postgresql"
-    driver.execute.return_value = Mock(spec=SelectResult)
-    driver.execute_many.return_value = Mock()
+    driver.dialect = "postgres"
+    # Use AsyncMock for async methods
+    driver.execute = AsyncMock(return_value=Mock(spec=SQLResult))
+    driver.execute_many = AsyncMock(return_value=Mock())
     return driver
 
 
@@ -302,7 +303,7 @@ async def test_async_adapter_select_with_record_class_warning(
     async_adapter: AiosqlAsyncAdapter, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Test that record_class parameter triggers warning in async adapter."""
-    mock_result = Mock(spec=SelectResult)
+    mock_result = Mock(spec=SQLResult)
     mock_result.data = [{"id": 1, "name": "John"}]
     async_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
@@ -327,7 +328,7 @@ async def test_async_adapter_select_with_schema_type_in_params(async_adapter: Ai
         id: int
         name: str
 
-    mock_result = Mock(spec=SelectResult)
+    mock_result = Mock(spec=SQLResult)
     mock_result.data = [User(id=1, name="John")]
     async_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
@@ -353,7 +354,7 @@ async def test_async_adapter_select_with_schema_type_in_params(async_adapter: Ai
 @pytest.mark.asyncio
 async def test_async_adapter_select_one_with_limit(async_adapter: AiosqlAsyncAdapter) -> None:
     """Test async select_one automatically adds limit filter."""
-    mock_result = Mock(spec=SelectResult)
+    mock_result = Mock(spec=SQLResult)
     mock_result.data = [{"id": 1, "name": "John"}]
     async_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
@@ -391,7 +392,7 @@ async def test_async_adapter_select_value(async_adapter: AiosqlAsyncAdapter) -> 
 @pytest.mark.asyncio
 async def test_async_adapter_select_cursor(async_adapter: AiosqlAsyncAdapter) -> None:
     """Test async select_cursor context manager."""
-    mock_result = Mock(spec=SelectResult)
+    mock_result = Mock(spec=SQLResult)
     mock_result.data = [{"id": 1}, {"id": 2}]
     async_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
@@ -478,19 +479,23 @@ def test_async_adapter_extract_sqlspec_filters_with_default_filters(mock_async_d
     assert isinstance(extracted_filters[1], SearchFilter)
 
 
-@patch("sqlspec.typing.AIOSQL_INSTALLED", False)
-def test_sync_adapter_missing_aiosql_dependency() -> None:
+@patch("sqlspec.extensions.aiosql.adapter._check_aiosql_available")
+def test_sync_adapter_missing_aiosql_dependency(mock_check: Mock) -> None:
     """Test error when aiosql is not installed."""
     from sqlspec.exceptions import MissingDependencyError
+
+    mock_check.side_effect = MissingDependencyError("aiosql", "aiosql")
 
     with pytest.raises(MissingDependencyError, match="aiosql"):
         AiosqlSyncAdapter(Mock())
 
 
-@patch("sqlspec.typing.AIOSQL_INSTALLED", False)
-def test_async_adapter_missing_aiosql_dependency() -> None:
+@patch("sqlspec.extensions.aiosql.adapter._check_aiosql_available")
+def test_async_adapter_missing_aiosql_dependency(mock_check: Mock) -> None:
     """Test error when aiosql is not installed."""
     from sqlspec.exceptions import MissingDependencyError
+
+    mock_check.side_effect = MissingDependencyError("aiosql", "aiosql")
 
     with pytest.raises(MissingDependencyError, match="aiosql"):
         AiosqlAsyncAdapter(Mock())
@@ -499,7 +504,7 @@ def test_async_adapter_missing_aiosql_dependency() -> None:
 def test_sync_adapter_driver_execution_error_propagation() -> None:
     """Test that driver execution errors are properly propagated."""
     mock_driver = Mock()
-    mock_driver.dialect = "postgresql"
+    mock_driver.dialect = "postgres"
     mock_driver.execute.side_effect = Exception("Database connection failed")
 
     adapter = AiosqlSyncAdapter(mock_driver)
@@ -519,7 +524,7 @@ def test_sync_adapter_driver_execution_error_propagation() -> None:
 async def test_async_adapter_driver_execution_error_propagation() -> None:
     """Test that async driver execution errors are properly propagated."""
     mock_driver = Mock()
-    mock_driver.dialect = "postgresql"
+    mock_driver.dialect = "postgres"
     mock_driver.execute.side_effect = Exception("Database connection failed")
 
     adapter = AiosqlAsyncAdapter(mock_driver)

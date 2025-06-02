@@ -7,6 +7,7 @@ import pytest
 import sqlglot
 
 from sqlspec.statement.pipelines.analyzers._analyzer import StatementAnalyzer
+from sqlspec.statement.pipelines.context import SQLProcessingContext
 from sqlspec.statement.sql import SQLConfig
 
 
@@ -288,7 +289,11 @@ def test_analyzer_process_method(analyzer: StatementAnalyzer) -> None:
     expression = sqlglot.parse_one(sql, read="mysql")
     config = SQLConfig()
 
-    result_expression, validation_result = analyzer.process(expression, "mysql", config)
+    context = SQLProcessingContext(
+        initial_sql_string=sql, dialect="mysql", config=config, current_expression=expression
+    )
+
+    result_expression, validation_result = analyzer.process(context)
 
     # Should return unchanged expression and no validation result
     assert result_expression is expression

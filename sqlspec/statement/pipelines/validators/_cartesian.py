@@ -1,25 +1,30 @@
 # ruff: noqa: ARG004
 """Validator to detect cartesian products in SQL queries."""
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlglot import exp
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.base import SQLValidation, ValidationResult
+from sqlspec.statement.pipelines.base import ProcessorProtocol, ValidationResult
 
 if TYPE_CHECKING:
-    from sqlglot.dialects.dialect import DialectType
-
-    from sqlspec.statement.pipelines.base import AnalysisResult
-    from sqlspec.statement.sql import SQLConfig
+    from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 __all__ = ("CartesianProductDetector",)
 
+# Constants for cartesian product detection
+DEFAULT_MAX_TABLE_PRODUCT_SIZE = 1000000
+"""Default maximum table product size (1M rows) before flagging cartesian products."""
 
-class CartesianProductDetector(SQLValidation):
+MIN_TABLES_FOR_CARTESIAN_CHECK = 2
+"""Minimum number of tables required before checking for cartesian products."""
+
+CARTESIAN_SAFETY_MARGIN = 1
+"""Safety margin for cartesian product calculations."""
+
+
+class CartesianProductDetector(ProcessorProtocol[exp.Expression]):
     """Validator to detect potential cartesian products in SQL queries.
 
     Cartesian products occur when:
@@ -36,30 +41,31 @@ class CartesianProductDetector(SQLValidation):
 
     Args:
         risk_level: The risk level assigned when cartesian products are detected.
-        min_risk_to_raise: Minimum risk level to raise an issue.
         allow_explicit_cross_joins: Whether to allow explicit CROSS JOINs.
         max_table_product_size: Maximum allowed estimated table product size.
     """
 
     def __init__(
         self,
-        risk_level: RiskLevel = RiskLevel.HIGH,
-        min_risk_to_raise: RiskLevel | None = RiskLevel.HIGH,
+        risk_level: "RiskLevel" = RiskLevel.HIGH,
         allow_explicit_cross_joins: bool = True,
-        max_table_product_size: int = 1000000,  # 1M rows
+        max_table_product_size: int = DEFAULT_MAX_TABLE_PRODUCT_SIZE,
     ) -> None:
-        super().__init__(risk_level, min_risk_to_raise)
+        self.risk_level = risk_level
         self.allow_explicit_cross_joins = allow_explicit_cross_joins
         self.max_table_product_size = max_table_product_size
 
-    def validate(
-        self,
-        expression: exp.Expression,
-        dialect: DialectType,
-        config: SQLConfig,
-        **kwargs: Any,
-    ) -> ValidationResult:
+    def process(self, context: "SQLProcessingContext") -> "tuple[exp.Expression, Optional[ValidationResult]]":
         """Validate the expression for cartesian product patterns."""
+        if context.current_expression is None:
+            return exp.Placeholder(), ValidationResult(
+                is_safe=False,
+                risk_level=RiskLevel.CRITICAL,
+                issues=["CartesianProductDetector received no expression."],
+            )
+
+        expression = context.current_expression
+
         issues: list[str] = []
         warnings: list[str] = []
 
@@ -70,27 +76,26 @@ class CartesianProductDetector(SQLValidation):
         self._check_comma_separated_tables(expression, issues, warnings)
         self._check_subquery_cartesian_risks(expression, issues, warnings)
 
-        # Determine final result
+        final_validation_result: Optional[ValidationResult] = None
         if issues:
-            return ValidationResult(
+            final_validation_result = ValidationResult(
                 is_safe=False,
                 risk_level=self.risk_level,
                 issues=issues,
                 warnings=warnings,
             )
+        else:
+            final_validation_result = ValidationResult(
+                is_safe=True,
+                risk_level=RiskLevel.SAFE if not warnings else RiskLevel.LOW,
+                warnings=warnings,
+            )
 
-        return ValidationResult(
-            is_safe=True,
-            risk_level=RiskLevel.SAFE if not warnings else RiskLevel.LOW,
-            warnings=warnings,
-        )
+        return context.current_expression, final_validation_result
 
-    def _check_explicit_cross_joins(self, expression: exp.Expression, issues: list[str], warnings: list[str]) -> None:
+    def _check_explicit_cross_joins(self, expression: "exp.Expression", issues: list[str], warnings: list[str]) -> None:
         """Check for explicit CROSS JOINs."""
-        cross_joins = []
-        for join in expression.find_all(exp.Join):
-            if join.kind and join.kind.upper() == "CROSS":
-                cross_joins.append(join)
+        cross_joins = [join for join in expression.find_all(exp.Join) if join.kind and join.kind.upper() == "CROSS"]
 
         if cross_joins:
             if not self.allow_explicit_cross_joins:
@@ -105,7 +110,7 @@ class CartesianProductDetector(SQLValidation):
                 )
 
     def _check_implicit_cartesian_products(
-        self, expression: exp.Expression, issues: list[str], warnings: list[str]
+        self, expression: "exp.Expression", issues: list[str], warnings: list[str]
     ) -> None:
         """Check for implicit cartesian products from joins without conditions."""
         for join in expression.find_all(exp.Join):
@@ -124,7 +129,7 @@ class CartesianProductDetector(SQLValidation):
                 )
 
     def _check_missing_join_conditions(
-        self, expression: exp.Expression, issues: list[str], warnings: list[str]
+        self, expression: "exp.Expression", issues: list[str], warnings: list[str]
     ) -> None:
         """Check for potentially insufficient join conditions."""
         for join in expression.find_all(exp.Join):
@@ -146,7 +151,9 @@ class CartesianProductDetector(SQLValidation):
                         "JOIN condition uses only inequality operators. This may result in large result sets."
                     )
 
-    def _check_comma_separated_tables(self, expression: exp.Expression, issues: list[str], warnings: list[str]) -> None:
+    def _check_comma_separated_tables(
+        self, expression: "exp.Expression", issues: list[str], warnings: list[str]
+    ) -> None:
         """Check for comma-separated tables in FROM clause without proper WHERE conditions."""
         # This is trickier to detect with SQLGlot as it usually parses comma-separated tables
         # as implicit joins. We'll check for multiple tables in FROM with weak WHERE conditions.
@@ -160,7 +167,7 @@ class CartesianProductDetector(SQLValidation):
             # Count tables in FROM clause
             tables = self._get_tables_from_from_clause(from_clause)
 
-            if len(tables) > 1:
+            if len(tables) > MIN_TABLES_FOR_CARTESIAN_CHECK:
                 # Multiple tables - check if WHERE clause has proper join conditions
                 where_clause = select.find(exp.Where)
 
@@ -180,7 +187,7 @@ class CartesianProductDetector(SQLValidation):
                         )
 
     def _check_subquery_cartesian_risks(
-        self, expression: exp.Expression, issues: list[str], warnings: list[str]
+        self, expression: "exp.Expression", issues: list[str], warnings: list[str]
     ) -> None:
         """Check for cartesian product risks in subqueries."""
         for subquery in expression.find_all(exp.Subquery):
@@ -194,12 +201,11 @@ class CartesianProductDetector(SQLValidation):
                 self._check_missing_join_conditions(subquery.this, sub_issues, sub_warnings)
 
                 # Add context that these are in subqueries
-                for issue in sub_issues:
-                    issues.append(f"In subquery: {issue}")
-                for warning in sub_warnings:
-                    warnings.append(f"In subquery: {warning}")
+                issues.extend(f"In subquery: {issue}" for issue in sub_issues)
+                warnings.extend(f"In subquery: {warning}" for warning in sub_warnings)
 
-    def _get_table_name(self, table_expr: exp.Expression) -> str:
+    @staticmethod
+    def _get_table_name(table_expr: "exp.Expression") -> str:
         """Extract table name from table expression."""
         if isinstance(table_expr, exp.Table):
             return str(table_expr.this) if table_expr.this else "unknown"
@@ -207,7 +213,8 @@ class CartesianProductDetector(SQLValidation):
             return str(table_expr.this)
         return str(table_expr)
 
-    def _analyze_join_condition(self, condition: Any) -> dict[str, bool]:
+    @staticmethod
+    def _analyze_join_condition(condition: Any) -> dict[str, bool]:
         """Analyze a join condition for potential issues."""
         analysis = {
             "has_literals_only": True,
@@ -275,80 +282,7 @@ class CartesianProductDetector(SQLValidation):
         join_count = len(list(expression.find_all(exp.Join)))
 
         # Simple heuristic: more tables + fewer proper joins = higher risk
-        if table_count > 1 and join_count < table_count - 1:
-            return self.max_table_product_size + 1  # Exceed threshold
+        if table_count > MIN_TABLES_FOR_CARTESIAN_CHECK and join_count < table_count - CARTESIAN_SAFETY_MARGIN:
+            return self.max_table_product_size + CARTESIAN_SAFETY_MARGIN  # Exceed threshold
 
         return 0  # Safe estimate
-
-    def validate_with_analysis(
-        self,
-        expression: exp.Expression,
-        analysis: AnalysisResult,
-        dialect: DialectType,
-        config: SQLConfig,
-        **kwargs: Any,
-    ) -> ValidationResult:
-        """Validate using pre-computed analysis results for efficiency.
-
-        Args:
-            expression: The SQL expression to validate
-            analysis: Pre-computed analysis results
-            dialect: The SQL dialect
-            config: The SQL configuration
-            kwargs: Additional keyword arguments
-
-        Returns:
-            ValidationResult with cartesian product issues and warnings
-        """
-        issues: list[str] = []
-        warnings: list[str] = []
-
-        # Use pre-computed analysis results
-        cross_joins = analysis.metrics.get("cross_joins", 0)
-        joins_without_conditions = analysis.metrics.get("joins_without_conditions", 0)
-        cartesian_risk = analysis.metrics.get("cartesian_risk", 0)
-
-        # Check for explicit cross joins
-        if cross_joins > 0:
-            if not self.allow_explicit_cross_joins:
-                issues.append(
-                    f"Explicit CROSS JOIN detected ({cross_joins} occurrences). This will create a cartesian product."
-                )
-            else:
-                warnings.append(
-                    f"Explicit CROSS JOIN detected ({cross_joins} occurrences). "
-                    "Ensure this is intentional as it creates cartesian products."
-                )
-
-        # Check for joins without conditions
-        if joins_without_conditions > 0:
-            issues.append(
-                f"Joins without proper conditions detected ({joins_without_conditions}). "
-                "This creates implicit cartesian products."
-            )
-
-        # Additional cartesian risk analysis
-        if cartesian_risk > 2:
-            issues.append(
-                f"High cartesian product risk detected (risk score: {cartesian_risk}). "
-                "Multiple patterns that may result in cartesian products."
-            )
-        elif cartesian_risk > 0:
-            warnings.append(
-                f"Potential cartesian product risk (risk score: {cartesian_risk}). Review join conditions carefully."
-            )
-
-        # Determine final result
-        if issues:
-            return ValidationResult(
-                is_safe=False,
-                risk_level=self.risk_level,
-                issues=issues,
-                warnings=warnings,
-            )
-
-        return ValidationResult(
-            is_safe=True,
-            risk_level=RiskLevel.SAFE if not warnings else RiskLevel.LOW,
-            warnings=warnings,
-        )

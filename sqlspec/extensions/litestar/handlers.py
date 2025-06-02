@@ -22,9 +22,8 @@ if TYPE_CHECKING:
     from litestar.datastructures.state import State
     from litestar.types import Message, Scope
 
-    from sqlspec.base import DatabaseConfigProtocol, DriverT
+    from sqlspec.config import DatabaseConfigProtocol, DriverT
     from sqlspec.typing import ConnectionT, PoolT
-
 
 SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, HTTP_DISCONNECT, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
 """ASGI events that terminate a session scope."""
@@ -158,7 +157,7 @@ def lifespan_handler_maker(
             app.state.pop(pool_key, None)
             try:
                 await ensure_async_(config.close_pool)()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 if app.logger:  # pragma: no cover
                     app.logger.warning("Error closing database pool for %s. Error: %s", pool_key, e)
 

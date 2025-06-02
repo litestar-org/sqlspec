@@ -9,7 +9,7 @@ import pytest
 from pytest_databases.docker.oracle import OracleService
 
 from sqlspec.adapters.oracledb import OraclePoolConfig, OracleSyncConfig
-from sqlspec.statement.result import ExecuteResult, SelectResult
+from sqlspec.statement.result import SQLResult
 
 ParamStyle = Literal["positional_binds", "dict_binds"]
 
@@ -64,7 +64,7 @@ def test_sync_insert_returning(oracle_sync_session: OracleSyncConfig, params: An
             exec_params = (params["name"],)
 
         result = driver.execute(sql, exec_params)
-        assert isinstance(result, SelectResult)  # RETURNING makes this a SELECT result
+        assert isinstance(result, SQLResult)
         assert result.data is not None
         assert len(result.data) == 1
         # Oracle often returns column names in uppercase
@@ -112,11 +112,11 @@ def test_sync_select(oracle_sync_session: OracleSyncConfig, params: Any, style: 
             select_params = (params["name"],)
 
         insert_result = driver.execute(insert_sql, insert_params)
-        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
-        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
+        assert isinstance(insert_result, SQLResult)
+        assert insert_result.rows_affected == 1
 
         select_result = driver.execute(select_sql, select_params)
-        assert isinstance(select_result, SelectResult)
+        assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert len(select_result.data) == 1
         assert select_result.data[0]["NAME"] == "test_name"
@@ -156,13 +156,13 @@ def test_sync_select_value(oracle_sync_session: OracleSyncConfig, params: Any, s
         setup_params_tuple = (setup_value,)
         insert_sql_setup = "INSERT INTO test_table (name) VALUES (:1)"
         insert_result = driver.execute(insert_sql_setup, setup_params_tuple)
-        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
-        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
+        assert isinstance(insert_result, SQLResult)
+        assert insert_result.rows_affected == 1
 
         # Select a literal value using Oracle's DUAL table
         select_sql = "SELECT 'test_value' FROM dual"
         value_result = driver.execute(select_sql)
-        assert isinstance(value_result, SelectResult)
+        assert isinstance(value_result, SQLResult)
         assert value_result.data is not None
         assert len(value_result.data) == 1
         assert value_result.column_names is not None
@@ -192,8 +192,8 @@ def test_sync_select_arrow(oracle_sync_session: OracleSyncConfig) -> None:
         # Insert test record using positional binds
         insert_sql = "INSERT INTO test_table (name) VALUES (:1)"
         insert_result = driver.execute(insert_sql, ("arrow_name",))
-        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
-        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
+        assert isinstance(insert_result, SQLResult)
+        assert insert_result.rows_affected == 1
 
         # Select and verify with Arrow support if available
         select_sql = "SELECT name, id FROM test_table WHERE name = :1"

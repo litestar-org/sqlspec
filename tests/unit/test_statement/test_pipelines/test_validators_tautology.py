@@ -1,23 +1,35 @@
 """Function-based tests for tautology condition validator."""
 
+from typing import Optional
+
 import pytest
 import sqlglot
 
+from sqlspec.statement.pipelines.context import SQLProcessingContext
 from sqlspec.statement.pipelines.validators._tautology import TautologyConditions
 from sqlspec.statement.sql import SQLConfig
+
+
+def _create_test_context(sql: str, config: Optional[SQLConfig] = None) -> SQLProcessingContext:
+    """Helper function to create a SQLProcessingContext for testing."""
+    if config is None:
+        config = SQLConfig()
+
+    expression = sqlglot.parse_one(sql, read="mysql")
+    return SQLProcessingContext(initial_sql_string=sql, dialect="mysql", config=config, current_expression=expression)
 
 
 def test_tautology_detects_numeric_tautology() -> None:
     """Test detection of numeric tautologies like 1=1."""
     validator = TautologyConditions()
-    config = SQLConfig()
 
     # Classic numeric tautology
     tautology_sql = "SELECT * FROM users WHERE 1 = 1"
-    expression = sqlglot.parse_one(tautology_sql, read="mysql")
+    context = _create_test_context(tautology_sql)
 
-    result = validator.validate(expression, "mysql", config)
+    _, result = validator.process(context)
 
+    assert result is not None
     assert not result.is_safe
     assert any("tautological" in issue.lower() for issue in result.issues)
 
@@ -25,14 +37,14 @@ def test_tautology_detects_numeric_tautology() -> None:
 def test_tautology_detects_string_tautology() -> None:
     """Test detection of string tautologies like 'a'='a'."""
     validator = TautologyConditions()
-    config = SQLConfig()
 
     # String-based tautology
     tautology_sql = "SELECT * FROM users WHERE 'a' = 'a'"
-    expression = sqlglot.parse_one(tautology_sql, read="mysql")
+    context = _create_test_context(tautology_sql)
 
-    result = validator.validate(expression, "mysql", config)
+    _, result = validator.process(context)
 
+    assert result is not None
     assert not result.is_safe
     assert any("tautological" in issue.lower() for issue in result.issues)
 
@@ -40,14 +52,14 @@ def test_tautology_detects_string_tautology() -> None:
 def test_tautology_detects_column_self_comparison() -> None:
     """Test detection of column self-comparisons."""
     validator = TautologyConditions()
-    config = SQLConfig()
 
     # Column comparing to itself
     tautology_sql = "SELECT * FROM users WHERE username = username"
-    expression = sqlglot.parse_one(tautology_sql, read="mysql")
+    context = _create_test_context(tautology_sql)
 
-    result = validator.validate(expression, "mysql", config)
+    _, result = validator.process(context)
 
+    assert result is not None
     assert not result.is_safe
     assert any("tautological" in issue.lower() for issue in result.issues)
 
@@ -55,14 +67,14 @@ def test_tautology_detects_column_self_comparison() -> None:
 def test_tautology_detects_or_clause_with_tautology() -> None:
     """Test detection of OR clauses containing tautologies (classic injection pattern)."""
     validator = TautologyConditions()
-    config = SQLConfig()
 
     # OR clause with tautology (classic injection)
     tautology_sql = "SELECT * FROM users WHERE username = 'admin' OR 1 = 1"
-    expression = sqlglot.parse_one(tautology_sql, read="mysql")
+    context = _create_test_context(tautology_sql)
 
-    result = validator.validate(expression, "mysql", config)
+    _, result = validator.process(context)
 
+    assert result is not None
     assert not result.is_safe
     assert any("or" in issue.lower() for issue in result.issues)
 
@@ -70,13 +82,13 @@ def test_tautology_detects_or_clause_with_tautology() -> None:
 def test_tautology_passes_legitimate_comparisons() -> None:
     """Test that legitimate comparisons pass validation without false positives."""
     validator = TautologyConditions()
-    config = SQLConfig()
 
     legitimate_sql = "SELECT * FROM users WHERE age > 18 AND status = 'active'"
-    expression = sqlglot.parse_one(legitimate_sql, read="mysql")
+    context = _create_test_context(legitimate_sql)
 
-    result = validator.validate(expression, "mysql", config)
+    _, result = validator.process(context)
 
+    assert result is not None
     assert result.is_safe
     assert len(result.issues) == 0
 
@@ -85,16 +97,17 @@ def test_tautology_mathematical_constants_configurable() -> None:
     """Test that mathematical constants can be allowed or disallowed via configuration."""
     validator_strict = TautologyConditions(allow_mathematical_constants=False)
     validator_permissive = TautologyConditions(allow_mathematical_constants=True)
-    config = SQLConfig()
 
     # Mathematical constant comparison
     math_sql = "SELECT * FROM users WHERE 2 + 2 = 4"
-    expression = sqlglot.parse_one(math_sql, read="mysql")
+    context = _create_test_context(math_sql)
 
-    result_strict = validator_strict.validate(expression, "mysql", config)
-    result_permissive = validator_permissive.validate(expression, "mysql", config)
+    _, result_strict = validator_strict.process(context)
+    _, result_permissive = validator_permissive.process(context)
 
     # Strict should flag it, permissive should allow it
+    assert result_strict is not None
+    assert result_permissive is not None
     assert not result_strict.is_safe
     assert result_permissive.is_safe
 
@@ -115,11 +128,11 @@ def test_tautology_detects_various_tautology_patterns(
 ) -> None:
     """Test detection of various tautological patterns."""
     validator = TautologyConditions()
-    config = SQLConfig()
+    context = _create_test_context(tautology_sql)
 
-    expression = sqlglot.parse_one(tautology_sql, read="mysql")
-    result = validator.validate(expression, "mysql", config)
+    _, result = validator.process(context)
 
+    assert result is not None
     assert not result.is_safe, f"Failed to detect {description}"
     assert any(expected_pattern.lower() in issue.lower() for issue in result.issues), (
         f"Expected pattern '{expected_pattern}' not found in issues for {description}"
@@ -129,14 +142,14 @@ def test_tautology_detects_various_tautology_patterns(
 def test_tautology_detects_and_clause_contradictions() -> None:
     """Test detection of contradictory conditions in AND clauses."""
     validator = TautologyConditions()
-    config = SQLConfig()
 
     # AND clause with contradiction
     contradiction_sql = "SELECT * FROM users WHERE status = 'active' AND status <> status"
-    expression = sqlglot.parse_one(contradiction_sql, read="mysql")
+    context = _create_test_context(contradiction_sql)
 
-    result = validator.validate(expression, "mysql", config)
+    _, result = validator.process(context)
 
+    assert result is not None
     # Should detect contradictory condition
     if len(result.warnings) > 0:
         assert any("and" in warning.lower() or "contradictory" in warning.lower() for warning in result.warnings)
@@ -146,7 +159,6 @@ def test_tautology_max_depth_configuration() -> None:
     """Test that maximum AST depth is configurable to prevent infinite recursion."""
     validator_shallow = TautologyConditions(max_depth=1)
     validator_deep = TautologyConditions(max_depth=10)
-    config = SQLConfig()
 
     # Nested query that might test depth limits
     nested_sql = """
@@ -156,12 +168,14 @@ def test_tautology_max_depth_configuration() -> None:
             WHERE total > (SELECT AVG(total) FROM orders WHERE 1 = 1)
         )
     """
-    expression = sqlglot.parse_one(nested_sql, read="mysql")
+    context = _create_test_context(nested_sql)
 
-    result_shallow = validator_shallow.validate(expression, "mysql", config)
-    result_deep = validator_deep.validate(expression, "mysql", config)
+    _, result_shallow = validator_shallow.process(context)
+    _, result_deep = validator_deep.process(context)
 
     # Both should handle the query without crashing
+    assert result_shallow is not None
+    assert result_deep is not None
     assert isinstance(result_shallow.is_safe, bool)
     assert isinstance(result_deep.is_safe, bool)
 
@@ -185,14 +199,14 @@ def test_tautology_max_depth_configuration() -> None:
 def test_tautology_operator_specific_detection(operator: str, left: str, right: str, should_detect: bool) -> None:
     """Test tautology detection for specific operators and operands."""
     validator = TautologyConditions()
-    config = SQLConfig()
 
     # Build SQL with the specific operator and operands
     test_sql = f"SELECT * FROM users WHERE {left} {operator} {right}"
-    expression = sqlglot.parse_one(test_sql, read="mysql")
+    context = _create_test_context(test_sql)
 
-    result = validator.validate(expression, "mysql", config)
+    _, result = validator.process(context)
 
+    assert result is not None
     if should_detect:
         assert not result.is_safe, f"Should detect tautology: {left} {operator} {right}"
         assert any("tautological" in issue.lower() for issue in result.issues)
@@ -203,7 +217,6 @@ def test_tautology_operator_specific_detection(operator: str, left: str, right: 
 def test_tautology_with_complex_or_conditions() -> None:
     """Test detection of tautologies in complex OR conditions."""
     validator = TautologyConditions()
-    config = SQLConfig()
 
     # Complex OR with nested tautology
     complex_sql = """
@@ -212,10 +225,11 @@ def test_tautology_with_complex_or_conditions() -> None:
         OR (age > 25 OR 'x' = 'x')
         OR role = 'admin'
     """
-    expression = sqlglot.parse_one(complex_sql, read="mysql")
+    context = _create_test_context(complex_sql)
 
-    result = validator.validate(expression, "mysql", config)
+    _, result = validator.process(context)
 
+    assert result is not None
     # Should detect the tautology in the OR clause
     assert not result.is_safe
     assert any("or" in issue.lower() and "tautological" in issue.lower() for issue in result.issues)
@@ -224,7 +238,6 @@ def test_tautology_with_complex_or_conditions() -> None:
 def test_tautology_ignores_legitimate_mathematical_expressions() -> None:
     """Test that legitimate mathematical expressions are not flagged when allowed."""
     validator = TautologyConditions(allow_mathematical_constants=True)
-    config = SQLConfig()
 
     # Legitimate mathematical expressions
     math_expressions = [
@@ -234,23 +247,24 @@ def test_tautology_ignores_legitimate_mathematical_expressions() -> None:
     ]
 
     for math_sql in math_expressions:
-        expression = sqlglot.parse_one(math_sql, read="mysql")
-        result = validator.validate(expression, "mysql", config)
+        context = _create_test_context(math_sql)
+        _, result = validator.process(context)
 
+        assert result is not None
         assert result.is_safe, f"Should not flag legitimate math: {math_sql}"
 
 
 def test_tautology_detects_table_qualified_column_self_comparison() -> None:
     """Test detection of self-comparisons with table qualifiers."""
     validator = TautologyConditions()
-    config = SQLConfig()
 
     # Table-qualified column self-comparison
     qualified_sql = "SELECT * FROM users u WHERE u.username = u.username"
-    expression = sqlglot.parse_one(qualified_sql, read="mysql")
+    context = _create_test_context(qualified_sql)
 
-    result = validator.validate(expression, "mysql", config)
+    _, result = validator.process(context)
 
+    assert result is not None
     assert not result.is_safe
     assert any("tautological" in issue.lower() for issue in result.issues)
 
@@ -258,7 +272,6 @@ def test_tautology_detects_table_qualified_column_self_comparison() -> None:
 def test_tautology_with_mixed_legitimate_and_tautological_conditions() -> None:
     """Test behavior with mixed legitimate and tautological conditions."""
     validator = TautologyConditions()
-    config = SQLConfig()
 
     # Mix of legitimate and tautological conditions
     mixed_sql = """
@@ -268,10 +281,11 @@ def test_tautology_with_mixed_legitimate_and_tautological_conditions() -> None:
         AND (department = 'IT' OR 1 = 1)
         AND created_at > '2023-01-01'
     """
-    expression = sqlglot.parse_one(mixed_sql, read="mysql")
+    context = _create_test_context(mixed_sql)
 
-    result = validator.validate(expression, "mysql", config)
+    _, result = validator.process(context)
 
+    assert result is not None
     # Should detect the tautology despite legitimate conditions
     assert not result.is_safe
     assert any("tautological" in issue.lower() for issue in result.issues)

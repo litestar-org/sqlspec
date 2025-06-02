@@ -269,7 +269,7 @@ class SQLFactory:
             # For other statement types, just return the builder as-is
             logger.warning("Cannot create INSERT from %s statement", type(parsed_expr).__name__)
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Failed to parse INSERT SQL, falling back to traditional mode: %s", e)
         return builder
 
@@ -288,7 +288,7 @@ class SQLFactory:
 
             logger.warning("Cannot create SELECT from %s statement", type(parsed_expr).__name__)
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Failed to parse SELECT SQL, falling back to traditional mode: %s", e)
         return builder
 
@@ -307,7 +307,7 @@ class SQLFactory:
 
             logger.warning("Cannot create UPDATE from %s statement", type(parsed_expr).__name__)
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Failed to parse UPDATE SQL, falling back to traditional mode: %s", e)
         return builder
 
@@ -326,7 +326,7 @@ class SQLFactory:
 
             logger.warning("Cannot create DELETE from %s statement", type(parsed_expr).__name__)
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Failed to parse DELETE SQL, falling back to traditional mode: %s", e)
         return builder
 
@@ -345,7 +345,7 @@ class SQLFactory:
 
             logger.warning("Cannot create MERGE from %s statement", type(parsed_expr).__name__)
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Failed to parse MERGE SQL, falling back to traditional mode: %s", e)
         return builder
 

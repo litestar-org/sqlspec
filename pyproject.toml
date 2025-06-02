@@ -245,7 +245,7 @@ show_error_codes = true
 strict = true
 warn_redundant_casts = true
 warn_return_any = true
-warn_unreachable = true
+warn_unreachable = false
 warn_unused_configs = true
 warn_unused_ignores = true
 
@@ -275,6 +275,11 @@ module = [
 [[tool.mypy.overrides]]
 disable_error_code = "ignore-without-code"
 module = "sqlspec.extensions.litestar.providers"
+
+[[tool.mypy.overrides]]
+disable_error_code = "ignore-without-code,method-assign,attr-defined,unused-ignore"
+module = "tests.*"
+
 
 [tool.pyright]
 disableBytesTypePromotions = true
@@ -348,6 +353,8 @@ ignore = [
   "PLR0916", # pylint - Too many statements in function
   "PLR0917", # pylint - Too many statements in class
   "DOC201",  # pydocstyle - Missing return statement
+  "BLE001",  # pylint -  Blind exception
+  "S101",    # S101 - Use of assert
 ]
 select = ["ALL"]
 

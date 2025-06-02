@@ -87,40 +87,36 @@ class MockSyncDriver(SyncDriverAdapterProtocol[MockConnection, DictRow]):
     def _execute_impl(
         self,
         statement: SQL,
-        parameters: Any | None = None,
         connection: MockConnection | None = None,
-        config: SQLConfig | None = None,
-        is_many: bool = False,
-        is_script: bool = False,
         **kwargs: Any,
     ) -> Any:
         conn = connection or self.connection
-        if is_script:
+        if statement.is_script:
             return "Script executed successfully"
-        return conn.execute(statement.sql, parameters)
+        return conn.execute(statement.sql, statement.parameters)
 
     def _wrap_select_result(
         self,
         statement: SQL,
-        raw_driver_result: Any,
+        result: Any,
         schema_type: type | None = None,
         **kwargs: Any,
     ) -> Mock:
         result = Mock()
-        result.rows = raw_driver_result
-        result.row_count = len(raw_driver_result) if raw_driver_result else 0
-        return result
+        result.rows = result
+        result.row_count = len(result) if result else 0
+        return result  # type: ignore
 
     def _wrap_execute_result(
         self,
         statement: SQL,
-        raw_driver_result: Any,
+        result: Any,
         **kwargs: Any,
     ) -> Mock:
         result = Mock()
         result.affected_count = 1
         result.last_insert_id = None
-        return result
+        return result  # type: ignore
 
 
 class MockAsyncDriver(AsyncDriverAdapterProtocol[MockAsyncConnection, DictRow]):
@@ -144,40 +140,36 @@ class MockAsyncDriver(AsyncDriverAdapterProtocol[MockAsyncConnection, DictRow]):
     async def _execute_impl(
         self,
         statement: SQL,
-        parameters: Any | None = None,
         connection: MockAsyncConnection | None = None,
-        config: SQLConfig | None = None,
-        is_many: bool = False,
-        is_script: bool = False,
         **kwargs: Any,
     ) -> Any:
         conn = connection or self.connection
-        if is_script:
+        if statement.is_script:
             return "Async script executed successfully"
-        return await conn.execute(statement.sql, parameters)
+        return await conn.execute(statement.sql, statement.parameters)
 
     async def _wrap_select_result(
         self,
         statement: SQL,
-        raw_driver_result: Any,
+        result: Any,
         schema_type: type | None = None,
         **kwargs: Any,
     ) -> Mock:
         result = Mock()
-        result.rows = raw_driver_result
-        result.row_count = len(raw_driver_result) if raw_driver_result else 0
-        return result
+        result.rows = result
+        result.row_count = len(result) if result else 0
+        return result  # type: ignore
 
     async def _wrap_execute_result(
         self,
         statement: SQL,
-        raw_driver_result: Any,
+        result: Any,
         **kwargs: Any,
     ) -> Mock:
         result = Mock()
         result.affected_count = 1
         result.last_insert_id = None
-        return result
+        return result  # type: ignore
 
 
 # CommonDriverAttributes Tests
@@ -592,7 +584,7 @@ def test_sync_driver_build_statement() -> None:
 
     # Test with SQL string
     sql_string = "SELECT * FROM users"
-    statement = driver._build_statement(sql_string, None)
+    statement = driver._build_statement(sql_string, None, None)
     assert isinstance(statement, SQL)
     assert statement.sql == sql_string
 
@@ -603,7 +595,7 @@ def test_sync_driver_build_statement_with_sql_object() -> None:
     driver = MockSyncDriver(connection)
 
     sql_obj = SQL("SELECT * FROM users WHERE id = :id", parameters={"id": 1})
-    statement = driver._build_statement(sql_obj, None)
+    statement = driver._build_statement(sql_obj, None, None)
     assert statement is sql_obj
 
 
@@ -617,7 +609,7 @@ def test_sync_driver_build_statement_with_filters() -> None:
     mock_filter.append_to_statement.return_value = SQL("SELECT * FROM users WHERE active = true")
 
     sql_string = "SELECT * FROM users"
-    driver._build_statement(sql_string, None, mock_filter)
+    driver._build_statement(sql_string, None, None, mock_filter)
 
     mock_filter.append_to_statement.assert_called_once()
 
@@ -674,7 +666,7 @@ def test_sync_driver_execute_many() -> None:
             # Use a non-strict config to avoid validation issues
             config = SQLConfig(strict_mode=False)
             result = driver.execute_many(
-                "INSERT INTO users (name) VALUES (:name)", parameters=parameters, config_override=config
+                "INSERT INTO users (name) VALUES (:name)", parameters=parameters, config=config
             )
 
             mock_execute.assert_called_once()
@@ -695,12 +687,12 @@ def test_sync_driver_execute_script() -> None:
 
         # Use a non-strict config to avoid DDL validation issues
         config = SQLConfig(strict_mode=False, enable_validation=False)
-        result = driver.execute_script(script, config_override=config)
+        result = driver.execute_script(script, config=config)
 
         mock_execute.assert_called_once()
         _, kwargs = mock_execute.call_args
         assert kwargs["is_script"] is True
-        assert result == "Script executed successfully"
+        assert result == "Script executed successfully"  # type: ignore
 
 
 def test_sync_driver_execute_with_parameters() -> None:
@@ -717,7 +709,7 @@ def test_sync_driver_execute_with_parameters() -> None:
 
             # Use a non-strict config to avoid validation issues
             config = SQLConfig(strict_mode=False)
-            driver.execute("SELECT * FROM users WHERE id = :id", parameters=parameters, config_override=config)
+            driver.execute("SELECT * FROM users WHERE id = :id", parameters=parameters, config=config)
 
             mock_execute.assert_called_once()
             _, kwargs = mock_execute.call_args
@@ -734,7 +726,7 @@ async def test_async_driver_build_statement() -> None:
 
     # Test with SQL string
     sql_string = "SELECT * FROM users"
-    statement = driver._build_statement(sql_string, None)
+    statement = driver._build_statement(sql_string, None, None)
     assert isinstance(statement, SQL)
     assert statement.sql == sql_string
 
@@ -788,9 +780,7 @@ async def test_async_driver_execute_many() -> None:
 
             # Use a non-strict config to avoid validation issues
             config = SQLConfig(strict_mode=False)
-            await driver.execute_many(
-                "INSERT INTO users (name) VALUES (:name)", parameters=parameters, config_override=config
-            )
+            await driver.execute_many("INSERT INTO users (name) VALUES (:name)", parameters=parameters, config=config)
 
             mock_execute.assert_called_once()
             _, kwargs = mock_execute.call_args
@@ -810,12 +800,12 @@ async def test_async_driver_execute_script() -> None:
 
         # Use a non-strict config to avoid DDL validation issues
         config = SQLConfig(strict_mode=False, enable_validation=False)
-        result = await driver.execute_script(script, config_override=config)
+        result = await driver.execute_script(script, config=config)
 
         mock_execute.assert_called_once()
         _, kwargs = mock_execute.call_args
         assert kwargs["is_script"] is True
-        assert result == "Async script executed successfully"
+        assert result == "Async script executed successfully"  # type: ignore
 
 
 async def test_async_driver_execute_with_schema_type() -> None:
@@ -939,7 +929,7 @@ def test_driver_returns_rows_detection(statement_type: str, expected_returns_row
 
                 # Use a non-strict config to avoid DDL validation issues
                 config = SQLConfig(strict_mode=False, enable_validation=False)
-                driver.execute(statement_type, config_override=config)
+                driver.execute(statement_type, config=config)
 
                 if expected_returns_rows:
                     mock_wrap_select.assert_called_once()

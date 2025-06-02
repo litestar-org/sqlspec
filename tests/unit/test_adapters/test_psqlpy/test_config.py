@@ -1,6 +1,5 @@
 """Unit tests for PSQLPy configuration."""
 
-from typing import NoReturn
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -352,7 +351,7 @@ async def test_psqlpy_config_provide_connection_with_pool() -> None:
 
 @patch("psqlpy.Connection.connect")
 @pytest.mark.asyncio
-async def test_psqlpy_config_provide_connection_error_handling(mock_connect: Mock) -> NoReturn:
+async def test_psqlpy_config_provide_connection_error_handling(mock_connect: Mock) -> None:
     """Test PSQLPy config provide_connection error handling."""
     mock_connection = AsyncMock()
     mock_connect.return_value = mock_connection

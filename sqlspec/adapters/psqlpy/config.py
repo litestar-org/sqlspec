@@ -11,8 +11,7 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.psqlpy.driver import PsqlpyConnection, PsqlpyDriver
 from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow as SQLSpecDictRow
-from sqlspec.typing import Empty
+from sqlspec.typing import DictRow, Empty
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -289,7 +288,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         connection_config: Optional[PsqlpyConnectionConfig] = None,
         statement_config: Optional[SQLConfig] = None,
         instrumentation: Optional[InstrumentationConfig] = None,
-        default_row_type: type[SQLSpecDictRow] = SQLSpecDictRow,  # type: ignore[assignment]
+        default_row_type: type[DictRow] = DictRow,
     ) -> None:
         """Initialize Psqlpy asynchronous configuration.
 
@@ -364,7 +363,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         """
         conn_dict = {k: v for k, v in self.connection_config.items() if v is not Empty}
         # psqlpy Connection constructor is synchronous, not async
-        return Connection(**conn_dict)  # type: ignore[return-value]
+        return Connection(**conn_dict)
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[PsqlpyConnection, None]:
@@ -379,7 +378,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         """
         if self.pool_instance:
             async with self.pool_instance.acquire() as conn:
-                yield conn  # type: ignore[misc]
+                yield conn
         else:
             conn = await self.create_connection()
             try:

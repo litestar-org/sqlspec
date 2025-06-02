@@ -40,7 +40,6 @@ class SafeQuery:
     """A safely constructed SQL query with bound parameters."""
 
     sql: str
-    # Storing parameters as a dictionary for named parameters.
     parameters: dict[str, Any] = field(default_factory=dict)
     dialect: Optional[DialectType] = None
 
@@ -178,13 +177,13 @@ class QueryBuilder(ABC, Generic[ResultT]):
                 cte_select_expression = parsed_expression
             except SQLGlotParseError as e:
                 self._raise_sql_builder_error(f"Failed to parse CTE query string: {e!s}", e)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 msg = f"An unexpected error occurred while parsing CTE query string: {e!s}"
                 self._raise_sql_builder_error(msg, e)
         elif isinstance(query, exp.Select):
             cte_select_expression = query.copy()
         else:
-            msg = (  # type: ignore[unreachable]
+            msg = (
                 f"Invalid query type for CTE: {type(query).__name__}. Must be QueryBuilder, str, or sqlglot.exp.Select."
             )
             self._raise_sql_builder_error(msg)
@@ -192,7 +191,7 @@ class QueryBuilder(ABC, Generic[ResultT]):
         self._with_ctes[alias] = exp.CTE(this=cte_select_expression, alias=exp.to_table(alias))
         return self
 
-    def build(self) -> SafeQuery:
+    def build(self) -> "SafeQuery":
         """Builds the SQL query string and parameters.
 
         Returns:
@@ -236,7 +235,7 @@ class QueryBuilder(ABC, Generic[ResultT]):
         # sql_string is now guaranteed to be assigned if no error was raised.
         return SafeQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=self.dialect)
 
-    def to_statement(self, config: Optional[SQLConfig] = None) -> SQL:
+    def to_statement(self, config: "Optional[SQLConfig]" = None) -> "SQL":
         """Converts the built query into a SQL statement object.
 
         Args:
@@ -263,12 +262,12 @@ class QueryBuilder(ABC, Generic[ResultT]):
         """
         try:
             return self.build().sql
-        except Exception:  # noqa: BLE001
+        except Exception:
             # Fallback to default representation if build fails
             return super().__str__()
 
     @property
-    def dialect_name(self) -> Optional[str]:
+    def dialect_name(self) -> "Optional[str]":
         """Returns the name of the dialect, if set."""
         if isinstance(self.dialect, str):
             return self.dialect
@@ -278,8 +277,8 @@ class QueryBuilder(ABC, Generic[ResultT]):
             if isinstance(self.dialect, Dialect):
                 return type(self.dialect).__name__.lower()
             # Handle case where dialect might have a __name__ attribute
-            if hasattr(self.dialect, "__name__"):  # type: ignore[unreachable]
-                return self.dialect.__name__.lower()  # type: ignore[unreachable]
+            if hasattr(self.dialect, "__name__"):
+                return self.dialect.__name__.lower()
         return None
 
 
@@ -296,7 +295,7 @@ class WhereClauseMixin:
     - _raise_sql_builder_error method
     """
 
-    def where_eq(self, column: Union[str, exp.Column], value: Any) -> "Self":
+    def where_eq(self, column: "Union[str, exp.Column]", value: Any) -> "Self":
         """Add an equality condition to the WHERE clause.
 
         Args:
@@ -313,7 +312,7 @@ class WhereClauseMixin:
 
     def where_between(
         self,
-        column: Union[str, exp.Column],
+        column: "Union[str, exp.Column]",
         low: Any,
         high: Any,
     ) -> "Self":
@@ -334,7 +333,7 @@ class WhereClauseMixin:
         condition: exp.Expression = col_expr.between(exp.var(low_param), exp.var(high_param))
         return self.where(condition)  # type: ignore[attr-defined, no-any-return]
 
-    def where_like(self, column: Union[str, exp.Column], pattern: str) -> "Self":
+    def where_like(self, column: "Union[str, exp.Column]", pattern: str) -> "Self":
         """Add a LIKE condition to the WHERE clause.
 
         Args:
@@ -349,7 +348,7 @@ class WhereClauseMixin:
         condition: exp.Expression = col_expr.like(exp.var(param_name))
         return self.where(condition)  # type: ignore[attr-defined, no-any-return]
 
-    def where_not_like(self, column: Union[str, exp.Column], pattern: str) -> "Self":
+    def where_not_like(self, column: "Union[str, exp.Column]", pattern: str) -> "Self":
         """Add a NOT LIKE condition to the WHERE clause.
 
         Args:
@@ -364,7 +363,7 @@ class WhereClauseMixin:
         condition: exp.Expression = col_expr.like(exp.var(param_name)).not_()
         return self.where(condition)  # type: ignore[attr-defined, no-any-return]
 
-    def where_is_null(self, column: Union[str, exp.Column]) -> "Self":
+    def where_is_null(self, column: "Union[str, exp.Column]") -> "Self":
         """Add an IS NULL condition to the WHERE clause.
 
         Args:
@@ -377,7 +376,7 @@ class WhereClauseMixin:
         condition: exp.Expression = col_expr.is_(exp.null())
         return self.where(condition)  # type: ignore[attr-defined, no-any-return]
 
-    def where_is_not_null(self, column: Union[str, exp.Column]) -> "Self":
+    def where_is_not_null(self, column: "Union[str, exp.Column]") -> "Self":
         """Add an IS NOT NULL condition to the WHERE clause.
 
         Args:
@@ -390,7 +389,7 @@ class WhereClauseMixin:
         condition: exp.Expression = col_expr.is_(exp.null()).not_()
         return self.where(condition)  # type: ignore[attr-defined, no-any-return]
 
-    def where_exists(self, subquery: Union[str, Any]) -> "Self":
+    def where_exists(self, subquery: "Union[str, Any]") -> "Self":
         """Add a WHERE EXISTS clause.
 
         Args:
@@ -402,6 +401,7 @@ class WhereClauseMixin:
         Raises:
             SQLBuilderError: If the subquery cannot be parsed.
         """
+        sub_expr: Optional[exp.Expression]
         if hasattr(subquery, "_parameters") and hasattr(subquery, "build"):
             # This is a QueryBuilder (like SelectBuilder)
             subquery_builder_params: dict[str, Any] = subquery._parameters  # type: ignore[attr-defined]
@@ -411,9 +411,9 @@ class WhereClauseMixin:
 
             # Get the subquery SQL
             sub_sql_obj = subquery.build()  # type: ignore[attr-defined]
-            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect_name)  # type: ignore[attr-defined,var-annotated]
+            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=getattr(self, "dialect_name", None))
         else:
-            sub_expr = exp.maybe_parse(str(subquery), dialect=self.dialect_name)  # type: ignore[attr-defined]
+            sub_expr = exp.maybe_parse(str(subquery), dialect=getattr(self, "dialect_name", None))
 
         if not sub_expr:
             msg = f"Could not parse subquery for EXISTS: {subquery}"
@@ -422,7 +422,7 @@ class WhereClauseMixin:
         exists_expr = exp.Exists(this=sub_expr)
         return self.where(exists_expr)  # type: ignore[attr-defined, no-any-return]
 
-    def where_not_exists(self, subquery: Union[str, Any]) -> "Self":
+    def where_not_exists(self, subquery: "Union[str, Any]") -> "Self":
         """Add a WHERE NOT EXISTS clause.
 
         Args:
@@ -434,6 +434,7 @@ class WhereClauseMixin:
         Raises:
             SQLBuilderError: If the subquery cannot be parsed.
         """
+        sub_expr: Optional[exp.Expression]
         if hasattr(subquery, "_parameters") and hasattr(subquery, "build"):
             # This is a QueryBuilder (like SelectBuilder)
             subquery_builder_params: dict[str, Any] = subquery._parameters  # type: ignore[attr-defined]
@@ -443,9 +444,9 @@ class WhereClauseMixin:
 
             # Get the subquery SQL
             sub_sql_obj = subquery.build()  # type: ignore[attr-defined]
-            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=self.dialect_name)  # type: ignore[attr-defined,var-annotated]
+            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=getattr(self, "dialect_name", None))
         else:
-            sub_expr = exp.maybe_parse(str(subquery), dialect=self.dialect_name)  # type: ignore[attr-defined]
+            sub_expr = exp.maybe_parse(str(subquery), dialect=getattr(self, "dialect_name", None))
 
         if not sub_expr:
             msg = f"Could not parse subquery for NOT EXISTS: {subquery}"

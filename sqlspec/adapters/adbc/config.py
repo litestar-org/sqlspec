@@ -296,10 +296,14 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             else:
                 db_kwargs["uri"] = uri
 
-        # Copy other connection parameters to db_kwargs
-        for key, value in self.connection_config.items():
-            if key not in {"driver_name", "uri", "db_kwargs", "conn_kwargs"} and value is not Empty:
-                db_kwargs[key] = value
+        # Copy other connection parameters to db_kwargs using dictionary comprehension
+        db_kwargs.update(
+            {
+                key: value
+                for key, value in self.connection_config.items()
+                if key not in {"driver_name", "uri", "db_kwargs", "conn_kwargs"} and value is not Empty
+            }
+        )
 
         # BigQuery driver has special parameter handling
         if "bigquery" in driver_name:
@@ -324,34 +328,26 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         driver_path = self._resolve_driver_name()
 
         if self.instrumentation.log_pool_operations:
-            logger.debug(f"Loading ADBC driver: {driver_path}", extra={"adapter": "adbc"})
+            logger.debug("Loading ADBC driver: %s", driver_path, extra={"adapter": "adbc"})
 
         try:
             connect_func = import_string(driver_path)
         except ImportError as e:
-            # Try adding .dbapi.connect suffix if not present
-            if ".dbapi.connect" not in driver_path:
-                try:
-                    driver_path_with_suffix = f"{driver_path}.dbapi.connect"
-                    connect_func = import_string(driver_path_with_suffix)
-                    if self.instrumentation.log_pool_operations:
-                        logger.info(
-                            f"Loaded ADBC driver with suffix: {driver_path_with_suffix}", extra={"adapter": "adbc"}
-                        )
-                except ImportError as e2:
-                    driver_path_with_suffix = f"{driver_path}.dbapi.connect"  # Ensure it's defined
-                    msg = (
-                        f"Failed to import ADBC connect function from '{driver_path}' or "
-                        f"'{driver_path_with_suffix}'. Is the driver installed? "
-                        f"Original errors: {e} / {e2}"
+            # Try adding .dbapi.connect suffix as fallback
+            driver_path_with_suffix = f"{driver_path}.dbapi.connect"
+            try:
+                connect_func = import_string(driver_path_with_suffix)
+                if self.instrumentation.log_pool_operations:
+                    logger.info(
+                        "Loaded ADBC driver with suffix: %s", driver_path_with_suffix, extra={"adapter": "adbc"}
                     )
-                    raise ImproperConfigurationError(msg) from e2
-            else:
+            except ImportError as e2:
                 msg = (
-                    f"Failed to import ADBC connect function from '{driver_path}'. "
-                    f"Is the driver installed and the path correct? Error: {e}"
+                    f"Failed to import ADBC connect function from '{driver_path}' or "
+                    f"'{driver_path_with_suffix}'. Is the driver installed? "
+                    f"Original errors: {e} / {e2}"
                 )
-                raise ImproperConfigurationError(msg) from e
+                raise ImproperConfigurationError(msg) from e2
 
         if not callable(connect_func):
             msg = f"The path '{driver_path}' did not resolve to a callable function."
@@ -376,7 +372,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             config_dict = self.connection_config_dict
 
             if self.instrumentation.log_pool_operations:
-                logger.debug(f"ADBC connection config: {config_dict}", extra={"adapter": "adbc"})
+                logger.debug("ADBC connection config: %s", config_dict, extra={"adapter": "adbc"})
 
             connection = connect_func(**config_dict)
 
@@ -393,13 +389,12 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                     if self.instrumentation.log_pool_operations:
                         logger.warning("Connection creation hook failed", extra={"adapter": "adbc", "error": str(e)})
 
-            return connection
-
         except Exception as e:
             driver_name = self.connection_config.get("driver_name", "Unknown")
             msg = f"Could not configure ADBC connection using driver '{driver_name}'. Error: {e}"
             logger.exception(msg, extra={"adapter": "adbc", "error": str(e)})
             raise ImproperConfigurationError(msg) from e
+        return connection
 
     @contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[AdbcConnection, None, None]":

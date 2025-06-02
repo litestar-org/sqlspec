@@ -4,12 +4,12 @@ import pytest
 from sqlglot import exp
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import UpdateBuilder, update
+from sqlspec.statement.builder import UpdateBuilder
 
 
 def test_basic_update() -> None:
     """Test basic UPDATE statement construction."""
-    builder = update("users")
+    builder = UpdateBuilder().table("users")
     result = builder.set("name", "John").set("age", 25).build()
 
     # Verify SQL structure
@@ -26,7 +26,7 @@ def test_basic_update() -> None:
 
 def test_update_with_where() -> None:
     """Test UPDATE with WHERE clause."""
-    builder = update("users")
+    builder = UpdateBuilder().table("users")
     result = builder.set("name", "Jane").where("id = 1").build()
 
     assert "UPDATE" in result.sql
@@ -38,7 +38,7 @@ def test_update_with_where() -> None:
 
 def test_update_multiple_sets() -> None:
     """Test UPDATE with multiple SET clauses."""
-    builder = update("users")
+    builder = UpdateBuilder().table("users")
     result = builder.set("name", "John").set("email", "john@example.com").set("age", 30).where("id = 1").build()
 
     assert "SET" in result.sql
@@ -48,7 +48,7 @@ def test_update_multiple_sets() -> None:
 
 def test_update_with_from_clause() -> None:
     """Test UPDATE with FROM clause (PostgreSQL style)."""
-    builder = update("users")
+    builder = UpdateBuilder().table("users")
     result = builder.set("status", "active").from_("user_profiles").where("users.id = user_profiles.user_id").build()
 
     assert "UPDATE" in result.sql
@@ -65,7 +65,7 @@ def test_update_without_table_raises_error() -> None:
 
 def test_update_parameter_binding() -> None:
     """Test that values are properly parameterized."""
-    builder = update("users")
+    builder = UpdateBuilder().table("users")
     result = builder.set("data", "'; DROP TABLE users; --").build()
 
     # Verify SQL injection is prevented
@@ -76,7 +76,7 @@ def test_update_parameter_binding() -> None:
 
 def test_update_with_expression_column() -> None:
     """Test UPDATE with sqlglot expression as column."""
-    builder = update("users")
+    builder = UpdateBuilder().table("users")
     col_expr = exp.column("name")
     result = builder.set(col_expr, "John").build()
 
@@ -96,7 +96,7 @@ def test_update_table_method() -> None:
 
 def test_update_with_complex_where() -> None:
     """Test UPDATE with complex WHERE conditions."""
-    builder = update("users")
+    builder = UpdateBuilder().table("users")
     result = builder.set("status", "updated").where("age > 18 AND created_at < '2023-01-01'").build()
 
     assert "WHERE" in result.sql
@@ -149,7 +149,7 @@ def test_update_table_method_resets_expression_if_not_update() -> None:
 
 def test_update_string_representation() -> None:
     """Test string representation of UpdateBuilder."""
-    builder = update("users")
+    builder = UpdateBuilder().table("users")
     builder.set("name", "John")
 
     sql_str = str(builder)

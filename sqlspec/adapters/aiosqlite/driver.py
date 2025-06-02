@@ -2,7 +2,7 @@
 import logging
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
+from typing import Any, ClassVar, Optional, Union, cast
 
 import aiosqlite
 import pyarrow as pa
@@ -11,13 +11,10 @@ from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import AsyncDriverAdapterProtocol
 from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, ExecuteResult, SelectResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT, SQLParameterType
+from sqlspec.typing import DictRow, ModelDTOT
 from sqlspec.utils.telemetry import instrument_operation_async
-
-if TYPE_CHECKING:
-    from sqlspec.statement.filters import StatementFilter
 
 __all__ = ("AiosqliteConnection", "AiosqliteDriver")
 
@@ -68,19 +65,13 @@ class AiosqliteDriver(
     async def _execute_impl(
         self,
         statement: SQL,
-        parameters: Optional[SQLParameterType] = None,
         connection: Optional[AiosqliteConnection] = None,
-        config: Optional[SQLConfig] = None,
-        is_many: bool = False,
-        is_script: bool = False,
         **kwargs: Any,
     ) -> Any:
         async with instrument_operation_async(self, "aiosqlite_execute", "database"):
             conn = self._connection(connection)
-            if config is not None and config != statement.config:
-                statement = statement.copy(config=config)
 
-            if is_script:
+            if statement.is_script:
                 final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
                 if self.instrumentation_config.log_queries:
                     logger.debug("Executing SQL script: %s", final_sql)
@@ -90,38 +81,37 @@ class AiosqliteDriver(
                 return "SCRIPT EXECUTED"
 
             final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
+            params_to_execute = statement.parameters
 
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", final_sql)
 
-            if is_many:
+            if statement.is_many:
                 params_list: list[tuple[Any, ...]] = []
-                if parameters and isinstance(parameters, Sequence):
-                    for param_set in parameters:
+                if params_to_execute and isinstance(params_to_execute, Sequence):
+                    for param_set in params_to_execute:
                         if isinstance(param_set, (list, tuple)):
                             params_list.append(tuple(param_set))
                         elif param_set is None:
                             params_list.append(())
                         else:
                             params_list.append((param_set,))
+                else:
+                    params_list = []
 
                 if self.instrumentation_config.log_parameters and params_list:
                     logger.debug("Query parameters (batch): %s", params_list)
 
                 async with self._get_cursor(conn) as cursor:
                     await cursor.executemany(final_sql, params_list)
-                    await conn.commit()
                     return cursor.rowcount if cursor.rowcount != -1 else len(params_list)
             else:
-                # Single execution
-                ordered_params = statement.get_parameters(style=self._get_placeholder_style())
                 db_params: tuple[Any, ...] = ()
-
-                if ordered_params is not None:
-                    if isinstance(ordered_params, (list, tuple)):
-                        db_params = tuple(ordered_params)
+                if params_to_execute is not None:
+                    if isinstance(params_to_execute, (list, tuple)):
+                        db_params = tuple(params_to_execute)
                     else:
-                        db_params = (ordered_params,)
+                        db_params = (params_to_execute,)
 
                 if self.instrumentation_config.log_parameters and db_params:
                     logger.debug("Query parameters: %s", db_params)
@@ -130,136 +120,123 @@ class AiosqliteDriver(
                     await cursor.execute(final_sql, db_params)
 
                     if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
-                        return await cursor.fetchall()
-                    await conn.commit()
-                    return cursor
+                        # Return data and description for _wrap_select_result
+                        return {"data": await cursor.fetchall(), "description": cursor.description}
+                    return cursor  # For DML, return cursor to _wrap_execute_result
 
     async def _wrap_select_result(
         self,
         statement: SQL,
-        raw_driver_result: Any,
-        schema_type: Optional[type[ModelDTOT]] = None,
+        result: Any,
+        schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
-    ) -> Union[SelectResult[ModelDTOT], SelectResult[dict[str, Any]]]:
+    ) -> Union[SQLResult[ModelDTOT], SQLResult[dict[str, Any]]]:
         async with instrument_operation_async(self, "aiosqlite_wrap_select", "database"):
-            cursor = cast("aiosqlite.Cursor", raw_driver_result)
-            fetched_data = await cursor.fetchall()
-            column_names = [desc[0] for desc in cursor.description or []]
+            if not isinstance(result, dict) or "data" not in result or "description" not in result:
+                logger.warning("Aiosqlite _wrap_select_result expects a dict with 'data' and 'description'.")
+                return SQLResult[dict[str, Any]](statement=statement, data=[], column_names=[], operation_type="SELECT")
 
-            # Convert sqlite3.Row objects to dictionaries
-            rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
+            column_names = [desc[0] for desc in result["description"] or []]
+
+            rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in result["data"]]
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Aiosqlite query returned %d rows", len(rows_as_dicts))
 
             if schema_type:
-                converted_data = self.to_schema(data=rows_as_dicts, schema_type=schema_type)
-                return SelectResult[ModelDTOT](
+                converted_data_seq = self.to_schema(data=rows_as_dicts, schema_type=schema_type)
+                return SQLResult[ModelDTOT](
                     statement=statement,
-                    data=converted_data,
+                    data=list(converted_data_seq) if converted_data_seq is not None else [],
                     column_names=column_names,
+                    operation_type="SELECT",
                 )
-            return SelectResult[dict[str, Any]](
+            return SQLResult[dict[str, Any]](
                 statement=statement,
                 data=rows_as_dicts,
                 column_names=column_names,
+                operation_type="SELECT",
             )
 
     async def _wrap_execute_result(
         self,
         statement: SQL,
-        raw_driver_result: Any,
+        result: Any,
         **kwargs: Any,
-    ) -> ExecuteResult:
+    ) -> SQLResult[dict[str, Any]]:
         async with instrument_operation_async(self, "aiosqlite_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             if statement.expression and hasattr(statement.expression, "key"):
                 operation_type = str(statement.expression.key).upper()
 
-            if isinstance(raw_driver_result, str):
-                return ExecuteResult(
+            if isinstance(result, str) and result == "SCRIPT EXECUTED":
+                return SQLResult[dict[str, Any]](
                     statement=statement,
-                    data={
-                        "rows_affected": 0,
-                        "last_inserted_id": None,
-                        "inserted_ids": [],
-                        "returning_data": None,
-                        "operation_type": operation_type or "SCRIPT",
-                    },
+                    data=[],
                     rows_affected=0,
                     operation_type=operation_type or "SCRIPT",
+                    metadata={"status_message": result},
                 )
 
-            cursor = cast("aiosqlite.Cursor", raw_driver_result)
+            cursor = cast("aiosqlite.Cursor", result)
             rows_affected = getattr(cursor, "rowcount", -1)
+            last_inserted_id = getattr(cursor, "lastrowid", None)
+
+            returned_data: list[dict[str, Any]] = []
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Aiosqlite execute operation affected %d rows", rows_affected)
+                if last_inserted_id is not None:
+                    logger.debug("Aiosqlite last inserted ID: %s", last_inserted_id)
 
-            return ExecuteResult(
+            return SQLResult[dict[str, Any]](
                 statement=statement,
-                data={
-                    "rows_affected": rows_affected,
-                    "last_inserted_id": None,
-                    "inserted_ids": [],
-                    "returning_data": None,
-                    "operation_type": operation_type,
-                },
+                data=returned_data,
                 rows_affected=rows_affected,
+                last_inserted_id=last_inserted_id,
                 operation_type=operation_type,
             )
 
-    async def select_to_arrow(
+    async def _select_to_arrow_impl(
         self,
-        statement: "Union[str, SQL, Any]",
-        parameters: Optional[SQLParameterType] = None,
-        *filters: "StatementFilter",
-        connection: Optional[AiosqliteConnection] = None,
-        config: Optional[SQLConfig] = None,
+        stmt_obj: "SQL",
+        connection: "AiosqliteConnection",
         **kwargs: Any,
     ) -> "ArrowResult":
-        async with instrument_operation_async(self, "aiosqlite_select_to_arrow", "database"):
-            conn = self._connection(connection)
-            current_config = config or self.config
-            stmt_obj = SQL(
-                statement, parameters, *(filters or ()), dialect=self.dialect, config=current_config, **kwargs
-            )
-            stmt_obj.validate()
+        final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
+        ordered_params = stmt_obj.get_parameters(style=self._get_placeholder_style())
 
-            if not AsyncDriverAdapterProtocol.returns_rows(stmt_obj.expression):
-                op_type = (
-                    str(stmt_obj.expression.key).upper()
-                    if stmt_obj.expression and hasattr(stmt_obj.expression, "key")
-                    else "UNKNOWN"
-                )
-                msg = f"Cannot fetch Arrow table for a non-query statement. Command type: {op_type}"
-                raise TypeError(msg)
+        db_params: tuple[Any, ...] = ()
+        if ordered_params is not None:
+            db_params = tuple(ordered_params) if isinstance(ordered_params, (list, tuple)) else (ordered_params,)
 
-            final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
-            ordered_params = stmt_obj.get_parameters(style=self._get_placeholder_style())
+        async with self._get_cursor(connection) as cursor:
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing aiosqlite Arrow query: %s", final_sql)
+            if self.instrumentation_config.log_parameters and db_params:
+                logger.debug("Query parameters for aiosqlite Arrow: %s", db_params)
 
-            db_params: tuple[Any, ...] = ()
-            if ordered_params is not None:
-                db_params = tuple(ordered_params) if isinstance(ordered_params, (list, tuple)) else (ordered_params,)
+            await cursor.execute(final_sql, db_params)
+            rows = await cursor.fetchall()
 
-            async with self._get_cursor(conn) as cursor:
-                await cursor.execute(final_sql, db_params)
-                rows = await cursor.fetchall()
+            if not rows:
+                column_names_from_desc = [desc[0] for desc in cursor.description or []]
+                return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=column_names_from_desc))
 
-                if not rows:
-                    return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=[]))
+            row_list = list(rows)
+            if not row_list:
+                return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=[]))
 
-                # Convert aiosqlite rows to Arrow table
-                row_list = list(rows)
-                column_names = list(row_list[0].keys())
-                columns_data = []
+            column_names = list(row_list[0].keys())
 
-                for col_name in column_names:
-                    column_values = [row[col_name] for row in row_list]
-                    columns_data.append(column_values)
+            # Transpose list of dict-like rows to dict of lists (columnar format for PyArrow)
+            data_for_arrow = {col_name: [row[col_name] for row in row_list] for col_name in column_names}
 
-                arrow_table = pa.Table.from_arrays(columns_data, names=column_names)
-                return ArrowResult(statement=stmt_obj, data=arrow_table)
+            # Alternative using from_arrays if data_for_arrow is a dict of lists (columns)
+            columns_as_lists = list(data_for_arrow.values())
+            arrow_table = pa.Table.from_arrays(columns_as_lists, names=column_names)
+
+            return ArrowResult(statement=stmt_obj, data=arrow_table)
 
     def _connection(self, connection: Optional[AiosqliteConnection] = None) -> AiosqliteConnection:
         """Get the connection to use for the operation."""

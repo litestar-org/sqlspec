@@ -22,9 +22,9 @@ from typing import (
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.service import SqlspecService
 from sqlspec.statement.filters import StatementFilter
-from sqlspec.statement.result import SelectResult
-from sqlspec.statement.sql import SQL
-from sqlspec.typing import AIOSQL_INSTALLED, DictRow, ModelDTOT, aiosql
+from sqlspec.statement.result import SQLResult
+from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.typing import AIOSQL_INSTALLED, DictRow, ModelDTOT, RowT, aiosql
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -46,6 +46,28 @@ def _check_aiosql_available() -> None:
     if not AIOSQL_INSTALLED:
         msg = "aiosql"
         raise MissingDependencyError(msg, "aiosql")
+
+
+def _normalize_dialect(dialect: str) -> str:
+    """Normalize dialect name for SQLGlot compatibility.
+
+    Args:
+        dialect: Original dialect name
+
+    Returns:
+        Normalized dialect name
+    """
+    # Map common dialect aliases to SQLGlot names
+    dialect_mapping = {
+        "postgresql": "postgres",
+        "psycopg": "postgres",
+        "psycopg2": "postgres",
+        "asyncpg": "postgres",
+        "psqlpy": "postgres",
+        "sqlite3": "sqlite",
+        "aiosqlite": "sqlite",
+    }
+    return dialect_mapping.get(dialect.lower(), dialect.lower())
 
 
 class AiosqlSyncAdapter:
@@ -135,6 +157,27 @@ class AiosqlSyncAdapter:
 
         return cleaned_params, all_filters
 
+    def _create_sql_object(self, sql: str, parameters: "Any" = None) -> SQL:
+        """Create SQL object with proper configuration.
+
+        Args:
+            sql: SQL string
+            parameters: Query parameters
+
+        Returns:
+            SQL object with relaxed validation for aiosql compatibility
+        """
+        # Create relaxed config for aiosql compatibility
+        config = SQLConfig(
+            strict_mode=False,  # Allow DDL and other statements
+            enable_validation=False,  # Skip validation for templates
+        )
+
+        # Normalize dialect for SQLGlot
+        normalized_dialect = _normalize_dialect(self.driver.dialect)
+
+        return SQL(sql, parameters=parameters, config=config, dialect=normalized_dialect)
+
     def select(
         self,
         conn: Any,
@@ -173,12 +216,14 @@ class AiosqlSyncAdapter:
             schema_type = cleaned_params.pop("_sqlspec_schema_type", None)
 
         # Create SQL object and apply filters
-        sql_obj = SQL(sql, cleaned_params, *filters, dialect=self.driver.dialect)
+        sql_obj = self._create_sql_object(sql, cleaned_params)
+        for filter_obj in filters:
+            sql_obj = sql_obj.append_filter(filter_obj)
 
         # Execute using SQLSpec driver
         result = self.driver.execute(sql_obj, connection=conn, schema_type=schema_type)
 
-        if isinstance(result, SelectResult) and result.data is not None:
+        if isinstance(result, SQLResult) and result.data is not None:
             yield from result.data
 
     def select_one(
@@ -188,7 +233,7 @@ class AiosqlSyncAdapter:
         sql: str,
         parameters: "Any",
         record_class: Optional[Any] = None,
-    ) -> Optional[Any]:
+    ) -> Optional[RowT]:
         """Execute a SELECT query and return first result.
 
         Args:
@@ -218,13 +263,13 @@ class AiosqlSyncAdapter:
         if isinstance(cleaned_params, dict):
             schema_type = cleaned_params.pop("_sqlspec_schema_type", None)
 
-        sql_obj = SQL(sql, parameters=cleaned_params, dialect=self.driver.dialect)
+        sql_obj = self._create_sql_object(sql, cleaned_params)
         for filter_obj in filters:
             sql_obj = sql_obj.append_filter(filter_obj)
 
-        result = cast("SelectResult[DictRow]", self.driver.execute(sql_obj, connection=conn, schema_type=schema_type))
+        result = cast("SQLResult[RowT]", self.driver.execute(sql_obj, connection=conn, schema_type=schema_type))
 
-        if hasattr(result, "rows") and result.data and isinstance(result, SelectResult):
+        if hasattr(result, "data") and result.data and isinstance(result, SQLResult):
             return result.data[0]
         return None
 
@@ -280,7 +325,7 @@ class AiosqlSyncAdapter:
         """
         cleaned_params, filters = self._extract_sqlspec_filters(parameters)
 
-        sql_obj = SQL(sql, parameters=cleaned_params, dialect=self.driver.dialect)
+        sql_obj = self._create_sql_object(sql, cleaned_params)
         for filter_obj in filters:
             sql_obj = sql_obj.append_filter(filter_obj)
 
@@ -292,7 +337,7 @@ class AiosqlSyncAdapter:
                 self.result = result
 
             def fetchall(self) -> list[Any]:
-                if isinstance(result, SelectResult) and result.data is not None:
+                if isinstance(result, SQLResult) and result.data is not None:
                     return list(result.data)
                 return []
 
@@ -322,7 +367,7 @@ class AiosqlSyncAdapter:
         """
         cleaned_params, filters = self._extract_sqlspec_filters(parameters)
 
-        sql_obj = SQL(sql, parameters=cleaned_params, dialect=self.driver.dialect)
+        sql_obj = self._create_sql_object(sql, cleaned_params)
         for filter_obj in filters:
             sql_obj = sql_obj.append_filter(filter_obj)
 
@@ -349,7 +394,7 @@ class AiosqlSyncAdapter:
             Number of affected rows
         """
         # For executemany, we don't extract sqlspec filters from individual parameter sets
-        sql_obj = SQL(sql, dialect=self.driver.dialect)
+        sql_obj = self._create_sql_object(sql)
         for filter_obj in self.default_filters:
             sql_obj = sql_obj.append_filter(filter_obj)
 
@@ -443,6 +488,27 @@ class AiosqlAsyncAdapter:
 
         return cleaned_params, all_filters
 
+    def _create_sql_object(self, sql: str, parameters: "Any" = None) -> SQL:
+        """Create SQL object with proper configuration.
+
+        Args:
+            sql: SQL string
+            parameters: Query parameters
+
+        Returns:
+            SQL object with relaxed validation for aiosql compatibility
+        """
+        # Create relaxed config for aiosql compatibility
+        config = SQLConfig(
+            strict_mode=False,  # Allow DDL and other statements
+            enable_validation=False,  # Skip validation for templates
+        )
+
+        # Normalize dialect for SQLGlot
+        normalized_dialect = _normalize_dialect(self.driver.dialect)
+
+        return SQL(sql, parameters=parameters, config=config, dialect=normalized_dialect)
+
     async def select(
         self,
         conn: Any,
@@ -480,15 +546,15 @@ class AiosqlAsyncAdapter:
         if isinstance(cleaned_params, dict):
             schema_type = cleaned_params.pop("_sqlspec_schema_type", None)
 
-        sql_obj = SQL(sql, parameters=cleaned_params, dialect=self.driver.dialect)
+        sql_obj = self._create_sql_object(sql, cleaned_params)
         for filter_obj in filters:
             sql_obj = sql_obj.append_filter(filter_obj)
 
         result = cast(
-            "SelectResult[DictRow]", await self.driver.execute(sql_obj, connection=conn, schema_type=schema_type)
+            "SQLResult[DictRow]", await self.driver.execute(sql_obj, connection=conn, schema_type=schema_type)
         )
 
-        if hasattr(result, "data") and result.data is not None and isinstance(result, SelectResult):
+        if hasattr(result, "data") and result.data is not None and isinstance(result, SQLResult):
             return list(result.data)
         return []
 
@@ -529,19 +595,15 @@ class AiosqlAsyncAdapter:
         if isinstance(cleaned_params, dict):
             schema_type = cleaned_params.pop("_sqlspec_schema_type", None)
 
-        from sqlspec.statement.filters import LimitOffsetFilter
-
-        filters.append(LimitOffsetFilter(limit=1, offset=0))
-
-        sql_obj = SQL(sql, parameters=cleaned_params, dialect=self.driver.dialect)
+        sql_obj = self._create_sql_object(sql, cleaned_params)
         for filter_obj in filters:
             sql_obj = sql_obj.append_filter(filter_obj)
 
         result = cast(
-            "SelectResult[DictRow]", await self.driver.execute(sql_obj, connection=conn, schema_type=schema_type)
+            "SQLResult[DictRow]", await self.driver.execute(sql_obj, connection=conn, schema_type=schema_type)
         )
 
-        if hasattr(result, "data") and result.data and isinstance(result, SelectResult):
+        if hasattr(result, "data") and result.data and isinstance(result, SQLResult):
             return result.data[0]
         return None
 
@@ -568,9 +630,12 @@ class AiosqlAsyncAdapter:
             return None
 
         if isinstance(row, dict):
+            # Return first value from dict
             return next(iter(row.values())) if row else None
         if hasattr(row, "__getitem__"):
+            # Handle tuple/list-like objects
             return row[0] if len(row) > 0 else None
+        # Handle scalar or object with attributes
         return row
 
     @asynccontextmanager
@@ -581,7 +646,7 @@ class AiosqlAsyncAdapter:
         sql: str,
         parameters: "Any",
     ) -> AsyncGenerator[Any, None]:
-        """Execute a SELECT query and return async cursor context manager.
+        """Execute a SELECT query and return cursor context manager.
 
         Args:
             conn: Database connection
@@ -590,11 +655,11 @@ class AiosqlAsyncAdapter:
             parameters: Query parameters
 
         Yields:
-            Async cursor-like object with results
+            Cursor-like object with results
         """
         cleaned_params, filters = self._extract_sqlspec_filters(parameters)
 
-        sql_obj = SQL(sql, parameters=cleaned_params, dialect=self.driver.dialect)
+        sql_obj = self._create_sql_object(sql, cleaned_params)
         for filter_obj in filters:
             sql_obj = sql_obj.append_filter(filter_obj)
 
@@ -605,7 +670,7 @@ class AiosqlAsyncAdapter:
                 self.result = result
 
             async def fetchall(self) -> list[Any]:
-                if isinstance(result, SelectResult) and result.data is not None:
+                if isinstance(result, SQLResult) and result.data is not None:
                     return list(result.data)
                 return []
 
@@ -629,10 +694,13 @@ class AiosqlAsyncAdapter:
             query_name: Name of the query
             sql: SQL string
             parameters: Query parameters
+
+        Note:
+            Async version returns None per aiosql protocol
         """
         cleaned_params, filters = self._extract_sqlspec_filters(parameters)
 
-        sql_obj = SQL(sql, parameters=cleaned_params, dialect=self.driver.dialect)
+        sql_obj = self._create_sql_object(sql, cleaned_params)
         for filter_obj in filters:
             sql_obj = sql_obj.append_filter(filter_obj)
 
@@ -652,8 +720,12 @@ class AiosqlAsyncAdapter:
             query_name: Name of the query
             sql: SQL string
             parameters: Sequence of parameter sets
+
+        Note:
+            Async version returns None per aiosql protocol
         """
-        sql_obj = SQL(sql, dialect=self.driver.dialect)
+        # For executemany, we don't extract sqlspec filters from individual parameter sets
+        sql_obj = self._create_sql_object(sql)
         for filter_obj in self.default_filters:
             sql_obj = sql_obj.append_filter(filter_obj)
 
@@ -677,34 +749,30 @@ class AiosqlAsyncAdapter:
         Returns:
             Returned value or None
         """
+        # INSERT RETURNING is treated like a select that returns data
         return await self.select_one(conn, query_name, sql, parameters)
 
 
 class AiosqlService(
     SqlspecService[Union["SyncDriverAdapterProtocol[Any, Any]", "AsyncDriverAdapterProtocol[Any, Any]"]]
 ):
-    """Service layer that integrates aiosql query loading with SQLSpec drivers.
+    """Enhanced service for aiosql integration with SQLSpec.
 
-    This service combines aiosql's file-based query loading with SQLSpec's advanced
-    features, providing a high-level interface for database operations.
+    Provides high-level abstractions for working with aiosql-loaded queries
+    while leveraging all SQLSpec features like filters, validation, and instrumentation.
 
     Example:
-        >>> from sqlspec.adapters.psycopg import PsycopgSyncConfig
         >>> from sqlspec.extensions.aiosql import AiosqlService
-        >>> # Create SQLSpec driver
-        >>> config = PsycopgSyncConfig(...)
-        >>> driver = config.create_driver()
-        >>> # Create service with aiosql integration
-        >>> service = AiosqlService(driver)
-        >>> # Load queries from file
-        >>> queries = service.load_queries("queries.sql")
-        >>> # Use queries with SQLSpec features
-        >>> from sqlspec.statement.filters import SearchFilter
+        >>> service = AiosqlService(
+        ...     driver, default_filters=[LimitOffsetFilter(100)]
+        ... )
+        >>> queries = service.load_queries("user_queries.sql")
         >>> result = service.execute_query_with_filters(
         ...     queries.get_users,
-        ...     conn,
-        ...     {"name": "John"},
-        ...     [SearchFilter("email", "@example.com")],
+        ...     connection=None,
+        ...     parameters={"active": True},
+        ...     filters=[SearchFilter("name", "John")],
+        ...     schema_type=User,
         ... )
     """
 
@@ -722,68 +790,63 @@ class AiosqlService(
             allow_sqlspec_filters: Whether to allow _sqlspec_filters parameter
         """
         super().__init__(driver)
-        self.default_filters = default_filters
+        self.default_filters = list(default_filters or [])
         self.allow_sqlspec_filters = allow_sqlspec_filters
-        self._aiosql_adapter: Optional[Union[AiosqlSyncAdapter, AiosqlAsyncAdapter]] = None
 
     @property
     def aiosql_adapter(self) -> Union[AiosqlSyncAdapter, AiosqlAsyncAdapter]:
-        """Get the appropriate aiosql adapter for the driver."""
-        if self._aiosql_adapter is None:
-            # Check if driver is async by looking for async methods
-            if hasattr(self._driver, "execute") and callable(self._driver.execute):
-                # Try to determine if it's async by checking the method signature
-                import inspect
+        """Get the appropriate aiosql adapter for this service's driver.
 
-                if inspect.iscoroutinefunction(self._driver.execute):
-                    self._aiosql_adapter = AiosqlAsyncAdapter(
-                        cast("AsyncDriverAdapterProtocol[Any, Any]", self._driver),
-                        self.default_filters,
-                        self.allow_sqlspec_filters,
-                    )
-                else:
-                    self._aiosql_adapter = AiosqlSyncAdapter(
-                        cast("SyncDriverAdapterProtocol[Any, Any]", self._driver),
-                        self.default_filters,
-                        self.allow_sqlspec_filters,
-                    )
-            else:
-                # Fallback to sync adapter
-                self._aiosql_adapter = AiosqlSyncAdapter(
-                    cast("SyncDriverAdapterProtocol[Any, Any]", self._driver),
-                    self.default_filters,
-                    self.allow_sqlspec_filters,
-                )
-
-        return self._aiosql_adapter
+        Returns:
+            AiosqlSyncAdapter for sync drivers, AiosqlAsyncAdapter for async drivers
+        """
+        # Check if driver has async methods to determine type
+        if hasattr(self.driver, "__aenter__") or any(
+            hasattr(self.driver, method) and callable(getattr(self.driver, method))
+            for method in ["aexecute", "aselect", "aexecute_many"]
+        ):
+            return AiosqlAsyncAdapter(
+                self.driver,  # type: ignore[arg-type]
+                default_filters=self.default_filters,
+                allow_sqlspec_filters=self.allow_sqlspec_filters,
+            )
+        return AiosqlSyncAdapter(
+            self.driver,  # type: ignore[arg-type]
+            default_filters=self.default_filters,
+            allow_sqlspec_filters=self.allow_sqlspec_filters,
+        )
 
     def load_queries(self, sql_path: str, **aiosql_kwargs: Any) -> Any:
-        """Load queries from a SQL file using aiosql.
+        """Load queries from SQL file using aiosql with SQLSpec adapter.
 
         Args:
             sql_path: Path to SQL file
             **aiosql_kwargs: Additional arguments passed to aiosql.from_path
 
         Returns:
-            aiosql Queries object configured with SQLSpec adapter
+            aiosql queries object with SQLSpec power
         """
-        _check_aiosql_available()
+        if not aiosql:
+            msg = "aiosql"
+            raise MissingDependencyError(msg, "aiosql")
 
-        return aiosql.from_path(sql_path, self.aiosql_adapter, **aiosql_kwargs)  # pyright: ignore
+        return aiosql.from_path(sql_path, self.aiosql_adapter, **aiosql_kwargs)  # type: ignore[arg-type]
 
     def load_queries_from_str(self, sql_str: str, **aiosql_kwargs: Any) -> Any:
-        """Load queries from a SQL string using aiosql.
+        """Load queries from SQL string using aiosql with SQLSpec adapter.
 
         Args:
-            sql_str: SQL string containing queries
+            sql_str: SQL string content
             **aiosql_kwargs: Additional arguments passed to aiosql.from_str
 
         Returns:
-            aiosql Queries object configured with SQLSpec adapter
+            aiosql queries object with SQLSpec power
         """
-        _check_aiosql_available()
+        if not aiosql:
+            msg = "aiosql"
+            raise MissingDependencyError(msg, "aiosql")
 
-        return aiosql.from_str(sql_str, self.aiosql_adapter, **aiosql_kwargs)  # pyright: ignore
+        return aiosql.from_str(sql_str, self.aiosql_adapter, **aiosql_kwargs)  # type: ignore[arg-type]
 
     def execute_query_with_filters(
         self,
@@ -794,38 +857,29 @@ class AiosqlService(
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> Any:
-        """Execute an aiosql query with additional SQLSpec filters.
+        """Execute aiosql query method with additional SQLSpec filters.
 
         Args:
-            query_method: Query method from aiosql queries object
+            query_method: aiosql query method
             connection: Database connection
             parameters: Query parameters
             filters: Additional SQLSpec filters to apply
-            schema_type: Optional schema type for result conversion
-            **kwargs: Additional arguments passed to query method
+            schema_type: Schema type for result conversion
+            **kwargs: Additional arguments
 
         Returns:
-            Query results with applied filters and optional schema conversion
+            Query result with applied filters and schema conversion
         """
-        # Combine parameters with filters
-        final_params = dict(parameters or {})
+        # Prepare parameters with SQLSpec enhancements
+        enhanced_params = dict(parameters or {})
+
+        # Add schema type if provided
+        if schema_type:
+            enhanced_params["_sqlspec_schema_type"] = schema_type
+
+        # Add filters if provided
         if filters:
-            existing_filters = final_params.get("_sqlspec_filters", [])
-            if not isinstance(existing_filters, list):
-                existing_filters = [existing_filters] if existing_filters else []
-            final_params["_sqlspec_filters"] = existing_filters + list(filters)
+            enhanced_params["_sqlspec_filters"] = list(filters)
 
-        # Execute query with enhanced parameters
-        result = query_method(connection, **final_params, **kwargs)
-
-        # Apply schema conversion if requested
-        if schema_type and hasattr(result, "__iter__"):
-            try:
-                if isinstance(result, (list, tuple)):
-                    return self.to_schema(result, schema_type=schema_type)
-                return self.to_schema(list(result), schema_type=schema_type)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Failed to convert result to schema type %s: %s", schema_type, e)
-                return result
-
-        return result
+        # Execute query method
+        return query_method(connection, **enhanced_params, **kwargs)

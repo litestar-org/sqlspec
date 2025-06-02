@@ -3,13 +3,8 @@ from typing import TYPE_CHECKING, Any, Union
 from litestar.di import Provide
 from litestar.plugins import InitPluginProtocol
 
-from sqlspec.base import (
-    AsyncConfigT,
-    DatabaseConfigProtocol,
-    DriverT,
-    SyncConfigT,
-)
 from sqlspec.base import SQLSpec as SQLSpecBase
+from sqlspec.config import AsyncConfigT, DatabaseConfigProtocol, DriverT, SyncConfigT
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.config import DatabaseConfig
 from sqlspec.typing import ConnectionT, PoolT

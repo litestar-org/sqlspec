@@ -68,22 +68,33 @@ def test_sqlconfig_initialization(config_data: dict[str, Any], expected_attrs: d
 
 
 def test_sqlconfig_get_pipeline_default() -> None:
-    """Test get_pipeline returns TransformerPipeline with default components."""
-    config = SQLConfig(enable_analysis=True, enable_validation=True)
-    pipeline = config.get_pipeline()
+    """Test SQLConfig enables pipeline processing by default for validation and analysis."""
+    # Test that validation (which uses the pipeline) is enabled by default
+    config = SQLConfig(enable_validation=True, strict_mode=False)  # Non-strict to avoid raising on test SQL
+    # This SQL is designed to trigger a DMLWithoutWhereValidator if it were present and active
+    # We are checking that the validation_result is populated, implying pipeline execution.
+    stmt = SQL("UPDATE users SET name = 'test'", config=config)
+    assert stmt.validation_result is not None, "Validation result should be populated if pipeline ran."
 
-    assert hasattr(pipeline, "execute")
-    assert hasattr(pipeline, "components")
-    assert len(pipeline.components) > 0  # Should have default components
+    # Test that analysis (which uses the pipeline) can be enabled
+    config_analysis = SQLConfig(enable_analysis=True, strict_mode=False)
+    stmt_analysis = SQL("SELECT * FROM users", config=config_analysis)
+    # Depending on default analyzers, analysis_result might be complex.
+    # For this test, we just check it's not None, implying pipeline ran.
+    assert stmt_analysis.analysis_result is not None, (
+        "Analysis result should be populated if pipeline ran for analysis."
+    )
 
 
 def test_sqlconfig_get_pipeline_custom_components() -> None:
-    """Test get_pipeline with custom processing components."""
+    """Test SQLConfig correctly stores custom processing components."""
     mock_component = Mock()
     config = SQLConfig(processing_pipeline_components=[mock_component])
-    pipeline = config.get_pipeline()
-
-    assert mock_component in pipeline.components
+    # Verify that the custom component is stored in the config
+    assert config.processing_pipeline_components is not None
+    assert mock_component in config.processing_pipeline_components
+    # Further testing of custom component execution would require deeper integration testing
+    # or specific test cases that trigger the custom component indirectly via SQL object operations.
 
 
 def test_sqlconfig_immutable_operations() -> None:

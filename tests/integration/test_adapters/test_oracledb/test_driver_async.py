@@ -9,7 +9,7 @@ import pytest
 from pytest_databases.docker.oracle import OracleService
 
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OraclePoolConfig
-from sqlspec.statement.result import ExecuteResult, SelectResult
+from sqlspec.statement.result import SQLResult
 
 ParamStyle = Literal["positional_binds", "dict_binds"]
 
@@ -64,15 +64,15 @@ async def test_async_insert_returning(oracle_async_session: OracleAsyncConfig, p
             # Let's just test basic insert instead
             insert_sql = "INSERT INTO test_table (name) VALUES (?)"
             result = await driver.execute(insert_sql, params)
-            assert isinstance(result, ExecuteResult)  # type: ignore[unreachable]
-            assert result.rows_affected == 1  # type: ignore[unreachable]
+            assert isinstance(result, SQLResult)
+            assert result.rows_affected == 1
         else:  # dict_binds
             insert_sql = "INSERT INTO test_table (name) VALUES (:name)"
             result = await driver.execute(insert_sql, params)
-            assert isinstance(result, ExecuteResult)  # type: ignore[unreachable]
-            assert result.rows_affected == 1  # type: ignore[unreachable]
+            assert isinstance(result, SQLResult)
+            assert result.rows_affected == 1
 
-        await driver.execute_script(  # type: ignore[unreachable]
+        await driver.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
         )
 
@@ -108,11 +108,11 @@ async def test_async_select(oracle_async_session: OracleAsyncConfig, params: Any
             select_sql = "SELECT name FROM test_table WHERE name = :name"
 
         insert_result = await driver.execute(insert_sql, params)
-        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
-        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
+        assert isinstance(insert_result, SQLResult)
+        assert insert_result.rows_affected == 1
 
         select_result = await driver.execute(select_sql, params)
-        assert isinstance(select_result, SelectResult)
+        assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert len(select_result.data) == 1
         assert select_result.data[0]["NAME"] == "test_name"  # Oracle returns uppercase column names
@@ -152,16 +152,15 @@ async def test_async_select_value(oracle_async_session: OracleAsyncConfig, param
             insert_sql = "INSERT INTO test_table (name) VALUES (:name)"
 
         insert_result = await driver.execute(insert_sql, params)
-        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
-        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
+        assert isinstance(insert_result, SQLResult)
+        assert insert_result.rows_affected == 1
 
         # Test select value using dual
         select_sql = "SELECT 'test_value' FROM dual"
         value_result = await driver.execute(select_sql)
-        assert isinstance(value_result, SelectResult)
+        assert isinstance(value_result, SQLResult)
         assert value_result.data is not None
         assert len(value_result.data) == 1
-        assert value_result.column_names is not None
 
         # Extract single value using column name
         value = value_result.data[0][value_result.column_names[0]]
@@ -191,8 +190,8 @@ async def test_async_select_arrow(oracle_async_session: OracleAsyncConfig) -> No
         # Insert test record using positional binds
         insert_sql = "INSERT INTO test_table (name) VALUES (?)"
         insert_result = await driver.execute(insert_sql, ("arrow_name",))
-        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
-        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
+        assert isinstance(insert_result, SQLResult)
+        assert insert_result.rows_affected == 1
 
         # Test select_to_arrow using mixins
         if hasattr(driver, "select_to_arrow"):
@@ -241,12 +240,12 @@ async def test_execute_many_insert(oracle_async_session: OracleAsyncConfig) -> N
         params_list = [("name1",), ("name2",), ("name3",)]
 
         result = await driver.execute_many(insert_sql, params_list)
-        assert isinstance(result, ExecuteResult)
+        assert isinstance(result, SQLResult)
         assert result.rows_affected == len(params_list)
 
         select_sql = "SELECT COUNT(*) as count FROM test_many_table"
         count_result = await driver.execute(select_sql)
-        assert isinstance(count_result, SelectResult)
+        assert isinstance(count_result, SQLResult)
         assert count_result.data is not None
         assert count_result.data[0]["COUNT"] == len(params_list)  # Oracle returns uppercase column names
 
@@ -274,7 +273,7 @@ async def test_execute_script(oracle_async_session: OracleAsyncConfig) -> None:
 
         # Verify script executed successfully
         select_result = await driver.execute("SELECT COUNT(*) as count FROM test_script_table")
-        assert isinstance(select_result, SelectResult)
+        assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert select_result.data[0]["COUNT"] == 2  # Oracle returns uppercase column names
 
@@ -299,19 +298,19 @@ async def test_update_operation(oracle_async_session: OracleAsyncConfig) -> None
 
         # Insert a record first
         insert_result = await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("original_name",))
-        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
-        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
+        assert isinstance(insert_result, SQLResult)
+        assert insert_result.rows_affected == 1
 
         # Update the record
         update_result = await driver.execute(
             "UPDATE test_table SET name = ? WHERE name = ?", ("updated_name", "original_name")
         )
-        assert isinstance(update_result, ExecuteResult)
+        assert isinstance(update_result, SQLResult)
         assert update_result.rows_affected == 1
 
         # Verify the update
         select_result = await driver.execute("SELECT name FROM test_table WHERE name = ?", ("updated_name",))
-        assert isinstance(select_result, SelectResult)
+        assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert select_result.data[0]["NAME"] == "updated_name"  # Oracle returns uppercase column names
 
@@ -336,16 +335,16 @@ async def test_delete_operation(oracle_async_session: OracleAsyncConfig) -> None
 
         # Insert a record first
         insert_result = await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("to_delete",))
-        assert isinstance(insert_result, ExecuteResult)  # type: ignore[unreachable]
-        assert insert_result.rows_affected == 1  # type: ignore[unreachable]
+        assert isinstance(insert_result, SQLResult)
+        assert insert_result.rows_affected == 1
 
         # Delete the record
         delete_result = await driver.execute("DELETE FROM test_table WHERE name = ?", ("to_delete",))
-        assert isinstance(delete_result, ExecuteResult)
+        assert isinstance(delete_result, SQLResult)
         assert delete_result.rows_affected == 1
 
         # Verify the deletion
         select_result = await driver.execute("SELECT COUNT(*) as count FROM test_table")
-        assert isinstance(select_result, SelectResult)
+        assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
-        assert select_result.data[0]["COUNT"] == 0  # Oracle returns uppercase column names
+        assert select_result.data[0]["COUNT"] == 0

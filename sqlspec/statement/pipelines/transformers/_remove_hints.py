@@ -8,55 +8,30 @@ from sqlglot import exp
 from sqlspec.statement.pipelines.base import ProcessorProtocol, ValidationResult
 
 if TYPE_CHECKING:
-    from sqlglot.dialects.dialect import DialectType
-
-    from sqlspec.statement.sql import SQLConfig
-
+    from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 __all__ = ("HintRemover",)
 
 
 class HintRemover(ProcessorProtocol[exp.Expression]):
-    """Removes hints from a SQL expression."""
+    """Removes hints from a SQL expression using sqlglot's transform method."""
 
-    def process(
-        self,
-        expression: exp.Expression,
-        dialect: "Optional[DialectType]" = None,
-        config: "Optional[SQLConfig]" = None,
-    ) -> "tuple[exp.Expression, Optional[ValidationResult]]":
-        """Removes all hints from the given SQL expression.
+    def process(self, context: "SQLProcessingContext") -> "tuple[exp.Expression, Optional[ValidationResult]]":
+        """Removes all hints from the SQL expression in the context."""
+        if context.current_expression is None:
+            msg = "HintRemover received no expression in context."
+            raise ValueError(msg)
 
-        Args:
-            expression: The SQL expression to process.
-            dialect: The SQL dialect.
-            config: SQL configuration.
+        def _remove_hint_node(node: exp.Expression) -> Optional[exp.Expression]:
+            if isinstance(node, exp.Hint):
+                return None
+            return node
 
-        Returns:
-            A tuple containing the modified expression without hints and None for ValidationResult.
-        """
-        # Create a copy to avoid modifying the original
-        expression_without_hints = expression.copy()
+        transformed_expression = context.current_expression.transform(_remove_hint_node, copy=True)
 
-        # Remove different types of hints
-        self._remove_optimizer_hints(expression_without_hints)
+        if transformed_expression is None:
+            context.current_expression = exp.Anonymous(this="")  # type: ignore[unreachable]
+        else:
+            context.current_expression = transformed_expression
 
-        return expression_without_hints, None
-
-    def _remove_optimizer_hints(self, expression: exp.Expression) -> None:
-        """Remove optimizer hints from the expression."""
-        # Find and remove all Hint nodes
-        hints_to_remove = list(expression.find_all(exp.Hint))
-
-        for hint in hints_to_remove:
-            # Try to remove the hint by replacing it with None or removing from parent
-            if hint.parent:
-                try:
-                    # Try to remove from parent's children
-                    for key, value in hint.parent.args.items():
-                        if value is hint:
-                            hint.parent.args[key] = None
-                            break
-                except (AttributeError, TypeError):
-                    # If we can't remove it cleanly, just skip
-                    pass
+        return context.current_expression, None
