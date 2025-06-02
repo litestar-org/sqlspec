@@ -18,7 +18,7 @@ from sqlspec.statement.mixins import (
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT
+from sqlspec.typing import ArrowTable, DictRow, ModelDTOT
 from sqlspec.utils.sync_tools import ensure_async_
 from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
 
@@ -227,20 +227,24 @@ class OracleSyncDriver(
 
         with self._get_cursor(connection) as cursor:
             cursor.execute(final_sql, oracle_params_dict)
-            rows = cursor.fetchall()  # list of tuples
+            native_df = False
+            if hasattr(cursor, "fetch_df_all"):
+                rows = cursor.fetch_df_all()  # pyright: ignore
+                native_df = True
+            else:
+                rows = cursor.fetchall()
+            column_names = [col[0] for col in cursor.description or []]
             if not rows:
                 column_names_from_desc = [col[0] for col in cursor.description or []]
                 return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=column_names_from_desc))
+            if native_df:
+                arrow_table = rows
+            else:
+                empty_cols: list[list[str]] = [[] for _ in column_names]
+                list_of_cols = list(zip(*rows)) if rows else empty_cols
 
-            column_names = [col[0] for col in cursor.description or []]
-            # Transpose list of tuples (rows) into list of lists (columns)
-            empty_cols: list[list[str]] = [[] for _ in column_names]
-            list_of_cols = (
-                list(zip(*rows)) if rows else empty_cols
-            )  # Ensure inner lists if rows is empty but cols exist
-
-            arrow_table = pa.Table.from_arrays(list_of_cols, names=column_names)
-            return ArrowResult(statement=stmt_obj, data=arrow_table)
+                arrow_table = pa.Table.from_arrays(list_of_cols, names=column_names)
+            return ArrowResult(statement=stmt_obj, data=cast("ArrowTable", arrow_table))
 
 
 class OracleAsyncDriver(
@@ -435,12 +439,21 @@ class OracleAsyncDriver(
 
         async with self._get_cursor(connection) as cursor:
             await cursor.execute(final_sql, oracle_params_dict)
-            rows = await cursor.fetchall()
+            native_df = False
+            if hasattr(cursor, "fetch_df_all"):
+                rows = await cursor.fetch_df_all()  # pyright: ignore
+                native_df = True
+            else:
+                rows = await cursor.fetchall()
+            column_names = [col[0] for col in cursor.description or []]
             if not rows:
                 column_names_from_desc = [col[0] for col in cursor.description or []]
                 return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=column_names_from_desc))
+            if native_df:
+                arrow_table = rows
+            else:
+                empty_cols: list[list[str]] = [[] for _ in column_names]
+                list_of_cols = list(zip(*rows)) if rows else empty_cols
 
-            column_names = [col[0] for col in cursor.description or []]
-            list_of_cols = list(zip(*rows)) if rows else [[] for _ in column_names]  # type: ignore[misc]
-            arrow_table = pa.Table.from_arrays(list_of_cols, names=column_names)
-            return ArrowResult(statement=stmt_obj, data=arrow_table)
+                arrow_table = pa.Table.from_arrays(list_of_cols, names=column_names)
+            return ArrowResult(statement=stmt_obj, data=cast("ArrowTable", arrow_table))
