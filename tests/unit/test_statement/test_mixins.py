@@ -524,7 +524,7 @@ def test_mixin_method_consistency(mixin_class: type, method_name: str, is_async:
 
         async def run_test() -> None:
             with pytest.raises(NotImplementedError):
-                await method("SELECT * FROM test")
+                await method("SELECT * FROM test")  # pyright: ignore
 
         # Run async test (we can't use asyncio.run here easily in pytest)
         import asyncio

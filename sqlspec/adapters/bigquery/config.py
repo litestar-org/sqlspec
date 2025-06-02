@@ -159,8 +159,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         connection_config: Optional[BigQueryConnectionConfig] = None,
         statement_config: Optional[SQLConfig] = None,
         instrumentation: Optional[InstrumentationConfig] = None,
-        default_row_type: type[DictRow] = DictRow,  # type: ignore[assignment]
-        # BigQuery-specific callbacks
+        default_row_type: type[DictRow] = DictRow,
         on_connection_create: Optional[Callable[[BigQueryConnection], None]] = None,
         on_job_start: Optional[Callable[[str], None]] = None,
         on_job_complete: Optional[Callable[[str, Any], None]] = None,

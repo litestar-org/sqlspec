@@ -18,6 +18,7 @@ __all__ = (
     "RiskLevel",
     "SQLBuilderError",
     "SQLConversionError",
+    "SQLFileParsingError",
     "SQLInjectionError",
     "SQLParsingError",
     "SQLSpecError",
@@ -91,6 +92,15 @@ class SQLParsingError(SQLSpecError):
         super().__init__(message)
 
 
+class SQLFileParsingError(SQLSpecError):
+    """Issues parsing SQL files."""
+
+    def __init__(self, message: Optional[str] = None) -> None:
+        if message is None:
+            message = "Issues parsing SQL files."
+        super().__init__(message)
+
+
 class SQLBuilderError(SQLSpecError):
     """Issues Building or Generating SQL statements."""
 
@@ -131,25 +141,25 @@ class RiskLevel(Enum):
     def __lt__(self, other: "RiskLevel") -> bool:  # pragma: no cover
         """Less than comparison for ordering."""
         if not isinstance(other, RiskLevel):
-            return NotImplemented  # type: ignore[unreachable]
+            return NotImplemented
         return self.value < other.value
 
     def __le__(self, other: "RiskLevel") -> bool:  # pragma: no cover
         """Less than or equal comparison for ordering."""
         if not isinstance(other, RiskLevel):
-            return NotImplemented  # type: ignore[unreachable]
+            return NotImplemented
         return self.value <= other.value
 
     def __gt__(self, other: "RiskLevel") -> bool:  # pragma: no cover
         """Greater than comparison for ordering."""
         if not isinstance(other, RiskLevel):
-            return NotImplemented  # type: ignore[unreachable]
+            return NotImplemented
         return self.value > other.value
 
     def __ge__(self, other: "RiskLevel") -> bool:  # pragma: no cover
         """Greater than or equal comparison for ordering."""
         if not isinstance(other, RiskLevel):
-            return NotImplemented  # type: ignore[unreachable]
+            return NotImplemented
         return self.value >= other.value
 
 

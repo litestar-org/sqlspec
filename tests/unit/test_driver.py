@@ -77,7 +77,7 @@ class MockSyncDriver(SyncDriverAdapterProtocol[MockConnection, DictRow]):
         connection: MockConnection,
         config: SQLConfig | None = None,
         instrumentation_config: InstrumentationConfig | None = None,
-        default_row_type: type[DictRow] | None = None,
+        default_row_type: type[DictRow] = DictRow,
     ) -> None:
         super().__init__(connection, config, instrumentation_config, default_row_type)
 
@@ -130,7 +130,7 @@ class MockAsyncDriver(AsyncDriverAdapterProtocol[MockAsyncConnection, DictRow]):
         connection: MockAsyncConnection,
         config: SQLConfig | None = None,
         instrumentation_config: InstrumentationConfig | None = None,
-        default_row_type: type[DictRow] | None = None,
+        default_row_type: type[DictRow] = DictRow,
     ) -> None:
         super().__init__(connection, config, instrumentation_config, default_row_type)
 

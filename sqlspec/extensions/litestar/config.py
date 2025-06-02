@@ -82,7 +82,7 @@ class DatabaseConfig:
                 connection_scope_key=self.connection_key,
             )
         else:
-            msg = f"Invalid commit mode: {self.commit_mode}"  # type: ignore[unreachable]
+            msg = f"Invalid commit mode: {self.commit_mode}"
             raise ImproperConfigurationError(detail=msg)
         self.lifespan_handler = lifespan_handler_maker(config=self.config, pool_key=self.pool_key)
         self.connection_provider = connection_provider_maker(

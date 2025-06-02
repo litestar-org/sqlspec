@@ -1,5 +1,5 @@
 from sqlspec.adapters.asyncmy.config import AsyncmyConfig, AsyncmyConnectionConfig, AsyncmyPoolConfig
-from sqlspec.adapters.asyncmy.driver import AsyncmyConnection, AsyncmyDriver  # type: ignore[attr-defined]
+from sqlspec.adapters.asyncmy.driver import AsyncmyConnection, AsyncmyDriver
 
 __all__ = (
     "AsyncmyConfig",

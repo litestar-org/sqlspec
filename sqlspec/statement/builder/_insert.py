@@ -35,7 +35,7 @@ ERR_MSG_EXPRESSION_NOT_INITIALIZED = "Internal error: base expression not initia
 
 
 @dataclass(unsafe_hash=True)
-class InsertBuilder(QueryBuilder[SQLResult[RowT]]):
+class InsertBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInvalidTypeArguments]
     """Builder for INSERT statements.
 
     This builder facilitates the construction of SQL INSERT queries

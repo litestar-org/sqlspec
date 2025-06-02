@@ -168,7 +168,7 @@ class ParameterValidator:
             List of ParameterInfo objects in order of appearance
         """
         if sql is None:
-            msg = "'NoneType' object has no attribute 'finditer'"  # type: ignore[unreachable]
+            msg = "'NoneType' object has no attribute 'finditer'"
             raise AttributeError(msg)
 
         if sql in self._parameter_cache:
@@ -285,7 +285,6 @@ class ParameterValidator:
 
         Raises:
             ParameterStyleMismatchError: When style doesn't match
-            MissingParameterError: When required parameters are missing
         """
         expected_input_type = self.determine_parameter_input_type(parameters_info)
 

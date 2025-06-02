@@ -18,7 +18,7 @@ from typing import (
     Union,
 )
 
-from sqlspec.exceptions import MissingDependencyError, SQLSpecError
+from sqlspec.exceptions import MissingDependencyError, SQLFileParsingError
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import AIOSQL_INSTALLED, AiosqlSQLOperationType
 from sqlspec.utils.singleton import SingletonMeta
@@ -41,12 +41,8 @@ MIN_QUERY_PARTS = 3
 
 __all__ = (
     "AiosqlLoader",
-    "SqlFileParseError",
+    "SQLFileParsingError",
 )
-
-
-class SqlFileParseError(SQLSpecError):
-    """Raised when SQL file parsing fails."""
 
 
 class AiosqlLoader(metaclass=SingletonMeta):
@@ -82,7 +78,7 @@ class AiosqlLoader(metaclass=SingletonMeta):
 
         Raises:
             MissingDependencyError: If aiosql is not installed (for compatibility)
-            SqlFileParseError: If file path is invalid or insecure
+            SQLFileParsingError: If file path is invalid or insecure
         """
         if not AIOSQL_INSTALLED:
             msg = "aiosql"
@@ -109,31 +105,31 @@ class AiosqlLoader(metaclass=SingletonMeta):
             path = Path(sql_path).resolve()
         except (OSError, ValueError) as e:
             msg = f"Invalid SQL file path: {sql_path}"
-            raise SqlFileParseError(msg) from e
+            raise SQLFileParsingError(msg) from e
 
         # Basic security check
         path_str = str(path)
         suspicious_patterns = ["../", "..\\", "~", "$"]
         if any(pattern in path_str for pattern in suspicious_patterns):
             msg = f"Potentially unsafe SQL file path: {sql_path}"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         return path
 
     def _parse_sql_file(self) -> dict[str, tuple[str, "AiosqlSQLOperationType"]]:
         if not self.sql_path.exists():
             msg = f"SQL file not found: {self.sql_path}"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         if not self.sql_path.is_file():
             msg = f"Path is not a file: {self.sql_path}"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         try:
             content = self.sql_path.read_text(encoding="utf-8")
         except Exception as e:
             msg = f"Failed to read SQL file {self.sql_path}: {e}"
-            raise SqlFileParseError(msg) from e
+            raise SQLFileParsingError(msg) from e
 
         return self._parse_sql_content(content)
 
@@ -145,7 +141,7 @@ class AiosqlLoader(metaclass=SingletonMeta):
 
         if len(parts) < MIN_QUERY_PARTS:
             msg = "No valid aiosql queries found in file"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         # Skip first part (content before first query)
         for i in range(1, len(parts), 3):
@@ -172,7 +168,7 @@ class AiosqlLoader(metaclass=SingletonMeta):
 
         if not queries:
             msg = "No valid queries parsed from SQL file"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         logger.info("Successfully parsed %d queries from %s", len(queries), self.sql_path)
         return queries
@@ -217,11 +213,11 @@ class AiosqlLoader(metaclass=SingletonMeta):
             SQL object ready for execution with SQLSpec drivers
 
         Raises:
-            SqlFileParseError: If query not found
+            SQLFileParsingError: If query not found
         """
         if name not in self._queries:
             msg = f"Query '{name}' not found. Available queries: {', '.join(self.query_names)}"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         sql_text, _ = self._queries[name]
         effective_config = config or self.config
@@ -255,20 +251,20 @@ class AiosqlLoader(metaclass=SingletonMeta):
             SQL object for SELECT operations
 
         Raises:
-            SqlFileParseError: If query not found or not a SELECT operation
+            SQLFileParsingError: If query not found or not a SELECT operation
         """
         if name not in self._queries:
             msg = f"Query '{name}' not found. Available queries: {', '.join(self.query_names)}"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         _, operation_type = self._queries[name]
-        if operation_type not in (
+        if operation_type not in {
             AiosqlSQLOperationType.SELECT,
             AiosqlSQLOperationType.SELECT_ONE,
             AiosqlSQLOperationType.SELECT_VALUE,
-        ):
+        }:
             msg = f"Query '{name}' is not a SELECT operation (operation type: {operation_type})"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         return self.get_sql(name, *filters, config=config)
 
@@ -289,20 +285,20 @@ class AiosqlLoader(metaclass=SingletonMeta):
             SQL object for INSERT operations
 
         Raises:
-            SqlFileParseError: If query not found or not an INSERT operation
+            SQLFileParsingError: If query not found or not an INSERT operation
         """
         if name not in self._queries:
             msg = f"Query '{name}' not found. Available queries: {', '.join(self.query_names)}"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         _, operation_type = self._queries[name]
-        if operation_type not in (
+        if operation_type not in {
             AiosqlSQLOperationType.INSERT_UPDATE_DELETE,
             AiosqlSQLOperationType.INSERT_RETURNING,
             AiosqlSQLOperationType.INSERT_UPDATE_DELETE_MANY,
-        ):
+        }:
             msg = f"Query '{name}' is not an INSERT operation (operation type: {operation_type})"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         return self.get_sql(name, *filters, config=config)
 
@@ -323,19 +319,19 @@ class AiosqlLoader(metaclass=SingletonMeta):
             SQL object for UPDATE operations
 
         Raises:
-            SqlFileParseError: If query not found or not an UPDATE operation
+            SQLFileParsingError: If query not found or not an UPDATE operation
         """
         if name not in self._queries:
             msg = f"Query '{name}' not found. Available queries: {', '.join(self.query_names)}"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         _, operation_type = self._queries[name]
-        if operation_type not in (
+        if operation_type not in {
             AiosqlSQLOperationType.INSERT_UPDATE_DELETE,
             AiosqlSQLOperationType.INSERT_UPDATE_DELETE_MANY,
-        ):
+        }:
             msg = f"Query '{name}' is not an UPDATE operation (operation type: {operation_type})"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         return self.get_sql(name, *filters, config=config)
 
@@ -356,19 +352,19 @@ class AiosqlLoader(metaclass=SingletonMeta):
             SQL object for DELETE operations
 
         Raises:
-            SqlFileParseError: If query not found or not a DELETE operation
+            SQLFileParsingError: If query not found or not a DELETE operation
         """
         if name not in self._queries:
             msg = f"Query '{name}' not found. Available queries: {', '.join(self.query_names)}"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         _, operation_type = self._queries[name]
-        if operation_type not in (
+        if operation_type not in {
             AiosqlSQLOperationType.INSERT_UPDATE_DELETE,
             AiosqlSQLOperationType.INSERT_UPDATE_DELETE_MANY,
-        ):
+        }:
             msg = f"Query '{name}' is not a DELETE operation (operation type: {operation_type})"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         return self.get_sql(name, *filters, config=config)
 
@@ -389,16 +385,16 @@ class AiosqlLoader(metaclass=SingletonMeta):
             SQL object for SCRIPT operations
 
         Raises:
-            SqlFileParseError: If query not found or not a SCRIPT operation
+            SQLFileParsingError: If query not found or not a SCRIPT operation
         """
         if name not in self._queries:
             msg = f"Query '{name}' not found. Available queries: {', '.join(self.query_names)}"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         _, operation_type = self._queries[name]
         if operation_type != AiosqlSQLOperationType.SCRIPT:
             msg = f"Query '{name}' is not a SCRIPT operation (operation type: {operation_type})"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         return self.get_sql(name, config=config)
 
@@ -412,11 +408,11 @@ class AiosqlLoader(metaclass=SingletonMeta):
             The aiosql operation type
 
         Raises:
-            SqlFileParseError: If query not found
+            SQLFileParsingError: If query not found
         """
         if name not in self._queries:
             msg = f"Query '{name}' not found. Available queries: {', '.join(self.query_names)}"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         _, operation_type = self._queries[name]
         return operation_type
@@ -431,11 +427,11 @@ class AiosqlLoader(metaclass=SingletonMeta):
             Raw SQL text
 
         Raises:
-            SqlFileParseError: If query not found
+            SQLFileParsingError: If query not found
         """
         if name not in self._queries:
             msg = f"Query '{name}' not found. Available queries: {', '.join(self.query_names)}"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         sql_text, _ = self._queries[name]
         return sql_text
@@ -473,22 +469,22 @@ class AiosqlLoader(metaclass=SingletonMeta):
             SQL object for MERGE operations
 
         Raises:
-            SqlFileParseError: If query not found or not a MERGE operation
+            SQLFileParsingError: If query not found or not a MERGE operation
         """
         if name not in self._queries:
             msg = f"Query '{name}' not found. Available queries: {', '.join(self.query_names)}"
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         sql_text, operation_type = self._queries[name]
 
         # MERGE operations should use ! suffix and contain MERGE keyword
         if operation_type != AiosqlSQLOperationType.INSERT_UPDATE_DELETE:
             msg = f"Query '{name}' is not a MERGE operation (operation type: {operation_type}). MERGE queries should use '!' suffix."
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         # Check if SQL actually contains MERGE keyword
         if "MERGE" not in sql_text.upper():
             msg = f"Query '{name}' does not contain MERGE statement. Expected MERGE operation but found: {sql_text[:50]}..."
-            raise SqlFileParseError(msg)
+            raise SQLFileParsingError(msg)
 
         return self.get_sql(name, *filters, config=config)

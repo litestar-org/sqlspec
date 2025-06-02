@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
-from sqlspec.exceptions import MissingDependencyError
-from sqlspec.extensions.aiosql.loader import AiosqlLoader, SqlFileParseError
+from sqlspec.exceptions import MissingDependencyError, SQLFileParsingError
+from sqlspec.extensions.aiosql.loader import AiosqlLoader
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import AiosqlSQLOperationType
 
@@ -129,7 +129,7 @@ class TestAiosqlLoader:
             # Security checks are implemented and should raise SqlFileParseError
             try:
                 AiosqlLoader(path)
-            except SqlFileParseError as e:
+            except SQLFileParsingError as e:
                 # Either security error or file not found is expected
                 assert (
                     "SQL file not found" in str(e)
@@ -141,14 +141,14 @@ class TestAiosqlLoader:
         """Test error handling for nonexistent files."""
         try:
             AiosqlLoader("nonexistent_file.sql")
-        except SqlFileParseError as e:
+        except SQLFileParsingError as e:
             assert "SQL file not found" in str(e)
 
     def test_aiosql_loader_directory_instead_of_file(self, tmp_path: Path) -> None:
         """Test error handling when path is directory instead of file."""
         try:
             AiosqlLoader(tmp_path)
-        except SqlFileParseError as e:
+        except SQLFileParsingError as e:
             assert "Path is not a file" in str(e) or "SQL file not found" in str(e)
 
     def test_aiosql_loader_parse_queries(self, temp_sql_file: Path) -> None:
@@ -222,11 +222,11 @@ class TestAiosqlLoader:
         loader = AiosqlLoader(temp_sql_file, config=config)
 
         # Try to get SELECT operation as INSERT - should fail
-        with pytest.raises(SqlFileParseError, match="not an INSERT operation"):
+        with pytest.raises(SQLFileParsingError, match="not an INSERT operation"):
             loader.get_insert_sql("get_users")
 
         # Try to get INSERT operation as SELECT - should fail
-        with pytest.raises(SqlFileParseError, match="not a SELECT operation"):
+        with pytest.raises(SQLFileParsingError, match="not a SELECT operation"):
             loader.get_select_sql("create_user")
 
     def test_aiosql_loader_get_nonexistent_query(self, temp_sql_file: Path) -> None:
@@ -234,7 +234,7 @@ class TestAiosqlLoader:
         config = SQLConfig(strict_mode=False)  # Use relaxed config
         loader = AiosqlLoader(temp_sql_file, config=config)
 
-        with pytest.raises(SqlFileParseError, match="Query 'nonexistent' not found"):
+        with pytest.raises(SQLFileParsingError, match="Query 'nonexistent' not found"):
             loader.get_sql("nonexistent")
 
     def test_aiosql_loader_dictionary_access(self, temp_sql_file: Path) -> None:
@@ -329,7 +329,7 @@ SELECT * FROM users
             try:
                 AiosqlLoader(temp_path)
                 # If no error is raised, that's also acceptable behavior
-            except SqlFileParseError as e:
+            except SQLFileParsingError as e:
                 assert "No valid aiosql queries found" in str(e) or "SQL file not found" in str(e)
         finally:
             temp_path.unlink()
@@ -375,7 +375,7 @@ UPDATE users SET name = :name WHERE id = :id
             assert "WHEN MATCHED" in merge_sql.sql
 
             # Test that non-MERGE query fails
-            with pytest.raises(SqlFileParseError, match="does not contain MERGE statement"):
+            with pytest.raises(SQLFileParsingError, match="does not contain MERGE statement"):
                 loader.get_merge_sql("regular_update")
 
         finally:

@@ -270,7 +270,7 @@ class AiosqlSyncAdapter:
         result = cast("SQLResult[RowT]", self.driver.execute(sql_obj, connection=conn, schema_type=schema_type))
 
         if hasattr(result, "data") and result.data and isinstance(result, SQLResult):
-            return result.data[0]
+            return result.data[0]  # type: ignore[no-any-return]
         return None
 
     def select_value(

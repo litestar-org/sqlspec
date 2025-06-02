@@ -46,12 +46,13 @@ class OracleSyncDriver(
         connection: OracleSyncConnection,
         config: Optional[SQLConfig] = None,
         instrumentation_config: Optional[InstrumentationConfig] = None,
+        default_row_type: type[DictRow] = DictRow,
     ) -> None:
         super().__init__(
             connection=connection,
             config=config,
             instrumentation_config=instrumentation_config,
-            default_row_type=DictRow,
+            default_row_type=default_row_type,
         )
 
     def _get_placeholder_style(self) -> ParameterStyle:
@@ -86,11 +87,11 @@ class OracleSyncDriver(
 
                 if statement.is_many:
                     if params_to_execute is not None and isinstance(params_to_execute, Sequence):
-                        final_driver_params = list(params_to_execute)  # type: ignore
+                        final_driver_params = list(params_to_execute)
                     else:
                         final_driver_params = []
                 elif params_to_execute is not None:
-                    final_driver_params = params_to_execute  # type: ignore
+                    final_driver_params = params_to_execute  # type: ignore[assignment]
 
             with self._get_cursor(conn) as cursor:
                 if self.instrumentation_config.log_queries:
@@ -233,8 +234,9 @@ class OracleSyncDriver(
 
             column_names = [col[0] for col in cursor.description or []]
             # Transpose list of tuples (rows) into list of lists (columns)
+            empty_cols: list[list[str]] = [[] for _ in column_names]
             list_of_cols = (
-                list(zip(*rows)) if rows else [[] for _ in column_names]
+                list(zip(*rows)) if rows else empty_cols
             )  # Ensure inner lists if rows is empty but cols exist
 
             arrow_table = pa.Table.from_arrays(list_of_cols, names=column_names)
@@ -255,14 +257,15 @@ class OracleAsyncDriver(
     def __init__(
         self,
         connection: OracleAsyncConnection,
-        config: Optional[SQLConfig] = None,
-        instrumentation_config: Optional[InstrumentationConfig] = None,
+        config: "Optional[SQLConfig]" = None,
+        instrumentation_config: "Optional[InstrumentationConfig]" = None,
+        default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
         super().__init__(
             connection=connection,
             config=config,
             instrumentation_config=instrumentation_config,
-            default_row_type=DictRow,
+            default_row_type=default_row_type,
         )
 
     def _get_placeholder_style(self) -> ParameterStyle:
@@ -299,11 +302,11 @@ class OracleAsyncDriver(
 
                 if statement.is_many:
                     if params_to_execute is not None and isinstance(params_to_execute, Sequence):
-                        final_driver_params = list(params_to_execute)  # type: ignore
+                        final_driver_params = list(params_to_execute)
                     else:
                         final_driver_params = []
                 elif params_to_execute is not None:
-                    final_driver_params = params_to_execute  # type: ignore
+                    final_driver_params = params_to_execute  # type: ignore[assignment]
 
             async with self._get_cursor(conn) as cursor:
                 if self.instrumentation_config.log_queries:
@@ -438,6 +441,6 @@ class OracleAsyncDriver(
                 return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=column_names_from_desc))
 
             column_names = [col[0] for col in cursor.description or []]
-            list_of_cols = list(zip(*rows)) if rows else [[] for _ in column_names]
+            list_of_cols = list(zip(*rows)) if rows else [[] for _ in column_names]  # type: ignore[misc]
             arrow_table = pa.Table.from_arrays(list_of_cols, names=column_names)
             return ArrowResult(statement=stmt_obj, data=arrow_table)

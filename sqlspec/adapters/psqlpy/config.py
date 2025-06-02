@@ -311,7 +311,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     @property
     def connection_type(self) -> type[PsqlpyConnection]:  # type: ignore[override]
         """Return the connection type."""
-        return Connection  # type: ignore[return-value]
+        return Connection
 
     @property
     def driver_type(self) -> type[PsqlpyDriver]:  # type: ignore[override]

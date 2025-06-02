@@ -38,7 +38,7 @@ from sqlspec.statement.mixins import (
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
-from sqlspec.typing import RowT, SQLParameterType
+from sqlspec.typing import DictRow, RowT, SQLParameterType
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder import QueryBuilder
@@ -76,10 +76,9 @@ class BigQueryDriver(
     def __init__(
         self,
         connection: BigQueryConnection,
-        config: Optional[SQLConfig] = None,
-        instrumentation_config: Optional[InstrumentationConfig] = None,
-        default_row_type: type[RowT] = dict[str, Any],
-        # BigQuery-specific parameters
+        config: "Optional[SQLConfig]" = None,
+        instrumentation_config: "Optional[InstrumentationConfig]" = None,
+        default_row_type: "type[DictRow]" = DictRow,
         default_query_job_config: Optional[QueryJobConfig] = None,
         on_job_start: Optional[Callable[[str], None]] = None,
         on_job_complete: Optional[Callable[[str, Any], None]] = None,
@@ -277,7 +276,7 @@ class BigQueryDriver(
         Returns:
             List of dictionaries representing the rows.
         """
-        return [dict(row) for row in rows_iterator]  # type: ignore[report-return-type]
+        return [dict(row) for row in rows_iterator]  # type: ignore[misc]
 
     def _execute_impl(
         self,

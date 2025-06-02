@@ -25,6 +25,9 @@ __all__ = ("SQLFactory",)
 
 logger = logging.getLogger("sqlspec")
 
+MIN_SQL_LIKE_STRING_LENGTH = 6
+MIN_DECODE_ARGS = 2
+
 
 class SQLFactory:
     """Unified factory for creating SQL builders and column expressions with a fluent API.
@@ -234,7 +237,7 @@ class SQLFactory:
         Returns:
             True if the string appears to be SQL
         """
-        if not candidate or len(candidate.strip()) < 6:
+        if not candidate or len(candidate.strip()) < MIN_SQL_LIKE_STRING_LENGTH:
             return False
 
         candidate_upper = candidate.strip().upper()
@@ -322,7 +325,7 @@ class SQLFactory:
         try:
             # Use SQLGlot directly for parsing - no validation here
             parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
-            if parsed_expr is None:  # type: ignore[var-annotated]
+            if parsed_expr is None:
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Update):
@@ -341,7 +344,7 @@ class SQLFactory:
         try:
             # Use SQLGlot directly for parsing - no validation here
             parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
-            if parsed_expr is None:  # type: ignore[var-annotated]
+            if parsed_expr is None:
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Delete):
@@ -360,7 +363,7 @@ class SQLFactory:
         try:
             # Use SQLGlot directly for parsing - no validation here
             parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
-            if parsed_expr is None:  # type: ignore[var-annotated]
+            if parsed_expr is None:
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Merge):
@@ -555,7 +558,7 @@ class SQLFactory:
                     columns = [exp.column(col) for col in column_set]
                     set_expressions.append(exp.Tuple(expressions=columns))
             else:
-                set_expressions.append(exp.column(column_set))  # type: ignore[unreachable]
+                set_expressions.append(exp.column(column_set))
 
         return exp.GroupingSets(expressions=set_expressions)
 
@@ -700,7 +703,7 @@ class SQLFactory:
         """
         col_expr = exp.column(column) if isinstance(column, str) else column
 
-        if len(args) < 2:
+        if len(args) < MIN_DECODE_ARGS:
             msg = "DECODE requires at least one search/result pair"
             raise ValueError(msg)
 
@@ -1074,7 +1077,7 @@ class CaseExpressionBuilder:
         Returns:
             Self for method chaining.
         """
-        cond_expr = exp.maybe_parse(condition) or exp.column(condition) if isinstance(condition, str) else condition  # type: ignore[unreachable]
+        cond_expr = exp.maybe_parse(condition) or exp.column(condition) if isinstance(condition, str) else condition
 
         if isinstance(value, str):
             val_expr = exp.Literal.string(value)

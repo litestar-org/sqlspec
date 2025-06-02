@@ -174,7 +174,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         connection_config: Optional[AsyncpgConnectionConfig] = None,
         statement_config: Optional[SQLConfig] = None,
         instrumentation: Optional[InstrumentationConfig] = None,
-        default_row_type: type[DictRow] = DictRow,  # type: ignore[assignment]
+        default_row_type: type[DictRow] = DictRow,
         json_serializer: "Callable[[Any], str]" = encode_json,
         json_deserializer: "Callable[[str], Any]" = decode_json,
     ) -> None:
@@ -203,7 +203,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
     @property
     def connection_type(self) -> type[AsyncpgConnection]:  # type: ignore[override]
         """Return the connection type."""
-        return PoolConnectionProxy  # type: ignore[return-value]
+        return PoolConnectionProxy
 
     @property
     def driver_type(self) -> type[AsyncpgDriver]:  # type: ignore[override]

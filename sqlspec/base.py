@@ -1,4 +1,3 @@
-# ruff: noqa: BLE001
 import asyncio
 import atexit
 import logging
@@ -22,6 +21,7 @@ from sqlspec.config import (
     SyncConfigT,
     SyncDatabaseConfig,
 )
+from sqlspec.typing import DictRow
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
@@ -260,7 +260,7 @@ class SQLSpec:
                     config.driver_type(
                         connection=resolved_connection,
                         instrumentation_config=config.instrumentation,
-                        default_row_type=getattr(config, "default_row_type", None),
+                        default_row_type=getattr(config, "default_row_type", DictRow),
                     ),
                 )
                 logger.debug("Created async driver session for config: %s", config_name)
@@ -271,7 +271,7 @@ class SQLSpec:
         driver = config.driver_type(
             connection=connection_obj,
             instrumentation_config=config.instrumentation,
-            default_row_type=getattr(config, "default_row_type", None),
+            default_row_type=getattr(config, "default_row_type", DictRow),
         )
         logger.debug("Created sync driver session for config: %s", config_name)
         return cast("DriverT", driver)  # pyright: ignore

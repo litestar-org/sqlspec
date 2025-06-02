@@ -99,7 +99,7 @@ class CommonDriverAttributes(ABC, Generic[ConnectionT, RowT]):
         connection: "ConnectionT",
         config: "Optional[SQLConfig]" = None,
         instrumentation_config: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "Optional[type[RowT]]" = None,
+        default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
         """Initialize with connection, config, instrumentation_config, and default_row_type.
 
@@ -125,7 +125,7 @@ class CommonDriverAttributes(ABC, Generic[ConnectionT, RowT]):
     def _setup_opentelemetry(self) -> None:
         """Set up OpenTelemetry tracer with proper service naming."""
         if trace is None:
-            logger.warning("OpenTelemetry not installed, skipping OpenTelemetry setup.")  # type: ignore[unreachable]
+            logger.warning("OpenTelemetry not installed, skipping OpenTelemetry setup.")
             return
         self._tracer = trace.get_tracer(
             self.instrumentation_config.service_name,
@@ -439,7 +439,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
         connection: "ConnectionT",
         config: "Optional[SQLConfig]" = None,
         instrumentation_config: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "Optional[type[RowT]]" = None,
+        default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
         """Initialize sync driver adapter.
 
@@ -703,7 +703,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], Asyn
         connection: "ConnectionT",
         config: "Optional[SQLConfig]" = None,
         instrumentation_config: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "Optional[type[RowT]]" = None,
+        default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
         """Initialize async driver adapter.
 

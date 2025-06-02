@@ -181,7 +181,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
 
     - Extension auto-management and installation
     - Secret management for API integrations
-    - Intelligent autoconfiguration settings
+    - Intelligent auto configuration settings
     - High-performance Arrow integration
     - Direct file querying capabilities
     - Performance optimizations for analytics workloads
@@ -195,8 +195,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         connection_config: Optional[DuckDBConnectionConfig] = None,
         statement_config: Optional[SQLConfig] = None,
         instrumentation: Optional[InstrumentationConfig] = None,
-        default_row_type: type[DictRow] = DictRow,  # type: ignore[assignment]
-        # DuckDB intelligent features
+        default_row_type: type[DictRow] = DictRow,
         extensions: Optional[list[DuckDBExtensionConfig]] = None,
         secrets: Optional[list[DuckDBSecretConfig]] = None,
         on_connection_create: Optional[Callable[[DuckDBConnection], None]] = None,

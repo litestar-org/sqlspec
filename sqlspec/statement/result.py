@@ -295,7 +295,7 @@ class ArrowResult(StatementResult[ArrowTable]):
             ValueError: If no Arrow table is available.
         """
         if self.data is None:
-            msg = "No Arrow table available for this result"  # type: ignore[unreachable]
+            msg = "No Arrow table available for this result"
             raise ValueError(msg)
         return self.data
 
@@ -309,7 +309,7 @@ class ArrowResult(StatementResult[ArrowTable]):
             ValueError: If no Arrow table is available.
         """
         if self.data is None:
-            msg = "No Arrow table available"  # type: ignore[unreachable]
+            msg = "No Arrow table available"
             raise ValueError(msg)
 
         return self.data.column_names
@@ -324,7 +324,7 @@ class ArrowResult(StatementResult[ArrowTable]):
             ValueError: If no Arrow table is available.
         """
         if self.data is None:
-            msg = "No Arrow table available"  # type: ignore[unreachable]
+            msg = "No Arrow table available"
             raise ValueError(msg)
 
         return self.data.num_rows
@@ -339,7 +339,7 @@ class ArrowResult(StatementResult[ArrowTable]):
             ValueError: If no Arrow table is available.
         """
         if self.data is None:
-            msg = "No Arrow table available"  # type: ignore[unreachable]
+            msg = "No Arrow table available"
             raise ValueError(msg)
 
         return self.data.num_columns

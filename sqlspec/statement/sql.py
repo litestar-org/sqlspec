@@ -244,7 +244,7 @@ class SQL:
             and not isinstance(parameters, (dict, list, tuple, str, int, float, bool))
         ):
             # The "parameters" argument is actually a filter
-            actual_filters.insert(0, parameters)  # type: ignore[arg-type]  # We've checked it has append_to_statement
+            actual_filters.insert(0, parameters)
             actual_parameters = None
 
         if isinstance(statement, SQL):
@@ -1126,7 +1126,7 @@ class SQL:
 
             # Ensure we have a Select expression that supports where()
             if hasattr(new_expr, "where") and callable(getattr(new_expr, "where", None)):
-                new_expr = new_expr.where(condition_expression)  # type: ignore[attr-defined]
+                new_expr = new_expr.where(condition_expression)  # pyright: ignore
             else:
                 # Convert to Select if not already selectable
                 if not isinstance(new_expr, exp.Select):
@@ -1155,24 +1155,22 @@ class SQL:
 
             # Ensure expression supports limit()
             if hasattr(expr_with_param, "limit") and callable(getattr(expr_with_param, "limit", None)):
-                expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
+                expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))  # pyright: ignore
             else:
                 logger.warning("Expression does not support limit(), converting to Select")
                 if not isinstance(expr_with_param, exp.Select):
                     expr_with_param = exp.Select().from_(expr_with_param)
                 expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))
-
             return new_stmt.copy(statement=expr_with_param, parameters=new_stmt._merged_parameters)
 
         # Direct limit without parameter
         if hasattr(new_expr, "limit") and callable(getattr(new_expr, "limit", None)):
-            new_expr = new_expr.limit(limit_value)  # type: ignore[attr-defined]
+            new_expr = new_expr.limit(limit_value)  # pyright: ignore
         else:
             logger.warning("Expression does not support limit(), converting to Select")
             if not isinstance(new_expr, exp.Select):
                 new_expr = exp.Select().from_(new_expr)
             new_expr = new_expr.limit(limit_value)
-
         return self.copy(statement=new_expr)
 
     def offset(self, offset_value: int, use_parameter: bool = False) -> "SQL":
@@ -1194,7 +1192,7 @@ class SQL:
 
             # Ensure expression supports offset()
             if hasattr(expr_with_param, "offset") and callable(getattr(expr_with_param, "offset", None)):
-                expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
+                expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))  # pyright: ignore
             else:
                 logger.warning("Expression does not support offset(), converting to Select")
                 if not isinstance(expr_with_param, exp.Select):
@@ -1205,7 +1203,7 @@ class SQL:
 
         # Direct offset without parameter
         if hasattr(new_expr, "offset") and callable(getattr(new_expr, "offset", None)):
-            new_expr = new_expr.offset(offset_value)  # type: ignore[attr-defined]
+            new_expr = new_expr.offset(offset_value)  # pyright: ignore
         else:
             logger.warning("Expression does not support offset(), converting to Select")
             if not isinstance(new_expr, exp.Select):
@@ -1260,7 +1258,7 @@ class SQL:
                 logger.warning("Converting non-Select expression to Select for ORDER BY clause")
                 new_expr = exp.Select().from_(new_expr)
             # We know it's a Select after the conversion above
-            new_expr = new_expr.order_by(*parsed_orders)  # type: ignore[attr-defined]
+            new_expr = new_expr.order_by(*parsed_orders)  # pyright: ignore
 
         return self.copy(statement=new_expr)
 

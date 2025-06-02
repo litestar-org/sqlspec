@@ -12,7 +12,7 @@ from sqlspec.statement.mixins import ResultConverter, SQLTranslatorMixin, SyncAr
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import ModelDTOT, RowT
+from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.telemetry import instrument_operation
 
 if TYPE_CHECKING:
@@ -53,13 +53,13 @@ class DuckDBDriver(
         connection: "DuckDBConnection",
         config: "Optional[SQLConfig]" = None,
         instrumentation_config: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "Optional[type[RowT]]" = None,
+        default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
         super().__init__(
             connection=connection,
             config=config,
             instrumentation_config=instrumentation_config,
-            default_row_type=default_row_type or cast("type[RowT]", dict[str, Any]),
+            default_row_type=default_row_type,
         )
 
     def _get_placeholder_style(self) -> ParameterStyle:
@@ -232,7 +232,7 @@ class DuckDBDriver(
 
             relation = cursor.execute(final_sql, final_params or [])
             if relation is None:
-                import pyarrow as pa  # type: ignore[unreachable]
+                import pyarrow as pa
 
                 logger.warning(
                     "DuckDB execute returned None where a relation was expected for Arrow conversion. Returning empty table."

@@ -392,7 +392,7 @@ async def test_aiosqlite_driver_instrumentation(aiosqlite_driver: AiosqliteDrive
     )
 
     # Verify execution worked
-    mock_aiosqlite_connection.execute.assert_called_once_with("SELECT * FROM users WHERE id = ?", [1])
+    mock_aiosqlite_connection.execute.assert_called_once_with("SELECT * FROM users WHERE id = ?", [1])  # pyright: ignore
 
 
 @pytest.mark.asyncio

@@ -197,7 +197,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         connection_config: "Optional[OracleConnectionConfig]" = None,
         statement_config: "Optional[SQLConfig]" = None,
         instrumentation: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,  # type: ignore[assignment]
+        default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
         """Initialize Oracle synchronous configuration.
 
@@ -222,7 +222,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         """Return the connection type."""
         import oracledb
 
-        return oracledb.Connection  # type: ignore[return-value]
+        return oracledb.Connection
 
     @property
     def driver_type(self) -> type[OracleSyncDriver]:  # type: ignore[override]
@@ -324,7 +324,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         connection_config: "Optional[OracleConnectionConfig]" = None,
         statement_config: "Optional[SQLConfig]" = None,
         instrumentation: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,  # type: ignore[assignment]
+        default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
         """Initialize Oracle asynchronous configuration.
 
@@ -349,7 +349,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         """Return the connection type."""
         import oracledb
 
-        return oracledb.AsyncConnection  # type: ignore[return-value]
+        return oracledb.AsyncConnection
 
     @property
     def driver_type(self) -> type[OracleAsyncDriver]:  # type: ignore[override]

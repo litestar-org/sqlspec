@@ -26,7 +26,7 @@ logger = logging.getLogger("sqlspec")
 
 
 @dataclass(unsafe_hash=True)
-class UpdateBuilder(QueryBuilder[SQLResult[RowT]], WhereClauseMixin):
+class UpdateBuilder(QueryBuilder[SQLResult[RowT]], WhereClauseMixin):  # pyright: ignore[reportInvalidTypeArguments]
     """Builder for UPDATE statements.
 
     This builder provides a fluent interface for constructing SQL UPDATE statements

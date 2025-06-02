@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
 from asyncmy import Connection
+from litestar.utils import ensure_async_callable
 from typing_extensions import TypeAlias
 
 from sqlspec.driver import AsyncDriverAdapterProtocol
@@ -44,12 +45,13 @@ class AsyncmyDriver(
         connection: "AsyncmyConnection",  # pyright: ignore
         config: "Optional[SQLConfig]" = None,
         instrumentation_config: "Optional[InstrumentationConfig]" = None,
+        default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
         super().__init__(
             connection=connection,
             config=config,
             instrumentation_config=instrumentation_config,
-            default_row_type=DictRow,
+            default_row_type=default_row_type,
         )
 
     def _get_placeholder_style(self) -> "ParameterStyle":
@@ -63,7 +65,7 @@ class AsyncmyDriver(
             yield cursor
         finally:
             if hasattr(cursor, "close") and callable(cursor.close):
-                await cursor.close()
+                await ensure_async_callable(cursor.close)()  # pyright: ignore
 
     async def _execute_impl(
         self,

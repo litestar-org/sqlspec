@@ -3,22 +3,24 @@
 
 import logging
 from dataclasses import dataclass
-from typing import Any, ClassVar, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
 from psqlpy import Connection, QueryResult
 
-from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import AsyncDriverAdapterProtocol
 from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import ModelDTOT
+from sqlspec.typing import DictRow, ModelDTOT
 from sqlspec.utils.telemetry import instrument_operation_async
+
+if TYPE_CHECKING:
+    from sqlspec.config import InstrumentationConfig
 
 __all__ = ("PsqlpyConnection", "PsqlpyDriver")
 
-PsqlpyConnection = Connection  # type: ignore[misc]
+PsqlpyConnection = Connection
 logger = logging.getLogger("sqlspec")
 
 
@@ -47,14 +49,15 @@ class PsqlpyDriver(
     def __init__(
         self,
         connection: PsqlpyConnection,
-        config: Optional[SQLConfig] = None,
-        instrumentation_config: Optional[InstrumentationConfig] = None,
+        config: "Optional[SQLConfig]" = None,
+        instrumentation_config: "Optional[InstrumentationConfig]" = None,
+        default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
         super().__init__(
             connection=connection,
             config=config,
             instrumentation_config=instrumentation_config,
-            default_row_type=dict[str, Any],
+            default_row_type=default_row_type,
         )
 
     def _get_placeholder_style(self) -> ParameterStyle:
@@ -86,7 +89,7 @@ class PsqlpyDriver(
                     # It executes one by one. So params_to_execute here will be a list of parameter lists.
                     if params_to_execute and isinstance(params_to_execute, list):
                         # We expect a list of lists/tuples. Each inner list/tuple is for one execution.
-                        final_driver_params = params_to_execute  # type: ignore
+                        final_driver_params = params_to_execute
                     else:
                         final_driver_params = []
                 elif params_to_execute is not None:

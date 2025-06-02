@@ -143,8 +143,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         connection_config: Optional[AdbcConnectionConfig] = None,
         statement_config: Optional[SQLConfig] = None,
         instrumentation: Optional[InstrumentationConfig] = None,
-        default_row_type: type[DictRow] = DictRow,  # type: ignore[assignment]
-        # ADBC-specific callback
+        default_row_type: type[DictRow] = DictRow,
         on_connection_create: Optional[Callable[[AdbcConnection], None]] = None,
     ) -> None:
         """Initialize ADBC configuration with universal connectivity features.

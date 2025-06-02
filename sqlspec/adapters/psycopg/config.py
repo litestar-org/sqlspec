@@ -5,7 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict
 
-from psycopg import Connection, connect
+from psycopg import AsyncConnection, Connection, connect
 from psycopg.rows import DictRow as PsycopgDictRow
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
@@ -18,7 +18,7 @@ from sqlspec.adapters.psycopg.driver import (
 )
 from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig, SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import Empty, RowT
+from sqlspec.typing import DictRow, Empty
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
@@ -179,7 +179,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         connection_config: "Optional[PsycopgConnectionConfig]" = None,
         statement_config: "Optional[SQLConfig]" = None,
         instrumentation: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "type[RowT]" = dict[str, Any],
+        default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
         """Initialize Psycopg synchronous configuration.
 
@@ -202,7 +202,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     @property
     def connection_type(self) -> "type[PsycopgSyncConnection]":  # type: ignore[override]
         """Return the connection type."""
-        return Connection  # type: ignore[return-value]
+        return Connection  # pyright: ignore
 
     @property
     def driver_type(self) -> "type[PsycopgSyncDriver]":  # type: ignore[override]
@@ -259,7 +259,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         """
         conn_dict = {k: v for k, v in self.connection_config.items() if v is not Empty}
         conn_dict["row_factory"] = PsycopgDictRow
-        return connect(**conn_dict)  # type: ignore[return-value,arg-type]
+        return connect(**conn_dict)  # type: ignore[arg-type]
 
     @contextlib.contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[PsycopgSyncConnection, None, None]":
@@ -278,7 +278,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         else:
             conn = self.create_connection()  # type: ignore[assignment]
             try:
-                yield conn
+                yield conn  # type: ignore[misc]
             finally:
                 conn.close()
 
@@ -324,7 +324,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         connection_config: "Optional[PsycopgConnectionConfig]" = None,
         statement_config: "Optional[SQLConfig]" = None,
         instrumentation: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "type[RowT]" = dict[str, Any],
+        default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
         """Initialize Psycopg asynchronous configuration.
 
@@ -349,7 +349,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """Return the connection type."""
         from psycopg import AsyncConnection
 
-        return AsyncConnection  # type: ignore[return-value]
+        return AsyncConnection  # pyright: ignore
 
     @property
     def driver_type(self) -> "type[PsycopgAsyncDriver]":  # type: ignore[override]
@@ -403,20 +403,19 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             )
             raise
 
-    async def create_connection(self) -> "PsycopgAsyncConnection":
+    async def create_connection(self) -> "PsycopgAsyncConnection":  # pyright: ignore
         """Create a single async connection (not from pool).
 
         Returns:
             A psycopg AsyncConnection instance configured with DictRow.
         """
-        from psycopg import AsyncConnection
 
-        conn_dict = {k: v for k, v in self.connection_config.items() if v is not Empty}
+        conn_dict: dict[str, Any] = {k: v for k, v in self.connection_config.items() if v is not Empty}
         conn_dict["row_factory"] = PsycopgDictRow
-        return await AsyncConnection.connect(**conn_dict)  # type: ignore[return-value]
+        return await AsyncConnection.connect(**conn_dict)  # pyright: ignore
 
     @asynccontextmanager
-    async def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[PsycopgAsyncConnection, None]":
+    async def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[PsycopgAsyncConnection, None]":  # pyright: ignore
         """Provide an async connection context manager.
 
         Args:

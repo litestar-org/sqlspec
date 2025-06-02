@@ -64,7 +64,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
         connection_config: Optional[AiosqliteConnectionConfig] = None,
         statement_config: Optional[SQLConfig] = None,
         instrumentation: Optional[InstrumentationConfig] = None,
-        default_row_type: type[DictRow] = DictRow,  # type: ignore[assignment]
+        default_row_type: type[DictRow] = DictRow,
     ) -> None:
         """Initialize Aiosqlite configuration.
 

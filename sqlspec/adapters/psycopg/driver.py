@@ -38,8 +38,9 @@ class PsycopgSyncDriver(
     def __init__(
         self,
         connection: PsycopgSyncConnection,
-        config: Optional[SQLConfig] = None,
-        instrumentation_config: Optional[InstrumentationConfig] = None,
+        config: "Optional[SQLConfig]" = None,
+        instrumentation_config: "Optional[InstrumentationConfig]" = None,
+        default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
         super().__init__(
             connection=connection,

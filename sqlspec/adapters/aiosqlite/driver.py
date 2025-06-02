@@ -2,12 +2,11 @@
 import logging
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
-from typing import Any, ClassVar, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
 import aiosqlite
 import pyarrow as pa
 
-from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import AsyncDriverAdapterProtocol
 from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin
 from sqlspec.statement.parameters import ParameterStyle
@@ -15,6 +14,9 @@ from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT
 from sqlspec.utils.telemetry import instrument_operation_async
+
+if TYPE_CHECKING:
+    from sqlspec.config import InstrumentationConfig
 
 __all__ = ("AiosqliteConnection", "AiosqliteDriver")
 
@@ -37,14 +39,15 @@ class AiosqliteDriver(
     def __init__(
         self,
         connection: AiosqliteConnection,
-        config: Optional[SQLConfig] = None,
-        instrumentation_config: Optional[InstrumentationConfig] = None,
+        config: "Optional[SQLConfig]" = None,
+        instrumentation_config: "Optional[InstrumentationConfig]" = None,
+        default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
         super().__init__(
             connection=connection,
             config=config,
             instrumentation_config=instrumentation_config,
-            default_row_type=DictRow,
+            default_row_type=default_row_type,
         )
 
     def _get_placeholder_style(self) -> ParameterStyle:
