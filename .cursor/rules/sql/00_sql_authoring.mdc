@@ -4,6 +4,7 @@ globs:
 alwaysApply: false
 ---
 # SQL Authoring and Management
+<!-- alwaysApply: true -->
 
 ## Objective
 To ensure SQL used within the project is correct, maintainable, and compatible with supported database dialects, leveraging `sqlglot` for validation and conversion where applicable.
@@ -16,19 +17,23 @@ To ensure SQL used within the project is correct, maintainable, and compatible w
 ## Rules
 
 ### 1. SQL Dialect Awareness and Validation
+<!-- alwaysApply: true -->
 - **`sqlglot` Usage**: When dealing with SQL that needs to be dialect-specific or requires validation/conversion, utilize `sqlglot` capabilities as appropriate within the library's logic.
 - **Clarity**: SQL code, whether in `.sql` files or embedded in Python strings, should be clear, readable, and well-formatted.
 - **Parameterization**: Always use parameterized queries or equivalent safe mechanisms when constructing SQL with variable input to prevent SQL injection vulnerabilities. The `sqlspec` library's driver interfaces should handle this for query execution.
 
 ### 2. Embedded SQL in Python
+<!-- alwaysApply: true -->
 - **Readability**: For complex SQL queries embedded in Python, consider using multi-line strings with appropriate indentation for readability.
 - **Tooling**: Be mindful that static analysis tools for SQL may have limited visibility into SQL strings embedded within Python code. Clear formatting and comments can aid understanding.
 
 ### 3. Internal SQL Abstractions (for `sqlspec` contributors)
+<!-- alwaysApply: true -->
 - **Consistency**: If working on the `sqlspec` library itself, adhere to existing patterns and abstractions for SQL statement construction, processing, and execution (e.g., `SQL` object, builder patterns, etc.).
 - **Draft Rules Reference**: Legacy draft rules like `sql_statement_object.mdc`, `raw_sql_interaction.mdc`, and `sql_builder_system.mdc` (from `tmp/rules_outdate_draft/sql/`) hinted at internal mechanisms. While not being converted into formal universal rules here (as they are implementation-specific), they indicate areas where internal consistency is important for contributors to the `sqlspec` core.
 
 ### 4. General SQL Best Practices
+<!-- alwaysApply: true -->
 - Follow general SQL best practices for performance, maintainability, and correctness (e.g., appropriate indexing for schemas, avoiding overly complex joins where simpler alternatives exist, using CTEs for clarity, etc.). These are beyond the scope of project-specific enforceable rules but are expected knowledge for developers working with SQL.
 
 ### 5. Single-Pass Pipeline (UNBREAKABLE RULE)

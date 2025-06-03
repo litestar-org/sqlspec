@@ -3,7 +3,8 @@ description:
 globs:
 alwaysApply: false
 ---
-# Code Structure & Style
+# Code Structure and Style Rules
+<!-- alwaysApply: true -->
 
 ## Objective
 To ensure consistency, readability, and maintainability of the codebase by adhering to established directory structures, modular design principles, and automated code styling.
@@ -61,16 +62,4 @@ To ensure consistency, readability, and maintainability of the codebase by adher
 - **Cross-Reference**: See `.cursor/rules/adapters/00_adapter_development.mdc` and `.cursor/rules/sql/00_sql_authoring.mdc` for further requirements and rationale.
 
 ## Exceptions
-- Specific files or sections may be excluded from certain Ruff rules if configured in `pyproject.toml` (e.g., via `# noqa` or `per-file-ignores`). Such exceptions should be rare and well-justified.
-- Test files in `tests/` may have more relaxed rules regarding naming or structure in some specific, justified cases (e.g., for test utility classes or fixtures), but should still aim for clarity.
-
-## Security and Performance by Design (UNBREAKABLE RULE)
-<!-- alwaysApply: true -->
-- **Mandatory for All Code**: Every module, not just statement processing, must be designed for security and performance at every step. This rule is never breakable.
-- **Regexes**:
-  - All regexes must be compiled as constants at the top of the file.
-  - Consolidate regexes and test them in a single step where possible, rather than iteratively.
-  - All regexes must be bulletproof: consider every possible edge case, research best practices, and maximize correctness. Never use naive or partial regexes for production logic.
-- **No Naive String Search**: Never use simple string search (e.g., searching for '?' or ':') for logic that should be handled by parsing or AST traversal. This is especially critical for SQL bind variable detection and similar logic.
-- **AST-Driven Logic**: Always use the SQLglot AST for SQL analysis and manipulation. Learn to traverse and trust the AST.
-- **Security First**: Consider SQL injection and security implications in every place that handles or parses raw SQL or user input. All code must be enterprise-grade and robust against known attack vectors.
+- Specific files or sections may be excluded from certain Ruff rules if configured in `pyproject.toml` (e.g., via `# noqa` or `per-file-ignores`

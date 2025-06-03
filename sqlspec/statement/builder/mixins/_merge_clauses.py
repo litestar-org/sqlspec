@@ -1,97 +1,17 @@
-# ruff: noqa: PLR6301, SLF001
-"""Safe SQL query builder with validation and parameter binding.
-
-This module provides a fluent interface for building SQL queries safely,
-with automatic parameter binding and validation.
-"""
-
-import logging
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import Any, Optional, Union
 
 from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder._base import QueryBuilder
-from sqlspec.statement.result import SQLResult
-from sqlspec.typing import RowT
 
-if TYPE_CHECKING:
-    from sqlspec.statement.builder._select import SelectBuilder
-
-__all__ = ("MergeBuilder",)
-
-logger = logging.getLogger("sqlspec")
+__all__ = ("MergeIntoClauseMixin", "MergeMatchedClauseMixin", "MergeNotMatchedBySourceClauseMixin", "MergeNotMatchedClauseMixin", "MergeOnClauseMixin", "MergeUsingClauseMixin", )
 
 
-@dataclass(unsafe_hash=True)
-class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInvalidTypeArguments]
-    """Builder for MERGE statements.
+class MergeIntoClauseMixin:
+    """Mixin providing INTO clause for MERGE builders."""
 
-    This builder provides a fluent interface for constructing SQL MERGE statements
-    (also known as UPSERT in some databases) with automatic parameter binding and validation.
-
-    Example:
-        ```python
-        # Basic MERGE statement
-        merge_query = (
-            MergeBuilder()
-            .into("target_table")
-            .using("source_table", "src")
-            .on("target_table.id = src.id")
-            .when_matched_then_update(
-                {
-                    "name": "src.name",
-                    "updated_at": "NOW()",
-                }
-            )
-            .when_not_matched_then_insert(
-                columns=["id", "name", "created_at"],
-                values=["src.id", "src.name", "NOW()"],
-            )
-        )
-
-        # MERGE with subquery source
-        source_query = (
-            SelectBuilder()
-            .select("id", "name", "email")
-            .from_("temp_users")
-            .where("status = 'pending'")
-        )
-
-        merge_query = (
-            MergeBuilder()
-            .into("users")
-            .using(source_query, "src")
-            .on("users.email = src.email")
-            .when_matched_then_update({"name": "src.name"})
-            .when_not_matched_then_insert(
-                columns=["id", "name", "email"],
-                values=["src.id", "src.name", "src.email"],
-            )
-        )
-        ```
-    """
-
-    @property
-    def _expected_result_type(self) -> "type[SQLResult[RowT]]":
-        """Return the expected result type for this builder.
-
-        Returns:
-            The SQLResult type for MERGE statements.
-        """
-        return SQLResult[RowT]
-
-    def _create_base_expression(self) -> "exp.Merge":
-        """Create a base MERGE expression.
-
-        Returns:
-            A new sqlglot Merge expression with empty clauses.
-        """
-        return exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
-
-    def into(self, table: "Union[str, exp.Expression]", alias: "Optional[str]" = None) -> "Self":
+    def into(self, table: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
         """Set the target table for the MERGE operation (INTO clause).
 
         Args:
@@ -102,12 +22,18 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
         Returns:
             The current builder instance for method chaining.
         """
-        if not isinstance(self._expression, exp.Merge):
-            self._expression = self._create_base_expression()
+        if self._expression is None:
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[attr-defined]
+        if not isinstance(self._expression, exp.Merge):  # type: ignore[attr-defined]
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[attr-defined]
         self._expression.set("this", exp.to_table(table, alias=alias) if isinstance(table, str) else table)
         return self
 
-    def using(self, source: "Union[str, exp.Expression, SelectBuilder[RowT]]", alias: "Optional[str]" = None) -> "Self":
+
+class MergeUsingClauseMixin:
+    """Mixin providing USING clause for MERGE builders."""
+
+    def using(self, source: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Self:
         """Set the source data for the MERGE operation (USING clause).
 
         Args:
@@ -121,20 +47,22 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
         Raises:
             SQLBuilderError: If the current expression is not a MERGE statement or if the source type is unsupported.
         """
-        if not isinstance(self._expression, exp.Merge):
-            self._expression = self._create_base_expression()
+        if self._expression is None:
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[attr-defined]
+        if not isinstance(self._expression, exp.Merge):  # type: ignore[attr-defined]
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[attr-defined]
 
         source_expr: exp.Expression
         if isinstance(source, str):
             source_expr = exp.to_table(source, alias=alias)
-        elif isinstance(source, QueryBuilder):
-            # Merge parameters from the SELECT builder
-            subquery_builder_params: dict[str, Any] = source._parameters
+        elif hasattr(source, "_parameters") and hasattr(source, "_expression"):
+            # Merge parameters from the SELECT builder or other builder
+            subquery_builder_params = getattr(source, "_parameters", {})
             if subquery_builder_params:
                 for p_name, p_value in subquery_builder_params.items():
-                    self.add_parameter(p_value, name=p_name)
+                    self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
 
-            subquery_exp: exp.Expression = exp.paren(source._expression or exp.select())
+            subquery_exp = exp.paren(getattr(source, "_expression", exp.select()))
             source_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
         elif isinstance(source, exp.Expression):
             source_expr = source
@@ -147,7 +75,11 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
         self._expression.set("using", source_expr)
         return self
 
-    def on(self, condition: "Union[str, exp.Expression]") -> "Self":
+
+class MergeOnClauseMixin:
+    """Mixin providing ON clause for MERGE builders."""
+
+    def on(self, condition: Union[str, exp.Expression]) -> Self:
         """Set the join condition for the MERGE operation (ON clause).
 
         Args:
@@ -160,12 +92,14 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
         Raises:
             SQLBuilderError: If the current expression is not a MERGE statement or if the condition type is unsupported.
         """
-        if not isinstance(self._expression, exp.Merge):
-            self._expression = self._create_base_expression()
+        if self._expression is None:
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[attr-defined]
+        if not isinstance(self._expression, exp.Merge):  # type: ignore[attr-defined]
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[attr-defined]
 
         condition_expr: exp.Expression
         if isinstance(condition, str):
-            parsed_condition = exp.maybe_parse(condition, dialect=self.dialect)  # type: ignore[var-annotated]
+            parsed_condition = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
             if not parsed_condition:
                 msg = f"Could not parse ON condition: {condition}"
                 raise SQLBuilderError(msg)
@@ -179,14 +113,20 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
         self._expression.set("on", condition_expr)
         return self
 
+
+class MergeMatchedClauseMixin:
+    """Mixin providing WHEN MATCHED THEN ... clauses for MERGE builders."""
+
     def _add_when_clause(self, when_clause: exp.When) -> None:
         """Helper to add a WHEN clause to the MERGE statement.
 
         Args:
             when_clause: The WHEN clause to add.
         """
-        if not isinstance(self._expression, exp.Merge):
-            self._expression = self._create_base_expression()
+        if self._expression is None:
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[attr-defined]
+        if not isinstance(self._expression, exp.Merge):  # type: ignore[attr-defined]
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[attr-defined]
 
         # Get or create the whens object
         whens = self._expression.args.get("whens")
@@ -198,8 +138,8 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
         whens.append("expressions", when_clause)
 
     def when_matched_then_update(
-        self, set_values: "dict[str, Any]", condition: "Optional[Union[str, exp.Expression]]" = None
-    ) -> "Self":
+        self, set_values: dict[str, Any], condition: Optional[Union[str, exp.Expression]] = None
+    ) -> Self:
         """Define the UPDATE action for matched rows.
 
         Args:
@@ -215,7 +155,7 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
         """
         update_expressions: list[exp.EQ] = []
         for col, val in set_values.items():
-            param_name = self._add_parameter(val)
+            param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
             update_expressions.append(
                 exp.EQ(
                     this=exp.column(col),
@@ -231,7 +171,7 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)  # type: ignore[var-annotated]
+                parsed_cond = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -247,7 +187,7 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
         self._add_when_clause(when_clause)
         return self
 
-    def when_matched_then_delete(self, condition: "Optional[Union[str, exp.Expression]]" = None) -> "Self":
+    def when_matched_then_delete(self, condition: Optional[Union[str, exp.Expression]] = None) -> Self:
         """Define the DELETE action for matched rows.
 
         Args:
@@ -267,7 +207,7 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)  # type: ignore[var-annotated]
+                parsed_cond = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -283,13 +223,17 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
         self._add_when_clause(when_clause)
         return self
 
+
+class MergeNotMatchedClauseMixin:
+    """Mixin providing WHEN NOT MATCHED THEN ... clauses for MERGE builders."""
+
     def when_not_matched_then_insert(
         self,
-        columns: "Optional[list[str]]" = None,
-        values: "Optional[list[Any]]" = None,
-        condition: "Optional[Union[str, exp.Expression]]" = None,
+        columns: Optional[list[str]] = None,
+        values: Optional[list[Any]] = None,
+        condition: Optional[Union[str, exp.Expression]] = None,
         by_target: bool = True,
-    ) -> "Self":
+    ) -> Self:
         """Define the INSERT action for rows not matched.
 
         Args:
@@ -315,7 +259,7 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
 
             parameterized_values: list[exp.Expression] = []
             for val in values:
-                param_name = self._add_parameter(val)
+                param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
                 parameterized_values.append(exp.var(param_name))
 
             insert_args["this"] = exp.Tuple(expressions=[exp.column(c) for c in columns])
@@ -341,7 +285,7 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)  # type: ignore[var-annotated]
+                parsed_cond = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -354,12 +298,16 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
             when_args["this"] = condition_expr
 
         when_clause = exp.When(**when_args)
-        self._add_when_clause(when_clause)
+        self._add_when_clause(when_clause)  # type: ignore[attr-defined]
         return self
 
+
+class MergeNotMatchedBySourceClauseMixin:
+    """Mixin providing WHEN NOT MATCHED BY SOURCE THEN ... clauses for MERGE builders."""
+
     def when_not_matched_by_source_then_update(
-        self, set_values: "dict[str, Any]", condition: "Optional[Union[str, exp.Expression]]" = None
-    ) -> "Self":
+        self, set_values: dict[str, Any], condition: Optional[Union[str, exp.Expression]] = None
+    ) -> Self:
         """Define the UPDATE action for rows not matched by source.
 
         This is useful for handling rows that exist in the target but not in the source.
@@ -376,7 +324,7 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
         """
         update_expressions: list[exp.EQ] = []
         for col, val in set_values.items():
-            param_name = self._add_parameter(val)
+            param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
             update_expressions.append(
                 exp.EQ(
                     this=exp.column(col),
@@ -393,7 +341,7 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)  # type: ignore[var-annotated]
+                parsed_cond = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -406,12 +354,10 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
             when_args["this"] = condition_expr
 
         when_clause = exp.When(**when_args)
-        self._add_when_clause(when_clause)
+        self._add_when_clause(when_clause)  # type: ignore[attr-defined]
         return self
 
-    def when_not_matched_by_source_then_delete(
-        self, condition: "Optional[Union[str, exp.Expression]]" = None
-    ) -> "Self":
+    def when_not_matched_by_source_then_delete(self, condition: Optional[Union[str, exp.Expression]] = None) -> Self:
         """Define the DELETE action for rows not matched by source.
 
         This is useful for cleaning up rows that exist in the target but not in the source.
@@ -434,7 +380,7 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond = exp.maybe_parse(condition, dialect=self.dialect)  # type: ignore[var-annotated]
+                parsed_cond = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -447,5 +393,5 @@ class MergeBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInva
             when_args["this"] = condition_expr
 
         when_clause = exp.When(**when_args)
-        self._add_when_clause(when_clause)
+        self._add_when_clause(when_clause)  # type: ignore[attr-defined]
         return self

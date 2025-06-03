@@ -1,4 +1,4 @@
-# ruff: noqa: PLR6301, SLF001
+# ruff: noqa: PLR6301
 """Safe SQL query builder with validation and parameter binding.
 
 This module provides a fluent interface for building SQL queries safely,
@@ -13,14 +13,19 @@ from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder._base import QueryBuilder
+from sqlspec.statement.builder.base import QueryBuilder
+from sqlspec.statement.builder.mixins import (
+    InsertFromSelectMixin,
+    InsertIntoClauseMixin,
+    InsertValuesMixin,
+    ReturningClauseMixin,
+)
 from sqlspec.statement.result import SQLResult
 from sqlspec.typing import RowT
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-    from sqlspec.statement.builder._select import SelectBuilder
 
 __all__ = ("InsertBuilder",)
 
@@ -35,7 +40,13 @@ ERR_MSG_EXPRESSION_NOT_INITIALIZED = "Internal error: base expression not initia
 
 
 @dataclass(unsafe_hash=True)
-class InsertBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInvalidTypeArguments]
+class InsertBuilder(
+    QueryBuilder[SQLResult[RowT]],  # pyright: ignore[reportInvalidTypeArguments]
+    ReturningClauseMixin,
+    InsertValuesMixin,
+    InsertFromSelectMixin,
+    InsertIntoClauseMixin,
+):
     """Builder for INSERT statements.
 
     This builder facilitates the construction of SQL INSERT queries
@@ -123,47 +134,6 @@ class InsertBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInv
         if not isinstance(self._expression, exp.Insert):
             raise SQLBuilderError(ERR_MSG_INTERNAL_EXPRESSION_TYPE)
         return self._expression
-
-    def into(self, table: str) -> "Self":
-        """Sets the target table for the INSERT statement.
-
-        Args:
-            table: The name of the table to insert data into.
-
-        Returns:
-            The current builder instance for method chaining.
-        """
-        self._table = table
-        insert_expr = self._get_insert_expression()
-        insert_expr.set("this", exp.to_table(table))
-        return self
-
-    def columns(self, *columns: str) -> "Self":
-        """Sets the columns for the INSERT statement.
-
-        If specified, the `values` method will expect a corresponding number of values.
-        If not called, or called with no arguments, the INSERT statement will not
-        explicitly list columns (e.g., `INSERT INTO table VALUES (...)`).
-
-        Args:
-            *columns: The names of the columns to insert data into.
-
-        Returns:
-            The current builder instance for method chaining.
-        """
-        self._columns = list(columns)
-        insert_expr = self._get_insert_expression()
-
-        # Set the schema with column identifiers, but preserve the table
-        if self._columns and self._table:
-            column_identifiers = [exp.to_identifier(c) for c in self._columns]
-            schema = exp.Schema(this=exp.to_table(self._table), expressions=column_identifiers)
-            insert_expr.set("this", schema)
-        elif self._table:
-            # If no columns specified but table is set, just use the table
-            insert_expr.set("this", exp.to_table(self._table))
-
-        return self
 
     def values(self, *values: Any) -> "Self":
         """Adds a row of values to the INSERT statement.
@@ -282,40 +252,6 @@ class InsertBuilder(QueryBuilder[SQLResult[RowT]]):  # pyright: ignore[reportInv
         # Add each row
         for row_dict in data:
             self.values(*[row_dict[col] for col in self._columns])
-
-        return self
-
-    def from_select(self, select_builder: "SelectBuilder[RowT]") -> "Self":
-        """Sets the INSERT source to a SELECT statement.
-
-        This creates an INSERT ... SELECT statement.
-
-        Args:
-            select_builder: A SelectBuilder instance representing the SELECT query.
-
-        Returns:
-            The current builder instance for method chaining.
-
-        Raises:
-            SQLBuilderError: If `into()` has not been called to set the table.
-        """
-        if not self._table:
-            raise SQLBuilderError(ERR_MSG_TABLE_NOT_SET)
-
-        insert_expr = self._get_insert_expression()
-
-        # Merge parameters from the SELECT builder
-        subquery_params: dict[str, Any] = select_builder._parameters
-        if subquery_params:
-            for p_name, p_value in subquery_params.items():
-                self.add_parameter(p_value, name=p_name)
-
-        # Set the SELECT expression as the source
-        if select_builder._expression and isinstance(select_builder._expression, exp.Select):
-            insert_expr.set("expression", select_builder._expression.copy())
-        else:
-            msg = "SelectBuilder must have a valid SELECT expression."
-            raise SQLBuilderError(msg)
 
         return self
 

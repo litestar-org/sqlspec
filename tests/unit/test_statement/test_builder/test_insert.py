@@ -20,7 +20,7 @@ from sqlglot import exp
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder import InsertBuilder
-from sqlspec.statement.builder._select import SelectBuilder
+from sqlspec.statement.builder.select import SelectBuilder
 
 
 # Fixtures for common test data
@@ -550,7 +550,7 @@ def test_insert_build_returns_safe_query() -> None:
     builder = InsertBuilder().into("users").values("John", "john@example.com")
     query = builder.build()
 
-    from sqlspec.statement.builder._base import SafeQuery
+    from sqlspec.statement.builder.base import SafeQuery
 
     assert isinstance(query, SafeQuery)
     assert isinstance(query.sql, str)

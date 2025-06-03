@@ -19,7 +19,8 @@ from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder._base import QueryBuilder, SafeQuery, WhereClauseMixin
+from sqlspec.statement.builder.base import QueryBuilder, SafeQuery
+from sqlspec.statement.builder.mixins._where import WhereClauseMixin
 from sqlspec.statement.result import StatementResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -373,7 +374,7 @@ def test_query_builder_build_expression_not_initialized() -> None:
         builder.build()
 
 
-@patch("sqlspec.statement.builder._base.logger")
+@patch("sqlspec.statement.builder.base.logger")
 def test_query_builder_build_sql_generation_error(mock_logger: Mock, test_builder: TestQueryBuilder) -> None:
     """Test build method handles SQL generation errors."""
     # Mock the expression to raise an error during SQL generation

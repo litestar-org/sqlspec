@@ -318,7 +318,9 @@ class SyncArrowMixin(ExporterMixinProtocol[ConnectionT], ABC, Generic[Connection
         with instrument_operation(self, "select_to_arrow", "database"):
             # The 'self.config' refers to the default config on the driver.
             # 'config' param is an override.
-            stmt_obj = self._build_statement(statement, parameters=parameters, filters=list(filters), config=config or self.config)
+            stmt_obj = self._build_statement(
+                statement, parameters=parameters, filters=list(filters), config=config or self.config
+            )
             # Validation is typically handled by _build_statement via SQLConfig
             # or can be called explicitly if needed: stmt_obj.validate()
 
@@ -390,7 +392,9 @@ class AsyncArrowMixin(ExporterMixinProtocol[ConnectionT], ABC, Generic[Connectio
             raise TypeError(msg)
 
         async with instrument_operation_async(self, "select_to_arrow", "database"):
-            stmt_obj = self._build_statement(statement, parameters=parameters, filters=list(filters), config=config or self.config)
+            stmt_obj = self._build_statement(
+                statement, parameters=parameters, filters=list(filters), config=config or self.config
+            )
 
             if not self.returns_rows(stmt_obj.expression):
                 op_type = (
@@ -461,7 +465,9 @@ class SyncParquetMixin(ExporterMixinProtocol[ConnectionT], ABC, Generic[Connecti
             raise TypeError(msg)
 
         with instrument_operation(self, "to_parquet", "database"):
-            stmt_obj = self._build_statement(statement, parameters=parameters, filters=list(filters), config=config or self.config)
+            stmt_obj = self._build_statement(
+                statement, parameters=parameters, filters=list(filters), config=config or self.config
+            )
 
             if not self.returns_rows(stmt_obj.expression):
                 op_type = (
@@ -532,7 +538,9 @@ class AsyncParquetMixin(ExporterMixinProtocol[ConnectionT], ABC, Generic[Connect
             raise TypeError(msg)
 
         async with instrument_operation_async(self, "to_parquet", "database"):
-            stmt_obj = self._build_statement(statement, parameters=parameters, filters=list(filters), config=config or self.config)
+            stmt_obj = self._build_statement(
+                statement, parameters=parameters, filters=list(filters), config=config or self.config
+            )
 
             if not self.returns_rows(stmt_obj.expression):
                 op_type = (

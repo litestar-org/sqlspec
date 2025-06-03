@@ -9,6 +9,7 @@ import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.statement.result import SQLResult
+from sqlspec.statement.sql import SQLConfig
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -135,8 +136,9 @@ async def test_aiosqlite_execute_script(aiosqlite_session: AiosqliteDriver) -> N
     """
 
     result = await aiosqlite_session.execute_script(script)
-    # Script execution typically returns a status string
-    assert isinstance(result, str) or result is None  # type: ignore[unreachable]
+    # Script execution now returns SQLResult object
+    assert isinstance(result, SQLResult)
+    assert result.operation_type == "SCRIPT"
 
     # Verify script effects
     select_result = await aiosqlite_session.execute(
@@ -324,7 +326,8 @@ async def test_aiosqlite_schema_operations(aiosqlite_session: AiosqliteDriver) -
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    assert isinstance(create_result, str) or create_result is None  # type: ignore[unreachable]
+    assert isinstance(create_result, SQLResult)
+    assert create_result.operation_type == "SCRIPT"
 
     # Insert data into new table
     insert_result = await aiosqlite_session.execute(
@@ -341,7 +344,8 @@ async def test_aiosqlite_schema_operations(aiosqlite_session: AiosqliteDriver) -
 
     # Drop table
     drop_result = await aiosqlite_session.execute_script("DROP TABLE schema_test")
-    assert isinstance(drop_result, str) or drop_result is None
+    assert isinstance(drop_result, SQLResult)
+    assert drop_result.operation_type == "SCRIPT"
 
 
 @pytest.mark.xdist_group("aiosqlite")
@@ -446,10 +450,13 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
         # JSON1 extension might not be available
         pass
 
-    # Test ATTACH/DETACH database (in-memory)
-    await aiosqlite_session.execute("ATTACH DATABASE ':memory:' AS temp_db")
-    await aiosqlite_session.execute("CREATE TABLE temp_db.temp_table (id INTEGER, name TEXT)")
-    await aiosqlite_session.execute("INSERT INTO temp_db.temp_table VALUES (1, 'temp')")
+    # Test ATTACH/DETACH database (in-memory) with non-strict mode
+    # Use a config with strict_mode disabled for statements that SQLGlot can't parse
+    non_strict_config = SQLConfig(strict_mode=False)
+
+    await aiosqlite_session.execute("ATTACH DATABASE ':memory:' AS temp_db", config=non_strict_config)
+    await aiosqlite_session.execute("CREATE TABLE temp_db.temp_table (id INTEGER, name TEXT)", config=non_strict_config)
+    await aiosqlite_session.execute("INSERT INTO temp_db.temp_table VALUES (1, 'temp')", config=non_strict_config)
 
     temp_result = await aiosqlite_session.execute("SELECT * FROM temp_db.temp_table")
     assert isinstance(temp_result, SQLResult)
@@ -457,4 +464,4 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
     assert len(temp_result.data) == 1
     assert temp_result.data[0]["name"] == "temp"
 
-    await aiosqlite_session.execute("DETACH DATABASE temp_db")
+    await aiosqlite_session.execute("DETACH DATABASE temp_db", config=non_strict_config)

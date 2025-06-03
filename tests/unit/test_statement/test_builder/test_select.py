@@ -17,7 +17,7 @@ from sqlglot import exp
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder import SelectBuilder
-from sqlspec.statement.builder._select import CaseBuilder
+from sqlspec.statement.builder.mixins._case_builder import CaseBuilder
 
 
 def test_distinct_columns() -> None:

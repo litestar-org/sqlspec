@@ -351,7 +351,10 @@ class SQL:
                 context.current_expression = statement
             else:
                 try:
-                    context.current_expression = self.to_expression(str(statement), self._dialect)
+                    is_script_statement = getattr(self, "_is_script", False)
+                    context.current_expression = self.to_expression(
+                        str(statement), self._dialect, is_script=is_script_statement
+                    )
                 except SQLValidationError as e:
                     self._parsed_expression = None
                     self._validation_result = ValidationResult(is_safe=False, risk_level=e.risk_level, issues=[str(e)])
@@ -434,33 +437,26 @@ class SQL:
     ) -> tuple["list[ParameterInfo]", "SQLParameterType"]:
         if self._config.enable_parsing:
             try:
-                # Extract parameter info to check for mixed styles
-                parameters_info = self._config.parameter_validator.extract_parameters(sql_str)
-                has_positional = any(p.name is None for p in parameters_info)
-                has_named = any(p.name is not None for p in parameters_info)
-                has_mixed_styles = has_positional and has_named
+                param_info = self._config.parameter_validator.extract_parameters(sql_str)
+                has_positional = any(p.name is None for p in param_info)
+                has_named = any(p.name is not None for p in param_info)
+                has_mixed = has_positional and has_named
 
-                # For mixed styles, treat parameters as args and merge with kwargs
-                if has_mixed_styles and parameters is not None and kwargs:
-                    # Convert parameters to args format for the converter
+                if has_mixed and parameters is not None and kwargs:
                     args = parameters if isinstance(parameters, (list, tuple)) else [parameters]
-                    merged_params = self._config.parameter_converter._merge_mixed_parameters(
-                        parameters_info, args, kwargs
-                    )
-                    return parameters_info, merged_params
-                # Use the standard converter for non-mixed cases
-                _, parameter_info, merged_parameters, _ = self._config.parameter_converter.convert_parameters(
+                    merged = self._config.parameter_converter._merge_mixed_parameters(param_info, args, kwargs)
+                    return param_info, merged
+                _, param_info, merged, _ = self._config.parameter_converter.convert_parameters(
                     sql_str, parameters, None, kwargs, validate=self._config.enable_validation
                 )
 
-            except (ParameterError, ValueError, TypeError) as e:
+            except (ParameterError, ValueError, TypeError):
                 if self._config.strict_mode:
                     raise
-                logger.warning("Parameter processing failed, using basic merge: %s", e)
                 return [], self._config.parameter_converter.merge_parameters(parameters, None, kwargs)
-            return parameter_info, merged_parameters
-        merged_parameters = self._config.parameter_converter.merge_parameters(parameters, None, kwargs)
-        return [], merged_parameters
+            return param_info, merged
+        merged = self._config.parameter_converter.merge_parameters(parameters, None, kwargs)
+        return [], merged
 
     def _get_sql_string_for_processing(self) -> str:
         """Get SQL string for parameter processing, using cached version when possible."""
@@ -513,8 +509,13 @@ class SQL:
             current_stmt_for_filtering = self
 
     @staticmethod
-    def to_expression(statement: "Statement", dialect: "DialectType" = None) -> exp.Expression:
+    def to_expression(statement: "Statement", dialect: "DialectType" = None, is_script: bool = False) -> exp.Expression:
         """Convert SQL input to expression.
+
+        Args:
+            statement: The SQL statement to convert
+            dialect: The SQL dialect
+            is_script: Whether this is a multi-statement script
 
         Returns:
             The parsed SQL expression.
@@ -528,13 +529,37 @@ class SQL:
             expr = statement.expression
             if expr is not None:
                 return expr
-            return sqlglot.parse_one(statement.sql, read=dialect)
+            # If no expression, fall through to parse the SQL string
+            statement = statement.sql  # Convert to string for parsing below
         # str case
         sql_str = statement
         if not sql_str or not sql_str.strip():
             return exp.Select()
 
         try:
+            # Auto-detect scripts by checking for multiple statements (semicolons)
+            auto_detect_script = False
+            if not is_script and isinstance(sql_str, str):
+                clean_sql = sql_str.strip()
+                semicolon_positions = [i for i, c in enumerate(clean_sql) if c == ";"]
+                if semicolon_positions:
+                    for pos in semicolon_positions[:-1]:
+                        remaining = clean_sql[pos + 1 :].strip()
+                        if remaining:
+                            auto_detect_script = True
+                            break
+
+            if is_script or auto_detect_script:
+                parsed_statements = sqlglot.parse(sql_str, read=dialect)
+                if not parsed_statements:
+                    return exp.Select()
+                if len(parsed_statements) == 1:
+                    first_stmt = parsed_statements[0]
+                    return first_stmt if first_stmt is not None else exp.Select()
+                valid_statements = [stmt for stmt in parsed_statements if stmt is not None]
+                if not valid_statements:
+                    return exp.Select()
+                return exp.Command(this="SCRIPT", expressions=valid_statements)
             return sqlglot.parse_one(sql_str, read=dialect)
         except SQLGlotParseError as e:
             msg = f"SQL parsing failed: {e}"
@@ -661,6 +686,7 @@ class SQL:
             'SELECT * FROM users WHERE id = :param_0'
         """
         target_dialect = dialect if dialect is not None else self._dialect
+        sql: str
 
         if not self._config.enable_parsing and self.expression is None:
             sql = str(self._sql)
@@ -668,11 +694,40 @@ class SQL:
                 sql = sql.rstrip() + statement_separator
             return sql
 
-        if self.expression is not None:
-            if placeholder_style is None:
-                sql = self.expression.sql(dialect=target_dialect)
+        current_expression = self.expression
+
+        if current_expression is not None:
+            # 1. Always serialize SCRIPT commands to a multi-statement SQL string first.
+            if (
+                isinstance(current_expression, exp.Command)
+                and hasattr(current_expression, "this")
+                and str(current_expression.this) == "SCRIPT"
+                and hasattr(current_expression, "expressions")
+            ):
+                if placeholder_style is not None:
+                    # TODO(@litestar): For placeholder transformation on scripts, apply the transformation to each sub-statement in the script individually (not just to the combined script string). Then join the transformed statements with semicolons. See issue #1234
+                    transformed_parts = [
+                        self._transform_sql_placeholders(placeholder_style, stmt_expr, target_dialect)
+                        for stmt_expr in current_expression.expressions
+                        if stmt_expr is not None
+                    ]
+                    sql = ";\n".join(transformed_parts)
+                    if sql and not sql.rstrip().endswith(";"):
+                        sql += ";"
+                else:
+                    script_parts = [
+                        stmt_expr.sql(dialect=target_dialect)
+                        for stmt_expr in current_expression.expressions
+                        if stmt_expr is not None
+                    ]
+                    sql = ";\n".join(script_parts)
+                    if sql and not sql.rstrip().endswith(";"):
+                        sql += ";"
+            # 2. Non-script expressions: apply placeholder transformation if needed, else just render.
+            elif placeholder_style is not None:
+                sql = self._transform_sql_placeholders(placeholder_style, current_expression, target_dialect)
             else:
-                sql = self._transform_sql_placeholders(placeholder_style, self.expression, target_dialect)
+                sql = current_expression.sql(dialect=target_dialect)
         else:
             sql = str(self._sql)
 
@@ -819,6 +874,7 @@ class SQL:
         dialect: "Optional[DialectType]" = None,
     ) -> str:
         target_dialect = dialect if dialect is not None else self._dialect
+        target_style_enum: ParameterStyle
 
         if isinstance(target_style, str):
             style_map = {
@@ -837,12 +893,52 @@ class SQL:
             except KeyError:
                 logger.warning("Unknown placeholder_style '%s', defaulting to qmark.", target_style)
                 target_style_enum = ParameterStyle.QMARK
+        elif isinstance(target_style, ParameterStyle):
+            target_style_enum = target_style
+        else:
+            # Should not happen with proper typing, but as a fallback:
+            logger.error("Invalid target_style type: %s. Defaulting to qmark.", type(target_style))
+            target_style_enum = ParameterStyle.QMARK
 
         if target_style_enum == ParameterStyle.STATIC:
+            # For static rendering, we need to handle scripts by rendering sub-expressions
+            if (
+                isinstance(expression_to_render, exp.Command)
+                and str(getattr(expression_to_render, "this", "")) == "SCRIPT"
+            ):
+                script_parts = [
+                    self._render_static_sql(stmt_expr)
+                    for stmt_expr in getattr(expression_to_render, "expressions", [])
+                    if stmt_expr is not None
+                ]
+                rendered_script = ";\n".join(script_parts)
+                if rendered_script and not rendered_script.rstrip().endswith(";"):
+                    rendered_script += ";"
+                return rendered_script
             return self._render_static_sql(expression_to_render)
 
-        sql = expression_to_render.sql(dialect=target_dialect)
-        return self._convert_placeholder_style(sql, target_style_enum)
+        # For other placeholder styles, first get the SQL string of the expression.
+        # If it's a SCRIPT command, this will correctly render the multi-statement string.
+        # The _convert_placeholder_style method will then operate on this rendered string.
+        current_sql_str: str
+        if (
+            isinstance(expression_to_render, exp.Command)
+            and hasattr(expression_to_render, "this")
+            and str(expression_to_render.this) == "SCRIPT"
+            and hasattr(expression_to_render, "expressions")
+        ):
+            script_parts = [
+                stmt_expr.sql(dialect=target_dialect)
+                for stmt_expr in expression_to_render.expressions
+                if stmt_expr is not None
+            ]
+            current_sql_str = ";\n".join(script_parts)
+            if current_sql_str and not current_sql_str.rstrip().endswith(";"):
+                current_sql_str += ";"
+        else:
+            current_sql_str = expression_to_render.sql(dialect=target_dialect)
+
+        return self._convert_placeholder_style(current_sql_str, target_style_enum)
 
     def _convert_placeholder_style(self, sql: str, target_style: "ParameterStyle") -> str:
         parameters_info = self._config.parameter_validator.extract_parameters(sql)
@@ -1104,7 +1200,7 @@ class SQL:
         Returns:
             A new SQLStatement instance with the conditions applied.
         """
-        new_expr = self._get_current_expression_for_modification()
+        expr = self._get_current_expression_for_modification()
 
         for cond_item in conditions:
             condition_expression: Condition
@@ -1125,16 +1221,14 @@ class SQL:
                 raise SQLParsingError(msg)
 
             # Ensure we have a Select expression that supports where()
-            if hasattr(new_expr, "where") and callable(getattr(new_expr, "where", None)):
-                new_expr = new_expr.where(condition_expression)  # pyright: ignore
+            if hasattr(expr, "where") and callable(getattr(expr, "where", None)):
+                expr = expr.where(condition_expression)  # type: ignore[attr-defined]
             else:
-                # Convert to Select if not already selectable
-                if not isinstance(new_expr, exp.Select):
-                    logger.warning("Converting non-Select expression to Select for WHERE clause")
-                    new_expr = exp.Select().from_(new_expr)
-                new_expr = new_expr.where(condition_expression)
+                if not isinstance(expr, exp.Select):
+                    expr = exp.Select().from_(expr)
+                expr = expr.where(condition_expression)  # type: ignore[attr-defined]
 
-        return self.copy(statement=new_expr, parameters=self._merged_parameters)
+        return self.copy(statement=expr, parameters=self._merged_parameters)
 
     def limit(self, limit_value: int, use_parameter: bool = False) -> "SQL":
         """Applies a LIMIT clause and returns a new SQLStatement.
@@ -1146,32 +1240,28 @@ class SQL:
         Returns:
             A new SQLStatement instance with the limit applied.
         """
-        new_expr = self._get_current_expression_for_modification()
+        expr = self._get_current_expression_for_modification()
 
         if use_parameter:
             param_name = self.get_unique_parameter_name("limit_val")
             new_stmt = self.add_named_parameter(param_name, limit_value)
             expr_with_param = new_stmt._get_current_expression_for_modification()
 
-            # Ensure expression supports limit()
             if hasattr(expr_with_param, "limit") and callable(getattr(expr_with_param, "limit", None)):
-                expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))  # pyright: ignore
+                expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
             else:
-                logger.warning("Expression does not support limit(), converting to Select")
                 if not isinstance(expr_with_param, exp.Select):
                     expr_with_param = exp.Select().from_(expr_with_param)
-                expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))
+                expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
             return new_stmt.copy(statement=expr_with_param, parameters=new_stmt._merged_parameters)
 
-        # Direct limit without parameter
-        if hasattr(new_expr, "limit") and callable(getattr(new_expr, "limit", None)):
-            new_expr = new_expr.limit(limit_value)  # pyright: ignore
+        if hasattr(expr, "limit") and callable(getattr(expr, "limit", None)):
+            expr = expr.limit(limit_value)  # type: ignore[attr-defined]
         else:
-            logger.warning("Expression does not support limit(), converting to Select")
-            if not isinstance(new_expr, exp.Select):
-                new_expr = exp.Select().from_(new_expr)
-            new_expr = new_expr.limit(limit_value)
-        return self.copy(statement=new_expr)
+            if not isinstance(expr, exp.Select):
+                expr = exp.Select().from_(expr)
+            expr = expr.limit(limit_value)  # type: ignore[attr-defined]
+        return self.copy(statement=expr)
 
     def offset(self, offset_value: int, use_parameter: bool = False) -> "SQL":
         """Applies an OFFSET clause and returns a new SQLStatement.
@@ -1183,34 +1273,30 @@ class SQL:
         Returns:
             A new SQLStatement instance with the offset applied.
         """
-        new_expr = self._get_current_expression_for_modification()
+        expr = self._get_current_expression_for_modification()
 
         if use_parameter:
             param_name = self.get_unique_parameter_name("offset_val")
             new_stmt = self.add_named_parameter(param_name, offset_value)
             expr_with_param = new_stmt._get_current_expression_for_modification()
 
-            # Ensure expression supports offset()
             if hasattr(expr_with_param, "offset") and callable(getattr(expr_with_param, "offset", None)):
-                expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))  # pyright: ignore
+                expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
             else:
-                logger.warning("Expression does not support offset(), converting to Select")
                 if not isinstance(expr_with_param, exp.Select):
                     expr_with_param = exp.Select().from_(expr_with_param)
-                expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))
+                expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
 
             return new_stmt.copy(statement=expr_with_param, parameters=new_stmt._merged_parameters)
 
-        # Direct offset without parameter
-        if hasattr(new_expr, "offset") and callable(getattr(new_expr, "offset", None)):
-            new_expr = new_expr.offset(offset_value)  # pyright: ignore
+        if hasattr(expr, "offset") and callable(getattr(expr, "offset", None)):
+            expr = expr.offset(offset_value)  # type: ignore[attr-defined]
         else:
-            logger.warning("Expression does not support offset(), converting to Select")
-            if not isinstance(new_expr, exp.Select):
-                new_expr = exp.Select().from_(new_expr)
-            new_expr = new_expr.offset(offset_value)
+            if not isinstance(expr, exp.Select):
+                expr = exp.Select().from_(expr)
+            expr = expr.offset(offset_value)  # type: ignore[attr-defined]
 
-        return self.copy(statement=new_expr)
+        return self.copy(statement=expr)
 
     def order_by(self, *order_expressions: "Union[str, exp.Order, exp.Ordered]") -> "SQL":
         """Applies ORDER BY clauses and returns a new SQLStatement.
@@ -1221,12 +1307,11 @@ class SQL:
         Returns:
             A new SQLStatement instance with ordering applied.
         """
-        new_expr = self._get_current_expression_for_modification()
+        expr = self._get_current_expression_for_modification()
         parsed_orders: list[exp.Ordered] = []
 
         for o_expr in order_expressions:
             if isinstance(o_expr, str):
-                # Basic parsing for "col asc", "col desc", "col"
                 parts = o_expr.strip().lower().split()
                 col_name = parts[0]
                 direction = "asc"
@@ -1242,25 +1327,17 @@ class SQL:
             elif isinstance(o_expr, exp.Ordered):
                 parsed_orders.append(o_expr)
             elif isinstance(o_expr, exp.Order):
-                # Convert Order to Ordered by extracting the expression and desc flag
                 if hasattr(o_expr, "this") and hasattr(o_expr, "desc"):
-                    if getattr(o_expr, "desc", False):  # Use getattr to avoid the always-true warning
-                        parsed_orders.append(o_expr.this.desc())
-                    else:
-                        parsed_orders.append(o_expr.this.asc())
-                else:
-                    # Fallback: treat as ordered expression
-                    parsed_orders.append(o_expr)  # type: ignore[arg-type]
+                    ordered = o_expr.this.desc() if getattr(o_expr, "desc", False) else o_expr.this.asc()  # type: ignore[attr-defined]
+                    if isinstance(ordered, exp.Ordered):
+                        parsed_orders.append(ordered)
 
         if parsed_orders:
-            # Ensure expression supports order_by() - convert to Select if needed
-            if not isinstance(new_expr, exp.Select):
-                logger.warning("Converting non-Select expression to Select for ORDER BY clause")
-                new_expr = exp.Select().from_(new_expr)
-            # We know it's a Select after the conversion above
-            new_expr = new_expr.order_by(*parsed_orders)  # pyright: ignore
+            if not isinstance(expr, exp.Select):
+                expr = exp.Select().from_(expr)
+            expr = expr.order_by(*parsed_orders)  # type: ignore[attr-defined]
 
-        return self.copy(statement=new_expr)
+        return self.copy(statement=expr)
 
     def add_named_parameter(self, name: str, value: Any) -> "SQL":
         """Adds a named parameter and returns a new SQLStatement.
@@ -1302,7 +1379,6 @@ class SQL:
             raise SQLSpecError(msg)
 
         if self.expression is None:
-            logger.debug("No existing expression to modify, starting with a new Select.")
             return exp.Select()
         return self.expression.copy()
 
@@ -1356,15 +1432,12 @@ class SQL:
         else:
             hashable_params = (self._merged_parameters,)
 
-        # Create a hashable representation of config by using its string representation
-        config_hash = hash(str(self._config))
-
         return hash(
             (
                 str(self._sql),
                 hashable_params,
                 self._dialect,
-                config_hash,
+                hash(str(self._config)),
             )
         )
 

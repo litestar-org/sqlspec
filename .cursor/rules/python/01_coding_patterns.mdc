@@ -43,7 +43,7 @@ These rules apply to general Python development within the project, complementin
     ❌ **Avoid (Violates Project Style):**
     ```python
     # This is too verbose for the project's preferred style.
-    raw_value = raw_data['value'] 
+    raw_value = raw_data['value']
     processed_value = process_result(str(raw_value)) # str() might be an oversimplification
     return processed_value
     ```

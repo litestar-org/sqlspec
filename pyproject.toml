@@ -380,6 +380,7 @@ known-first-party = ["sqlspec", "tests"]
 [tool.ruff.lint.per-file-ignores]
 "docs/**/*.*" = ["S", "B", "DTZ", "A", "TC", "ERA", "D", "RET", "PLW0127"]
 "docs/examples/**" = ["T201"]
+"sqlspec/statement/builder/mixins/**/*.*" = ["SLF001"]
 "tests/**/*.*" = [
   "A",
   "ARG",

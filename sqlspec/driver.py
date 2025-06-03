@@ -462,7 +462,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
         self,
         statement: "Union[SQL, Statement, QueryBuilder[Any]]",
         parameters: "Optional[SQLParameterType]" = None,
-        filters: "Optional[list[StatementFilter]    ]" = None,
+        filters: "Optional[list[StatementFilter]]" = None,
         config: "Optional[SQLConfig]" = None,
     ) -> "SQL":
         if isinstance(statement, SQL):
@@ -643,7 +643,6 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
         **kwargs: Any,
     ) -> "SQLResult[RowT]":
         with instrument_operation(self, "execute_script", "database"):
-            # Create a config that allows DDL for script execution
             from sqlspec.statement.sql import SQLConfig
 
             script_config = config or self.config
@@ -661,7 +660,6 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
                     sqlglot_schema=script_config.sqlglot_schema,
                     analysis_cache_size=script_config.analysis_cache_size,
                 )
-
             sql_statement = SQL(
                 statement,
                 parameters,
@@ -669,7 +667,6 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
                 dialect=self.dialect,
                 config=script_config,
             )
-            # Mark the statement for script execution
             sql_statement = sql_statement.as_script()
             script_output = self._execute_statement(
                 statement=sql_statement,
@@ -677,8 +674,6 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
                 is_script=True,
                 **kwargs,
             )
-            # For script execution, we expect the driver to return a SQLResult
-            # If it returns a string (legacy), wrap it in a SQLResult
             if isinstance(script_output, str):
                 from sqlspec.statement.result import SQLResult
 
@@ -687,7 +682,6 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
                     data=[],
                     operation_type="SCRIPT",
                 )
-                # For now, assume success if we got a string back
                 result.total_statements = 1
                 result.successful_statements = 1
                 return result
@@ -902,25 +896,23 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], Asyn
         **kwargs: Any,
     ) -> "SQLResult[RowT]":
         async with instrument_operation_async(self, "execute_script", "database"):
-            # Create a config that allows DDL for script execution
             from sqlspec.statement.sql import SQLConfig
 
             script_config = config or self.config
             if script_config.enable_validation:
                 script_config = SQLConfig(
                     enable_parsing=script_config.enable_parsing,
-                    enable_validation=False,  # Disable validation for scripts
+                    enable_validation=False,
                     enable_transformations=script_config.enable_transformations,
                     enable_analysis=script_config.enable_analysis,
-                    strict_mode=False,  # Disable strict mode for scripts
+                    strict_mode=False,
                     cache_parsed_expression=script_config.cache_parsed_expression,
-                    processing_pipeline_components=[],  # No validation components
+                    processing_pipeline_components=[],
                     parameter_converter=script_config.parameter_converter,
                     parameter_validator=script_config.parameter_validator,
                     sqlglot_schema=script_config.sqlglot_schema,
                     analysis_cache_size=script_config.analysis_cache_size,
                 )
-
             sql_statement = SQL(
                 statement,
                 parameters,
@@ -928,7 +920,6 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], Asyn
                 dialect=self.dialect,
                 config=script_config,
             )
-            # Mark the statement for script execution
             sql_statement = sql_statement.as_script()
             script_output = await self._execute_statement(
                 statement=sql_statement,
@@ -936,8 +927,6 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], Asyn
                 is_script=True,
                 **kwargs,
             )
-            # For script execution, we expect the driver to return a SQLResult
-            # If it returns a string (legacy), wrap it in a SQLResult
             if isinstance(script_output, str):
                 from sqlspec.statement.result import SQLResult
 
@@ -946,7 +935,6 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], Asyn
                     data=[],
                     operation_type="SCRIPT",
                 )
-                # For now, assume success if we got a string back
                 result.total_statements = 1
                 result.successful_statements = 1
                 return result

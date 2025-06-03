@@ -129,10 +129,19 @@ def test_sqlite_execute_script(sqlite_session: SqliteDriver) -> None:
         UPDATE test_table SET value = 1000 WHERE name = 'script_test1';
     """
 
-    result = sqlite_session.execute_script(script)
+    try:
+        result = sqlite_session.execute_script(script)
+    except Exception as e:
+        pytest.fail(f"execute_script raised an unexpected exception: {e}")
     # Script execution now returns SQLResult object
     assert isinstance(result, SQLResult)
     assert result.operation_type == "SCRIPT"
+
+    # Explicitly check for errors from the script execution itself
+    if hasattr(result, "errors") and result.errors:
+        pytest.fail(f"Script execution reported errors: {result.errors}")
+    if hasattr(result, "has_errors") and callable(result.has_errors) and result.has_errors():
+        pytest.fail(f"Script execution reported errors (via has_errors): {result.get_errors()}")
 
     # Verify script effects
     select_result = sqlite_session.execute(

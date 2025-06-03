@@ -11,7 +11,7 @@ To ensure all Python code is comprehensively and correctly type-hinted using a *
 ## Context
 - The project requires Python >= 3.9.
 - Type checking is enforced by `mypy` (strict mode) and `Pyright`.
-- **Key Project Mandates**: 
+- **Key Project Mandates**:
     - NO `from __future__ import annotations`.
     - ALWAYS stringify type hints for forward references and non-built-in types.
     - ALWAYS use `typing.Optional` and `typing.Union` (NO `|` syntax).
@@ -30,7 +30,7 @@ To ensure all Python code is comprehensively and correctly type-hinted using a *
     ✅ **Good:** `items: 'list[str]'`
     ✅ **Good:** `mapping: 'dict[str, int]'`
     ❌ **Avoid (Using `typing.List`):** `from typing import List
-items: List[str]` 
+items: List[str]`
     ❌ **Avoid (Not stringified for built-in generic):** `items: list[str]`
 
 - **Stringify ALL Non-Primitive Type Hints**: ALWAYS enclose non-primitive type hints (custom classes, types from `typing` like `Optional`, `Union`, etc.) in quotes.

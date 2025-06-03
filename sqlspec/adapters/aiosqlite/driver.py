@@ -106,20 +106,34 @@ class AiosqliteDriver(
 
                 async with self._get_cursor(conn) as cursor:
                     await cursor.executemany(final_sql, params_list)
-                    return cursor.rowcount if cursor.rowcount != -1 else len(params_list)
+                    # executemany doesn't set rowcount properly in aiosqlite
+                    # Return the count of parameter sets executed
+                    return len(params_list) if params_list else 0
             else:
-                db_params: tuple[Any, ...] = ()
+                # Handle different parameter types properly
                 if params_to_execute is not None:
-                    if isinstance(params_to_execute, (list, tuple)):
+                    if isinstance(params_to_execute, dict):
+                        # For named parameters, check if SQL uses named placeholders
+                        if ":" in final_sql:
+                            db_params = params_to_execute
+                        else:
+                            # Convert dict to positional if SQL uses ? placeholders
+                            db_params = tuple(params_to_execute.values())
+                    elif isinstance(params_to_execute, (list, tuple)):
                         db_params = tuple(params_to_execute)
                     else:
                         db_params = (params_to_execute,)
+                else:
+                    db_params = ()
 
                 if self.instrumentation_config.log_parameters and db_params:
                     logger.debug("Query parameters: %s", db_params)
 
                 async with self._get_cursor(conn) as cursor:
-                    await cursor.execute(final_sql, db_params)
+                    if isinstance(db_params, dict):
+                        await cursor.execute(final_sql, db_params)
+                    else:
+                        await cursor.execute(final_sql, db_params)
 
                     if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
                         # Return data and description for _wrap_select_result
