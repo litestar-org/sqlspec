@@ -73,51 +73,84 @@ class OracleSyncDriver(
         connection: Optional[OracleSyncConnection] = None,
         **kwargs: Any,
     ) -> Any:
+        if statement.is_script:
+            return self._execute_script(
+                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
+                connection=connection,
+                **kwargs,
+            )
+        if statement.is_many:
+            return self._execute_many(
+                statement.to_sql(placeholder_style=self._get_placeholder_style()),
+                statement.parameters,
+                connection=connection,
+                **kwargs,
+            )
+        return self._execute(
+            statement.to_sql(placeholder_style=self._get_placeholder_style()),
+            statement.parameters,
+            statement,
+            connection=connection,
+            **kwargs,
+        )
+
+    def _execute(
+        self,
+        sql: str,
+        params: Any,
+        statement: SQL,
+        connection: Optional[OracleSyncConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
         with instrument_operation(self, "oracle_execute", "database"):
             conn = self._connection(connection)
-
-            final_sql: str
-            final_driver_params: Union[dict[str, Any], list[Union[dict[str, Any], Sequence[Any]]], None] = None
-
-            if statement.is_script:
-                final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-            else:
-                final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-                params_to_execute = statement.parameters
-
-                if statement.is_many:
-                    if params_to_execute is not None and isinstance(params_to_execute, Sequence):
-                        final_driver_params = list(params_to_execute)
-                    else:
-                        final_driver_params = []
-                elif params_to_execute is not None:
-                    final_driver_params = params_to_execute  # type: ignore[assignment]
-
+            final_driver_params = params
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL: %s", sql)
+            if self.instrumentation_config.log_parameters and final_driver_params:
+                logger.debug("Query parameters: %s", final_driver_params)
             with self._get_cursor(conn) as cursor:
-                if self.instrumentation_config.log_queries:
-                    logger.debug("Executing SQL: %s", final_sql)
-
-                if self.instrumentation_config.log_parameters and final_driver_params:
-                    logger.debug("Query parameters: %s", final_driver_params)
-
-                if statement.is_script:
-                    cursor.execute(final_sql)
-                    return "SCRIPT EXECUTED"
-
-                if statement.is_many:
-                    cursor.executemany(
-                        final_sql,
-                        cast("list[Any]", final_driver_params) if final_driver_params is not None else [],
-                    )
-                elif final_driver_params is None:
-                    cursor.execute(final_sql)
+                if final_driver_params is None:
+                    cursor.execute(sql)
                 elif isinstance(final_driver_params, dict):
-                    cursor.execute(final_sql, final_driver_params)
+                    cursor.execute(sql, final_driver_params)
                 elif isinstance(final_driver_params, (list, tuple)):
-                    cursor.execute(final_sql, list(final_driver_params))
+                    cursor.execute(sql, list(final_driver_params))
                 else:
-                    cursor.execute(final_sql, [final_driver_params])
+                    cursor.execute(sql, [final_driver_params])
                 return cursor
+
+    def _execute_many(
+        self,
+        sql: str,
+        param_list: Any,
+        connection: Optional[OracleSyncConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
+        with instrument_operation(self, "oracle_execute_many", "database"):
+            conn = self._connection(connection)
+            params_list = param_list if isinstance(param_list, Sequence) else []
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL (executemany): %s", sql)
+            if self.instrumentation_config.log_parameters and params_list:
+                logger.debug("Query parameters (batch): %s", params_list)
+            with self._get_cursor(conn) as cursor:
+                cursor.executemany(sql, params_list)
+                return cursor
+
+    def _execute_script(
+        self,
+        script: str,
+        connection: Optional[OracleSyncConnection] = None,
+        **kwargs: Any,
+    ) -> str:
+        with instrument_operation(self, "oracle_execute_script", "database"):
+            conn = self._connection(connection)
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL script: %s", script)
+            with self._get_cursor(conn) as cursor:
+                cursor.execute(script)
+            return "SCRIPT EXECUTED"
 
     def _wrap_select_result(
         self,
@@ -292,50 +325,84 @@ class OracleAsyncDriver(
         connection: Optional[OracleAsyncConnection] = None,
         **kwargs: Any,
     ) -> Any:
+        if statement.is_script:
+            return await self._execute_script(
+                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
+                connection=connection,
+                **kwargs,
+            )
+        if statement.is_many:
+            return await self._execute_many(
+                statement.to_sql(placeholder_style=self._get_placeholder_style()),
+                statement.parameters,
+                connection=connection,
+                **kwargs,
+            )
+        return await self._execute(
+            statement.to_sql(placeholder_style=self._get_placeholder_style()),
+            statement.parameters,
+            statement,
+            connection=connection,
+            **kwargs,
+        )
+
+    async def _execute(
+        self,
+        sql: str,
+        params: Any,
+        statement: SQL,
+        connection: Optional[OracleAsyncConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
         async with instrument_operation_async(self, "oracle_async_execute", "database"):
             conn = self._connection(connection)
-
-            final_sql: str
-            final_driver_params: Union[dict[str, Any], list[Union[dict[str, Any], Sequence[Any]]], None] = None
-
-            if statement.is_script:
-                final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-            else:
-                final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-                params_to_execute = statement.parameters
-
-                if statement.is_many:
-                    if params_to_execute is not None and isinstance(params_to_execute, Sequence):
-                        final_driver_params = list(params_to_execute)
-                    else:
-                        final_driver_params = []
-                elif params_to_execute is not None:
-                    final_driver_params = params_to_execute  # type: ignore[assignment]
-
+            final_driver_params = params
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL: %s", sql)
+            if self.instrumentation_config.log_parameters and final_driver_params:
+                logger.debug("Query parameters: %s", final_driver_params)
             async with self._get_cursor(conn) as cursor:
-                if self.instrumentation_config.log_queries:
-                    logger.debug("Executing SQL: %s", final_sql)
-
-                if self.instrumentation_config.log_parameters and final_driver_params:
-                    logger.debug("Query parameters: %s", final_driver_params)
-
-                if statement.is_script:
-                    await cursor.execute(final_sql)
-                    return "SCRIPT EXECUTED"
-
-                if statement.is_many:
-                    await cursor.executemany(
-                        final_sql, cast("list[Any]", final_driver_params) if final_driver_params is not None else []
-                    )
-                elif final_driver_params is None:
-                    await cursor.execute(final_sql)
+                if final_driver_params is None:
+                    await cursor.execute(sql)
                 elif isinstance(final_driver_params, dict):
-                    await cursor.execute(final_sql, final_driver_params)
+                    await cursor.execute(sql, final_driver_params)
                 elif isinstance(final_driver_params, (list, tuple)):
-                    await cursor.execute(final_sql, list(final_driver_params))
+                    await cursor.execute(sql, list(final_driver_params))
                 else:
-                    await cursor.execute(final_sql, [final_driver_params])
+                    await cursor.execute(sql, [final_driver_params])
                 return cursor
+
+    async def _execute_many(
+        self,
+        sql: str,
+        param_list: Any,
+        connection: Optional[OracleAsyncConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
+        async with instrument_operation_async(self, "oracle_async_execute_many", "database"):
+            conn = self._connection(connection)
+            params_list = param_list if isinstance(param_list, Sequence) else []
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL (executemany): %s", sql)
+            if self.instrumentation_config.log_parameters and params_list:
+                logger.debug("Query parameters (batch): %s", params_list)
+            async with self._get_cursor(conn) as cursor:
+                await cursor.executemany(sql, params_list)
+                return cursor
+
+    async def _execute_script(
+        self,
+        script: str,
+        connection: Optional[OracleAsyncConnection] = None,
+        **kwargs: Any,
+    ) -> str:
+        async with instrument_operation_async(self, "oracle_async_execute_script", "database"):
+            conn = self._connection(connection)
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL script: %s", script)
+            async with self._get_cursor(conn) as cursor:
+                await cursor.execute(script)
+            return "SCRIPT EXECUTED"
 
     async def _wrap_select_result(
         self,

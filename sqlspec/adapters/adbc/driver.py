@@ -3,7 +3,7 @@ import contextlib
 import logging
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 from adbc_driver_manager.dbapi import Connection, Cursor
 
@@ -124,55 +124,85 @@ class AdbcDriver(
         connection: Optional["AdbcConnection"] = None,
         **kwargs: Any,
     ) -> Any:
-        with instrument_operation(self, "adbc_execute", "database"):
-            conn = self._connection(connection)
+        if statement.is_script:
+            return self._execute_script(
+                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
+                connection=connection,
+                **kwargs,
+            )
+        if statement.is_many:
+            return self._execute_many(
+                statement.to_sql(placeholder_style=self._get_placeholder_style()),
+                statement.parameters,
+                connection=connection,
+                **kwargs,
+            )
+        return self._execute(
+            statement.to_sql(placeholder_style=self._get_placeholder_style()),
+            statement.parameters,
+            statement,
+            connection=connection,
+            **kwargs,
+        )
 
-            if statement.is_script:
-                final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-                with self._get_cursor(conn) as cursor:
-                    if self.instrumentation_config.log_queries:
-                        logger.debug("Executing SQL Script: %s", final_sql)
-                    cursor.execute(final_sql)
-                    status_message = "SCRIPT EXECUTED"
-                    if hasattr(cursor, "statusmessage"):
-                        with contextlib.suppress(Exception):
-                            status_message = getattr(cursor, "statusmessage", "SCRIPT EXECUTED")
-                    return status_message
+    def _execute(
+        self,
+        sql: str,
+        params: Any,
+        statement: SQL,
+        connection: Optional["AdbcConnection"] = None,
+        **kwargs: Any,
+    ) -> Any:
+        conn = self._connection(connection)
+        final_exec_params: Optional[list[Any]] = None
+        if params is not None:
+            if isinstance(params, list):
+                final_exec_params = params
+            elif hasattr(params, "__iter__") and not isinstance(params, (str, bytes)):
+                final_exec_params = list(params)
+            else:
+                final_exec_params = [params]
+        with self._get_cursor(conn) as cursor:
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL: %s", sql)
+            if self.instrumentation_config.log_parameters and final_exec_params:
+                logger.debug("Query parameters: %s", final_exec_params)
+            cursor.execute(sql, final_exec_params or [])
+            return cursor
 
-            final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-            params_to_execute = statement.parameters
+    def _execute_many(
+        self,
+        sql: str,
+        param_list: Any,
+        connection: Optional["AdbcConnection"] = None,
+        **kwargs: Any,
+    ) -> Any:
+        conn = self._connection(connection)
+        final_exec_params = (
+            [list(p) if isinstance(p, (list, tuple)) else [p] for p in param_list]
+            if param_list and isinstance(param_list, Sequence)
+            else []
+        )
+        with self._get_cursor(conn) as cursor:
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL (executemany): %s", sql)
+            if self.instrumentation_config.log_parameters and final_exec_params:
+                logger.debug("Query parameters (batch): %s", final_exec_params)
+            cursor.executemany(sql, final_exec_params)
+            return cursor
 
-            # Ensure parameters are in a list format if they exist, suitable for ADBC
-            final_exec_params: Optional[list[Any]] = None
-            if statement.is_many:
-                if params_to_execute and isinstance(params_to_execute, Sequence):
-                    # For executemany, ADBC expects a list of lists/tuples
-                    final_exec_params = [list(p) if isinstance(p, (list, tuple)) else [p] for p in params_to_execute]
-                else:
-                    final_exec_params = []  # Should not happen if statement.is_many is true with valid params
-            elif params_to_execute is not None:  # Single execution
-                # For execute, ADBC expects a list or tuple of parameters
-                if isinstance(params_to_execute, list):
-                    final_exec_params = params_to_execute
-                elif hasattr(params_to_execute, "__iter__") and not isinstance(params_to_execute, (str, bytes)):
-                    final_exec_params = list(params_to_execute)
-                else:  # Single parameter
-                    final_exec_params = [params_to_execute]
-
-            with self._get_cursor(conn) as cursor:
-                if self.instrumentation_config.log_queries:
-                    logger.debug("Executing SQL: %s", final_sql)
-
-                if self.instrumentation_config.log_parameters and final_exec_params:
-                    logger.debug("Query parameters: %s", final_exec_params)
-
-                if statement.is_many:
-                    # Ensure final_exec_params is correctly a list of lists for executemany
-                    # The previous logic for final_exec_params under is_many should handle this.
-                    cursor.executemany(final_sql, cast("list[list[Any]]", final_exec_params))
-                else:
-                    cursor.execute(final_sql, final_exec_params or [])
-                return cursor
+    def _execute_script(
+        self,
+        script: str,
+        connection: Optional["AdbcConnection"] = None,
+        **kwargs: Any,
+    ) -> str:
+        conn = self._connection(connection)
+        if self.instrumentation_config.log_queries:
+            logger.debug("Executing SQL script: %s", script)
+        with self._get_cursor(conn) as cursor:
+            cursor.execute(script)
+        return "SCRIPT EXECUTED"
 
     def _wrap_select_result(  # pyright ignore
         self,

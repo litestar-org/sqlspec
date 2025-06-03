@@ -69,69 +69,85 @@ class PsqlpyDriver(
         connection: Optional[PsqlpyConnection] = None,
         **kwargs: Any,
     ) -> Any:
+        if statement.is_script:
+            return await self._execute_script(
+                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
+                connection=connection,
+                **kwargs,
+            )
+        if statement.is_many:
+            return await self._execute_many(
+                statement.to_sql(placeholder_style=self._get_placeholder_style()),
+                statement.parameters,
+                connection=connection,
+                **kwargs,
+            )
+        return await self._execute(
+            statement.to_sql(placeholder_style=self._get_placeholder_style()),
+            statement.parameters,
+            statement,
+            connection=connection,
+            **kwargs,
+        )
+
+    async def _execute(
+        self,
+        sql: str,
+        params: Any,
+        statement: SQL,
+        connection: Optional[PsqlpyConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
         async with instrument_operation_async(self, "psqlpy_execute", "database"):
             conn = self._connection(connection)
-            # config parameter removed, statement.config is the source of truth
-
-            final_sql: str
-            # psqlpy expects parameters as a list for its `parameters` argument.
-            # statement.parameters should provide this after processing.
             final_driver_params: Optional[list[Any]] = None
-
-            if statement.is_script:
-                final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-            else:
-                final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-                params_to_execute = statement.parameters  # This should be a list or tuple
-
-                if statement.is_many:
-                    # psqlpy does not have a direct executemany that takes a list of lists.
-                    # It executes one by one. So params_to_execute here will be a list of parameter lists.
-                    if params_to_execute and isinstance(params_to_execute, list):
-                        # We expect a list of lists/tuples. Each inner list/tuple is for one execution.
-                        final_driver_params = params_to_execute
-                    else:
-                        final_driver_params = []
-                elif params_to_execute is not None:
-                    if isinstance(params_to_execute, (list, tuple)):
-                        final_driver_params = list(params_to_execute)
-                    else:  # Single parameter value
-                        final_driver_params = [params_to_execute]
-                    # else final_driver_params remains None, meaning no parameters
-
+            if params is not None:
+                final_driver_params = list(params) if isinstance(params, (list, tuple)) else [params]
             if self.instrumentation_config.log_queries:
-                logger.debug("Executing psqlpy SQL: %s", final_sql)
-
+                logger.debug("Executing psqlpy SQL: %s", sql)
             if self.instrumentation_config.log_parameters and final_driver_params:
-                # For is_many, final_driver_params is a list of lists. Log appropriately.
-                if statement.is_many:
-                    logger.debug("Psqlpy query parameters (batch): %s", final_driver_params)
-                else:
-                    logger.debug("Psqlpy query parameters: %s", final_driver_params)
+                logger.debug("Psqlpy query parameters: %s", final_driver_params)
+            if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
+                return await conn.fetch(sql, parameters=final_driver_params)
+            return await conn.execute(sql, parameters=final_driver_params)
 
-            if statement.is_script:
-                await conn.execute(final_sql, parameters=None)  # Explicitly None for scripts
-                return "SCRIPT EXECUTED"
+    async def _execute_many(
+        self,
+        sql: str,
+        param_list: Any,
+        connection: Optional[PsqlpyConnection] = None,
+        **kwargs: Any,
+    ) -> BatchResult:
+        async with instrument_operation_async(self, "psqlpy_execute_many", "database"):
+            conn = self._connection(connection)
+            total_affected = 0
+            params_list = param_list if isinstance(param_list, list) else []
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing psqlpy SQL (executemany): %s", sql)
+            if self.instrumentation_config.log_parameters and params_list:
+                logger.debug("Psqlpy query parameters (batch): %s", params_list)
+            for param_set in params_list:
+                current_param_list = list(param_set) if isinstance(param_set, (list, tuple)) else [param_set]
+                result = await conn.execute(sql, parameters=current_param_list)
+                affected = getattr(result, "affected_rows", None) or getattr(result, "rowcount", 0)
+                if affected and affected != -1:
+                    total_affected += affected
+                elif not self.returns_rows(None):
+                    total_affected += 1
+            return BatchResult(total_affected)
 
-            if statement.is_many:
-                total_affected = 0
-                # final_driver_params is a list of parameter lists
-                for param_set in final_driver_params or []:
-                    current_param_list = list(param_set) if isinstance(param_set, (list, tuple)) else [param_set]
-                    result = await conn.execute(final_sql, parameters=current_param_list)
-                    affected = getattr(result, "affected_rows", None) or getattr(result, "rowcount", 0)
-                    if affected and affected != -1:
-                        total_affected += affected
-                    elif not self.returns_rows(statement.expression):  # Heuristic for DML
-                        total_affected += 1
-                return BatchResult(total_affected)
-
-            # Single execution
-            if self.returns_rows(statement.expression):
-                # final_driver_params should be a list here or None
-                return await conn.fetch(final_sql, parameters=final_driver_params)
-            # For DML or other non-select queries
-            return await conn.execute(final_sql, parameters=final_driver_params)
+    async def _execute_script(
+        self,
+        script: str,
+        connection: Optional[PsqlpyConnection] = None,
+        **kwargs: Any,
+    ) -> str:
+        async with instrument_operation_async(self, "psqlpy_execute_script", "database"):
+            conn = self._connection(connection)
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing psqlpy SQL script: %s", script)
+            await conn.execute(script, parameters=None)
+            return "SCRIPT EXECUTED"
 
     async def _wrap_select_result(
         self,

@@ -64,59 +64,77 @@ class PsycopgSyncDriver(
         connection: Optional[PsycopgSyncConnection] = None,
         **kwargs: Any,
     ) -> Any:
+        if statement.is_script:
+            return self._execute_script(
+                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
+                connection=connection,
+                **kwargs,
+            )
+        if statement.is_many:
+            return self._execute_many(
+                statement.to_sql(placeholder_style=self._get_placeholder_style()),
+                statement.parameters,
+                connection=connection,
+                **kwargs,
+            )
+        return self._execute(
+            statement.to_sql(placeholder_style=self._get_placeholder_style()),
+            statement.parameters,
+            statement,
+            connection=connection,
+            **kwargs,
+        )
+
+    def _execute(
+        self,
+        sql: str,
+        params: Any,
+        statement: SQL,
+        connection: Optional[PsycopgSyncConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
         with instrument_operation(self, "psycopg_execute", "database"):
             conn = self._connection(connection)
-            # config parameter removed, statement.config is source of truth
-
-            final_sql: str
-            # Psycopg uses pyformat_named (e.g., %(name)s). It expects a dict for single execute
-            # and a list of dicts for executemany.
-            # statement.parameters should provide this directly.
-            final_driver_params: Union[dict[str, Any], list[dict[str, Any]], None] = None
-
-            if statement.is_script:
-                final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-                # Parameters are not passed separately for scripts with psycopg
-            else:
-                final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-                params_to_execute = statement.parameters
-
-                if statement.is_many:
-                    if params_to_execute is not None and isinstance(params_to_execute, list):
-                        # Expecting a list of dicts
-                        final_driver_params = params_to_execute
-                    else:
-                        # Should be a list of dicts, or an error/empty list if invalid
-                        final_driver_params = []
-                elif params_to_execute is not None and isinstance(params_to_execute, dict):
-                    final_driver_params = params_to_execute
-                else:
-                    # For single execute, if params are not a dict (or None), it might be an issue
-                    # or imply no parameters. Psycopg execute with pyformat expects a mapping.
-                    final_driver_params = {}  # Default to empty dict if not a dict or None
-
+            final_driver_params = params if params is not None and isinstance(params, dict) else {}
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL: %s", sql)
+            if self.instrumentation_config.log_parameters and final_driver_params:
+                logger.debug("Query parameters: %s", final_driver_params)
             with self._get_cursor(conn) as cursor:
-                if self.instrumentation_config.log_queries:
-                    logger.debug("Executing SQL: %s", final_sql)
-
-                if (
-                    self.instrumentation_config.log_parameters
-                    and final_driver_params
-                    and not (not statement.is_many and final_driver_params == {} and statement.parameters is None)
-                ):
-                    logger.debug("Query parameters: %s", final_driver_params)
-
-                if statement.is_script:
-                    cursor.execute(script_sql=final_sql)  # Pass as script_sql to avoid param interpolation by mistake
-                    return cursor.statusmessage or "SCRIPT EXECUTED"
-
-                if statement.is_many:
-                    # Ensure final_driver_params is a list of dicts
-                    cursor.executemany(final_sql, cast("list[dict[str, Any]]", final_driver_params or []))
-                else:
-                    # Ensure final_driver_params is a dict or None (psycopg handles None as no params)
-                    cursor.execute(final_sql, cast("Optional[dict[str, Any]]", final_driver_params))
+                cursor.execute(sql, cast("Optional[dict[str, Any]]", final_driver_params))
                 return cursor
+
+    def _execute_many(
+        self,
+        sql: str,
+        param_list: Any,
+        connection: Optional[PsycopgSyncConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
+        with instrument_operation(self, "psycopg_execute_many", "database"):
+            conn = self._connection(connection)
+            params_list = param_list if isinstance(param_list, list) else []
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL (executemany): %s", sql)
+            if self.instrumentation_config.log_parameters and params_list:
+                logger.debug("Query parameters (batch): %s", params_list)
+            with self._get_cursor(conn) as cursor:
+                cursor.executemany(sql, cast("list[dict[str, Any]]", params_list))
+                return cursor
+
+    def _execute_script(
+        self,
+        script: str,
+        connection: Optional[PsycopgSyncConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
+        with instrument_operation(self, "psycopg_execute_script", "database"):
+            conn = self._connection(connection)
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL script: %s", script)
+            with self._get_cursor(conn) as cursor:
+                cursor.execute(script_sql=script)
+                return cursor.statusmessage or "SCRIPT EXECUTED"
 
     def _wrap_select_result(  # pyright: ignore
         self,
@@ -248,49 +266,77 @@ class PsycopgAsyncDriver(
         connection: Optional[PsycopgAsyncConnection] = None,
         **kwargs: Any,
     ) -> Any:
+        if statement.is_script:
+            return await self._execute_script(
+                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
+                connection=connection,
+                **kwargs,
+            )
+        if statement.is_many:
+            return await self._execute_many(
+                statement.to_sql(placeholder_style=self._get_placeholder_style()),
+                statement.parameters,
+                connection=connection,
+                **kwargs,
+            )
+        return await self._execute(
+            statement.to_sql(placeholder_style=self._get_placeholder_style()),
+            statement.parameters,
+            statement,
+            connection=connection,
+            **kwargs,
+        )
+
+    async def _execute(
+        self,
+        sql: str,
+        params: Any,
+        statement: SQL,
+        connection: Optional[PsycopgAsyncConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
         async with instrument_operation_async(self, "psycopg_async_execute", "database"):
             conn = self._connection(connection)
-            # config parameter removed, statement.config is source of truth
-
-            final_sql: str
-            final_driver_params: Union[dict[str, Any], list[dict[str, Any]], None] = None
-
-            if statement.is_script:
-                final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-            else:
-                final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-                params_to_execute = statement.parameters
-
-                if statement.is_many:
-                    if params_to_execute is not None and isinstance(params_to_execute, list):
-                        final_driver_params = params_to_execute
-                    else:
-                        final_driver_params = []
-                elif params_to_execute is not None and isinstance(params_to_execute, dict):
-                    final_driver_params = params_to_execute
-                else:
-                    final_driver_params = {}  # Default to empty dict
-
+            final_driver_params = params if params is not None and isinstance(params, dict) else {}
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL: %s", sql)
+            if self.instrumentation_config.log_parameters and final_driver_params:
+                logger.debug("Query parameters: %s", final_driver_params)
             async with self._get_cursor(conn) as cursor:
-                if self.instrumentation_config.log_queries:
-                    logger.debug("Executing SQL: %s", final_sql)
-
-                if (
-                    self.instrumentation_config.log_parameters
-                    and final_driver_params
-                    and not (not statement.is_many and final_driver_params == {} and statement.parameters is None)
-                ):
-                    logger.debug("Query parameters: %s", final_driver_params)
-
-                if statement.is_script:
-                    await cursor.execute(script_sql=final_sql)  # Pass as script_sql
-                    return cursor.statusmessage or "SCRIPT EXECUTED"
-
-                if statement.is_many:
-                    await cursor.executemany(final_sql, cast("list[dict[str, Any]]", final_driver_params or []))
-                else:
-                    await cursor.execute(final_sql, cast("Optional[dict[str, Any]]", final_driver_params))
+                await cursor.execute(sql, final_driver_params)
                 return cursor
+
+    async def _execute_many(
+        self,
+        sql: str,
+        param_list: Any,
+        connection: Optional[PsycopgAsyncConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
+        async with instrument_operation_async(self, "psycopg_async_execute_many", "database"):
+            conn = self._connection(connection)
+            params_list = param_list if isinstance(param_list, list) else []
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL (executemany): %s", sql)
+            if self.instrumentation_config.log_parameters and params_list:
+                logger.debug("Query parameters (batch): %s", params_list)
+            async with self._get_cursor(conn) as cursor:
+                await cursor.executemany(sql, params_list)
+                return cursor
+
+    async def _execute_script(
+        self,
+        script: str,
+        connection: Optional[PsycopgAsyncConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
+        async with instrument_operation_async(self, "psycopg_async_execute_script", "database"):
+            conn = self._connection(connection)
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL script: %s", script)
+            async with self._get_cursor(conn) as cursor:
+                await cursor.execute(script_sql=script)
+                return cursor.statusmessage if hasattr(cursor, "statusmessage") else "SCRIPT EXECUTED"
 
     async def _wrap_select_result(  # pyright: ignore
         self,

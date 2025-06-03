@@ -71,74 +71,98 @@ class AiosqliteDriver(
         connection: Optional[AiosqliteConnection] = None,
         **kwargs: Any,
     ) -> Any:
+        if statement.is_script:
+            return await self._execute_script(
+                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
+                connection=connection,
+                **kwargs,
+            )
+        if statement.is_many:
+            return await self._execute_many(
+                statement.to_sql(placeholder_style=self._get_placeholder_style()),
+                statement.parameters,
+                connection=connection,
+                **kwargs,
+            )
+        return await self._execute(
+            statement.to_sql(placeholder_style=self._get_placeholder_style()),
+            statement.parameters,
+            statement,
+            connection=connection,
+            **kwargs,
+        )
+
+    async def _execute(
+        self,
+        sql: str,
+        params: Any,
+        statement: SQL,
+        connection: Optional[AiosqliteConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
         async with instrument_operation_async(self, "aiosqlite_execute", "database"):
             conn = self._connection(connection)
-
-            if statement.is_script:
-                final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-                if self.instrumentation_config.log_queries:
-                    logger.debug("Executing SQL script: %s", final_sql)
-                async with self._get_cursor(conn) as cursor:
-                    await cursor.executescript(final_sql)
-                return "SCRIPT EXECUTED"
-
-            final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-            params_to_execute = statement.parameters
-
             if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQL: %s", final_sql)
-
-            if statement.is_many:
-                params_list: list[tuple[Any, ...]] = []
-                if params_to_execute and isinstance(params_to_execute, Sequence):
-                    for param_set in params_to_execute:
-                        if isinstance(param_set, (list, tuple)):
-                            params_list.append(tuple(param_set))
-                        elif param_set is None:
-                            params_list.append(())
-                        else:
-                            params_list.append((param_set,))
+                logger.debug("Executing SQL: %s", sql)
+            if params is not None:
+                if isinstance(params, dict):
+                    db_params = params if ":" in sql else tuple(params.values())
+                elif isinstance(params, (list, tuple)):
+                    db_params = tuple(params)
                 else:
-                    params_list = []
-
-                if self.instrumentation_config.log_parameters and params_list:
-                    logger.debug("Query parameters (batch): %s", params_list)
-
-                async with self._get_cursor(conn) as cursor:
-                    await cursor.executemany(final_sql, params_list)
-                    # executemany doesn't set rowcount properly in aiosqlite
-                    # Return the count of parameter sets executed
-                    return len(params_list) if params_list else 0
+                    db_params = (params,)
             else:
-                # Handle different parameter types properly
-                if params_to_execute is not None:
-                    if isinstance(params_to_execute, dict):
-                        # For named parameters, check if SQL uses named placeholders
-                        if ":" in final_sql:
-                            db_params = params_to_execute
-                        else:
-                            # Convert dict to positional if SQL uses ? placeholders
-                            db_params = tuple(params_to_execute.values())
-                    elif isinstance(params_to_execute, (list, tuple)):
-                        db_params = tuple(params_to_execute)
-                    else:
-                        db_params = (params_to_execute,)
+                db_params = ()
+            if self.instrumentation_config.log_parameters and db_params:
+                logger.debug("Query parameters: %s", db_params)
+            async with self._get_cursor(conn) as cursor:
+                if isinstance(db_params, dict):
+                    await cursor.execute(sql, db_params)
                 else:
-                    db_params = ()
+                    await cursor.execute(sql, db_params)
+                if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
+                    return {"data": await cursor.fetchall(), "description": cursor.description}
+                return cursor
 
-                if self.instrumentation_config.log_parameters and db_params:
-                    logger.debug("Query parameters: %s", db_params)
-
-                async with self._get_cursor(conn) as cursor:
-                    if isinstance(db_params, dict):
-                        await cursor.execute(final_sql, db_params)
+    async def _execute_many(
+        self,
+        sql: str,
+        param_list: Any,
+        connection: Optional[AiosqliteConnection] = None,
+        **kwargs: Any,
+    ) -> int:
+        async with instrument_operation_async(self, "aiosqlite_execute_many", "database"):
+            conn = self._connection(connection)
+            params_list: list[tuple[Any, ...]] = []
+            if param_list and isinstance(param_list, Sequence):
+                for param_set in param_list:
+                    if isinstance(param_set, (list, tuple)):
+                        params_list.append(tuple(param_set))
+                    elif param_set is None:
+                        params_list.append(())
                     else:
-                        await cursor.execute(final_sql, db_params)
+                        params_list.append((param_set,))
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL (executemany): %s", sql)
+            if self.instrumentation_config.log_parameters and params_list:
+                logger.debug("Query parameters (batch): %s", params_list)
+            async with self._get_cursor(conn) as cursor:
+                await cursor.executemany(sql, params_list)
+                return len(params_list) if params_list else 0
 
-                    if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
-                        # Return data and description for _wrap_select_result
-                        return {"data": await cursor.fetchall(), "description": cursor.description}
-                    return cursor  # For DML, return cursor to _wrap_execute_result
+    async def _execute_script(
+        self,
+        script: str,
+        connection: Optional[AiosqliteConnection] = None,
+        **kwargs: Any,
+    ) -> str:
+        async with instrument_operation_async(self, "aiosqlite_execute_script", "database"):
+            conn = self._connection(connection)
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL script: %s", script)
+            async with self._get_cursor(conn) as cursor:
+                await cursor.executescript(script)
+            return "SCRIPT EXECUTED"
 
     async def _wrap_select_result(
         self,

@@ -76,68 +76,88 @@ class AsyncpgDriver(
         connection: Optional[AsyncpgConnection] = None,
         **kwargs: Any,
     ) -> Any:
+        if statement.is_script:
+            return await self._execute_script(
+                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
+                connection=connection,
+                **kwargs,
+            )
+        if statement.is_many:
+            return await self._execute_many(
+                statement.to_sql(placeholder_style=self._get_placeholder_style()),
+                statement.parameters,
+                connection=connection,
+                **kwargs,
+            )
+        return await self._execute(
+            statement.to_sql(placeholder_style=self._get_placeholder_style()),
+            statement.parameters,
+            statement,
+            connection=connection,
+            **kwargs,
+        )
+
+    async def _execute(
+        self,
+        sql: str,
+        params: Any,
+        statement: SQL,
+        connection: Optional[AsyncpgConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
         async with instrument_operation_async(self, "asyncpg_execute", "database"):
             conn = self._connection(connection)
-
-            if statement.is_script:
-                final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-                if self.instrumentation_config.log_queries:
-                    logger.debug("Executing SQL script: %s", final_sql)
-                # asyncpg's execute method can handle multi-statement strings.
-                # Parameters are not typically passed separately for scripts.
-                return await conn.execute(final_sql)
-
-            final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-            params_to_execute = statement.parameters  # These are the merged and processed params
-
             if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQL: %s", final_sql)
-
+                logger.debug("Executing SQL: %s", sql)
             args_for_driver: list[Any] = []
-            if statement.is_many:
-                # asyncpg executemany expects a list of tuples/lists.
-                # statement.parameters should already be a sequence of sequences/dicts.
-                # We need to ensure each inner sequence is a tuple for asyncpg if it's not a dict.
-                params_list: list[tuple[Any, ...]] = []
-                if params_to_execute and isinstance(params_to_execute, Sequence):
-                    for param_set in params_to_execute:
-                        if isinstance(param_set, (list, tuple)):
-                            params_list.append(tuple(param_set))
-                        elif param_set is None:  # Should not happen with valid is_many
-                            params_list.append(())
-                        else:  # Should be a dict or a single value that needs to be tuple-ized
-                            # This path might indicate an issue if not a dict, as asyncpg expects sequences.
-                            # For now, assume parameters are correctly list of lists/tuples or list of dicts.
-                            # If it's a list of dicts, asyncpg handles it. If list of lists/tuples, also fine.
-                            # The guide focuses on simplification, assuming SQL object prepares params well.
-                            params_list.append(
-                                tuple(param_set) if isinstance(param_set, list) else (param_set,)
-                            )  # Ensure tuple for single items if not dict
-
-                if self.instrumentation_config.log_parameters and params_list:
-                    logger.debug("Query parameters (batch): %s", params_list)
-
-                # The type for params_list in executemany is list[tuple[Any, ...]]
-                # or can be list[dict[str, Any]] if using named placeholders (not for numeric)
-                return await conn.executemany(final_sql, params_list)
-
-            # Single execution
-            # asyncpg execute expects parameters as separate arguments (*args)
-            # statement.parameters should be a single sequence (list/tuple) or dict
-            if params_to_execute is not None:
-                if isinstance(params_to_execute, (list, tuple)):
-                    args_for_driver.extend(params_to_execute)
-                elif isinstance(params_to_execute, dict):  # asyncpg can handle dict for named params
-                    args_for_driver.append(params_to_execute)
-                else:  # Single non-sequence parameter
-                    args_for_driver.append(params_to_execute)
-
+            if params is not None:
+                if isinstance(params, (list, tuple)):
+                    args_for_driver.extend(params)
+                elif isinstance(params, dict):
+                    args_for_driver.append(params)
+                else:
+                    args_for_driver.append(params)
             if self.instrumentation_config.log_parameters and args_for_driver:
                 logger.debug("Query parameters: %s", args_for_driver)
-
             if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
-                return await conn.fetch(final_sql, *args_for_driver)
-            return await conn.execute(final_sql, *args_for_driver)
+                return await conn.fetch(sql, *args_for_driver)
+            return await conn.execute(sql, *args_for_driver)
+
+    async def _execute_many(
+        self,
+        sql: str,
+        param_list: Any,
+        connection: Optional[AsyncpgConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
+        async with instrument_operation_async(self, "asyncpg_execute_many", "database"):
+            conn = self._connection(connection)
+            params_list: list[tuple[Any, ...]] = []
+            if param_list and isinstance(param_list, Sequence):
+                for param_set in param_list:
+                    if isinstance(param_set, (list, tuple)):
+                        params_list.append(tuple(param_set))
+                    elif param_set is None:
+                        params_list.append(())
+                    else:
+                        params_list.append((param_set,))
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL (executemany): %s", sql)
+            if self.instrumentation_config.log_parameters and params_list:
+                logger.debug("Query parameters (batch): %s", params_list)
+            return await conn.executemany(sql, params_list)
+
+    async def _execute_script(
+        self,
+        script: str,
+        connection: Optional[AsyncpgConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
+        async with instrument_operation_async(self, "asyncpg_execute_script", "database"):
+            conn = self._connection(connection)
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL script: %s", script)
+            return await conn.execute(script)
 
     async def _wrap_select_result(
         self,

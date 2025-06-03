@@ -1,12 +1,10 @@
 # ruff: noqa: PLR6301
 import datetime
 import logging
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator
 from contextlib import suppress
-from dataclasses import replace
 from decimal import Decimal
 from typing import (
-    TYPE_CHECKING,
     Any,
     Callable,
     ClassVar,
@@ -26,7 +24,6 @@ from google.cloud.bigquery.table import Row as BigQueryRow
 from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.exceptions import (
-    ParameterStyleMismatchError,
     SQLSpecError,
 )
 from sqlspec.statement.mixins import (
@@ -37,13 +34,8 @@ from sqlspec.statement.mixins import (
 )
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
-from sqlspec.statement.sql import SQL, SQLConfig, Statement
-from sqlspec.typing import DictRow, RowT, SQLParameterType
-
-if TYPE_CHECKING:
-    from sqlspec.statement.builder import QueryBuilder
-    from sqlspec.statement.filters import StatementFilter
-
+from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.typing import DictRow, RowT
 
 __all__ = ("BigQueryConnection", "BigQueryDriver")
 
@@ -283,74 +275,64 @@ class BigQueryDriver(
         statement: SQL,
         connection: Optional[BigQueryConnection] = None,
         **kwargs: Any,
-    ) -> Union[QueryJob, str]:
-        """Core execution implementation for BigQuery operations.
-
-        Args:
-            statement: SQL statement object to execute.
-            connection: Optional connection override.
-            **kwargs: Additional execution parameters, e.g., job_config.
-
-        Raises:
-            ParameterStyleMismatchError: If the parameters are not formatted correctly for BigQuery.
-            SQLSpecError: For other BigQuery specific errors.
-
-        Returns:
-            QueryJob for regular queries or string for script execution.
-        """
-        # `is_many` and `is_script` are accessed from `statement.is_many` and `statement.is_script`.
-
-        final_sql_str: str
-        bq_query_parameters_list: list[Union[ScalarQueryParameter, ArrayQueryParameter]]
-
+    ) -> Any:
         if statement.is_script:
-            final_sql_str = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-            bq_query_parameters_list = []
-        elif (
-            isinstance(statement.parameters, (list, tuple))
-            and statement.parameters
-            and all(isinstance(p, (ScalarQueryParameter, ArrayQueryParameter)) for p in statement.parameters)
-        ):
-            if not isinstance(statement.sql, str):
-                msg = "If statement.parameters contains pre-formatted BigQuery parameters, statement.sql must be a string."
-                raise SQLSpecError(msg)
-            final_sql_str = statement.sql
-            bq_query_parameters_list = list(statement.parameters)
-        else:
-            final_sql_str = statement.to_sql(placeholder_style=self._get_placeholder_style())
-            params_from_sql_object = statement.parameters
-            params_dict: dict[str, Any] = {}
-
-            if params_from_sql_object is not None:
-                if isinstance(params_from_sql_object, dict):
-                    params_dict = params_from_sql_object
-                else:
-                    # This path should ideally not be hit if SQL.get_parameters works as expected for NAMED_AT
-                    msg = (
-                        f"For BigQuery, parameters should be a dictionary for named placeholders. "
-                        f"Received: {type(params_from_sql_object)}"
-                    )
-                    raise ParameterStyleMismatchError(msg)
-
-            bq_query_parameters_list = self._prepare_bq_query_parameters(params_dict)
-
-        # Note: statement.is_many is not directly used here because BigQuery's batching for DML
-        # is typically handled by sending multiple individual DML statements or using specific batch APIs
-        # not covered by a single _execute_statement call with is_many=True in the same way as other drivers.
-        # The existing `execute_many` method in this driver iterates and calls `_run_query_job`.
-        # If a future BigQuery API supports batch DMLs via a single job with multiple parameter sets,
-        # then `statement.is_many` would be used here to structure `bq_query_parameters_list` accordingly.
-
-        job_config = kwargs.get("job_config")
-        query_job = self._run_query_job(
-            final_sql_str, bq_query_parameters_list, connection=connection, job_config=job_config
+            return self._execute_script(
+                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
+                connection=connection,
+                **kwargs,
+            )
+        if statement.is_many:
+            return self._execute_many(
+                statement.to_sql(placeholder_style=self._get_placeholder_style()),
+                statement.parameters,
+                connection=connection,
+                **kwargs,
+            )
+        return self._execute(
+            statement.to_sql(placeholder_style=self._get_placeholder_style()),
+            statement.parameters,
+            statement,
+            connection=connection,
+            **kwargs,
         )
 
-        if statement.is_script:
-            query_job.result()
-            return f"SCRIPT EXECUTED (Job ID: {query_job.job_id})"
+    def _execute(
+        self,
+        sql: str,
+        params: Any,
+        statement: SQL,
+        connection: Optional[BigQueryConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
+        # Prepare BigQuery parameters
+        bq_params = self._prepare_bq_query_parameters(params or {}) if params else []
+        return self._run_query_job(sql, bq_params, connection=connection)
 
-        return query_job  # For select/DML, return the job; result is fetched in wrapper methods
+    def _execute_many(
+        self,
+        sql: str,
+        param_list: Any,
+        connection: Optional[BigQueryConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
+        # For BigQuery, batch execution is not natively supported; run jobs in a loop
+        jobs = []
+        for params in param_list or []:
+            bq_params = self._prepare_bq_query_parameters(params or {})
+            job = self._run_query_job(sql, bq_params, connection=connection)
+            jobs.append(job)
+        return jobs
+
+    def _execute_script(
+        self,
+        script: str,
+        connection: Optional[BigQueryConnection] = None,
+        **kwargs: Any,
+    ) -> str:
+        # BigQuery does not support multi-statement scripts in a single job; treat as a single statement
+        self._run_query_job(script, [], connection=connection)
+        return "SCRIPT EXECUTED"
 
     def _wrap_select_result(
         self, statement: SQL, result: Any, schema_type: "Optional[type]" = None, **kwargs: Any
@@ -423,86 +405,6 @@ class BigQueryDriver(
 
         return SQLResult[RowT](
             statement=statement, data=[], rows_affected=rows_affected, operation_type=operation_type, metadata=metadata
-        )
-
-    def execute_many(
-        self,
-        statement: "Union[SQL, Statement, QueryBuilder[SQLResult[RowT]]]",
-        parameters: "Optional[Sequence[SQLParameterType]]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[BigQueryConnection]" = None,
-        config: "Optional[SQLConfig]" = None,
-        job_config: "Optional[QueryJobConfig]" = None,
-        **kwargs: Any,
-    ) -> "SQLResult[RowT]":
-        current_config = config or self.config
-
-        if not parameters:
-            template_stmt = self._build_statement(statement, None, *filters, config=current_config)
-            return SQLResult[RowT](
-                statement=template_stmt,
-                data=[],
-                rows_affected=0,
-                operation_type="EXECUTE",
-                metadata={},
-            )
-
-        total_rows_affected = 0
-        conn = connection or self.connection
-        template_stmt = self._build_statement(statement, None, *filters, config=current_config)
-        processed_sql_template = template_stmt.to_sql(placeholder_style=self._get_placeholder_style())
-        all_job_ids = []
-        errors_occurred = False
-
-        final_metadata: dict[str, Any] = {"job_ids": all_job_ids}
-        if errors_occurred:
-            final_metadata["errors_occurred_in_batch"] = True
-            if total_rows_affected == 0 and parameters:
-                total_rows_affected = -1
-
-        for param_set in parameters:
-            item_stmt = SQL(
-                template_stmt.sql,
-                param_set,
-                dialect=self.dialect,
-                config=replace(current_config or SQLConfig(), enable_validation=False),
-            )
-            item_params_dict = item_stmt.get_parameters(style=self._get_placeholder_style())
-            if not isinstance(item_params_dict, dict):
-                logger.error("Parameter set did not resolve to a dictionary for BigQuery: %s", item_params_dict)
-                item_params_dict = {}
-
-            bq_item_params = self._prepare_bq_query_parameters(item_params_dict)
-            query_job: Optional[QueryJob] = None
-            try:
-                query_job = self._run_query_job(
-                    processed_sql_template, bq_item_params, connection=conn, job_config=job_config
-                )
-                all_job_ids.append(query_job.job_id)
-                query_job.result(timeout=kwargs.get("bq_job_timeout_many"))  # Wait for this job
-                if query_job.num_dml_affected_rows is not None:
-                    total_rows_affected += query_job.num_dml_affected_rows
-
-            except Exception:
-                errors_occurred = True
-                job_id_str = query_job.job_id if query_job else "unknown"
-                logger.exception(
-                    "Error in execute_many for a parameter set. Job ID: %s, Params: %s ",
-                    job_id_str,
-                    param_set,
-                )
-                # Decide on behavior: stop all, or continue? For now, continue and report aggregate.
-
-        final_operation_type = "EXECUTE_MANY"
-        if template_stmt.expression and hasattr(template_stmt.expression, "key"):
-            final_operation_type = str(template_stmt.expression.key).upper() + "_MANY"
-
-        return SQLResult[RowT](
-            statement=template_stmt,
-            data=[],
-            rows_affected=total_rows_affected,
-            operation_type=final_operation_type,
-            metadata=final_metadata,
         )
 
     def _select_to_arrow_impl(

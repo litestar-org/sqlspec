@@ -73,71 +73,89 @@ class AsyncmyDriver(
         connection: "Optional[AsyncmyConnection]" = None,  # pyright: ignore
         **kwargs: Any,
     ) -> Any:
+        if statement.is_script:
+            return await self._execute_script(
+                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
+                connection=connection,
+                **kwargs,
+            )
+        if statement.is_many:
+            return await self._execute_many(
+                statement.to_sql(placeholder_style=self._get_placeholder_style()),
+                statement.parameters,
+                connection=connection,
+                **kwargs,
+            )
+        return await self._execute(
+            statement.to_sql(placeholder_style=self._get_placeholder_style()),
+            statement.parameters,
+            statement,
+            connection=connection,
+            **kwargs,
+        )
+
+    async def _execute(
+        self,
+        sql: str,
+        params: Any,
+        statement: "SQL",
+        connection: "Optional[AsyncmyConnection]" = None,
+        **kwargs: Any,
+    ) -> Any:
         async with instrument_operation_async(self, "asyncmy_execute", "database"):
             conn = self._connection(connection)
-
-            if statement.is_script:
-                final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-                if self.instrumentation_config.log_queries:
-                    logger.debug("Executing SQL script: %s", final_sql)
-                async with self._get_cursor(conn) as cursor:
-                    # Asyncmy might require multi=True for scripts, depending on how they are structured.
-                    # Assuming a single call can handle multiple statements if needed.
-                    await cursor.execute(final_sql)  # For scripts, parameters are usually inlined
-                return "SCRIPT EXECUTED"
-
-            final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-            params_to_execute = statement.parameters
-
             if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQL: %s", final_sql)
-
-            if statement.is_many:
-                # asyncmy executemany expects a list of sequences (tuples or lists)
-                params_list: list[Union[list[Any], tuple[Any, ...]]] = []
-                if params_to_execute and isinstance(params_to_execute, Sequence):
-                    for param_set in params_to_execute:
-                        if isinstance(param_set, (list, tuple)):
-                            params_list.append(param_set)
-                        elif param_set is None:  # Should be handled by SQL object or be an empty sequence
-                            params_list.append([])
-                        else:  # Single item in a batch set
-                            params_list.append([param_set])
-                # else: params_list remains empty for an empty batch
-
-                if self.instrumentation_config.log_parameters and params_list:
-                    logger.debug("Query parameters (batch): %s", params_list)
-
-                async with self._get_cursor(conn) as cursor:
-                    await cursor.executemany(final_sql, params_list)
-                    # rowcount for executemany indicates number of affected rows or statements
-                    return cursor.rowcount if cursor.rowcount != -1 else len(params_list)
-            else:
-                # Single execution
-                # asyncmy execute expects params as a list or tuple, or dict for named placeholders
-                # Since we use pyformat_positional (%), it expects a sequence.
-                processed_params: Optional[Union[list[Any], tuple[Any, ...]]] = None
-                if params_to_execute is not None:
-                    if isinstance(params_to_execute, (list, tuple)):
-                        processed_params = params_to_execute
-                    else:  # Single parameter
-                        processed_params = [params_to_execute]
-
-                if self.instrumentation_config.log_parameters and processed_params:
-                    logger.debug("Query parameters: %s", processed_params)
-
-                async with self._get_cursor(conn) as cursor:
-                    await cursor.execute(final_sql, processed_params)
-
-                    if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
-                        # For asyncmy, fetchall() returns a list of tuples (default) or dicts if dict cursor used.
-                        # We also need the description for column names if not using a dict cursor by default.
-                        # Assuming _get_cursor provides a cursor that gives us what _wrap_select_result expects.
-                        # The `_wrap_select_result` will handle fetching and processing.
-                        return cursor  # Pass the cursor itself to _wrap_select_result
-
-                    # For DML, the cursor contains rowcount etc.
+                logger.debug("Executing SQL: %s", sql)
+            processed_params: Optional[Union[list[Any], tuple[Any, ...]]] = None
+            if params is not None:
+                processed_params = params if isinstance(params, (list, tuple)) else [params]
+            if self.instrumentation_config.log_parameters and processed_params:
+                logger.debug("Query parameters: %s", processed_params)
+            async with self._get_cursor(conn) as cursor:
+                await cursor.execute(sql, processed_params)
+                if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
                     return cursor
+                return cursor
+
+    async def _execute_many(
+        self,
+        sql: str,
+        param_list: Any,
+        connection: "Optional[AsyncmyConnection]" = None,
+        **kwargs: Any,
+    ) -> int:
+        async with instrument_operation_async(self, "asyncmy_execute_many", "database"):
+            conn = self._connection(connection)
+            params_list: list[Union[list[Any], tuple[Any, ...]]] = []
+            if param_list and isinstance(param_list, Sequence):
+                for param_set in param_list:
+                    if isinstance(param_set, (list, tuple)):
+                        params_list.append(param_set)
+                    elif param_set is None:
+                        params_list.append([])
+                    else:
+                        params_list.append([param_set])
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL (executemany): %s", sql)
+            if self.instrumentation_config.log_parameters and params_list:
+                logger.debug("Query parameters (batch): %s", params_list)
+            async with self._get_cursor(conn) as cursor:
+                await cursor.executemany(sql, params_list)
+                return cursor.rowcount if cursor.rowcount != -1 else len(params_list)
+
+    async def _execute_script(
+        self,
+        script: str,
+        connection: "Optional[AsyncmyConnection]" = None,
+        **kwargs: Any,
+    ) -> str:
+        async with instrument_operation_async(self, "asyncmy_execute_script", "database"):
+            conn = self._connection(connection)
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL script: %s", script)
+            async with self._get_cursor(conn) as cursor:
+                await cursor.execute(script)
+            return "SCRIPT EXECUTED"
 
     async def _wrap_select_result(
         self,

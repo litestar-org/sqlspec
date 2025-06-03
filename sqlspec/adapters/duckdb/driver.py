@@ -80,48 +80,90 @@ class DuckDBDriver(
         connection: Optional["DuckDBConnection"] = None,
         **kwargs: Any,
     ) -> Any:
-        with instrument_operation(self, "duckdb_execute", "database"):
-            conn = self._connection(connection)
+        if statement.is_script:
+            return self._execute_script(
+                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
+                connection=connection,
+                **kwargs,
+            )
+        if statement.is_many:
+            return self._execute_many(
+                statement.to_sql(placeholder_style=self._get_placeholder_style()),
+                statement.parameters,
+                connection=connection,
+                **kwargs,
+            )
+        return self._execute(
+            statement.to_sql(placeholder_style=self._get_placeholder_style()),
+            statement.parameters,
+            statement,
+            connection=connection,
+            **kwargs,
+        )
 
-            if statement.is_script:
-                final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-                if self.instrumentation_config.log_queries:
-                    logger.debug("Executing SQL script: %s", final_sql)
-                with self._get_cursor(conn) as cursor:
-                    cursor.execute(final_sql)
-                return "SCRIPT EXECUTED"
+    def _execute(
+        self,
+        sql: str,
+        params: Any,
+        statement: SQL,
+        connection: Optional["DuckDBConnection"] = None,
+        **kwargs: Any,
+    ) -> Any:
+        conn = self._connection(connection)
+        final_exec_params: Optional[list[Any]] = None
+        if params is not None:
+            if isinstance(params, list):
+                final_exec_params = params
+            elif hasattr(params, "__iter__") and not isinstance(params, (str, bytes)):
+                final_exec_params = list(params)
+            else:
+                final_exec_params = [params]
+        with self._get_cursor(conn) as cursor:
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL: %s", sql)
+            if self.instrumentation_config.log_parameters and final_exec_params:
+                logger.debug("Query parameters: %s", final_exec_params)
+            cursor.execute(sql, final_exec_params or [])
+            if self.returns_rows(statement.expression):
+                fetched_data = cursor.fetchall()
+                column_names = [col[0] for col in cursor.description or []]
+                return {"data": fetched_data, "columns": column_names, "rowcount": cursor.rowcount}
+            return {"rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1}
 
-            final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-            params_to_execute = statement.parameters
+    def _execute_many(
+        self,
+        sql: str,
+        param_list: Any,
+        connection: Optional["DuckDBConnection"] = None,
+        **kwargs: Any,
+    ) -> Any:
+        conn = self._connection(connection)
+        final_exec_params = (
+            [list(p) if isinstance(p, (list, tuple)) else [p] for p in param_list]
+            if param_list and isinstance(param_list, Sequence)
+            else []
+        )
+        with self._get_cursor(conn) as cursor:
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL (executemany): %s", sql)
+            if self.instrumentation_config.log_parameters and final_exec_params:
+                logger.debug("Query parameters (batch): %s", final_exec_params)
+            for params in final_exec_params:
+                cursor.execute(sql, params)
+            return {"rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1}
 
-            final_exec_params: Optional[list[Any]] = None
-            if statement.is_many:
-                if params_to_execute and isinstance(params_to_execute, Sequence):
-                    final_exec_params = [list(p) if isinstance(p, (list, tuple)) else [p] for p in params_to_execute]
-                else:
-                    final_exec_params = []
-            elif params_to_execute is not None:
-                if isinstance(params_to_execute, list):
-                    final_exec_params = params_to_execute
-                elif hasattr(params_to_execute, "__iter__") and not isinstance(params_to_execute, (str, bytes)):
-                    final_exec_params = list(params_to_execute)
-                else:
-                    final_exec_params = [params_to_execute]
-
-            with self._get_cursor(conn) as cursor:
-                if self.instrumentation_config.log_queries:
-                    logger.debug("Executing SQL: %s", final_sql)
-                if self.instrumentation_config.log_parameters and final_exec_params:
-                    logger.debug("Query parameters: %s", final_exec_params)
-
-                cursor.execute(final_sql, final_exec_params or [])
-
-                if self.returns_rows(statement.expression):
-                    fetched_data = cursor.fetchall()
-                    column_names = [col[0] for col in cursor.description or []]
-                    return {"data": fetched_data, "columns": column_names, "rowcount": cursor.rowcount}
-
-                return {"rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1}
+    def _execute_script(
+        self,
+        script: str,
+        connection: Optional["DuckDBConnection"] = None,
+        **kwargs: Any,
+    ) -> str:
+        conn = self._connection(connection)
+        if self.instrumentation_config.log_queries:
+            logger.debug("Executing SQL script: %s", script)
+        with self._get_cursor(conn) as cursor:
+            cursor.execute(script)
+        return "SCRIPT EXECUTED"
 
     def _wrap_select_result(
         self,
