@@ -2,6 +2,8 @@
 
 This package provides fluent interfaces for building SQL queries with automatic
 parameter binding and validation.
+
+# SelectBuilder is now generic and supports as_schema for type-safe schema integration.
 """
 
 from sqlspec.exceptions import SQLBuilderError

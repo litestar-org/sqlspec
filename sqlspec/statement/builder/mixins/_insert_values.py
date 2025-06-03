@@ -27,9 +27,9 @@ class InsertValuesMixin:
         if hasattr(self, "_columns"):
             # If no columns, clear the list
             if not columns:
-                self._columns.clear()  # type: ignore[attr-defined]
+                self._columns.clear()  # pyright: ignore
             else:
-                self._columns[:] = [col.name if isinstance(col, exp.Column) else str(col) for col in columns]  # type: ignore[attr-defined]
+                self._columns[:] = [col.name if isinstance(col, exp.Column) else str(col) for col in columns]  # pyright: ignore
         return self
 
     def values(self, *values: Any) -> Self:
@@ -40,10 +40,11 @@ class InsertValuesMixin:
             msg = "Cannot add values to a non-INSERT expression."
             raise SQLBuilderError(msg)
         # Validate value count if _columns is present and non-empty
-        if hasattr(self, "_columns") and getattr(self, "_columns", []):
-            if len(values) != len(self._columns):  # type: ignore[attr-defined]
-                msg = f"Number of values ({len(values)}) does not match the number of specified columns ({len(self._columns)})."  # type: ignore[attr-defined]
-                raise SQLBuilderError(msg)
+        if (
+            hasattr(self, "_columns") and getattr(self, "_columns", []) and len(values) != len(self._columns)  # pyright: ignore
+        ):
+            msg = f"Number of values ({len(values)}) does not match the number of specified columns ({len(self._columns)})."  # pyright: ignore
+            raise SQLBuilderError(msg)
         row_exprs = [exp.Literal.string(str(v)) if not isinstance(v, exp.Expression) else v for v in values]
         values_expr = exp.Values(expressions=[row_exprs])
         self._expression.set("expression", values_expr)

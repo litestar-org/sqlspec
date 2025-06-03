@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from sqlglot import exp
 from typing_extensions import Self
@@ -32,7 +32,8 @@ class WhereClauseMixin:
         if isinstance(self, UpdateBuilder) and not (
             hasattr(self, "_expression") and isinstance(self._expression, exp.Update)
         ):
-            raise SQLBuilderError("Cannot add WHERE clause to non-UPDATE expression")
+            msg = "Cannot add WHERE clause to non-UPDATE expression"
+            raise SQLBuilderError(msg)
         builder = cast("BuilderProtocol", self)
         if builder._expression is None:
             msg = "Cannot add WHERE clause: expression is not initialized."
@@ -79,15 +80,14 @@ class WhereClauseMixin:
         condition: exp.Expression = col_expr.between(exp.var(low_param), exp.var(high_param))
         return cast("Self", self.where(condition))
 
-    def where_like(self, column: "Union[str, exp.Column]", pattern: str, escape: str = None) -> "Self":
+    def where_like(self, column: "Union[str, exp.Column]", pattern: str, escape: Optional[str] = None) -> "Self":
         _, param_name = self.add_parameter(pattern)  # type: ignore[attr-defined]
         col_expr = exp.column(column) if not isinstance(column, exp.Column) else column
         if escape is not None:
-            condition: exp.Expression = exp.Like(
-                this=col_expr, expression=exp.var(param_name), escape=exp.Literal.string(str(escape))
-            )
+            cond = exp.Like(this=col_expr, expression=exp.var(param_name), escape=exp.Literal.string(str(escape)))
         else:
-            condition: exp.Expression = col_expr.like(exp.var(param_name))
+            cond = col_expr.like(exp.var(param_name))
+        condition: exp.Expression = cond
         return cast("Self", self.where(condition))
 
     def where_not_like(self, column: "Union[str, exp.Column]", pattern: str) -> "Self":
@@ -150,7 +150,7 @@ class WhereClauseMixin:
         # Subquery support
         if hasattr(values, "build") or isinstance(values, exp.Expression):
             if hasattr(values, "build"):
-                subquery = values.build()  # type: ignore[attr-defined]
+                subquery = values.build()  # pyright: ignore
                 subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect_name", None)))
             else:
                 subquery_exp = values
@@ -158,12 +158,13 @@ class WhereClauseMixin:
             return cast("Self", self.where(condition))
         # Iterable of values
         if not hasattr(values, "__iter__") or isinstance(values, (str, bytes)):
-            raise SQLBuilderError("Unsupported type for 'values' in WHERE IN")
+            msg = "Unsupported type for 'values' in WHERE IN"
+            raise SQLBuilderError(msg)
         params = []
         for v in values:
             _, param_name = self.add_parameter(v)  # type: ignore[attr-defined]
             params.append(exp.var(param_name))
-        condition: exp.Expression = col_expr.isin(*params)
+        condition = col_expr.isin(*params)
         return cast("Self", self.where(condition))
 
     def where_not_in(self, column: "Union[str, exp.Column]", values: Any) -> "Self":
@@ -171,22 +172,83 @@ class WhereClauseMixin:
         col_expr = exp.column(column) if not isinstance(column, exp.Column) else column
         if hasattr(values, "build") or isinstance(values, exp.Expression):
             if hasattr(values, "build"):
-                subquery = values.build()  # type: ignore[attr-defined]
+                subquery = values.build()  # pyright: ignore
                 subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect_name", None)))
             else:
                 subquery_exp = values
             condition = exp.Not(this=col_expr.isin(subquery_exp))
             return cast("Self", self.where(condition))
         if not hasattr(values, "__iter__") or isinstance(values, (str, bytes)):
-            raise SQLBuilderError("Values for where_not_in must be a non-string iterable or subquery.")
+            msg = "Values for where_not_in must be a non-string iterable or subquery."
+            raise SQLBuilderError(msg)
         params = []
         for v in values:
             _, param_name = self.add_parameter(v)  # type: ignore[attr-defined]
             params.append(exp.var(param_name))
-        condition: exp.Expression = exp.Not(this=col_expr.isin(*params))
+        condition = exp.Not(this=col_expr.isin(*params))
         return cast("Self", self.where(condition))
 
     def where_null(self, column: "Union[str, exp.Column]") -> "Self":
         col_expr = exp.column(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.is_(exp.null())
+        return cast("Self", self.where(condition))
+
+    def where_any(self, column: "Union[str, exp.Column]", values: Any) -> "Self":
+        """Add a WHERE ... = ANY (...) clause. Supports subqueries and iterables.
+
+        Args:
+            column: The column to compare.
+            values: A subquery or iterable of values.
+
+        Returns:
+            The current builder instance for method chaining.
+        """
+        col_expr = exp.column(column) if not isinstance(column, exp.Column) else column
+        if hasattr(values, "build") or isinstance(values, exp.Expression):
+            if hasattr(values, "build"):
+                subquery = values.build()  # pyright: ignore
+                subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect_name", None)))
+            else:
+                subquery_exp = values
+            condition = exp.EQ(this=col_expr, expression=exp.Any(this=subquery_exp))
+            return cast("Self", self.where(condition))
+        if not hasattr(values, "__iter__") or isinstance(values, (str, bytes)):
+            msg = "Unsupported type for 'values' in WHERE ANY"
+            raise SQLBuilderError(msg)
+        params = []
+        for v in values:
+            _, param_name = self.add_parameter(v)  # type: ignore[attr-defined]
+            params.append(exp.var(param_name))
+        tuple_expr = exp.Tuple(expressions=params)
+        condition = exp.EQ(this=col_expr, expression=exp.Any(this=tuple_expr))
+        return cast("Self", self.where(condition))
+
+    def where_not_any(self, column: "Union[str, exp.Column]", values: Any) -> "Self":
+        """Add a WHERE ... <> ANY (...) (or NOT = ANY) clause. Supports subqueries and iterables.
+
+        Args:
+            column: The column to compare.
+            values: A subquery or iterable of values.
+
+        Returns:
+            The current builder instance for method chaining.
+        """
+        col_expr = exp.column(column) if not isinstance(column, exp.Column) else column
+        if hasattr(values, "build") or isinstance(values, exp.Expression):
+            if hasattr(values, "build"):
+                subquery = values.build()  # pyright: ignore
+                subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect_name", None)))
+            else:
+                subquery_exp = values
+            condition = exp.NEQ(this=col_expr, expression=exp.Any(this=subquery_exp))
+            return cast("Self", self.where(condition))
+        if not hasattr(values, "__iter__") or isinstance(values, (str, bytes)):
+            msg = "Unsupported type for 'values' in WHERE NOT ANY"
+            raise SQLBuilderError(msg)
+        params = []
+        for v in values:
+            _, param_name = self.add_parameter(v)  # type: ignore[attr-defined]
+            params.append(exp.var(param_name))
+        tuple_expr = exp.Tuple(expressions=params)
+        condition = exp.NEQ(this=col_expr, expression=exp.Any(this=tuple_expr))
         return cast("Self", self.where(condition))

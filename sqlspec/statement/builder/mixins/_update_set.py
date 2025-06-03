@@ -8,6 +8,8 @@ from sqlspec.exceptions import SQLBuilderError
 
 __all__ = ("UpdateSetClauseMixin",)
 
+MIN_SET_ARGS = 2
+
 
 class UpdateSetClauseMixin:
     """Mixin providing SET clause for UPDATE builders."""
@@ -33,6 +35,7 @@ class UpdateSetClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
+
         if self._expression is None:
             self._expression = exp.Update()
         if not isinstance(self._expression, exp.Update):
@@ -40,7 +43,7 @@ class UpdateSetClauseMixin:
             raise SQLBuilderError(msg)
         assignments = []
         # (column, value) signature
-        if len(args) == 2 and not kwargs:
+        if len(args) == MIN_SET_ARGS and not kwargs:
             col, val = args
             param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
             col_expr = col if isinstance(col, exp.Column) else exp.column(col)
@@ -52,6 +55,7 @@ class UpdateSetClauseMixin:
                 param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
                 assignments.append(exp.EQ(this=exp.column(col), expression=exp.Placeholder(this=param_name)))
         else:
-            raise SQLBuilderError("Invalid arguments for set(): use (column, value), mapping, or kwargs.")
+            msg = "Invalid arguments for set(): use (column, value), mapping, or kwargs."
+            raise SQLBuilderError(msg)
         self._expression.set("expressions", assignments)
         return self

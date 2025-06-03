@@ -6,12 +6,10 @@ with automatic parameter binding and validation.
 
 import logging
 from dataclasses import dataclass, field
-from typing import Union
+from typing import Optional, Union, cast
 
 from sqlglot import exp
-from typing_extensions import Self
 
-from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder.base import QueryBuilder
 from sqlspec.statement.builder.mixins import (
     AggregateFunctionsMixin,
@@ -23,8 +21,10 @@ from sqlspec.statement.builder.mixins import (
     JoinClauseMixin,
     LimitOffsetClauseMixin,
     OrderByClauseMixin,
+    PivotClauseMixin,
     SelectColumnsMixin,
     SetOperationMixin,
+    UnpivotClauseMixin,
     WhereClauseMixin,
     WindowFunctionsMixin,
 )
@@ -52,10 +52,35 @@ class SelectBuilder(
     AggregateFunctionsMixin,
     WindowFunctionsMixin,
     CaseBuilderMixin,
+    PivotClauseMixin,
+    UnpivotClauseMixin,
 ):
-    """Builds SELECT queries."""
+    """Type-safe builder for SELECT queries with schema/model integration.
+
+    This builder provides a fluent, safe interface for constructing SQL SELECT statements.
+    It supports type-safe result mapping via the `as_schema()` method, allowing users to
+    associate a schema/model (such as a Pydantic model, dataclass, or msgspec.Struct) with
+    the query for static type checking and IDE support.
+
+    Example:
+        >>> class User(BaseModel):
+        ...     id: int
+        ...     name: str
+        >>> builder = (
+        ...     SelectBuilder()
+        ...     .select("id", "name")
+        ...     .from_("users")
+        ...     .as_schema(User)
+        ... )
+        >>> result: list[User] = driver.execute(builder)
+
+    Attributes:
+        _schema: The schema/model class for row typing, if set via as_schema().
+    """
 
     _with_parts: "dict[str, Union[exp.CTE, SelectBuilder]]" = field(default_factory=dict, init=False)
+    _expression: Optional[exp.Expression] = field(default=None, init=False, repr=False, compare=False, hash=False)
+    _schema: Optional[type[RowT]] = None
 
     def __post_init__(self) -> "None":
         super().__post_init__()
@@ -72,30 +97,28 @@ class SelectBuilder(
         return SQLResult[RowT]
 
     def _create_base_expression(self) -> "exp.Select":
-        if self._expression is None:
+        if self._expression is None or not isinstance(self._expression, exp.Select):
             self._expression = exp.Select()
-        return self._expression
+        # At this point, self._expression is exp.Select
+        return self._expression  # type: ignore[return-value]
 
-    def order_by(self, *items: "Union[str, exp.Ordered]") -> "Self":
-        """Add ORDER BY clause.
+    def as_schema(self, schema: "type[RowT]") -> "SelectBuilder[RowT]":
+        """Return a new SelectBuilder instance parameterized with the given schema/model type.
+
+        This enables type-safe result mapping: the returned builder will carry the schema type
+        for static analysis and IDE autocompletion. The schema should be a class such as a Pydantic
+        model, dataclass, or msgspec.Struct that describes the expected row shape.
 
         Args:
-            *items: Columns to order by. Can be strings (column names) or
-                    sqlglot.exp.Ordered instances for specific directions (e.g., exp.column("name").desc()).
-
-        Raises:
-            SQLBuilderError: If the current expression is not a SELECT statement or if the item type is unsupported.
+            schema: The schema/model class to use for row typing (e.g., a Pydantic model, dataclass, or msgspec.Struct).
 
         Returns:
-            SelectBuilder: The current builder instance for method chaining.
+            SelectBuilder[RowT]: A new SelectBuilder instance with RowT set to the provided schema/model type.
         """
-        if not isinstance(self._expression, exp.Select):
-            msg = "Order by can only be applied to a SELECT expression."
-            raise SQLBuilderError(msg)
-
-        current_expr = self._expression
-        for item in items:
-            order_item = exp.column(item).asc() if isinstance(item, str) else item
-            current_expr = current_expr.order_by(order_item, copy=False)
-        self._expression = current_expr
-        return self
+        new_builder = SelectBuilder()
+        new_builder._expression = self._expression.copy() if self._expression is not None else None
+        new_builder._parameters = self._parameters.copy()
+        new_builder._parameter_counter = self._parameter_counter
+        new_builder.dialect = self.dialect
+        new_builder._schema = schema  # type: ignore[attr-defined]
+        return cast("SelectBuilder[RowT]", new_builder)

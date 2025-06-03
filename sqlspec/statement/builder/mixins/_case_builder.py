@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from sqlglot import exp
 
@@ -29,11 +29,11 @@ class CaseBuilderMixin:
 class CaseBuilder:
     """Builder for CASE expressions."""
 
-    _parent: "QueryBuilder[Generic[RowT]]"  # type: ignore[valid-type]
+    _parent: "QueryBuilder[RowT]"  # pyright: ignore
     _alias: Optional[str]
     _case_expr: exp.Case
 
-    def __init__(self, parent: "QueryBuilder[Generic[RowT]]", alias: Optional[str] = None) -> None:  # pyright: ignore
+    def __init__(self, parent: "QueryBuilder[RowT]", alias: Optional[str] = None) -> None:  # pyright: ignore
         """Initialize CaseBuilder.
 
         Args:
@@ -79,7 +79,7 @@ class CaseBuilder:
         self._case_expr.set("default", value_expr)
         return self
 
-    def end(self) -> "QueryBuilder[Generic[RowT]]":  # pyright: ignore
+    def end(self) -> "QueryBuilder[RowT]":  # pyright: ignore
         """Finalize the CASE expression and add it to the SELECT clause.
 
         Returns:

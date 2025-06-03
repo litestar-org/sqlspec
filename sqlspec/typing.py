@@ -1,4 +1,3 @@
-# ruff: noqa: PLC0105
 from collections.abc import Iterable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import Field, fields
@@ -76,7 +75,7 @@ DictRow: TypeAlias = "dict[str, Any]"
 """Type variable for DictRow types."""
 TupleRow: TypeAlias = "tuple[Any, ...]"
 """Type variable for TupleRow types."""
-RowT = TypeVar("RowT", default=dict[str, Any], covariant=True)
+RowT = TypeVar("RowT", default=dict[str, Any])
 
 SupportedSchemaModel: TypeAlias = "Union[Struct, BaseModel, DataclassProtocol]"
 """Type alias for pydantic or msgspec models.

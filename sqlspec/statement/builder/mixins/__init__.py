@@ -1,3 +1,5 @@
+"""SQL statement builder mixins."""
+
 from sqlspec.statement.builder.mixins._aggregate_functions import AggregateFunctionsMixin
 from sqlspec.statement.builder.mixins._case_builder import CaseBuilderMixin
 from sqlspec.statement.builder.mixins._common_table_expr import CommonTableExpressionMixin
@@ -19,31 +21,16 @@ from sqlspec.statement.builder.mixins._merge_clauses import (
     MergeUsingClauseMixin,
 )
 from sqlspec.statement.builder.mixins._order_by import OrderByClauseMixin
+from sqlspec.statement.builder.mixins._pivot import PivotClauseMixin
 from sqlspec.statement.builder.mixins._returning import ReturningClauseMixin
 from sqlspec.statement.builder.mixins._select_columns import SelectColumnsMixin
 from sqlspec.statement.builder.mixins._set_ops import SetOperationMixin
+from sqlspec.statement.builder.mixins._unpivot import UnpivotClauseMixin
 from sqlspec.statement.builder.mixins._update_from import UpdateFromClauseMixin
 from sqlspec.statement.builder.mixins._update_set import UpdateSetClauseMixin
 from sqlspec.statement.builder.mixins._update_table import UpdateTableClauseMixin
 from sqlspec.statement.builder.mixins._where import WhereClauseMixin
 from sqlspec.statement.builder.mixins._window_functions import WindowFunctionsMixin
-
-# Add stubs for PivotClauseMixin and UnpivotClauseMixin if not present
-try:
-    from sqlspec.statement.builder.mixins._pivot import PivotClauseMixin
-except ImportError:
-
-    class PivotClauseMixin:
-        """Stub for PivotClauseMixin."""
-
-
-try:
-    from sqlspec.statement.builder.mixins._unpivot import UnpivotClauseMixin
-except ImportError:
-
-    class UnpivotClauseMixin:
-        """Stub for UnpivotClauseMixin."""
-
 
 __all__ = (
     "AggregateFunctionsMixin",

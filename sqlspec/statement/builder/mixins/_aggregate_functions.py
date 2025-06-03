@@ -86,3 +86,57 @@ class AggregateFunctionsMixin:
         min_expr = exp.Min(this=col_expr)
         select_expr = exp.alias_(min_expr, alias) if alias else min_expr
         return self.select(select_expr)  # type: ignore[attr-defined]
+
+    def array_agg(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Any:
+        """Add ARRAY_AGG aggregate function to SELECT clause.
+
+        Args:
+            column: The column to aggregate into an array.
+            alias: Optional alias for the result.
+
+        Returns:
+            The current builder instance for method chaining.
+        """
+        col_expr = exp.column(column) if isinstance(column, str) else column
+        try:
+            array_agg_expr = exp.ArrayAgg(this=col_expr)
+        except AttributeError:
+            array_agg_expr = exp.Anonymous(this="ARRAY_AGG", expressions=[col_expr])
+        select_expr = exp.alias_(array_agg_expr, alias) if alias else array_agg_expr
+        return self.select(select_expr)  # type: ignore[attr-defined]
+
+    def bool_and(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Any:
+        """Add BOOL_AND aggregate function to SELECT clause (PostgreSQL, DuckDB, etc).
+
+        Args:
+            column: The boolean column to aggregate.
+            alias: Optional alias for the result.
+
+        Returns:
+            The current builder instance for method chaining.
+
+        Note:
+            Uses exp.Anonymous for BOOL_AND. Not all dialects support this function.
+        """
+        col_expr = exp.column(column) if isinstance(column, str) else column
+        bool_and_expr = exp.Anonymous(this="BOOL_AND", expressions=[col_expr])
+        select_expr = exp.alias_(bool_and_expr, alias) if alias else bool_and_expr
+        return self.select(select_expr)  # type: ignore[attr-defined]
+
+    def bool_or(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Any:
+        """Add BOOL_OR aggregate function to SELECT clause (PostgreSQL, DuckDB, etc).
+
+        Args:
+            column: The boolean column to aggregate.
+            alias: Optional alias for the result.
+
+        Returns:
+            The current builder instance for method chaining.
+
+        Note:
+            Uses exp.Anonymous for BOOL_OR. Not all dialects support this function.
+        """
+        col_expr = exp.column(column) if isinstance(column, str) else column
+        bool_or_expr = exp.Anonymous(this="BOOL_OR", expressions=[col_expr])
+        select_expr = exp.alias_(bool_or_expr, alias) if alias else bool_or_expr
+        return self.select(select_expr)  # type: ignore[attr-defined]

@@ -6,6 +6,7 @@ This module provides the `sql` factory object for easy SQL construction:
 """
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import sqlglot
@@ -27,6 +28,14 @@ logger = logging.getLogger("sqlspec")
 
 MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2
+SQL_TYPE_PATTERNS = {
+    "SELECT": re.compile(r"^\s*(?:/\*.*?\*/\s*)*(?:--.*?\n\s*)*SELECT\\b", re.IGNORECASE | re.DOTALL),
+    "INSERT": re.compile(r"^\s*(?:/\*.*?\*/\s*)*(?:--.*?\n\s*)*INSERT\\b", re.IGNORECASE | re.DOTALL),
+    "UPDATE": re.compile(r"^\s*(?:/\*.*?\*/\s*)*(?:--.*?\n\s*)*UPDATE\\b", re.IGNORECASE | re.DOTALL),
+    "DELETE": re.compile(r"^\s*(?:/\*.*?\*/\s*)*(?:--.*?\n\s*)*DELETE\\b", re.IGNORECASE | re.DOTALL),
+    "MERGE": re.compile(r"^\s*(?:/\*.*?\*/\s*)*(?:--.*?\n\s*)*MERGE\\b", re.IGNORECASE | re.DOTALL),
+    "WITH": re.compile(r"^\s*(?:/\*.*?\*/\s*)*(?:--.*?\n\s*)*WITH\\b", re.IGNORECASE | re.DOTALL),
+}
 
 
 class SQLFactory:
@@ -68,6 +77,13 @@ class SQLFactory:
         ```
     """
 
+    @classmethod
+    def detect_sql_type(cls, sql: str) -> str:
+        for typ, pat in SQL_TYPE_PATTERNS.items():
+            if pat.match(sql):
+                return typ
+        return "UNKNOWN"
+
     def __init__(self, dialect: Optional[DialectType] = None) -> None:
         """Initialize the SQL factory.
 
@@ -77,149 +93,178 @@ class SQLFactory:
         self.dialect = dialect
 
     # ===================
+    # Callable Interface
+    # ===================
+    def __call__(
+        self,
+        statement: str,
+        parameters: Optional[Any] = None,
+        *filters: Any,
+        config: Optional[Any] = None,
+        dialect: Optional[DialectType] = None,
+        **kwargs: Any,
+    ) -> "Any":
+        """Create a SelectBuilder from a SQL string, only allowing SELECT/CTE queries.
+
+        Args:
+            statement: The SQL statement string.
+            parameters: Optional parameters for the query.
+            *filters: Optional filters.
+            config: Optional config.
+            dialect: Optional SQL dialect.
+            **kwargs: Additional parameters.
+
+        Returns:
+            SelectBuilder instance.
+
+        Raises:
+            SQLBuilderError: If the SQL is not a SELECT/CTE statement.
+        """
+
+        from sqlspec.exceptions import SQLBuilderError
+        from sqlspec.statement.builder import SelectBuilder
+
+        try:
+            parsed_expr = sqlglot.parse_one(statement, read=dialect or self.dialect)
+        except Exception as e:
+            msg = f"Failed to parse SQL: {e}"
+            raise SQLBuilderError(msg)
+        actual_type = type(parsed_expr).__name__.upper()
+        # Map sqlglot expression class to type string
+        expr_type_map = {
+            "SELECT": "SELECT",
+            "INSERT": "INSERT",
+            "UPDATE": "UPDATE",
+            "DELETE": "DELETE",
+            "MERGE": "MERGE",
+            "WITH": "WITH",
+        }
+        actual_type_str = expr_type_map.get(actual_type, actual_type)
+        # Only allow SELECT or WITH (if WITH wraps SELECT)
+        if actual_type_str == "SELECT" or (
+            actual_type_str == "WITH" and hasattr(parsed_expr, "this") and isinstance(parsed_expr.this, exp.Select)
+        ):
+            builder = SelectBuilder(dialect=dialect or self.dialect)
+            builder._expression = parsed_expr
+            if parameters or kwargs:
+                from sqlspec.statement.sql import SQL
+
+                sql_obj = SQL(statement, parameters, *filters, dialect=dialect, config=config, **kwargs)
+                builder._sql_object = sql_obj  # type: ignore[attr-defined]
+            return builder
+        # If not SELECT, raise with helpful message
+        msg = (
+            f"sql(...) only supports SELECT statements. Detected type: {actual_type_str}. "
+            f"Use sql.{actual_type_str.lower()}() instead."
+        )
+        raise SQLBuilderError(msg)
+
+    # ===================
     # Statement Builders
     # ===================
-
     def select(
         self, *columns_or_sql: Union[str, exp.Expression], dialect: Optional[DialectType] = None
     ) -> "SelectBuilder":
-        """Create a SELECT builder, optionally from raw SQL.
-
-        Args:
-            *columns_or_sql: Columns to select, or a raw SQL string if only one argument.
-                           If first argument looks like SQL, it will be parsed.
-            dialect: SQL dialect to use (overrides factory default).
-
-        Returns:
-            SelectBuilder: A new SelectBuilder instance.
-        """
+        from sqlspec.exceptions import SQLBuilderError
         from sqlspec.statement.builder import SelectBuilder
 
         builder_dialect = dialect or self.dialect
-
-        # Check if this looks like raw SQL (single string argument with SQL keywords)
         if len(columns_or_sql) == 1 and isinstance(columns_or_sql[0], str):
             sql_candidate = columns_or_sql[0].strip()
-            if self._looks_like_sql(sql_candidate, "SELECT"):
-                select_builder = SelectBuilder(dialect=builder_dialect)
-                # Ensure proper initialization
-                if select_builder._expression is None:
-                    select_builder.__post_init__()
-                return self._populate_select_from_sql(select_builder, sql_candidate)
+            # Validate type
+            import re
 
-        # Traditional column-based usage
+            if not re.match(r"^\s*(SELECT|WITH)\\b", sql_candidate, re.IGNORECASE):
+                detected = self.detect_sql_type(sql_candidate)
+                msg = (
+                    f"sql.select() expects a SELECT or WITH statement, got {detected}. "
+                    f"Use sql.{detected.lower()}() instead."
+                )
+                raise SQLBuilderError(msg)
+            select_builder = SelectBuilder(dialect=builder_dialect)
+            if select_builder._expression is None:
+                select_builder.__post_init__()
+            return self._populate_select_from_sql(select_builder, sql_candidate)
         select_builder = SelectBuilder(dialect=builder_dialect)
-        # Ensure proper initialization
         if select_builder._expression is None:
             select_builder.__post_init__()
-
         if columns_or_sql:
             select_builder.select(*columns_or_sql)
         return select_builder
 
     def insert(self, table_or_sql: Optional[str] = None, dialect: Optional[DialectType] = None) -> "InsertBuilder":
-        """Create an INSERT builder, optionally from raw SQL.
-
-        Args:
-            table_or_sql: Table name to insert into, or raw SQL string.
-            dialect: SQL dialect to use (overrides factory default).
-
-        Returns:
-            InsertBuilder: A new InsertBuilder instance.
-        """
+        from sqlspec.exceptions import SQLBuilderError
         from sqlspec.statement.builder import InsertBuilder
 
         builder_dialect = dialect or self.dialect
         builder = InsertBuilder(dialect=builder_dialect)
-
-        # Ensure proper initialization (call __post_init__ explicitly if needed)
         if builder._expression is None:
             builder.__post_init__()
-
         if table_or_sql:
             if self._looks_like_sql(table_or_sql):
+                detected = self.detect_sql_type(table_or_sql)
+                if detected not in {"INSERT", "SELECT"}:
+                    msg = (
+                        f"sql.insert() expects INSERT or SELECT (for insert-from-select), got {detected}. "
+                        f"Use sql.{detected.lower()}() instead."
+                    )
+                    raise SQLBuilderError(msg)
                 return self._populate_insert_from_sql(builder, table_or_sql)
-            # Traditional table name usage
             return builder.into(table_or_sql)
-
         return builder
 
     def update(self, table_or_sql: Optional[str] = None, dialect: Optional[DialectType] = None) -> "UpdateBuilder":
-        """Create an UPDATE builder, optionally from raw SQL.
-
-        Args:
-            table_or_sql: Table name to update, or raw SQL string.
-            dialect: SQL dialect to use (overrides factory default).
-
-        Returns:
-            UpdateBuilder: A new UpdateBuilder instance.
-        """
+        from sqlspec.exceptions import SQLBuilderError
         from sqlspec.statement.builder import UpdateBuilder
 
         builder_dialect = dialect or self.dialect
         builder = UpdateBuilder(dialect=builder_dialect)
-
-        # Ensure proper initialization (call __post_init__ explicitly if needed)
         if builder._expression is None:
             builder.__post_init__()
-
         if table_or_sql:
-            if self._looks_like_sql(table_or_sql, "UPDATE"):
+            if self._looks_like_sql(table_or_sql):
+                detected = self.detect_sql_type(table_or_sql)
+                if detected != "UPDATE":
+                    msg = (
+                        f"sql.update() expects UPDATE statement, got {detected}. Use sql.{detected.lower()}() instead."
+                    )
+                    raise SQLBuilderError(msg)
                 return self._populate_update_from_sql(builder, table_or_sql)
-            # Traditional table name usage
             return builder.table(table_or_sql)
-
         return builder
 
     def delete(self, table_or_sql: Optional[str] = None, dialect: Optional[DialectType] = None) -> "DeleteBuilder":
-        """Create a DELETE builder, optionally from raw SQL.
-
-        Args:
-            table_or_sql: Optional raw SQL string for DELETE statement.
-            dialect: SQL dialect to use (overrides factory default).
-
-        Returns:
-            DeleteBuilder: A new DeleteBuilder instance.
-        """
+        from sqlspec.exceptions import SQLBuilderError
         from sqlspec.statement.builder import DeleteBuilder
 
         builder_dialect = dialect or self.dialect
         builder = DeleteBuilder(dialect=builder_dialect)
-
-        # Ensure proper initialization (call __post_init__ explicitly if needed)
         if builder._expression is None:
             builder.__post_init__()
-
-        if table_or_sql and self._looks_like_sql(table_or_sql, "DELETE"):
+        if table_or_sql and self._looks_like_sql(table_or_sql):
+            detected = self.detect_sql_type(table_or_sql)
+            if detected != "DELETE":
+                msg = f"sql.delete() expects DELETE statement, got {detected}. Use sql.{detected.lower()}() instead."
+                raise SQLBuilderError(msg)
             return self._populate_delete_from_sql(builder, table_or_sql)
-
         return builder
 
     def merge(self, table_or_sql: Optional[str] = None, dialect: Optional[DialectType] = None) -> "MergeBuilder":
-        """Create a MERGE builder, optionally from raw SQL.
-
-        Args:
-            table_or_sql: Target table for merge, or raw SQL string.
-            dialect: SQL dialect to use (overrides factory default).
-
-        Returns:
-            MergeBuilder: A new MergeBuilder instance.
-        """
+        from sqlspec.exceptions import SQLBuilderError
         from sqlspec.statement.builder import MergeBuilder
 
         builder_dialect = dialect or self.dialect
         builder = MergeBuilder(dialect=builder_dialect)
-
-        # Ensure proper initialization (call __post_init__ explicitly if needed)
         if builder._expression is None:
             builder.__post_init__()
-
         if table_or_sql:
-            if self._looks_like_sql(table_or_sql, "MERGE"):
+            if self._looks_like_sql(table_or_sql):
+                detected = self.detect_sql_type(table_or_sql)
+                if detected != "MERGE":
+                    msg = f"sql.merge() expects MERGE statement, got {detected}. Use sql.{detected.lower()}() instead."
+                    raise SQLBuilderError(msg)
                 return self._populate_merge_from_sql(builder, table_or_sql)
-            # Traditional table name usage
             return builder.into(table_or_sql)
-
         return builder
 
     # ===================

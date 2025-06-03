@@ -171,6 +171,7 @@ class UpdateBuilder(
 
         # Check that the table is set
         if getattr(self._expression, "this", None) is None:
-            raise SQLBuilderError("No table specified for UPDATE statement.")
+            msg = "No table specified for UPDATE statement."
+            raise SQLBuilderError(msg)
 
         return super().build()

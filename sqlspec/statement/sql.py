@@ -455,7 +455,7 @@ class SQL:
                     raise
                 return [], self._config.parameter_converter.merge_parameters(parameters, None, kwargs)
             return param_info, merged
-        merged = self._config.parameter_converter.merge_parameters(parameters, None, kwargs)
+        merged = self._config.parameter_converter.merge_parameters(parameters, None, kwargs)  # type: ignore[assignment]
         return [], merged
 
     def _get_sql_string_for_processing(self) -> str:

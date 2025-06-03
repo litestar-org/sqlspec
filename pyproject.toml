@@ -295,9 +295,9 @@ reportUnknownMemberType = false
 reportUnknownVariableType = false
 reportUnnecessaryComparison = false
 reportUnnecessaryIsInstance = false
-reportUnnecessaryTypeIgnoreComments = true
+reportUnnecessaryTypeIgnoreComments = "information"
 root = "."
-
+venv = ".venv"
 
 [tool.slotscheck]
 strict-imports = false
@@ -318,6 +318,7 @@ fixable = ["ALL"]
 ignore = [
   "A003",    # flake8-builtins - class attribute {name} is shadowing a python builtin
   "B010",    # flake8-bugbear - do not call setattr with a constant attribute value
+  "B904",    # Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None`
   "D100",    # pydocstyle - missing docstring in public module
   "D101",    # pydocstyle - missing docstring in public class
   "D102",    # pydocstyle - missing docstring in public method
@@ -329,6 +330,7 @@ ignore = [
   "D202",    # pydocstyle - no blank lines allowed after function docstring
   "D205",    # pydocstyle - 1 blank line required between summary line and description
   "D415",    # pydocstyle - first line should end with a period, question mark, or exclamation point
+  "DOC501",  # pydocstyle - Missing raise information in docstring
   "E501",    # pycodestyle line too long, handled by ruff format
   "PLW2901", # pylint - for loop variable overwritten by assignment target
   "RUF012",  # Ruff-specific rule - annotated with classvar
