@@ -118,7 +118,7 @@ def await_(
         except RuntimeError:
             # No running event loop
             if raise_sync_error:
-                msg = "await_ called without a running event loop and raise_sync_error=True"
+                msg = "Cannot run async function"
                 raise RuntimeError(msg) from None
             return asyncio.run(partial_f())
         else:
@@ -145,7 +145,7 @@ def await_(
             # but the loop isn't running, but handle defensively.
             # loop is not running
             if raise_sync_error:
-                msg = "await_ found a non-running loop via get_running_loop()"
+                msg = "Cannot run async function"
                 raise RuntimeError(msg)
             # Fallback to running in a new loop
             return asyncio.run(partial_f())
@@ -169,6 +169,7 @@ def async_(
         Callable: An async function that runs the original function in a thread.
     """
 
+    @functools.wraps(function)
     async def wrapper(
         *args: "ParamSpecT.args",
         **kwargs: "ParamSpecT.kwargs",
@@ -195,6 +196,7 @@ def ensure_async_(
     if inspect.iscoroutinefunction(function):
         return function
 
+    @functools.wraps(function)
     async def wrapper(*args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
         result = function(*args, **kwargs)
         if inspect.isawaitable(result):

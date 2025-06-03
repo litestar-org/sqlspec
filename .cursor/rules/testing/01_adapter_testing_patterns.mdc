@@ -1,0 +1,215 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Adapter Testing Patterns
+<!-- alwaysApply: true -->
+
+## Objective
+To ensure adapter tests are correctly structured and avoid common pitfalls discovered during recent debugging, particularly around mock setup, context manager handling, and parameter flow testing.
+
+## Context
+- Adapter testing revealed critical issues with mock setup and context manager protocols
+- Proper mock configuration is essential for testing the actual execution paths
+- Parameter flow testing must verify the complete pipeline from SQL object to database execution
+- Different execution modes (single, many, script) require specific testing approaches
+
+## Rules
+
+### 1. Mock Setup Requirements (CRITICAL)
+<!-- alwaysApply: true -->
+- **Use MagicMock for Context Managers**: Database cursors that use context managers (`with cursor:`) must be mocked with `MagicMock`, not basic `Mock`
+    ```python
+    from unittest.mock import Mock, MagicMock
+
+    @pytest.fixture
+    def mock_connection() -> Mock:
+        mock_connection = Mock(spec=ConnectionType)
+        mock_cursor = MagicMock()  # Required for __enter__/__exit__ support
+        mock_connection.cursor.return_value = mock_cursor
+        mock_cursor.__enter__.return_value = mock_cursor
+        mock_cursor.__exit__.return_value = None
+        return mock_connection
+    ```
+
+- **Context Manager Protocol**: Ensure mock cursors support the full context manager protocol:
+    - `__enter__` returns the cursor itself
+    - `__exit__` returns `None`
+    - Both methods must be properly configured on the mock
+
+### 2. Assertion Targets (MANDATORY)
+<!-- alwaysApply: true -->
+- **Assert on Actual Used Mock**: Tests must assert on the mock object actually used by the driver, not a locally created one
+- **Context Manager Cursor**: For drivers using `with cursor:`, assert on `mock_connection.cursor.return_value.__enter__.return_value`
+- **Direct Cursor**: For drivers using cursor directly, assert on `mock_connection.cursor.return_value`
+- **Example Pattern**:
+    ```python
+    def test_execute_single(driver, mock_connection):
+        # Get the actual cursor used by the driver
+        mock_cursor = mock_connection.cursor.return_value.__enter__.return_value
+        mock_cursor.description = [(("id",))]
+        mock_cursor.fetchall.return_value = []
+        
+        # Execute and verify
+        result = driver._execute_statement(SQL("SELECT * FROM users WHERE id = ?", parameters=(1,)))
+        
+        # Assert on the correct mock
+        mock_cursor.execute.assert_called_once_with("SELECT * FROM users WHERE id = ?", (1,))
+    ```
+
+### 3. Parameter Flow Testing (MANDATORY)
+<!-- alwaysApply: true -->
+- **Test All Execution Modes**: Every adapter must test single, many, and script execution
+- **Parameter Transformation**: Verify parameters are correctly transformed from SQL object to driver
+- **Placeholder Style**: Test that correct placeholder styles are applied for each execution mode
+- **Test Pattern**:
+    ```python
+    @pytest.mark.parametrize("sql_str, params, expected_sql, expected_params", [
+        ("SELECT * FROM users WHERE id = ?", (1,), "SELECT * FROM users WHERE id = ?", (1,)),
+        ("INSERT INTO users (name) VALUES (?)", ("John",), "INSERT INTO users (name) VALUES (?)", ("John",)),
+    ])
+    def test_parameter_flow(driver, mock_connection, sql_str, params, expected_sql, expected_params):
+        mock_cursor = mock_connection.cursor.return_value.__enter__.return_value
+        mock_cursor.description = []
+        
+        result = driver._execute_statement(SQL(sql_str, parameters=params))
+        
+        mock_cursor.execute.assert_called_once_with(expected_sql, expected_params)
+    ```
+
+### 4. Script Execution Testing (MANDATORY)
+<!-- alwaysApply: true -->
+- **Multi-Statement Verification**: Test that scripts execute all statements, not just the first
+- **Parameter Substitution**: Verify that script parameters are converted to static literals
+- **Statement Counting**: Ensure all statements in the script are processed
+- **Test Pattern**:
+    ```python
+    def test_script_execution(driver, mock_connection):
+        mock_cursor = mock_connection.cursor.return_value.__enter__.return_value
+        mock_cursor.description = []
+        
+        script_sql = "INSERT INTO test (name) VALUES ('test1'); INSERT INTO test (name) VALUES ('test2');"
+        statement = SQL(script_sql).as_script()
+        
+        result = driver._execute_statement(statement)
+        
+        # Verify executescript was called with the complete script
+        mock_cursor.executescript.assert_called_once()
+        call_args = mock_cursor.executescript.call_args[0][0]
+        assert "test1" in call_args
+        assert "test2" in call_args
+    ```
+
+### 5. Execution Mode Testing (MANDATORY)
+<!-- alwaysApply: true -->
+- **Mode Detection**: Test that `is_many` and `is_script` properties correctly control execution paths
+- **Method Dispatch**: Verify that the correct execution method is called for each mode
+- **Test Coverage**: Each execution path must be independently tested
+- **Example**:
+    ```python
+    def test_execution_modes(driver, mock_connection):
+        mock_cursor = mock_connection.cursor.return_value.__enter__.return_value
+        
+        # Test single execution
+        single_stmt = SQL("SELECT * FROM users")
+        result = driver._execute_statement(single_stmt)
+        mock_cursor.execute.assert_called_once()
+        
+        # Test many execution
+        many_stmt = SQL("INSERT INTO users (name) VALUES (?)", parameters=[("Alice",), ("Bob",)])
+        result = driver._execute_statement(many_stmt.as_many())
+        mock_cursor.executemany.assert_called_once()
+        
+        # Test script execution
+        script_stmt = SQL("CREATE TABLE test (id INT); INSERT INTO test VALUES (1);").as_script()
+        result = driver._execute_statement(script_stmt)
+        mock_cursor.executescript.assert_called_once()
+    ```
+
+### 6. Result Type Testing (MANDATORY)
+<!-- alwaysApply: true -->
+- **SELECT vs DML Detection**: Test that result wrapping correctly identifies SELECT vs DML operations
+- **Result Object Verification**: Verify correct result types are returned (SelectResult vs ExecuteResult)
+- **Metadata Preservation**: Test that row counts and other metadata are correctly included
+- **Test Pattern**:
+    ```python
+    def test_result_types(driver, mock_connection):
+        mock_cursor = mock_connection.cursor.return_value.__enter__.return_value
+        
+        # Test SELECT result
+        mock_cursor.description = [("id",), ("name",)]
+        mock_cursor.fetchall.return_value = [(1, "Alice")]
+        result = driver._execute_statement(SQL("SELECT id, name FROM users"))
+        assert isinstance(result, SelectResult)
+        assert len(result.rows) == 1
+        
+        # Test DML result
+        mock_cursor.description = None
+        mock_cursor.rowcount = 1
+        result = driver._execute_statement(SQL("UPDATE users SET active = true"))
+        assert isinstance(result, ExecuteResult)
+        assert result.affected_count == 1
+    ```
+
+### 7. Error Handling Testing (MANDATORY)
+<!-- alwaysApply: true -->
+- **Database Error Wrapping**: Test that database-specific errors are wrapped in SQLSpec exceptions
+- **Connection Error Handling**: Test connection failure scenarios
+- **Parameter Error Testing**: Test invalid parameter scenarios
+- **Recovery Testing**: Test that adapters can recover from transient errors
+
+### 8. Mock Fixture Standards (MANDATORY)
+<!-- alwaysApply: true -->
+- **Consistent Naming**: Use `mock_{database}_connection` naming convention
+- **Spec Usage**: Always use `spec=` parameter with appropriate connection type
+- **Method Setup**: Pre-configure common methods that will be called
+- **Type Annotations**: Provide proper type hints for mock fixtures
+- **Example**:
+    ```python
+    @pytest.fixture
+    def mock_sqlite_connection() -> Mock:
+        """Mock SQLite connection with proper context manager support."""
+        mock_connection = Mock(spec=SqliteConnection)
+        mock_cursor = MagicMock()
+        mock_connection.cursor.return_value = mock_cursor
+        mock_connection.execute.return_value = mock_cursor
+        mock_connection.executemany.return_value = mock_cursor
+        mock_connection.executescript.return_value = mock_cursor
+        mock_cursor.__enter__.return_value = mock_cursor
+        mock_cursor.__exit__.return_value = None
+        return mock_connection
+    ```
+
+### 9. Test Organization (MANDATORY)
+<!-- alwaysApply: true -->
+- **Function-Based Tests**: Use standalone test functions, not test classes
+- **Parameterized Tests**: Use `@pytest.mark.parametrize` for multiple scenarios
+- **Descriptive Names**: Test function names must clearly indicate what is being tested
+- **Independent Tests**: Each test must be independent and runnable in any order
+- **Fast Execution**: Unit tests should complete quickly (<1ms per test when possible)
+
+### 10. Common Anti-Patterns to Avoid
+<!-- alwaysApply: true -->
+- **Basic Mock for Context Managers**: Never use `Mock()` for objects that need `__enter__`/`__exit__`
+- **Wrong Assertion Target**: Don't assert on locally created mocks that aren't used by the code
+- **Missing Mock Setup**: Don't forget to configure return values for methods that will be called
+- **Incomplete Error Testing**: Don't skip error scenario testing
+- **Class-Based Tests**: Avoid test classes unless there's a compelling documented reason
+
+## Integration Testing Requirements
+### Database-Specific Integration Tests
+- **Real Database Testing**: Each adapter must have integration tests against real database instances
+- **pytest-databases Integration**: Use pytest-databases for managing test database lifecycle
+- **Data Cleanup**: Ensure proper cleanup of test data between tests
+- **Connection Pool Testing**: Test pool lifecycle and connection management
+
+## Cross-References
+- See `.cursor/rules/adapters/01_execution_method_structure.mdc` for execution requirements
+- See `.cursor/rules/sql/01_sql_class_implementation.mdc` for SQL object behavior
+- See `.cursor/rules/quality/00_testing.mdc` for general testing standards
+
+## Exceptions
+- Performance tests may require longer execution times
+- Integration tests may use test classes for shared database setup
+- Legacy test files may temporarily deviate while being migrated

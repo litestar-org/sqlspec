@@ -25,7 +25,7 @@ To ensure that new database adapters are consistent with the existing adapter ar
 ### 2. Directory Structure and Placement
 <!-- alwaysApply: true -->
 - **Location**: New database adapters must be placed in a new subdirectory within `sqlspec/adapters/` (e.g., `sqlspec/adapters/newdb/`).
-- **Modularity**: Organize the adapter code into logical modules (e.g., `config.py`, `driver.py`, ` DTOs.py` if needed).
+- **Modularity**: Organize the adapter code into logical modules (e.g., `config.py`, `driver.py`, `DTOs.py` if needed).
 
 ### 3. Configuration
 <!-- alwaysApply: true -->
@@ -48,22 +48,11 @@ To ensure that new database adapters are consistent with the existing adapter ar
 <!-- alwaysApply: true -->
 - Adhere to all general project coding standards, including those for style, typing, linting, and error handling as defined in other `.mdc` rule files (e.g., in `core/`, `python/`, `quality/`).
 
-### 7. Method Splitting, Ordering, and Naming (MANDATORY)
+### 7. Execution Method Structure (MANDATORY)
 <!-- alwaysApply: true -->
-- **Driver Execution Method Splitting**: All driver classes MUST split execution logic into the following private methods:
-    - `_execute_statement`: The main dispatch method, which determines the execution mode and delegates to one of the following:
-        - `_execute`: Handles single-statement execution.
-        - `_execute_many`: Handles batch/many execution.
-        - `_execute_script`: Handles script execution.
-    - Each of these methods should contain only the logic relevant to its execution mode.
-- **Method Ordering**: For readability and consistency, these methods MUST appear in the following order at the top of the driver class:
-    1. `_execute_statement`
-    2. `_execute`
-    3. `_execute_many`
-    4. `_execute_script`
-- **Variable Naming**: Use concise, descriptive variable names. Prefer `sql` over verbose names like `final_sql`. Avoid unnecessary or overly detailed variable names.
-- **Minimize Needless Assignments**: Always favor in-lining expressions and reusing variables where possible, unless it would significantly harm readability. See `python/01_coding_patterns.mdc` for strict conciseness rules.
-- **Applicability**: This is a mandatory style for all new and refactored adapters.
+- **Mandatory Implementation**: All adapters MUST implement the standardized execution method structure
+- **Reference Implementation**: SQLite adapter serves as the canonical reference for execution patterns
+- **Cross-Reference**: See `.cursor/rules/adapters/01_execution_method_structure.mdc` for complete execution method requirements
 
 ### 8. Transaction Management (MANDATORY)
 <!-- alwaysApply: true -->
@@ -87,30 +76,36 @@ To ensure that new database adapters are consistent with the existing adapter ar
 
 ### 12. Testing and Quality Requirements
 <!-- alwaysApply: true -->
-- **Testing Pyramid**: Adapters must be covered by a comprehensive suite of tests, following the pyramid approach: more unit tests, fewer integration tests, minimal end-to-end tests.
-- **Pytest Function-Based Tests**: All pytest test cases must be written as standalone functions, not as methods in test classes, unless there is a compelling, documented reason. Refactor any existing class-based tests to function-based tests as part of ongoing maintenance.
-- **Parameterized Testing**: Use `pytest.mark.parametrize` for multiple scenarios. Each test should be independent and able to run in any order.
-- **Fast Feedback**: Unit tests should run quickly (<1ms per test when possible).
-- **Function-Based Tests**: Prefer simple test functions over test classes for readability and simplicity.
-- **Coverage Targets**: Unit tests must achieve 95%+ line coverage; integration tests 80%+.
-- **Test Structure**: Follow the established directory and naming conventions for unit and integration tests as modeled by the SQLite and asyncpg adapters.
-- **Mocking**: Use `Mock` for sync adapters, `AsyncMock` for async adapters. Fixtures should be reusable and type-annotated.
-- **Error and Edge Case Testing**: Always test both success and error scenarios, including edge cases and database-specific features.
-- **Performance and Metadata**: Include bulk operation and metadata tests where relevant.
+- **Testing Standards**: Follow comprehensive testing patterns for adapters
+- **Mock Setup**: Use proper mock configuration for context managers and database interactions
+- **Cross-Reference**: See `.cursor/rules/testing/01_adapter_testing_patterns.mdc` for specific testing requirements and patterns
 
-### 13. Refactoring and API Consistency
+### 13. Integration Requirements
 <!-- alwaysApply: true -->
-- **_execute_statement API**: All adapters must implement `_execute_statement` with the signature and logic described in the current API guidelines: the SQL object is the single source of truth for SQL string, parameters, and execution mode (script/many/single). No separate is_many/is_script/parameters/config arguments.
+- **SQL Object Integration**: All adapters must properly integrate with SQL object parameter handling and execution mode detection
 - **Pipeline Integration**: All adapters must integrate with the StatementPipeline and SQLProcessingContext architecture, ensuring a single-pass (parse/transform/validate/analyze once) pipeline. See [REF-011] in INTERNAL_REFERENCE.md for details.
-- **Cross-Adapter Consistency**: Any change to shared logic or patterns must be reflected in all adapters unless driver-specific and documented.
+- **Builder Support**: Adapters must seamlessly work with SQL builders and factory patterns
 
-### 14. Parameter Literalizer
+### 14. Database-Specific Considerations
 <!-- alwaysApply: true -->
-- **Special Caution**: The parameter literalizer is a known source of subtle bugs and must be handled with extreme care. Any issues, workarounds, or deviations must be documented in the adapter and in the rules if they affect cross-adapter behavior.
+- **Placeholder Styles**: Implement appropriate placeholder style conversion for the target database
+- **Connection Pooling**: Follow established patterns for connection pool management where applicable
+- **Error Mapping**: Map database-specific errors to appropriate SQLSpec exception hierarchy
+- **Feature Support**: Document database-specific feature support and limitations
 
-### 15. Documentation and Reference
+### 15. Performance Considerations
 <!-- alwaysApply: true -->
-- **Reference Pipeline and SQL Rules**: See `.cursor/rules/sql/00_sql_authoring.mdc` and `.cursor/rules/core/01_code_structure_style.mdc` for further pipeline and SQL authoring rules.
+- **Efficient Execution**: Implement efficient execution paths for all three execution modes
+- **Resource Management**: Proper cursor and connection lifecycle management
+- **Batch Operations**: Optimize batch execution where supported by the database driver
+- **Connection Reuse**: Leverage connection pooling and reuse patterns
+
+## Cross-References
+- See `.cursor/rules/adapters/01_execution_method_structure.mdc` for execution method requirements
+- See `.cursor/rules/testing/01_adapter_testing_patterns.mdc` for testing patterns
+- See `.cursor/rules/sql/01_sql_class_implementation.mdc` for SQL object integration
+- See internal docs REF-005 through REF-007 for driver protocol architecture details
 
 ## Exceptions
 - If a new database has fundamentally different paradigms that necessitate deviation from existing patterns, these deviations must be clearly justified and discussed with the project maintainers.
+- Emergency hotfixes may temporarily deviate but must be documented and addressed in follow-up work.

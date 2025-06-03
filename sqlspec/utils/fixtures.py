@@ -1,21 +1,20 @@
-from typing import TYPE_CHECKING, Any, Union
+from typing import Any
 
 from sqlspec._serialization import decode_json
 from sqlspec.exceptions import MissingDependencyError
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    from anyio import Path as AsyncPath
-
 __all__ = ("open_fixture", "open_fixture_async")
 
+# Define Path and AsyncPath as None for test patching
+Path = None  # type: ignore
+AsyncPath = None  # type: ignore
 
-def open_fixture(fixtures_path: "Union[Path, AsyncPath]", fixture_name: str) -> "Any":
+
+def open_fixture(fixtures_path: Any, fixture_name: str) -> Any:
     """Loads JSON file with the specified fixture name
 
     Args:
-        fixtures_path: :class:`pathlib.Path` | :class:`anyio.Path` The path to look for fixtures
+        fixtures_path: The path to look for fixtures (pathlib.Path or anyio.Path)
         fixture_name (str): The fixture name to load.
 
     Raises:
@@ -35,11 +34,11 @@ def open_fixture(fixtures_path: "Union[Path, AsyncPath]", fixture_name: str) -> 
     raise FileNotFoundError(msg)
 
 
-async def open_fixture_async(fixtures_path: "Union[Path, AsyncPath]", fixture_name: str) -> "Any":
+async def open_fixture_async(fixtures_path: Any, fixture_name: str) -> Any:
     """Loads JSON file with the specified fixture name
 
     Args:
-        fixtures_path: :class:`pathlib.Path` | :class:`anyio.Path` The path to look for fixtures
+        fixtures_path: The path to look for fixtures (pathlib.Path or anyio.Path)
         fixture_name (str): The fixture name to load.
 
     Raises:

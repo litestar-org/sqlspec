@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 import contextlib
 import logging
 import sqlite3
@@ -39,6 +38,7 @@ class SqliteDriver(
 
     __supports_arrow__: "ClassVar[bool]" = False
     dialect: str = "sqlite"
+    parameter_style: ParameterStyle = ParameterStyle.QMARK
 
     def __init__(
         self,
@@ -57,9 +57,6 @@ class SqliteDriver(
         # Ensure connection.row_factory is set for dictionary-like row access
         if not isinstance(connection.row_factory, type(sqlite3.Row)):
             connection.row_factory = sqlite3.Row
-
-    def _get_placeholder_style(self) -> ParameterStyle:
-        return ParameterStyle.QMARK
 
     @staticmethod
     @contextmanager
@@ -262,3 +259,6 @@ class SqliteDriver(
                 operation_type=operation_type,
                 last_inserted_id=last_inserted_id,
             )
+
+    def _get_placeholder_style(self) -> ParameterStyle:
+        return ParameterStyle.QMARK

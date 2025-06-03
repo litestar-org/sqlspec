@@ -179,26 +179,24 @@ async def test_open_fixture_async_utf8_encoding(temp_fixtures_dir: Path) -> None
 def test_open_fixture_async_missing_anyio_dependency() -> None:
     """Test that MissingDependencyError is raised when anyio is not available."""
     with patch("sqlspec.utils.fixtures.Path") as _:
-        # Mock the anyio import to raise ImportError
+        # Only patch sys.modules to simulate missing anyio
         with patch.dict("sys.modules", {"anyio": None}):
-            with patch("builtins.__import__", side_effect=ImportError("No module named 'anyio'")):
-                with pytest.raises(MissingDependencyError, match="package='anyio'"):
-                    # Use a dummy coroutine to test the import error
-                    import asyncio
+            with pytest.raises(MissingDependencyError, match="Package 'anyio' is not installed"):
+                import asyncio
 
-                    async def test_coro() -> None:
-                        await open_fixture_async(Path("/tmp"), "test")
+                async def test_coro() -> None:
+                    await open_fixture_async(Path("/tmp"), "test")
 
-                    asyncio.run(test_coro())
+                asyncio.run(test_coro())
 
 
 @pytest.mark.asyncio
-@patch("sqlspec.utils.fixtures.AsyncPath")
+@patch("anyio.Path")
 async def test_open_fixture_async_with_anyio_path(mock_async_path_class: Mock, temp_fixtures_dir: Path) -> None:
     """Test that async version works with anyio.Path objects."""
     # Mock anyio.Path behavior
     mock_async_path = AsyncMock()
-    mock_async_path_class.return_value = mock_async_path
+    mock_async_path_class.side_effect = lambda *a: mock_async_path  # type: ignore
     mock_async_path.exists.return_value = True
 
     # Mock the file operations
@@ -210,7 +208,7 @@ async def test_open_fixture_async_with_anyio_path(mock_async_path_class: Mock, t
         result = await open_fixture_async(temp_fixtures_dir, "test_fixture")
 
     assert result == {"async_anyio": "test"}
-    mock_async_path.exists.assert_called_once()
+    mock_async_path_class.assert_called_once_with(temp_fixtures_dir / "test_fixture.json")
     mock_async_path.open.assert_called_once_with(mode="r", encoding="utf-8")
 
 
@@ -229,10 +227,12 @@ def test_open_fixture_filename_construction(temp_fixtures_dir: Path, fixture_nam
     """Test that fixture filenames are constructed correctly."""
     # Create the expected file
     test_data = {"fixture_name": fixture_name}
-    (temp_fixtures_dir / expected_filename).write_text(json.dumps(test_data))
+    file_path = temp_fixtures_dir / expected_filename
+    file_path.write_text(json.dumps(test_data))
 
     if fixture_name == "":
-        # Empty name should still raise FileNotFoundError if file doesn't exist
+        # Remove the file to ensure FileNotFoundError is raised
+        file_path.unlink()
         with pytest.raises(FileNotFoundError):
             open_fixture(temp_fixtures_dir, fixture_name)
     else:

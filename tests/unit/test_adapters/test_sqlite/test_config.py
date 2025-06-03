@@ -36,13 +36,13 @@ def test_sqlite_connection_config_creation() -> None:
 
 def test_sqlite_connection_config_validation() -> None:
     """Test SQLite connection config parameter validation."""
-    # Test with invalid timeout type
-    with pytest.raises(TypeError):
-        SqliteConnectionConfig(database=":memory:", timeout="invalid")  # type: ignore[typeddict-item]
-
+    # Test with invalid timeout type (should not raise at runtime)
+    config = SqliteConnectionConfig(database=":memory:", timeout="invalid")  # type: ignore[typeddict-item]
+    assert config["database"] == ":memory:"
+    assert config["timeout"] == "invalid"
     # Test with invalid detect_types
-    with pytest.raises(TypeError):
-        SqliteConnectionConfig(database=":memory:", detect_types="invalid")  # type: ignore[typeddict-item]
+    config2 = SqliteConnectionConfig(database=":memory:", detect_types="invalid")  # type: ignore[typeddict-item]
+    assert config2["detect_types"] == "invalid"
 
 
 def test_sqlite_config_initialization() -> None:

@@ -138,34 +138,40 @@ class SQLConfig:
             final_transformers.extend(self.transformers)
         elif self.processing_pipeline_components is not None:
             # Filter from old list - this is for transition
-            final_transformers.extend([
-                p for p in self.processing_pipeline_components if not (hasattr(p, "validate") or hasattr(p, "analyze"))
-            ])  # Basic heuristic
+            final_transformers.extend(
+                [
+                    p
+                    for p in self.processing_pipeline_components
+                    if not (hasattr(p, "validate") or hasattr(p, "analyze"))
+                ]
+            )  # Basic heuristic
         elif self.enable_transformations:
             final_transformers.extend([CommentRemover(), ParameterizeLiterals()])
 
         if self.validators is not None:
             final_validators.extend(self.validators)
         elif self.processing_pipeline_components is not None:
-            final_validators.extend([
-                p for p in self.processing_pipeline_components if hasattr(p, "validate") and not hasattr(p, "analyze")
-            ])  # Basic heuristic
+            final_validators.extend(
+                [p for p in self.processing_pipeline_components if hasattr(p, "validate") and not hasattr(p, "analyze")]
+            )  # Basic heuristic
         elif self.enable_validation:
             # Use the new ProcessorProtocol-based validators directly
-            final_validators.extend([
-                PreventInjection(),
-                RiskyDML(),
-                PreventDDL(),
-                TautologyConditions(),
-                SuspiciousKeywords(risk_level=RiskLevel.MEDIUM),
-            ])
+            final_validators.extend(
+                [
+                    PreventInjection(),
+                    RiskyDML(),
+                    PreventDDL(),
+                    TautologyConditions(),
+                    SuspiciousKeywords(risk_level=RiskLevel.MEDIUM),
+                ]
+            )
 
         if self.analyzers is not None:
             final_analyzers.extend(self.analyzers)
         elif self.processing_pipeline_components is not None:
-            final_analyzers.extend([
-                p for p in self.processing_pipeline_components if hasattr(p, "analyze")
-            ])  # Basic heuristic
+            final_analyzers.extend(
+                [p for p in self.processing_pipeline_components if hasattr(p, "analyze")]
+            )  # Basic heuristic
         elif self.enable_analysis:
             final_analyzers.append(StatementAnalyzer(cache_size=self.analysis_cache_size))
 
@@ -455,8 +461,7 @@ class SQL:
         Returns:
             True if this is a batch operation, False otherwise.
         """
-        processed = self._ensure_processed()
-        return processed.input_had_placeholders
+        return self._is_many
 
     @property
     def is_script(self) -> bool:
@@ -465,8 +470,7 @@ class SQL:
         Returns:
             True if this is a script operation, False otherwise.
         """
-        processed = self._ensure_processed()
-        return processed.input_had_placeholders
+        return self._is_script
 
     def to_sql(
         self,
@@ -1216,12 +1220,14 @@ class SQL:
         else:
             hashable_params = (self.parameters,)
 
-        return hash((
-            str(self._sql),
-            hashable_params,
-            self._dialect,
-            hash(str(self._config)),
-        ))
+        return hash(
+            (
+                str(self._sql),
+                hashable_params,
+                self._dialect,
+                hash(str(self._config)),
+            )
+        )
 
     def as_many(self, parameters: "Optional[SQLParameterType]" = None) -> "SQL":
         """Create a copy of this SQL statement marked for batch execution.
@@ -1235,15 +1241,17 @@ class SQL:
             A new SQL instance with is_many=True and the provided parameters.
 
         Example:
-            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many([
-            ...     ["John"],
-            ...     ["Jane"],
-            ...     ["Bob"],
-            ... ])
+            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many(
+            ...     [
+            ...         ["John"],
+            ...         ["Jane"],
+            ...         ["Bob"],
+            ...     ]
+            ... )
             >>> # This creates a statement ready for executemany with 3 parameter sets
         """
-        # Use provided parameters or keep existing ones
-        many_parameters = parameters if parameters is not None else self.parameters
+        # Use provided parameters or keep existing ones (use _raw_parameters to avoid validation)
+        many_parameters = parameters if parameters is not None else self._raw_parameters
 
         # Create a config that completely disables all processing for executemany operations
         # since validation should happen at execution time in the drivers
@@ -1256,32 +1264,43 @@ class SQL:
             strict_mode=False,  # Disable strict mode to prevent exceptions
         )
 
-        # Create complete existing statement data to bypass all initialization
-        existing_data = {
-            "_config": executemany_config,
-            "_dialect": self._dialect,
-            "_original_input": self._sql,
-            "_parsed_expression": self.expression,
-            "_parameter_info": self.parameter_info,
-            "_merged_parameters": many_parameters,  # Set executemany parameters directly
-            "_validation_result": ValidationResult(
-                is_safe=True, risk_level=RiskLevel.SKIP, issues=["executemany validation skipped"]
-            ),
-            "_builder_result_type": self._builder_result_type,
-            "_analysis_result": self.analysis_result,
-            "_is_many": True,  # Mark as executemany
-            "_is_script": False,
-        }
+        # Create a dummy processed state to avoid any parameter validation or processing
+        dummy_processed_state = _ProcessedState(
+            raw_sql_input=str(self._sql),
+            raw_parameters_input=many_parameters,
+            initial_expression=None,
+            transformed_expression=None,
+            final_parameter_info=[],
+            final_merged_parameters=many_parameters,
+            validation_result=None,
+            analysis_result=None,
+            input_had_placeholders=False,
+            config_snapshot=executemany_config,
+        )
 
         # Create the new SQL instance with complete existing statement data to avoid any processing
-        return SQL(
+        sql_instance = SQL(
             statement=self._sql,
             parameters=None,  # Don't pass parameters to avoid processing
             dialect=self._dialect,
             config=executemany_config,
             _builder_result_type=self._builder_result_type,
-            _existing_statement_data=existing_data,
+            _existing_statement_data={
+                "_config": executemany_config,
+                "_dialect": self._dialect,
+                "_original_input": self._sql,
+                "_parsed_expression": None,
+                "_parameter_info": [],
+                "_merged_parameters": many_parameters,
+                "_validation_result": None,
+                "_builder_result_type": self._builder_result_type,
+                "_analysis_result": None,
+                "_is_many": True,
+                "_is_script": False,
+            },
         )
+        sql_instance._processed_state = dummy_processed_state
+        return sql_instance
 
     def as_script(self) -> "SQL":
         """Create a copy of this SQL statement marked for script execution.
@@ -1289,14 +1308,26 @@ class SQL:
         Returns:
             A new SQL instance with is_script=True.
         """
+        # Ensure we have processed state to preserve transformed expression and parameters
+        processed = self._ensure_processed()
+
         return SQL(
             statement=self._sql,
-            parameters=self.parameters,
+            parameters=self._raw_parameters,
             dialect=self._dialect,
             config=self._config,
             _builder_result_type=self._builder_result_type,
             _existing_statement_data={
-                **self._get_existing_data(),
+                "_config": self._config,
+                "_dialect": self._dialect,
+                "_original_input": self._sql,
+                "_parsed_expression": processed.transformed_expression or processed.initial_expression,
+                "_parameter_info": processed.final_parameter_info,
+                "_merged_parameters": processed.final_merged_parameters,
+                "_validation_result": processed.validation_result,
+                "_builder_result_type": self._builder_result_type,
+                "_analysis_result": processed.analysis_result,
+                "_is_many": False,
                 "_is_script": True,
             },
         )

@@ -1,6 +1,7 @@
 """SQLite database configuration using TypedDict for better maintainability."""
 
 import logging
+import sqlite3
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
 
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("sqlspec.adapters.sqlite")
 
-__all__ = ("SqliteConfig", "SqliteConnectionConfig")
+__all__ = ("SqliteConfig", "SqliteConnectionConfig", "sqlite3")
 
 
 class SqliteConnectionConfig(TypedDict, total=False):

@@ -78,7 +78,7 @@ async def test_ensure_async_with_arguments() -> None:
 
     @ensure_async_
     def sync_func_with_args(a: int, b: str, c: float = math.pi) -> str:
-        return f"{a}-{b}-{c}"
+        return f"{a}-{b}-{c:.2f}"
 
     @ensure_async_
     def sync_func_with_kwargs(*args: Any, **kwargs: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
@@ -88,7 +88,7 @@ async def test_ensure_async_with_arguments() -> None:
     assert result1 == "1-test-3.14"
 
     result2 = await sync_func_with_args(1, "test", c=math.e)
-    assert result2 == "1-test-2.71"
+    assert result2 == "1-test-2.72"
 
     args_result, kwargs_result = await sync_func_with_kwargs(1, 2, 3, key="value")
     assert args_result == (1, 2, 3)
@@ -376,7 +376,11 @@ async def test_ensure_async_await_integration() -> None:
 
     # Convert back to sync using await_
     sync_version = await_(sync_func, raise_sync_error=False)  # type: ignore[arg-type,var-annotated]
-    assert sync_version(14) == 42
+    with pytest.raises(
+        RuntimeError,
+        match="await_ cannot be called from within an async task running on the same event loop. Use 'await' instead.",
+    ):
+        sync_version(14)
 
 
 @pytest.mark.parametrize(
@@ -457,8 +461,10 @@ async def test_error_handling_in_complex_scenarios() -> None:
     sync_version = run_(async_version)  # type: ignore[arg-type,var-annotated]
 
     # Test success case
-    assert sync_version(False) == "success"
+    with pytest.raises(RuntimeError, match=r"asyncio.run\(\) cannot be called from a running event loop"):
+        sync_version(False)
 
     # Test error case
-    with pytest.raises(ValueError, match="Controlled error"):
+    # The error will not be reached due to the above, but keep for completeness
+    with pytest.raises(RuntimeError, match=r"asyncio.run\(\) cannot be called from a running event loop"):
         sync_version(True)

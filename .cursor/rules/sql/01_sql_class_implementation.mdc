@@ -1,0 +1,105 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# SQL Class Implementation Requirements
+<!-- alwaysApply: true -->
+
+## Objective
+To ensure the `sqlspec.statement.sql.SQL` class is correctly implemented and prevent critical bugs discovered during recent debugging and refactoring efforts.
+
+## Context
+- The SQL class is the central immutable object representing a query and its state
+- Recent debugging revealed critical property implementation bugs and parameter handling issues
+- The "process once" refactor requires careful state management and pipeline integration
+- Script execution has specific requirements for parameter substitution and expression handling
+
+## Rules
+
+### 1. Property Implementation (CRITICAL BUG PREVENTION)
+<!-- alwaysApply: true -->
+- **is_many and is_script Properties**: These properties MUST return the correct instance variables, not processed state flags
+    ```python
+    @property
+    def is_many(self) -> bool:
+        return self._is_many  # NOT processed.input_had_placeholders
+
+    @property
+    def is_script(self) -> bool:
+        return self._is_script  # NOT processed.input_had_placeholders
+    ```
+- **Bug Background**: Both properties were incorrectly returning `processed.input_had_placeholders`, preventing proper execution path dispatch in drivers
+- **Testing Requirement**: All property implementations must be covered by unit tests that verify the correct underlying state is returned
+
+### 2. Parameter Handling Patterns (MANDATORY)
+<!-- alwaysApply: true -->
+- **as_many() Implementation**: Must use `self._raw_parameters` to avoid triggering validation before no-validation config takes effect
+- **Parameter Validation Bypass**: For executemany operations, validation must be disabled at the config level, not bypassed through dummy states
+- **Raw vs Processed Parameters**: 
+    - Use `_raw_parameters` for operations that need to avoid validation pipeline
+    - Use `parameters` property for operations that require fully processed parameters
+- **Example Pattern**:
+    ```python
+    def as_many(self, parameters: "Optional[SQLParameterType]" = None) -> "SQL":
+        many_parameters = parameters if parameters is not None else self._raw_parameters
+        # Use raw parameters to avoid validation before config takes effect
+    ```
+
+### 3. Script Execution Requirements (MANDATORY)
+<!-- alwaysApply: true -->
+- **as_script() Implementation**: Must preserve transformed expression and extracted parameter values for static parameter substitution
+    ```python
+    def as_script(self) -> "SQL":
+        processed = self._ensure_processed()  # Get current transformed state
+        # Pass processed state to preserve transformations and extracted parameters
+    ```
+- **Parameter Substitution**: Script execution must convert all parameters (including extracted ones) back to literals using `ParameterStyle.STATIC`
+- **Multi-Statement Parsing**: Scripts must use `sqlglot.parse()` not `sqlglot.parse_one()` to handle multiple statements
+- **Expression Preservation**: The `as_script()` method must preserve the current pipeline state, not create a fresh instance
+
+### 4. Pipeline Integration (UNBREAKABLE RULE)
+<!-- alwaysApply: true -->
+- **Single-Pass Processing**: The `_ensure_processed()` method must implement true single-pass processing through StatementPipeline
+- **State Invalidation**: Any operation that modifies SQL content (`_apply_filters`, `copy()` with new statement) must set `_processed_state = None`
+- **Config Changes**: Operations that change processing configuration must trigger reprocessing
+- **Context Preservation**: When copying or modifying SQL objects, preserve relevant processing context to avoid redundant work
+
+### 5. Expression Handling (MANDATORY)
+<!-- alwaysApply: true -->
+- **Command Expression**: Multi-statement scripts must be wrapped in `exp.Command(this="SCRIPT", expressions=statements)`
+- **Static Rendering**: Script expressions must handle `ParameterStyle.STATIC` by substituting extracted parameters back to literals
+- **Script Detection**: Auto-detection of scripts must analyze semicolon positions and remaining content after each semicolon
+- **Expression Copying**: Modification methods must use `expression.copy()` to avoid mutating shared state
+
+### 6. Testing Requirements (MANDATORY)
+<!-- alwaysApply: true -->
+- **Property Testing**: All properties must be tested to ensure they return correct underlying state
+- **Parameter Flow Testing**: Test parameter handling through the entire pipeline for all execution modes
+- **Script Execution Testing**: Verify multi-statement scripts execute all statements, not just the first
+- **Mock Context Managers**: Use `MagicMock` for cursor mocks that need context manager support (`__enter__`/`__exit__`)
+- **State Transition Testing**: Test that SQL object state changes correctly through copy(), as_many(), as_script() operations
+
+### 7. Common Anti-Patterns to Avoid
+<!-- alwaysApply: true -->
+- **Property Implementation**: Never return processed state flags from instance property getters
+- **Parameter Access**: Don't access `.parameters` in methods that need to avoid validation
+- **Script Creation**: Don't create script instances without preserving transformed expressions
+- **State Management**: Don't modify SQL objects in-place; always return new instances
+- **Mock Setup**: Don't use basic `Mock()` for objects that need magic method support
+
+### 8. Debug and Validation Patterns
+<!-- alwaysApply: true -->
+- **Execution Path Validation**: Verify that `is_many` and `is_script` correctly control driver execution paths
+- **Parameter Tracing**: Log parameter flow through validation, transformation, and execution stages
+- **Expression Inspection**: Validate that expressions are properly parsed and transformed before execution
+- **Script Statement Counting**: Verify that multi-statement scripts parse and execute all statements
+
+## Cross-References
+- See `.cursor/rules/adapters/01_execution_method_structure.mdc` for adapter execution requirements
+- See `.cursor/rules/testing/01_adapter_testing_patterns.mdc` for testing patterns
+- See internal docs REF-011 for SQLStatement & StatementPipeline architecture details
+
+## Exceptions
+- Emergency hotfixes may temporarily deviate from these patterns but must be documented and addressed in follow-up work
+- Database-specific quirks may require adapter-level workarounds but must not affect core SQL class behavior

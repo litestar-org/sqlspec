@@ -1,0 +1,160 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Adapter Execution Method Structure
+<!-- alwaysApply: true -->
+
+## Objective
+To ensure all database adapters follow a unified, consistent execution method structure that enables proper debugging, testing, and maintenance across all supported databases.
+
+## Context
+- All adapters must implement the same execution method structure for consistency
+- The SQLite adapter serves as the reference implementation
+- Recent debugging revealed critical issues when adapters don't follow this structure
+- The execution flow must properly handle SQL object state and parameter management
+
+## Rules
+
+### 1. Mandatory Method Structure (UNBREAKABLE RULE)
+<!-- alwaysApply: true -->
+- **Required Methods**: All driver classes MUST define these methods in this exact order at the top of the class:
+    1. `_execute_statement` — Main dispatch method
+    2. `_execute` — Single-statement execution
+    3. `_execute_many` — Batch/many execution  
+    4. `_execute_script` — Script execution
+
+- **Method Signatures**: Must follow these exact signatures:
+    ```python
+    def _execute_statement(
+        self, 
+        statement: SQL, 
+        connection: Optional[ConnectionT] = None, 
+        **kwargs: Any
+    ) -> Any:
+        """Main dispatch method - determines execution mode and delegates."""
+        
+    def _execute(self, sql: str, parameters: SQLParameterType, connection: ConnectionT, **kwargs: Any) -> Any:
+        """Handle single-statement execution."""
+        
+    def _execute_many(self, sql: str, parameters: Sequence[SQLParameterType], connection: ConnectionT, **kwargs: Any) -> Any:
+        """Handle batch/many execution."""
+        
+    def _execute_script(self, sql: str, connection: ConnectionT, **kwargs: Any) -> Any:
+        """Handle script execution."""
+    ```
+
+### 2. Execution Flow Requirements (MANDATORY)
+<!-- alwaysApply: true -->
+- **SQL Object as Single Source of Truth**: The SQL object must be the authoritative source for:
+    - SQL string via `statement.to_sql(placeholder_style=...)`
+    - Parameters via `statement.parameters`
+    - Execution mode via `statement.is_many` and `statement.is_script`
+- **No Separate Parameters**: Never pass separate `is_many`, `is_script`, or `parameters` arguments to `_execute_statement`
+- **Dispatch Logic**:
+    ```python
+    def _execute_statement(self, statement: SQL, connection: Optional[ConnectionT] = None, **kwargs: Any) -> Any:
+        # Get connection (adapter-specific implementation)
+        conn = connection or self._get_connection()
+        
+        # Dispatch based on statement properties
+        if statement.is_script:
+            return self._execute_script(
+                statement.to_sql(placeholder_style=ParameterStyle.STATIC), 
+                connection=conn, 
+                **kwargs
+            )
+        elif statement.is_many:
+            return self._execute_many(
+                statement.to_sql(placeholder_style=self.placeholder_style),
+                statement.parameters,
+                connection=conn,
+                **kwargs
+            )
+        else:
+            return self._execute(
+                statement.to_sql(placeholder_style=self.placeholder_style),
+                statement.parameters,
+                connection=conn,
+                **kwargs
+            )
+    ```
+
+### 3. Parameter Handling Requirements (MANDATORY)
+<!-- alwaysApply: true -->
+- **Placeholder Style Conversion**: Use adapter-specific `placeholder_style` for regular execution
+- **Static Rendering for Scripts**: Always use `ParameterStyle.STATIC` for script execution to convert parameters to literals
+- **Parameter Validation**: Trust the SQL object's parameter processing; don't re-validate in adapters
+- **Type Preservation**: Maintain parameter types as provided by the SQL object
+
+### 4. Result Wrapping Requirements (MANDATORY)
+<!-- alwaysApply: true -->
+- **Consistent Result Types**: Use `_wrap_select_result` and `_wrap_execute_result` for consistent return types
+- **Row Detection**: Determine result type based on cursor description or statement analysis
+- **Metadata Preservation**: Include execution metadata (row counts, timing, etc.) in result objects
+
+### 5. Connection Management (MANDATORY)
+<!-- alwaysApply: true -->
+- **Context Manager Usage**: All database operations must use proper context managers for cursors
+- **Resource Cleanup**: Ensure cursors and connections are properly closed/returned to pools
+- **Error Handling**: Wrap database-specific exceptions into SQLSpec exception hierarchy
+
+### 6. Method Implementation Patterns (MANDATORY)
+<!-- alwaysApply: true -->
+- **Single Responsibility**: Each method handles only its designated execution mode
+- **Minimal Variable Assignment**: Follow strict conciseness rules; inline expressions where possible
+- **Concise Naming**: Use `sql` instead of verbose names like `final_sql`
+- **Implementation Example**:
+    ```python
+    def _execute(self, sql: str, parameters: SQLParameterType, connection: ConnectionT, **kwargs: Any) -> Any:
+        with self._get_cursor(connection) as cursor:
+            cursor.execute(sql, parameters)
+            return self._wrap_select_result(cursor) if cursor.description else self._wrap_execute_result(cursor)
+    ```
+
+### 7. Transaction Management (MANDATORY)
+<!-- alwaysApply: true -->
+- **No Implicit Commits**: Adapters MUST NOT issue `commit()` or `rollback()` calls
+- **User Responsibility**: Transaction management is always the user's responsibility
+- **Documentation**: This rule must be clearly documented in adapter docstrings
+
+### 8. Testing Requirements (MANDATORY)
+<!-- alwaysApply: true -->
+- **Execution Path Testing**: Test all three execution paths (single, many, script)
+- **Parameter Flow Testing**: Verify parameters flow correctly through all execution modes
+- **Mock Context Managers**: Use `MagicMock` for cursor mocks that need `__enter__`/`__exit__` support
+- **Result Type Testing**: Verify correct result wrapping for SELECT vs DML operations
+
+### 9. Cross-Adapter Consistency (UNBREAKABLE RULE)
+<!-- alwaysApply: true -->
+- **Shared Pattern Updates**: Any change to execution patterns must be reflected in ALL adapters
+- **Review Requirement**: When updating one adapter, review all others for parallel changes
+- **Reference Implementation**: SQLite adapter serves as the canonical reference
+
+### 10. Integration Requirements (MANDATORY)
+<!-- alwaysApply: true -->
+- **StatementPipeline Integration**: Must work with StatementPipeline and SQLProcessingContext architecture
+- **Single-Pass Processing**: Honor the "parse once, transform once, validate once" principle
+- **Pipeline Results**: Accept and properly handle all SQL object pipeline outputs
+
+## Adapters Requiring Updates
+The following adapters must be updated to match this structure:
+- `sqlspec/adapters/duckdb/driver.py`
+- `sqlspec/adapters/bigquery/driver.py`
+- `sqlspec/adapters/oracledb/driver.py`
+- `sqlspec/adapters/psycopg/driver.py`
+- `sqlspec/adapters/adbc/driver.py`
+- `sqlspec/adapters/aiosqlite/driver.py`
+- `sqlspec/adapters/asyncpg/driver.py`
+- `sqlspec/adapters/asyncmy/driver.py`
+- `sqlspec/adapters/psqlpy/driver.py`
+
+## Cross-References
+- See `.cursor/rules/sql/01_sql_class_implementation.mdc` for SQL object requirements
+- See `.cursor/rules/testing/01_adapter_testing_patterns.mdc` for testing patterns
+- See internal docs REF-005 for driver protocol architecture details
+
+## Exceptions
+- Database-specific quirks may require minor variations but must maintain the same overall structure
+- Performance optimizations may be added but cannot change the core execution flow
