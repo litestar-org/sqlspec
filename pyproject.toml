@@ -355,6 +355,8 @@ ignore = [
   "DOC201",  # pydocstyle - Missing return statement
   "BLE001",  # pylint -  Blind exception
   "S101",    # S101 - Use of assert
+  "FIX002",  # Ruff - Allow the use of TODO in comments
+  "TD003",   # Ruff - Missing issue link for TODO
 ]
 select = ["ALL"]
 

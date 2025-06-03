@@ -75,12 +75,10 @@ class InsertBuilder(
         insert_query = (
             InsertBuilder()
             .into("users")
-            .values_from_dict(
-                {
-                    "name": "John",
-                    "email": "john@example.com",
-                }
-            )
+            .values_from_dict({
+                "name": "John",
+                "email": "john@example.com",
+            })
         )
 
         # INSERT from SELECT
@@ -118,7 +116,9 @@ class InsertBuilder(
         Returns:
             The type of result expected for INSERT operations.
         """
-        return SQLResult[RowT]
+        from sqlspec.statement.result import SQLResult
+
+        return SQLResult
 
     def _get_insert_expression(self) -> exp.Insert:
         """Safely gets and casts the internal expression to exp.Insert.

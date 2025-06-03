@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Generic, Optional, Union, cast
 
 from sqlglot import exp
 
@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from sqlspec.statement.builder.base import QueryBuilder
     from sqlspec.typing import RowT
 
-__all__ = ("CaseBuilder", "CaseBuilderMixin", )
+__all__ = ("CaseBuilder", "CaseBuilderMixin")
 
 
 class CaseBuilderMixin:
@@ -22,18 +22,18 @@ class CaseBuilderMixin:
         Returns:
             CaseBuilder: A CaseBuilder instance for building the CASE expression.
         """
-        return CaseBuilder(self, alias)
+        return CaseBuilder(self, alias)  # type: ignore[arg-type]
 
 
 @dataclass
 class CaseBuilder:
     """Builder for CASE expressions."""
 
-    _parent: "QueryBuilder[Any]"
+    _parent: "QueryBuilder[Generic[RowT]]"  # type: ignore[valid-type]
     _alias: Optional[str]
     _case_expr: exp.Case
 
-    def __init__(self, parent: "QueryBuilder[RowT]", alias: Optional[str] = None) -> None:
+    def __init__(self, parent: "QueryBuilder[Generic[RowT]]", alias: Optional[str] = None) -> None:  # pyright: ignore
         """Initialize CaseBuilder.
 
         Args:
@@ -55,7 +55,7 @@ class CaseBuilder:
             CaseBuilder: The current builder instance for method chaining.
         """
         cond_expr = exp.condition(condition) if isinstance(condition, str) else condition
-        param_name = self._parent._add_parameter(value)  # type: ignore[attr-defined]
+        param_name = self._parent._add_parameter(value)  # pyright: ignore
         value_expr = exp.Placeholder(this=param_name)
 
         when_clause = exp.When(this=cond_expr, then=value_expr)
@@ -74,16 +74,16 @@ class CaseBuilder:
         Returns:
             CaseBuilder: The current builder instance for method chaining.
         """
-        param_name = self._parent._add_parameter(value)  # type: ignore[attr-defined]
+        param_name = self._parent._add_parameter(value)  # pyright: ignore
         value_expr = exp.Placeholder(this=param_name)
         self._case_expr.set("default", value_expr)
         return self
 
-    def end(self) -> "QueryBuilder[Any]":
+    def end(self) -> "QueryBuilder[Generic[RowT]]":  # pyright: ignore
         """Finalize the CASE expression and add it to the SELECT clause.
 
         Returns:
             The parent builder instance.
         """
         select_expr = exp.alias_(self._case_expr, self._alias) if self._alias else self._case_expr
-        return self._parent.select(select_expr)  # type: ignore[attr-defined]
+        return cast("QueryBuilder[RowT]", self._parent.select(select_expr))  # type: ignore[attr-defined]

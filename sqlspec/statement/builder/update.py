@@ -169,4 +169,8 @@ class UpdateBuilder(
             msg = "No UPDATE expression to build or expression is of the wrong type."
             raise SQLBuilderError(msg)
 
+        # Check that the table is set
+        if getattr(self._expression, "this", None) is None:
+            raise SQLBuilderError("No table specified for UPDATE statement.")
+
         return super().build()

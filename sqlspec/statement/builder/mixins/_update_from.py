@@ -5,7 +5,7 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 
-__all__ = ("UpdateFromClauseMixin", )
+__all__ = ("UpdateFromClauseMixin",)
 
 
 class UpdateFromClauseMixin:

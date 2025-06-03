@@ -7,7 +7,7 @@ from sqlspec.exceptions import SQLBuilderError
 if TYPE_CHECKING:
     from sqlspec.statement.builder.protocols import BuilderProtocol
 
-__all__ = ("FromClauseMixin", )
+__all__ = ("FromClauseMixin",)
 
 
 class FromClauseMixin:

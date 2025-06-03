@@ -1,7 +1,7 @@
 ---
-description:
-globs:
-alwaysApply: false
+description: 
+globs: 
+alwaysApply: true
 ---
 # Database Adapter Development
 <!-- alwaysApply: true -->
@@ -62,7 +62,7 @@ To ensure that new database adapters are consistent with the existing adapter ar
     3. `_execute_many`
     4. `_execute_script`
 - **Variable Naming**: Use concise, descriptive variable names. Prefer `sql` over verbose names like `final_sql`. Avoid unnecessary or overly detailed variable names.
-- **Minimize Needless Assignments**: Always favor in-lining expressions and re-using variables where possible, unless it would significantly harm readability. See `python/01_coding_patterns.mdc` for strict conciseness rules.
+- **Minimize Needless Assignments**: Always favor in-lining expressions and reusing variables where possible, unless it would significantly harm readability. See `python/01_coding_patterns.mdc` for strict conciseness rules.
 - **Applicability**: This is a mandatory style for all new and refactored adapters.
 
 ### 8. Transaction Management (MANDATORY)

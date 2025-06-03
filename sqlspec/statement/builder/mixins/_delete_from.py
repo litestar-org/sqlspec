@@ -1,13 +1,17 @@
+from typing import Optional
+
 from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 
-__all__ = ("DeleteFromClauseMixin", )
+__all__ = ("DeleteFromClauseMixin",)
 
 
 class DeleteFromClauseMixin:
     """Mixin providing FROM clause for DELETE builders."""
+
+    _expression: Optional[exp.Expression] = None
 
     def from_(self, table: str) -> Self:
         """Set the target table for the DELETE statement.
@@ -19,12 +23,12 @@ class DeleteFromClauseMixin:
             The current builder instance for method chaining.
         """
         if self._expression is None:
-            self._expression = exp.Delete()  # type: ignore[attr-defined]
-        if not isinstance(self._expression, exp.Delete):  # type: ignore[attr-defined]
-            current_expr_type = type(self._expression).__name__  # type: ignore[attr-defined]
+            self._expression = exp.Delete()
+        if not isinstance(self._expression, exp.Delete):
+            current_expr_type = type(self._expression).__name__
             msg = f"Base expression for DeleteBuilder is {current_expr_type}, expected Delete."
             raise SQLBuilderError(msg)
 
         setattr(self, "_table", table)
-        self._expression.set("this", exp.to_table(table))  # type: ignore[attr-defined]
+        self._expression.set("this", exp.to_table(table))
         return self

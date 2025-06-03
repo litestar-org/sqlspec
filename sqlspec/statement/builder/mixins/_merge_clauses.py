@@ -5,11 +5,20 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 
-__all__ = ("MergeIntoClauseMixin", "MergeMatchedClauseMixin", "MergeNotMatchedBySourceClauseMixin", "MergeNotMatchedClauseMixin", "MergeOnClauseMixin", "MergeUsingClauseMixin", )
+__all__ = (
+    "MergeIntoClauseMixin",
+    "MergeMatchedClauseMixin",
+    "MergeNotMatchedBySourceClauseMixin",
+    "MergeNotMatchedClauseMixin",
+    "MergeOnClauseMixin",
+    "MergeUsingClauseMixin",
+)
 
 
 class MergeIntoClauseMixin:
     """Mixin providing INTO clause for MERGE builders."""
+
+    _expression: Optional[exp.Expression] = None
 
     def into(self, table: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
         """Set the target table for the MERGE operation (INTO clause).
@@ -23,15 +32,17 @@ class MergeIntoClauseMixin:
             The current builder instance for method chaining.
         """
         if self._expression is None:
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[attr-defined]
-        if not isinstance(self._expression, exp.Merge):  # type: ignore[attr-defined]
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[attr-defined]
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # pyright: ignore
+        if not isinstance(self._expression, exp.Merge):  # pyright: ignore
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # pyright: ignore
         self._expression.set("this", exp.to_table(table, alias=alias) if isinstance(table, str) else table)
         return self
 
 
 class MergeUsingClauseMixin:
     """Mixin providing USING clause for MERGE builders."""
+
+    _expression: Optional[exp.Expression] = None
 
     def using(self, source: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Self:
         """Set the source data for the MERGE operation (USING clause).
@@ -48,9 +59,9 @@ class MergeUsingClauseMixin:
             SQLBuilderError: If the current expression is not a MERGE statement or if the source type is unsupported.
         """
         if self._expression is None:
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[attr-defined]
-        if not isinstance(self._expression, exp.Merge):  # type: ignore[attr-defined]
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[attr-defined]
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
+        if not isinstance(self._expression, exp.Merge):
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
 
         source_expr: exp.Expression
         if isinstance(source, str):
@@ -79,6 +90,8 @@ class MergeUsingClauseMixin:
 class MergeOnClauseMixin:
     """Mixin providing ON clause for MERGE builders."""
 
+    _expression: Optional[exp.Expression] = None
+
     def on(self, condition: Union[str, exp.Expression]) -> Self:
         """Set the join condition for the MERGE operation (ON clause).
 
@@ -93,13 +106,15 @@ class MergeOnClauseMixin:
             SQLBuilderError: If the current expression is not a MERGE statement or if the condition type is unsupported.
         """
         if self._expression is None:
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[attr-defined]
-        if not isinstance(self._expression, exp.Merge):  # type: ignore[attr-defined]
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[attr-defined]
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
+        if not isinstance(self._expression, exp.Merge):
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
 
         condition_expr: exp.Expression
         if isinstance(condition, str):
-            parsed_condition = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
+            parsed_condition: Optional[exp.Expression] = exp.maybe_parse(
+                condition, dialect=getattr(self, "dialect", None)
+            )
             if not parsed_condition:
                 msg = f"Could not parse ON condition: {condition}"
                 raise SQLBuilderError(msg)
@@ -117,6 +132,8 @@ class MergeOnClauseMixin:
 class MergeMatchedClauseMixin:
     """Mixin providing WHEN MATCHED THEN ... clauses for MERGE builders."""
 
+    _expression: Optional[exp.Expression] = None
+
     def _add_when_clause(self, when_clause: exp.When) -> None:
         """Helper to add a WHEN clause to the MERGE statement.
 
@@ -124,9 +141,9 @@ class MergeMatchedClauseMixin:
             when_clause: The WHEN clause to add.
         """
         if self._expression is None:
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[attr-defined]
-        if not isinstance(self._expression, exp.Merge):  # type: ignore[attr-defined]
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[attr-defined]
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
+        if not isinstance(self._expression, exp.Merge):
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
 
         # Get or create the whens object
         whens = self._expression.args.get("whens")
@@ -171,7 +188,9 @@ class MergeMatchedClauseMixin:
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
+                parsed_cond: Optional[exp.Expression] = exp.maybe_parse(
+                    condition, dialect=getattr(self, "dialect", None)
+                )
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -207,7 +226,9 @@ class MergeMatchedClauseMixin:
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
+                parsed_cond: Optional[exp.Expression] = exp.maybe_parse(
+                    condition, dialect=getattr(self, "dialect", None)
+                )
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -226,6 +247,8 @@ class MergeMatchedClauseMixin:
 
 class MergeNotMatchedClauseMixin:
     """Mixin providing WHEN NOT MATCHED THEN ... clauses for MERGE builders."""
+
+    _expression: Optional[exp.Expression] = None
 
     def when_not_matched_then_insert(
         self,
@@ -285,7 +308,9 @@ class MergeNotMatchedClauseMixin:
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
+                parsed_cond: Optional[exp.Expression] = exp.maybe_parse(
+                    condition, dialect=getattr(self, "dialect", None)
+                )
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -304,6 +329,8 @@ class MergeNotMatchedClauseMixin:
 
 class MergeNotMatchedBySourceClauseMixin:
     """Mixin providing WHEN NOT MATCHED BY SOURCE THEN ... clauses for MERGE builders."""
+
+    _expression: Optional[exp.Expression] = None
 
     def when_not_matched_by_source_then_update(
         self, set_values: dict[str, Any], condition: Optional[Union[str, exp.Expression]] = None
@@ -341,7 +368,9 @@ class MergeNotMatchedBySourceClauseMixin:
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
+                parsed_cond: Optional[exp.Expression] = exp.maybe_parse(
+                    condition, dialect=getattr(self, "dialect", None)
+                )
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)
@@ -380,7 +409,9 @@ class MergeNotMatchedBySourceClauseMixin:
         if condition:
             condition_expr: exp.Expression
             if isinstance(condition, str):
-                parsed_cond = exp.maybe_parse(condition, dialect=getattr(self, "dialect", None))
+                parsed_cond: Optional[exp.Expression] = exp.maybe_parse(
+                    condition, dialect=getattr(self, "dialect", None)
+                )
                 if not parsed_cond:
                     msg = f"Could not parse WHEN clause condition: {condition}"
                     raise SQLBuilderError(msg)

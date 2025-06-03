@@ -28,7 +28,24 @@ from sqlspec.statement.builder.mixins._update_table import UpdateTableClauseMixi
 from sqlspec.statement.builder.mixins._where import WhereClauseMixin
 from sqlspec.statement.builder.mixins._window_functions import WindowFunctionsMixin
 
-__all__ = [
+# Add stubs for PivotClauseMixin and UnpivotClauseMixin if not present
+try:
+    from sqlspec.statement.builder.mixins._pivot import PivotClauseMixin
+except ImportError:
+
+    class PivotClauseMixin:
+        """Stub for PivotClauseMixin."""
+
+
+try:
+    from sqlspec.statement.builder.mixins._unpivot import UnpivotClauseMixin
+except ImportError:
+
+    class UnpivotClauseMixin:
+        """Stub for UnpivotClauseMixin."""
+
+
+__all__ = (
     "AggregateFunctionsMixin",
     "CaseBuilderMixin",
     "CommonTableExpressionMixin",
@@ -48,12 +65,14 @@ __all__ = [
     "MergeOnClauseMixin",
     "MergeUsingClauseMixin",
     "OrderByClauseMixin",
+    "PivotClauseMixin",
     "ReturningClauseMixin",
     "SelectColumnsMixin",
     "SetOperationMixin",
+    "UnpivotClauseMixin",
     "UpdateFromClauseMixin",
     "UpdateSetClauseMixin",
     "UpdateTableClauseMixin",
     "WhereClauseMixin",
     "WindowFunctionsMixin",
-]
+)

@@ -5,11 +5,13 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 
-__all__ = ("WindowFunctionsMixin", )
+__all__ = ("WindowFunctionsMixin",)
 
 
 class WindowFunctionsMixin:
     """Mixin providing window function methods for SQL builders."""
+
+    _expression: Optional[exp.Expression] = None
 
     def window(
         self,

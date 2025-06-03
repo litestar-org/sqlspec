@@ -1,13 +1,15 @@
-from typing import Union
+from typing import Optional, Union
 
 from sqlglot import exp
 from typing_extensions import Self
 
-__all__ = ("GroupByClauseMixin", )
+__all__ = ("GroupByClauseMixin",)
 
 
 class GroupByClauseMixin:
     """Mixin providing GROUP BY clause functionality for SQL builders."""
+
+    _expression: Optional[exp.Expression] = None
 
     def group_by(self, *columns: Union[str, exp.Expression]) -> Self:
         """Add GROUP BY clause.
@@ -19,13 +21,13 @@ class GroupByClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        if self._expression is None:
-            return self  # pyright: ignore  # type: ignore[attr-defined]
+        if self._expression is None or not isinstance(self._expression, exp.Select):
+            return self
 
         for column in columns:
             self._expression = self._expression.group_by(
                 exp.column(column) if isinstance(column, str) else column, copy=False
-            )  # pyright: ignore  # type: ignore[attr-defined]
+            )
         return self
 
     def group_by_rollup(self, *columns: Union[str, exp.Expression]) -> Self:

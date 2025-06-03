@@ -7,7 +7,7 @@ if TYPE_CHECKING:
 
 from sqlspec.exceptions import SQLBuilderError
 
-__all__ = ("LimitOffsetClauseMixin", )
+__all__ = ("LimitOffsetClauseMixin",)
 
 
 class LimitOffsetClauseMixin:

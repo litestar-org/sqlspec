@@ -5,11 +5,13 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 
-__all__ = ("CommonTableExpressionMixin", )
+__all__ = ("CommonTableExpressionMixin",)
 
 
 class CommonTableExpressionMixin:
     """Mixin providing WITH clause (Common Table Expressions) support for SQL builders."""
+
+    _expression: Optional[exp.Expression] = None
 
     def with_(
         self,
@@ -45,14 +47,14 @@ class CommonTableExpressionMixin:
         cte_expr: Optional[exp.Expression] = None
         if hasattr(query, "build"):
             # Query is a builder instance
-            built_query = query.build()  # type: ignore[attr-defined]
+            built_query = query.build()  # pyright: ignore
             cte_sql = built_query.sql
             cte_expr = exp.maybe_parse(cte_sql, dialect=getattr(self, "dialect", None))
 
             # Merge parameters
             if hasattr(self, "add_parameter"):
                 for param_name, param_value in getattr(built_query, "parameters", {}).items():
-                    self.add_parameter(param_value, name=param_name)  # type: ignore[attr-defined]
+                    self.add_parameter(param_value, name=param_name)  # pyright: ignore
         elif isinstance(query, str):
             cte_expr = exp.maybe_parse(query, dialect=getattr(self, "dialect", None))
         elif isinstance(query, exp.Expression):
@@ -68,17 +70,17 @@ class CommonTableExpressionMixin:
 
         # Different handling for different expression types
         if hasattr(self._expression, "with_"):
-            existing_with = self._expression.args.get("with")  # type: ignore[attr-defined]
+            existing_with = self._expression.args.get("with")  # pyright: ignore
             if existing_with:
                 existing_with.expressions.append(cte_alias_expr)
                 if recursive:
                     existing_with.set("recursive", recursive)
             else:
-                self._expression = self._expression.with_(  # type: ignore[attr-defined]
+                self._expression = self._expression.with_(  # pyright: ignore
                     cte_alias_expr, as_=cte_alias_expr.alias, copy=False
                 )
                 if recursive:
-                    with_clause = self._expression.find(exp.With)  # type: ignore[attr-defined]
+                    with_clause = self._expression.find(exp.With)
                     if with_clause:
                         with_clause.set("recursive", recursive)
         else:

@@ -446,7 +446,7 @@ class SQL:
                     args = parameters if isinstance(parameters, (list, tuple)) else [parameters]
                     merged = self._config.parameter_converter._merge_mixed_parameters(param_info, args, kwargs)
                     return param_info, merged
-                _, param_info, merged, _ = self._config.parameter_converter.convert_parameters(
+                _, param_info, merged, _ = self._config.parameter_converter.convert_parameters(  # type: ignore[assignment]
                     sql_str, parameters, None, kwargs, validate=self._config.enable_validation
                 )
 
@@ -705,7 +705,8 @@ class SQL:
                 and hasattr(current_expression, "expressions")
             ):
                 if placeholder_style is not None:
-                    # TODO(@litestar): For placeholder transformation on scripts, apply the transformation to each sub-statement in the script individually (not just to the combined script string). Then join the transformed statements with semicolons. See issue #1234
+                    # TODO(@litestar): For placeholder transformation on scripts, apply the transformation to each sub-statement in the script individually (not just to the combined script string). Then join the transformed statements with semicolons.
+                    # TODO(@litestar): Placeholder should be configurable by the driver.  Perhaps the means that it should be an attribute on the SQL class?
                     transformed_parts = [
                         self._transform_sql_placeholders(placeholder_style, stmt_expr, target_dialect)
                         for stmt_expr in current_expression.expressions
@@ -1222,11 +1223,11 @@ class SQL:
 
             # Ensure we have a Select expression that supports where()
             if hasattr(expr, "where") and callable(getattr(expr, "where", None)):
-                expr = expr.where(condition_expression)  # type: ignore[attr-defined]
+                expr = expr.where(condition_expression)  # pyright: ignore
             else:
                 if not isinstance(expr, exp.Select):
                     expr = exp.Select().from_(expr)
-                expr = expr.where(condition_expression)  # type: ignore[attr-defined]
+                expr = expr.where(condition_expression)  # pyright: ignore
 
         return self.copy(statement=expr, parameters=self._merged_parameters)
 
@@ -1248,19 +1249,19 @@ class SQL:
             expr_with_param = new_stmt._get_current_expression_for_modification()
 
             if hasattr(expr_with_param, "limit") and callable(getattr(expr_with_param, "limit", None)):
-                expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
+                expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))  # pyright: ignore
             else:
                 if not isinstance(expr_with_param, exp.Select):
                     expr_with_param = exp.Select().from_(expr_with_param)
-                expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
+                expr_with_param = expr_with_param.limit(exp.Placeholder(this=param_name))
             return new_stmt.copy(statement=expr_with_param, parameters=new_stmt._merged_parameters)
 
         if hasattr(expr, "limit") and callable(getattr(expr, "limit", None)):
-            expr = expr.limit(limit_value)  # type: ignore[attr-defined]
+            expr = expr.limit(limit_value)  # pyright: ignore
         else:
             if not isinstance(expr, exp.Select):
                 expr = exp.Select().from_(expr)
-            expr = expr.limit(limit_value)  # type: ignore[attr-defined]
+            expr = expr.limit(limit_value)
         return self.copy(statement=expr)
 
     def offset(self, offset_value: int, use_parameter: bool = False) -> "SQL":
@@ -1281,20 +1282,20 @@ class SQL:
             expr_with_param = new_stmt._get_current_expression_for_modification()
 
             if hasattr(expr_with_param, "offset") and callable(getattr(expr_with_param, "offset", None)):
-                expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
+                expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))  # pyright: ignore
             else:
                 if not isinstance(expr_with_param, exp.Select):
                     expr_with_param = exp.Select().from_(expr_with_param)
-                expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))  # type: ignore[attr-defined]
+                expr_with_param = expr_with_param.offset(exp.Placeholder(this=param_name))
 
             return new_stmt.copy(statement=expr_with_param, parameters=new_stmt._merged_parameters)
 
         if hasattr(expr, "offset") and callable(getattr(expr, "offset", None)):
-            expr = expr.offset(offset_value)  # type: ignore[attr-defined]
+            expr = expr.offset(offset_value)  # pyright: ignore
         else:
             if not isinstance(expr, exp.Select):
                 expr = exp.Select().from_(expr)
-            expr = expr.offset(offset_value)  # type: ignore[attr-defined]
+            expr = expr.offset(offset_value)
 
         return self.copy(statement=expr)
 
@@ -1328,14 +1329,14 @@ class SQL:
                 parsed_orders.append(o_expr)
             elif isinstance(o_expr, exp.Order):
                 if hasattr(o_expr, "this") and hasattr(o_expr, "desc"):
-                    ordered = o_expr.this.desc() if getattr(o_expr, "desc", False) else o_expr.this.asc()  # type: ignore[attr-defined]
+                    ordered = o_expr.this.desc() if getattr(o_expr, "desc", False) else o_expr.this.asc()
                     if isinstance(ordered, exp.Ordered):
                         parsed_orders.append(ordered)
 
         if parsed_orders:
             if not isinstance(expr, exp.Select):
                 expr = exp.Select().from_(expr)
-            expr = expr.order_by(*parsed_orders)  # type: ignore[attr-defined]
+            expr = expr.order_by(*parsed_orders)
 
         return self.copy(statement=expr)
 

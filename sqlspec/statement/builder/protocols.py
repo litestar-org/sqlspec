@@ -2,7 +2,7 @@ from typing import Any, Optional, Protocol
 
 from sqlglot import exp
 
-__all__ = ("BuilderProtocol", )
+__all__ = ("BuilderProtocol",)
 
 
 class BuilderProtocol(Protocol):

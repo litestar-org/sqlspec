@@ -31,3 +31,4 @@ target/
 coverage.*
 setup.py
 tmp/
+*.log

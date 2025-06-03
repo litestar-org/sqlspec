@@ -1,15 +1,14 @@
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 from sqlglot import exp
-from typing_extensions import Self
 
-__all__ = ("AggregateFunctionsMixin", )
+__all__ = ("AggregateFunctionsMixin",)
 
 
 class AggregateFunctionsMixin:
     """Mixin providing aggregate function methods for SQL builders."""
 
-    def count_(self, column: Union[str, exp.Expression] = "*", alias: Optional[str] = None) -> Self:
+    def count_(self, column: Union[str, exp.Expression] = "*", alias: Optional[str] = None) -> Any:
         """Add COUNT function to SELECT clause.
 
         Args:
@@ -28,7 +27,7 @@ class AggregateFunctionsMixin:
         select_expr = exp.alias_(count_expr, alias) if alias else count_expr
         return self.select(select_expr)  # type: ignore[attr-defined]
 
-    def sum_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def sum_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Any:
         """Add SUM function to SELECT clause.
 
         Args:
@@ -43,7 +42,7 @@ class AggregateFunctionsMixin:
         select_expr = exp.alias_(sum_expr, alias) if alias else sum_expr
         return self.select(select_expr)  # type: ignore[attr-defined]
 
-    def avg_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def avg_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Any:
         """Add AVG function to SELECT clause.
 
         Args:
@@ -58,7 +57,7 @@ class AggregateFunctionsMixin:
         select_expr = exp.alias_(avg_expr, alias) if alias else avg_expr
         return self.select(select_expr)  # type: ignore[attr-defined]
 
-    def max_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def max_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Any:
         """Add MAX function to SELECT clause.
 
         Args:
@@ -73,7 +72,7 @@ class AggregateFunctionsMixin:
         select_expr = exp.alias_(max_expr, alias) if alias else max_expr
         return self.select(select_expr)  # type: ignore[attr-defined]
 
-    def min_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+    def min_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Any:
         """Add MIN function to SELECT clause.
 
         Args:
