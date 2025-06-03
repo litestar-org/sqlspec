@@ -106,7 +106,7 @@ async def test_asyncmy_driver_execute_impl_select(
     statement = SQL("SELECT * FROM users WHERE id = %s", parameters=[1], config=asyncmy_driver.config)
 
     # Execute
-    result = await asyncmy_driver._execute_impl(
+    result = await asyncmy_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -132,7 +132,7 @@ async def test_asyncmy_driver_execute_impl_insert(
     statement = SQL("INSERT INTO users (name) VALUES (%s)", parameters=["John"], config=asyncmy_driver.config)
 
     # Execute
-    result = await asyncmy_driver._execute_impl(
+    result = await asyncmy_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -159,7 +159,7 @@ async def test_asyncmy_driver_execute_impl_script(
     ).as_script()
 
     # Execute script
-    result = await asyncmy_driver._execute_impl(
+    result = await asyncmy_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -191,7 +191,7 @@ async def test_asyncmy_driver_execute_impl_many(
     ).as_many()
 
     # Execute many
-    result = await asyncmy_driver._execute_impl(
+    result = await asyncmy_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -222,7 +222,7 @@ async def test_asyncmy_driver_execute_impl_parameter_processing(
     )
 
     # Execute
-    result = await asyncmy_driver._execute_impl(
+    result = await asyncmy_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -381,7 +381,7 @@ async def test_asyncmy_driver_error_handling(asyncmy_driver: AsyncmyDriver, mock
 
     # Test error propagation
     with pytest.raises(Exception, match="Database error"):
-        await asyncmy_driver._execute_impl(
+        await asyncmy_driver._execute_statement(
             statement=statement,
             connection=None,
         )
@@ -416,7 +416,7 @@ async def test_asyncmy_driver_instrumentation(
     mock_cursor = mock_asyncmy_connection.cursor.return_value.__aenter__.return_value
 
     # Execute with logging enabled
-    await asyncmy_driver._execute_impl(
+    await asyncmy_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -586,7 +586,7 @@ async def test_asyncmy_driver_logging_configuration(
     statement = SQL("SELECT * FROM users WHERE id = %s", parameters=[1], config=asyncmy_driver.config)
 
     # Execute with logging enabled
-    await asyncmy_driver._execute_impl(
+    await asyncmy_driver._execute_statement(
         statement=statement,
         connection=None,
     )

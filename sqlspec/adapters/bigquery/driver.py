@@ -278,7 +278,7 @@ class BigQueryDriver(
         """
         return [dict(row) for row in rows_iterator]  # type: ignore[misc]
 
-    def _execute_impl(
+    def _execute_statement(
         self,
         statement: SQL,
         connection: Optional[BigQueryConnection] = None,
@@ -336,7 +336,7 @@ class BigQueryDriver(
 
         # Note: statement.is_many is not directly used here because BigQuery's batching for DML
         # is typically handled by sending multiple individual DML statements or using specific batch APIs
-        # not covered by a single _execute_impl call with is_many=True in the same way as other drivers.
+        # not covered by a single _execute_statement call with is_many=True in the same way as other drivers.
         # The existing `execute_many` method in this driver iterates and calls `_run_query_job`.
         # If a future BigQuery API supports batch DMLs via a single job with multiple parameter sets,
         # then `statement.is_many` would be used here to structure `bq_query_parameters_list` accordingly.

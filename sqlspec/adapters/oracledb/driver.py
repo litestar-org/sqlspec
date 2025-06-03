@@ -67,7 +67,7 @@ class OracleSyncDriver(
         finally:
             cursor.close()
 
-    def _execute_impl(
+    def _execute_statement(
         self,
         statement: SQL,
         connection: Optional[OracleSyncConnection] = None,
@@ -286,7 +286,7 @@ class OracleAsyncDriver(
         finally:
             await ensure_async_(cursor.close)()
 
-    async def _execute_impl(
+    async def _execute_statement(
         self,
         statement: SQL,
         connection: Optional[OracleAsyncConnection] = None,

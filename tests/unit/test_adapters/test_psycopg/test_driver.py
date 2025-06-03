@@ -191,7 +191,7 @@ def test_psycopg_sync_driver_execute_impl_select(
     )
 
     # Execute
-    result = psycopg_sync_driver._execute_impl(
+    result = psycopg_sync_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -220,7 +220,7 @@ async def test_psycopg_async_driver_execute_impl_select(
     )
 
     # Execute
-    result = await psycopg_async_driver._execute_impl(
+    result = await psycopg_async_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -247,7 +247,7 @@ def test_psycopg_sync_driver_execute_impl_insert(
     )
 
     # Execute
-    result = psycopg_sync_driver._execute_impl(
+    result = psycopg_sync_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -274,7 +274,7 @@ def test_psycopg_sync_driver_execute_impl_script(
     ).as_script()
 
     # Execute script
-    result = psycopg_sync_driver._execute_impl(
+    result = psycopg_sync_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -302,7 +302,7 @@ def test_psycopg_sync_driver_execute_impl_many(
     ).as_many()
 
     # Execute many
-    result = psycopg_sync_driver._execute_impl(
+    result = psycopg_sync_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -441,7 +441,7 @@ def test_psycopg_sync_driver_error_handling(
 
     # Test error propagation
     with pytest.raises(Exception, match="Database error"):
-        psycopg_sync_driver._execute_impl(
+        psycopg_sync_driver._execute_statement(
             statement=statement,
             connection=None,
         )
@@ -460,7 +460,7 @@ async def test_psycopg_async_driver_error_handling(
 
     # Test error propagation
     with pytest.raises(Exception, match="Database error"):
-        await psycopg_async_driver._execute_impl(
+        await psycopg_async_driver._execute_statement(
             statement=statement,
             connection=None,
         )
@@ -490,7 +490,7 @@ def test_psycopg_sync_driver_instrumentation(psycopg_sync_driver: PsycopgSyncDri
     )
 
     # Execute with logging enabled
-    psycopg_sync_driver._execute_impl(
+    psycopg_sync_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -524,7 +524,7 @@ async def test_psycopg_async_driver_instrumentation(psycopg_async_driver: Psycop
     )
 
     # Execute with logging enabled
-    await psycopg_async_driver._execute_impl(
+    await psycopg_async_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -579,7 +579,7 @@ def test_psycopg_sync_driver_logging_configuration(
     )
 
     # Execute with logging enabled
-    psycopg_sync_driver._execute_impl(
+    psycopg_sync_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -655,7 +655,7 @@ def test_psycopg_sync_driver_named_parameters(
     )
 
     # Execute
-    psycopg_sync_driver._execute_impl(
+    psycopg_sync_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -684,7 +684,7 @@ async def test_psycopg_async_driver_named_parameters(
     )
 
     # Execute
-    await psycopg_async_driver._execute_impl(
+    await psycopg_async_driver._execute_statement(
         statement=statement,
         connection=None,
     )

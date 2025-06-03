@@ -92,7 +92,7 @@ async def test_aiosqlite_driver_execute_impl_select(
     statement = SQL("SELECT * FROM users WHERE id = ?", parameters=[1], config=aiosqlite_driver.config)
 
     # Execute
-    result = await aiosqlite_driver._execute_impl(
+    result = await aiosqlite_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -116,7 +116,7 @@ async def test_aiosqlite_driver_execute_impl_insert(
     statement = SQL("INSERT INTO users (name) VALUES (?)", parameters=["John"], config=aiosqlite_driver.config)
 
     # Execute
-    result = await aiosqlite_driver._execute_impl(
+    result = await aiosqlite_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -141,7 +141,7 @@ async def test_aiosqlite_driver_execute_impl_script(
     ).as_script()
 
     # Execute script
-    result = await aiosqlite_driver._execute_impl(
+    result = await aiosqlite_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -168,7 +168,7 @@ async def test_aiosqlite_driver_execute_impl_many(
     ).as_many()
 
     # Execute many
-    result = await aiosqlite_driver._execute_impl(
+    result = await aiosqlite_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -197,7 +197,7 @@ async def test_aiosqlite_driver_execute_impl_parameter_processing(
     )
 
     # Execute
-    result = await aiosqlite_driver._execute_impl(
+    result = await aiosqlite_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -359,7 +359,7 @@ async def test_aiosqlite_driver_error_handling(
 
     # Test error propagation
     with pytest.raises(Exception, match="Database error"):
-        await aiosqlite_driver._execute_impl(
+        await aiosqlite_driver._execute_statement(
             statement=statement,
             connection=None,
         )
@@ -386,7 +386,7 @@ async def test_aiosqlite_driver_instrumentation(aiosqlite_driver: AiosqliteDrive
     statement = SQL("SELECT * FROM users WHERE id = ?", parameters=[1], config=aiosqlite_driver.config)
 
     # Execute with logging enabled
-    await aiosqlite_driver._execute_impl(
+    await aiosqlite_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -551,7 +551,7 @@ async def test_aiosqlite_driver_logging_configuration(
     statement = SQL("SELECT * FROM users WHERE id = ?", parameters=[1], config=aiosqlite_driver.config)
 
     # Execute with logging enabled
-    await aiosqlite_driver._execute_impl(
+    await aiosqlite_driver._execute_statement(
         statement=statement,
         connection=None,
     )

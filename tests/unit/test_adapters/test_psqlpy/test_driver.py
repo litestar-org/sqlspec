@@ -84,7 +84,7 @@ async def test_psqlpy_driver_execute_impl_select(
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[1], config=psqlpy_driver.config)
 
     # Execute
-    result = await psqlpy_driver._execute_impl(
+    result = await psqlpy_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -106,7 +106,7 @@ async def test_psqlpy_driver_execute_impl_insert(
     statement = SQL("INSERT INTO users (name) VALUES ($1)", parameters=["John"], config=psqlpy_driver.config)
 
     # Execute
-    result = await psqlpy_driver._execute_impl(
+    result = await psqlpy_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -130,7 +130,7 @@ async def test_psqlpy_driver_execute_impl_script(
     ).as_script()
 
     # Execute script
-    result: Any = await psqlpy_driver._execute_impl(
+    result: Any = await psqlpy_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -154,7 +154,7 @@ async def test_psqlpy_driver_execute_impl_many(psqlpy_driver: PsqlpyDriver, mock
     ).as_many()
 
     # Execute many
-    result: Any = await psqlpy_driver._execute_impl(
+    result: Any = await psqlpy_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -181,7 +181,7 @@ async def test_psqlpy_driver_execute_impl_parameter_processing(
     )
 
     # Execute
-    result: Any = await psqlpy_driver._execute_impl(
+    result: Any = await psqlpy_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -350,7 +350,7 @@ async def test_psqlpy_driver_error_handling(psqlpy_driver: PsqlpyDriver, mock_ps
 
     # Test error propagation
     with pytest.raises(Exception, match="Database error"):
-        await psqlpy_driver._execute_impl(
+        await psqlpy_driver._execute_statement(
             statement=statement,
             connection=None,
         )
@@ -505,7 +505,7 @@ async def test_psqlpy_driver_logging_configuration(
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[1], config=psqlpy_driver.config)
 
     # Execute with logging enabled
-    await psqlpy_driver._execute_impl(
+    await psqlpy_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -573,7 +573,7 @@ async def test_psqlpy_driver_dict_parameter_handling(
     dict_params = [{"name": "John", "age": 30}, {"name": "Jane", "age": 25}]
 
     # Execute many with dict parameters
-    result = await psqlpy_driver._execute_impl(
+    result = await psqlpy_driver._execute_statement(
         statement=statement,
         parameters=dict_params,
         connection=None,
@@ -599,7 +599,7 @@ async def test_psqlpy_driver_prepared_statements(
     statement = SQL("INSERT INTO users (name) VALUES ($1)", parameters=["John"], config=psqlpy_driver.config)
 
     # Execute
-    result = await psqlpy_driver._execute_impl(
+    result = await psqlpy_driver._execute_statement(
         statement=statement,
         parameters=None,
         connection=None,

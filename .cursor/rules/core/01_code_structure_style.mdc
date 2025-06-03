@@ -1,0 +1,76 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Code Structure & Style
+
+## Objective
+To ensure consistency, readability, and maintainability of the codebase by adhering to established directory structures, modular design principles, and automated code styling.
+
+## Context
+- Core library code resides in the `sqlspec/` directory.
+- Tests are located in `tests/unit/` and `tests/integration/`.
+- Automated formatting and linting are primarily handled by Ruff.
+- The project emphasizes modularity and clear organization.
+
+## Rules
+
+### Directory Structure
+- **Core Library**: All core library code must reside in the `sqlspec/` directory.
+- **Logical Subdirectories**: Organize code within `sqlspec/` into logical subdirectories (e.g., `adapters/`, `utils/`, `service/`, `statement/`).
+    ✅ **Good:** `sqlspec/adapters/new_adapter.py`
+    ❌ **Avoid:** Placing core business logic outside `sqlspec/` or in disorganized top-level files.
+- **Adapter Pattern**: New database adapters should be placed in `sqlspec/adapters/` following the established pattern for existing adapters (e.g., dedicated config modules if applicable).
+
+### Modularity
+- **Small, Focused Modules**: Strive for small, focused modules and functions. Each module/function should have a single, well-defined responsibility.
+- **Avoid Circular Dependencies**: Design modules to prevent circular dependencies. If a circular dependency is detected, refactor the code to break the cycle (e.g., by introducing a new module, using dependency inversion, or moving shared functionality).
+
+### Code Formatting & Linting (Ruff)
+- **Primary Tool**: Ruff is the primary linter and formatter.
+- **Compliance**: All Python code must pass `ruff check --fix` and `ruff format`.
+- **Configuration**: Adhere to the Ruff configuration defined in `pyproject.toml` (`[tool.ruff]`).
+- **Line Length**: Maximum line length is 120 characters, as enforced by Ruff.
+- **Pre-commit Hooks**: Utilize pre-commit hooks to automatically enforce formatting and linting before committing code.
+
+### Import Style
+- **Absolute Imports**: All imports must be absolute. Relative imports are disallowed (enforced by `flake8-tidy-imports` via Ruff).
+    ✅ **Good:** `from sqlspec.utils import some_util`
+    ❌ **Avoid:** `from . import some_util` or `from ..module import another_util`
+- **Organization**: Imports should be automatically organized by Ruff according to the `isort` configuration (e.g., standard library, third-party, first-party, sorted alphabetically within groups).
+
+### Naming Conventions
+- **Pythonic Names**: Follow standard Python naming conventions (PEP 8):
+    - `lowercase` for functions, methods, variables, and modules.
+    - `UPPERCASE` for constants.
+    - `CapWords` (PascalCase) for classes.
+    - `_leading_underscore` for internal/protected attributes/methods.
+    - `__double_leading_underscore` for name mangling (use sparingly).
+- **Descriptive Names**: Choose clear, descriptive names that convey the purpose of the variable, function, or class.
+
+### General Readability
+- **Simplicity**: Prefer clear and simple code over overly complex or clever solutions.
+- **Avoid Overly Complex Comprehensions**: While list/dict/set comprehensions are encouraged, avoid overly complex ones that sacrifice readability. Break them down if necessary.
+- **Comments**: Add comments to explain non-obvious logic, complex algorithms, or important decisions. Avoid redundant comments that merely restate what the code does.
+
+## Single-Pass Pipeline Architecture (MANDATORY)
+<!-- alwaysApply: true -->
+- **Single-Pass Principle**: All code handling SQL parsing, transformation, validation, or analysis must do so in a single pass. No redundant parsing or multiple traversals are allowed unless explicitly justified and documented.
+- **Required Architecture**: The StatementPipeline and SQLProcessingContext are the required architecture for all internal SQL processing. See [REF-011] in INTERNAL_REFERENCE.md for details.
+- **Cross-Reference**: See `.cursor/rules/adapters/00_adapter_development.mdc` and `.cursor/rules/sql/00_sql_authoring.mdc` for further requirements and rationale.
+
+## Exceptions
+- Specific files or sections may be excluded from certain Ruff rules if configured in `pyproject.toml` (e.g., via `# noqa` or `per-file-ignores`). Such exceptions should be rare and well-justified.
+- Test files in `tests/` may have more relaxed rules regarding naming or structure in some specific, justified cases (e.g., for test utility classes or fixtures), but should still aim for clarity.
+
+## Security and Performance by Design (UNBREAKABLE RULE)
+<!-- alwaysApply: true -->
+- **Mandatory for All Code**: Every module, not just statement processing, must be designed for security and performance at every step. This rule is never breakable.
+- **Regexes**:
+  - All regexes must be compiled as constants at the top of the file.
+  - Consolidate regexes and test them in a single step where possible, rather than iteratively.
+  - All regexes must be bulletproof: consider every possible edge case, research best practices, and maximize correctness. Never use naive or partial regexes for production logic.
+- **No Naive String Search**: Never use simple string search (e.g., searching for '?' or ':') for logic that should be handled by parsing or AST traversal. This is especially critical for SQL bind variable detection and similar logic.
+- **AST-Driven Logic**: Always use the SQLglot AST for SQL analysis and manipulation. Learn to traverse and trust the AST.
+- **Security First**: Consider SQL injection and security implications in every place that handles or parses raw SQL or user input. All code must be enterprise-grade and robust against known attack vectors.

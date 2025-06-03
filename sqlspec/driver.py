@@ -262,7 +262,7 @@ class SyncInstrumentationMixin(ABC):
                 span.set_attribute(key, value)
 
         try:
-            # func_to_execute is the original method (e.g., _execute_impl)
+            # func_to_execute is the original method (e.g., _execute_statement)
             # original_self is the instance of SyncDriverAdapterProtocol
             result = func_to_execute(original_self, *args, **kwargs)
             latency = time.monotonic() - start_time
@@ -472,7 +472,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
         return SQL(statement, parameters, *filters or [], dialect=self.dialect, config=config or self.config)
 
     @abstractmethod
-    def _execute_impl(
+    def _execute_statement(
         self,
         statement: "SQL",
         connection: "Optional[ConnectionT]" = None,
@@ -598,7 +598,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
             sql_statement = self._build_statement(
                 statement, parameters, filters=list(filters) or [], config=config or self.config
             )
-            result = self._execute_impl(
+            result = self._execute_statement(
                 statement=sql_statement,
                 connection=self._connection(connection),
                 **kwargs,
@@ -624,7 +624,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
             )
             # Mark the statement for batch execution with the parameter sequence
             sql_statement = sql_statement.as_many(parameters)
-            result = self._execute_impl(
+            result = self._execute_statement(
                 statement=sql_statement,
                 connection=self._connection(connection),
                 parameters=parameters,
@@ -671,7 +671,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
             )
             # Mark the statement for script execution
             sql_statement = sql_statement.as_script()
-            script_output = self._execute_impl(
+            script_output = self._execute_statement(
                 statement=sql_statement,
                 connection=self._connection(connection),
                 is_script=True,
@@ -732,7 +732,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], Asyn
         return SQL(statement, parameters, *filters or [], dialect=self.dialect, config=config or self.config)
 
     @abstractmethod
-    async def _execute_impl(
+    async def _execute_statement(
         self,
         statement: "SQL",
         connection: "Optional[ConnectionT]" = None,
@@ -857,7 +857,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], Asyn
             sql_statement = self._build_statement(
                 statement, parameters=parameters, filters=list(filters) or [], config=config or self.config
             )
-            result = await self._execute_impl(
+            result = await self._execute_statement(
                 statement=sql_statement,
                 connection=self._connection(connection),
                 **kwargs,
@@ -883,7 +883,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], Asyn
             )
             # Mark the statement for batch execution with the parameter sequence
             sql_statement = sql_statement.as_many(parameters)
-            result = await self._execute_impl(
+            result = await self._execute_statement(
                 statement=sql_statement,
                 connection=self._connection(connection),
                 parameters=parameters,
@@ -930,7 +930,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], Asyn
             )
             # Mark the statement for script execution
             sql_statement = sql_statement.as_script()
-            script_output = await self._execute_impl(
+            script_output = await self._execute_statement(
                 statement=sql_statement,
                 connection=self._connection(connection),
                 is_script=True,

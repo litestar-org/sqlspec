@@ -167,7 +167,7 @@ def test_oracle_sync_driver_execute_impl_select(
     )
 
     # Execute
-    result = oracle_sync_driver._execute_impl(
+    result = oracle_sync_driver._execute_statement(
         statement=statement,
     )
 
@@ -193,7 +193,7 @@ async def test_oracle_async_driver_execute_impl_select(
     )
 
     # Execute
-    result = await oracle_async_driver._execute_impl(
+    result = await oracle_async_driver._execute_statement(
         statement=statement,
     )
 
@@ -219,7 +219,7 @@ def test_oracle_sync_driver_execute_impl_insert(
     )
 
     # Execute
-    result = oracle_sync_driver._execute_impl(
+    result = oracle_sync_driver._execute_statement(
         statement=statement,
     )
 
@@ -242,7 +242,7 @@ def test_oracle_sync_driver_execute_impl_script(
     script_statement = SQL(
         "CREATE TABLE test (id NUMBER); INSERT INTO test VALUES (1);", config=oracle_sync_driver.config
     ).as_script()
-    script_result = oracle_sync_driver._execute_impl(script_statement)
+    script_result = oracle_sync_driver._execute_statement(script_statement)
 
     # Verify cursor was created and execute was called
     mock_oracle_sync_connection.cursor.assert_called_once()
@@ -268,7 +268,7 @@ def test_oracle_sync_driver_execute_impl_many(
     ).as_many()
 
     # Execute many
-    result = oracle_sync_driver._execute_impl(
+    result = oracle_sync_driver._execute_statement(
         statement=statement,
     )
 
@@ -297,7 +297,7 @@ def test_oracle_sync_driver_execute_impl_parameter_processing(
     )
 
     # Execute
-    oracle_sync_driver._execute_impl(
+    oracle_sync_driver._execute_statement(
         statement=statement,
     )
 
@@ -323,7 +323,7 @@ def test_oracle_sync_driver_execute_impl_positional_parameters(
     )
 
     # Execute
-    oracle_sync_driver._execute_impl(
+    oracle_sync_driver._execute_statement(
         statement=statement,
     )
 
@@ -478,7 +478,7 @@ def test_oracle_sync_driver_error_handling(
 
     # Test error propagation
     with pytest.raises(Exception, match="Database error"):
-        oracle_sync_driver._execute_impl(statement=statement)
+        oracle_sync_driver._execute_statement(statement=statement)
 
 
 @pytest.mark.asyncio
@@ -494,7 +494,7 @@ async def test_oracle_async_driver_error_handling(
 
     # Test error propagation
     with pytest.raises(Exception, match="Database error"):
-        await oracle_async_driver._execute_impl(statement=statement)
+        await oracle_async_driver._execute_statement(statement=statement)
 
 
 def test_oracle_sync_driver_instrumentation(oracle_sync_driver: OracleSyncDriver) -> None:
@@ -510,7 +510,7 @@ def test_oracle_sync_driver_instrumentation(oracle_sync_driver: OracleSyncDriver
 
     # Test execution with logging enabled
     statement = SQL("SELECT * FROM users")
-    oracle_sync_driver._execute_impl(
+    oracle_sync_driver._execute_statement(
         statement=statement,
     )
 
@@ -533,7 +533,7 @@ async def test_oracle_async_driver_instrumentation(oracle_async_driver: OracleAs
 
     # Test execution with logging enabled
     statement = SQL("SELECT * FROM users")
-    await oracle_async_driver._execute_impl(
+    await oracle_async_driver._execute_statement(
         statement=statement,
     )
 
@@ -587,7 +587,7 @@ def test_oracle_sync_driver_logging_configuration(
     )
 
     # Execute with logging enabled
-    oracle_sync_driver._execute_impl(
+    oracle_sync_driver._execute_statement(
         statement=statement,
     )
 
@@ -828,7 +828,7 @@ def test_oracle_sync_driver_named_parameters(
     )
 
     # Execute
-    oracle_sync_driver._execute_impl(
+    oracle_sync_driver._execute_statement(
         statement=statement,
     )
 
@@ -855,7 +855,7 @@ async def test_oracle_async_driver_named_parameters(
     )
 
     # Execute
-    await oracle_async_driver._execute_impl(
+    await oracle_async_driver._execute_statement(
         statement=statement,
     )
 
@@ -881,7 +881,7 @@ def test_oracle_sync_driver_single_parameter_conversion(
     )
 
     # Execute
-    oracle_sync_driver._execute_impl(
+    oracle_sync_driver._execute_statement(
         statement=statement,
     )
 

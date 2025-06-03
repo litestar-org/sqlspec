@@ -71,101 +71,107 @@ class SqliteDriver(
             with contextlib.suppress(Exception):
                 cursor.close()
 
-    def _execute_impl(
+    def _execute_statement(
         self,
         statement: SQL,
         connection: Optional[SqliteConnection] = None,
         **kwargs: Any,
     ) -> Any:
-        with instrument_operation(self, "sqlite_execute", "database"):
-            conn = self._connection(connection)
-            # config parameter removed, statement.config is the source of truth
-
-            final_sql: str
-            # SQLite uses qmark (?) placeholders. It expects a tuple for single execute
-            # and a list of tuples for executemany.
-            # statement.parameters should provide this directly.
-            final_driver_params: Union[tuple[Any, ...], list[tuple[Any, ...]], dict[str, Any], None] = None
-
-            if statement.is_script:
-                final_sql = statement.to_sql(placeholder_style=ParameterStyle.STATIC)
-                # Parameters are not passed separately for scripts with sqlite (executescript)
-                if self.instrumentation_config.log_queries:
-                    logger.debug("Executing SQLite script: %s", final_sql)
-                with self._get_cursor(conn) as cursor:
-                    cursor.executescript(final_sql)
-                # Explicitly commit the transaction after script execution
-                conn.commit()
-                return "SCRIPT EXECUTED"
-
-            # Handle parameter conversion for SQLite
-            params_to_execute = statement.parameters
-            final_driver_params: Union[tuple[Any, ...], list[tuple[Any, ...]], dict[str, Any], None] = None
-
-            # Check if we have named parameters in a dictionary
-            has_named_params = (
-                params_to_execute is not None
-                and isinstance(params_to_execute, dict)
-                and not statement.is_many
+        if statement.is_script:
+            return self._execute_script(
+                statement.to_sql(placeholder_style=ParameterStyle.STATIC), connection=connection, **kwargs
             )
 
-            if has_named_params:
-                # Keep named placeholders for dictionary parameters
-                final_sql = statement.to_sql(placeholder_style=ParameterStyle.NAMED_COLON)
-                final_driver_params = params_to_execute
-            else:
-                # Use qmark style for other cases
-                final_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
+        params_to_execute = statement.parameters
+        has_named_params = (
+            params_to_execute is not None and isinstance(params_to_execute, dict) and not statement.is_many
+        )
 
-                if statement.is_many:
-                    # executemany expects a list of tuples
-                    if params_to_execute is not None and isinstance(params_to_execute, list):
-                        # Ensure each item in the list is a tuple
-                        final_driver_params = [
-                            tuple(p) if isinstance(p, (list, tuple)) else (p,) for p in params_to_execute
-                        ]
-                    else:
-                        final_driver_params = []  # Default to empty list if params are not a list for is_many
-                elif params_to_execute is not None:
-                    if isinstance(params_to_execute, (list, tuple)):
-                        final_driver_params = tuple(params_to_execute)
-                    else:  # Single parameter value, wrap in a tuple
-                        final_driver_params = (params_to_execute,)
-                else:
-                    final_driver_params = ()  # Empty tuple for no parameters
+        if statement.is_many:
+            sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
+            param_list = (
+                [tuple(p) if isinstance(p, (list, tuple)) else (p,) for p in params_to_execute]
+                if params_to_execute is not None and isinstance(params_to_execute, list)
+                else []
+            )
+            return self._execute_many(sql, param_list, connection=connection, **kwargs)
 
-            # Logging
+        if has_named_params:
+            sql = statement.to_sql(placeholder_style=ParameterStyle.NAMED_COLON)
+            params = params_to_execute
+        elif params_to_execute is not None:
+            sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
+            params = tuple(params_to_execute) if isinstance(params_to_execute, (list, tuple)) else (params_to_execute,)
+        else:
+            sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
+            params = ()
+        return self._execute(sql, params, statement, connection=connection, **kwargs)
+
+    def _execute(
+        self,
+        sql: str,
+        params: Any,
+        statement: SQL,
+        connection: Optional[SqliteConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute a single statement with parameters."""
+        with instrument_operation(self, "sqlite_execute", "database"):
+            conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQLite SQL: %s", final_sql)
-
+                logger.debug("Executing SQLite SQL: %s", sql)
             if (
                 self.instrumentation_config.log_parameters
-                and final_driver_params
-                and not (not statement.is_many and final_driver_params == () and statement.parameters is None)
+                and params
+                and not (not statement.is_many and params == () and statement.parameters is None)
             ):
-                logger.debug("SQLite query parameters: %s", final_driver_params)
-
+                logger.debug("SQLite query parameters: %s", params)
             with self._get_cursor(conn) as cursor:
-                if statement.is_many:
-                    cursor.executemany(
-                        final_sql,
-                        cast("list[tuple[Any, ...]]", final_driver_params or []),
-                    )
-                    return cursor.rowcount  # Return rowcount for execute_many operations
-
-                if isinstance(final_driver_params, dict):
-                    cursor.execute(final_sql, final_driver_params)
+                if isinstance(params, dict):
+                    cursor.execute(sql, params)
                 else:
-                    cursor.execute(final_sql, cast("tuple[Any, ...]", final_driver_params))
-
-                # For SELECT queries, fetch data while cursor is still open
+                    cursor.execute(sql, params or ())
                 if self.returns_rows(statement.expression):
                     fetched_data: list[sqlite3.Row] = cursor.fetchall()
                     column_names = [col[0] for col in cursor.description or []]
                     return {"data": fetched_data, "column_names": column_names, "rowcount": cursor.rowcount}
-
-                # For non-SELECT queries, return rowcount
                 return cursor.rowcount
+
+    def _execute_many(
+        self,
+        sql: str,
+        param_list: list[tuple[Any, ...]],
+        connection: Optional[SqliteConnection] = None,
+        **kwargs: Any,
+    ) -> int:
+        """Execute a statement many times with a list of parameter tuples."""
+        with instrument_operation(self, "sqlite_execute_many", "database"):
+            conn = self._connection(connection)
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQLite SQL (executemany): %s", sql)
+            if self.instrumentation_config.log_parameters:
+                logger.debug("SQLite query parameters (executemany): %s", param_list)
+            with self._get_cursor(conn) as cursor:
+                cursor.executemany(sql, param_list)
+                return cursor.rowcount
+
+    def _execute_script(
+        self,
+        script: str,
+        connection: Optional[SqliteConnection] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute a script on the SQLite connection."""
+        with instrument_operation(self, "sqlite_execute_script", "database"):
+            conn = self._connection(connection)
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQLite script: %s", script)
+
+            with self._get_cursor(conn) as cursor:
+                cursor.executescript(script)
+            # Explicitly commit the transaction after script execution
+            conn.commit()
+            return "SCRIPT EXECUTED"
 
     def _wrap_select_result(
         self,
@@ -255,17 +261,4 @@ class SqliteDriver(
                 rows_affected=rows_affected,
                 operation_type=operation_type,
                 last_inserted_id=last_inserted_id,
-            )
-
-            if self.instrumentation_config.log_results_count:
-                logger.debug("Execute operation affected %d rows", rows_affected)
-                if last_inserted_id is not None:
-                    logger.debug("Last inserted ID: %s", last_inserted_id)
-
-            return SQLResult[RowT](
-                statement=statement,
-                data=cast("list[RowT]", returned_data),
-                rows_affected=rows_affected,
-                last_inserted_id=last_inserted_id,
-                operation_type=operation_type,
             )

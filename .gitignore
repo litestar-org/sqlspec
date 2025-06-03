@@ -17,7 +17,6 @@ site/
 target/
 .idea/
 .vscode/
-.cursor/
 
 # files
 **/*.so

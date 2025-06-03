@@ -5,7 +5,7 @@
 **IMPLEMENTATION**:
 
 - **Protocol Layer**: Public methods (`execute`, `execute_many`, `execute_script`) use context managers
-- **Driver Layer**: Private methods (`_execute_impl`, `_wrap_select_result`) use context managers
+- **Driver Layer**: Private methods (`_execute_statement`, `_wrap_select_result`) use context managers
 - **Context Managers**: `instrument_operation()` (sync) and `instrument_operation_async()` (async)
 
 **USER BENEFIT**:

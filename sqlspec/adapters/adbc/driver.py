@@ -118,7 +118,7 @@ class AdbcDriver(
             with contextlib.suppress(Exception):
                 cursor.close()  # type: ignore[no-untyped-call]
 
-    def _execute_impl(
+    def _execute_statement(
         self,
         statement: SQL,
         connection: Optional["AdbcConnection"] = None,

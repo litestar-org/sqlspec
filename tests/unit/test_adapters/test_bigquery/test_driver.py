@@ -363,7 +363,7 @@ def test_bigquery_driver_execute_impl_select(
     parameters = {"user_id": 123}
     statement = SQL("SELECT * FROM users WHERE id = @user_id", parameters=parameters)
 
-    result = bigquery_driver._execute_impl(statement)
+    result = bigquery_driver._execute_statement(statement)
 
     assert result == mock_query_job
     mock_bigquery_connection.query.assert_called_once()
@@ -378,7 +378,7 @@ def test_bigquery_driver_execute_impl_script(
 
     statement = SQL("CREATE TABLE test AS SELECT 1 as id").as_script()
 
-    result = bigquery_driver._execute_impl(statement)
+    result = bigquery_driver._execute_statement(statement)
 
     assert isinstance(result, str)
     assert "SCRIPT EXECUTED" in result
@@ -394,7 +394,7 @@ def test_bigquery_driver_execute_impl_preformatted_params(
     preformatted_params = [ScalarQueryParameter("user_id", "INT64", 123)]
     statement = SQL("SELECT * FROM users WHERE id = @user_id", parameters=preformatted_params)
 
-    result = bigquery_driver._execute_impl(statement)
+    result = bigquery_driver._execute_statement(statement)
 
     assert result == mock_query_job
 
@@ -414,7 +414,7 @@ def test_bigquery_driver_execute_impl_preformatted_params_with_kwargs(
     job_config_kwargs = QueryJobConfig()
     job_config_kwargs.use_legacy_sql = True  # Example kwarg
 
-    result = bigquery_driver._execute_impl(statement_with_preformatted, job_config=job_config_kwargs)
+    result = bigquery_driver._execute_statement(statement_with_preformatted, job_config=job_config_kwargs)
 
     assert result == mock_query_job
     # Check that the job_config kwarg was passed to _run_query_job (which is called by _execute_impl)
@@ -612,7 +612,7 @@ def test_bigquery_driver_connection_override(bigquery_driver: BigQueryDriver) ->
     statement = SQL("SELECT 1")
 
     # Should use override connection instead of driver's connection
-    bigquery_driver._execute_impl(statement, connection=override_connection)
+    bigquery_driver._execute_statement(statement, connection=override_connection)
 
     override_connection.query.assert_called_once()
     # Original connection should not be called

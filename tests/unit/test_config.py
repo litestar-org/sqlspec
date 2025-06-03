@@ -84,7 +84,7 @@ class MockDriver(SyncDriverAdapterProtocol[MockConnection, DictRow]):
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.QMARK
 
-    def _execute_impl(
+    def _execute_statement(
         self,
         statement: SQL,
         connection: MockConnection | None = None,
@@ -121,7 +121,7 @@ class MockAsyncDriver(AsyncDriverAdapterProtocol[MockAsyncConnection, DictRow]):
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.QMARK
 
-    async def _execute_impl(
+    async def _execute_statement(
         self,
         statement: SQL,
         connection: MockAsyncConnection | None = None,

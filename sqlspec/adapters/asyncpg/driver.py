@@ -70,7 +70,7 @@ class AsyncpgDriver(
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.NUMERIC
 
-    async def _execute_impl(
+    async def _execute_statement(
         self,
         statement: SQL,
         connection: Optional[AsyncpgConnection] = None,

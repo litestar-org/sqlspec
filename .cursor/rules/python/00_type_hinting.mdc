@@ -1,0 +1,74 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Python Type Hinting Standards (Strict)
+
+## Objective
+To ensure all Python code is comprehensively and correctly type-hinted using a **strictly enforced, specific style** that prioritizes explicitness and avoids certain modern syntax features for consistency and to meet specific project requirements.
+
+## Context
+- The project requires Python >= 3.9.
+- Type checking is enforced by `mypy` (strict mode) and `Pyright`.
+- **Key Project Mandates**: 
+    - NO `from __future__ import annotations`.
+    - ALWAYS stringify type hints for forward references and non-built-in types.
+    - ALWAYS use `typing.Optional` and `typing.Union` (NO `|` syntax).
+
+## Rules
+
+### Comprehensive Type Hinting
+- **All Signatures and Variables**: Use type hints for all function signatures (arguments and return types) and variable declarations where the type is not immediately obvious from the assignment.
+    ✅ **Good:** `def my_function(param: 'str') -> 'int': ...`
+    ✅ **Good:** `my_var: 'list[str]' = []`
+    ❌ **Avoid:** `def my_function(param) -> int: ...`
+    ❌ **Avoid:** `def my_function(param: str): ...` (unless return is `None`)
+
+### Type Hinting Syntax (Strict Python 3.9+ Style)
+- **Built-in Generics with Stringification**: Use built-in generic types (`list`, `dict`, `tuple`, `set`, etc.) stringified, instead of importing from `typing` (e.g., `typing.List`, `typing.Dict`).
+    ✅ **Good:** `items: 'list[str]'`
+    ✅ **Good:** `mapping: 'dict[str, int]'`
+    ❌ **Avoid (Using `typing.List`):** `from typing import List
+items: List[str]` 
+    ❌ **Avoid (Not stringified for built-in generic):** `items: list[str]`
+
+- **Stringify ALL Non-Primitive Type Hints**: ALWAYS enclose non-primitive type hints (custom classes, types from `typing` like `Optional`, `Union`, etc.) in quotes.
+    ✅ **Good:** `config: 'Optional[MyConfig]'`
+    ✅ **Good:** `result: 'Union[str, int]'`
+    ✅ **Good:** `def get_user(user_id: 'int') -> 'Optional[User]': ...`
+    ❌ **Avoid (Not stringified):** `config: Optional[MyConfig]`
+
+- **`from __future__ import annotations` IS PROHIBITED**:
+    - **NEVER** use `from __future__ import annotations`.
+    - This rule is strict to ensure consistency and avoid reliance on this future import.
+
+- **`typing.Optional` and `typing.Union` ARE REQUIRED (No `|` syntax)**:
+    - Due to the prohibition of `from __future__ import annotations` and the requirement for stringified type hints, the `|` operator for `Optional` (e.g., `str | None`) or `Union` (e.g., `str | int`) is **NOT ALLOWED**.
+    - ALWAYS use `Optional[SomeType]` and `Union[TypeA, TypeB]` from the `typing` module, and ensure these are stringified.
+    ✅ **Good:** `from typing import Optional, Union` (at module level)
+        `def get_item(key: 'str') -> 'Union[str, int]': ...`
+        `def find_user(user_id: 'int') -> 'Optional[User]': ...`
+    ❌ **Avoid:** `def get_item(key: str) -> str | int: ...`
+    ❌ **Avoid:** `def find_user(user_id: int) -> User | None: ...`
+
+### Tool Compliance
+- **`mypy` and `Pyright`**: All code must pass `mypy` (strict mode) and `Pyright` checks as configured in `pyproject.toml`. The stringification rules are essential for this when `from __future__ import annotations` is not used.
+- **Ruff**: Address or appropriately suppress any Ruff type-related linting errors (e.g., `ANN` codes), ensuring justifications for suppressions.
+
+### `__all__` Definition (Flake8 Dunder All)
+- **Presence**: Ensure `__all__` is defined in public modules to explicitly state the public API.
+- **Format**: `__all__` must use a tuple.
+    ✅ **Good:** `__all__ = ("MyClass", "my_function")`
+    ❌ **Avoid:** `__all__ = ["MyClass", "my_function"]`
+    ❌ **Avoid:** Missing `__all__` in modules intended for public consumption.
+- **Exclusion**: This rule is excluded for test files (`test*`) and `tools/` directory as per `.pre-commit-config.yaml`.
+
+### `__slots__` Usage (slotscheck)
+- **Consideration**: For classes (excluding those in `docs/` or `.github/`), consider using `__slots__` to reduce memory footprint, especially if many instances of the class are expected.
+- **Verification**: `slotscheck` (via pre-commit) will verify the implementation of `__slots__`.
+
+## Exceptions
+- Primitive types like `int`, `str`, `bool`, `float`, `None` do not need to be stringified unless part of a complex stringified type (e.g., `'Optional[int]'`).
+- Type hinting for third-party library code that lacks stubs might require `'typing.Any'` in some cases, but this should be minimized.
+- In files explicitly marked with `# type: ignore` at the top level, if thoroughly justified and reviewed.

@@ -74,7 +74,7 @@ class DuckDBDriver(
         finally:
             cursor.close()
 
-    def _execute_impl(
+    def _execute_statement(
         self,
         statement: SQL,
         connection: Optional["DuckDBConnection"] = None,

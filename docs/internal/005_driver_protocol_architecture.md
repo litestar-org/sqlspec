@@ -5,7 +5,7 @@
 **IMPLEMENTATION**:
 
 - **Protocol classes**: Define public API (`execute`, `execute_many`, `execute_script`)
-- **Abstract methods**: Driver-specific implementations (`_execute_impl`, `_wrap_*_result`)
+- **Abstract methods**: Driver-specific implementations (`_execute_statement`, `_wrap_*_result`)
 - **Instrumentation mixins**: Provide telemetry capabilities
 - **Common attributes**: Shared functionality and setup
 
@@ -25,7 +25,7 @@ SyncDriverAdapterProtocol
 
 PsycopgSyncDriver
 ├── Inherits from SyncDriverAdapterProtocol
-└── Implements: _execute_impl, _wrap_select_result, _wrap_execute_result
+└── Implements: _execute_statement, _wrap_select_result, _wrap_execute_result
 ```
 
 **KEY POINTS FOR DOCS**:

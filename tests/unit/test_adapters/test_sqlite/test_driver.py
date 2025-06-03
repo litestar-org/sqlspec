@@ -79,7 +79,7 @@ def test_sqlite_driver_execute_impl_select(sqlite_driver: SqliteDriver, mock_sql
     statement = SQL("SELECT * FROM users WHERE id = ?", parameters=(1,))
 
     # Execute
-    result = sqlite_driver._execute_impl(
+    result = sqlite_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -100,7 +100,7 @@ def test_sqlite_driver_execute_impl_insert(sqlite_driver: SqliteDriver, mock_sql
     statement = SQL("INSERT INTO users (name) VALUES (?)", parameters=("John",))
 
     # Execute
-    result = sqlite_driver._execute_impl(
+    result = sqlite_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -119,7 +119,7 @@ def test_sqlite_driver_execute_impl_script(sqlite_driver: SqliteDriver, mock_sql
     ).as_script()
 
     # Execute script
-    result = sqlite_driver._execute_impl(
+    result = sqlite_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -144,7 +144,7 @@ def test_sqlite_driver_execute_impl_many(sqlite_driver: SqliteDriver, mock_sqlit
     ).as_many()
 
     # Execute many
-    result = sqlite_driver._execute_impl(
+    result = sqlite_driver._execute_statement(
         statement=statement,
         connection=None,
     )
@@ -266,7 +266,7 @@ def test_sqlite_driver_error_handling(sqlite_driver: SqliteDriver, mock_sqlite_c
 
     # Test error propagation
     with pytest.raises(Exception, match="Database error"):
-        sqlite_driver._execute_impl(
+        sqlite_driver._execute_statement(
             statement=statement,
             connection=None,
         )
@@ -287,7 +287,7 @@ def test_sqlite_driver_instrumentation(sqlite_driver: SqliteDriver) -> None:
     tuple_params = (1, "John")
     # The SQL object should contain the parameters
     statement_with_params = SQL("SELECT * FROM users WHERE id = ? AND name = ?", parameters=tuple_params)
-    sqlite_driver._execute_impl(
+    sqlite_driver._execute_statement(
         statement=statement_with_params,
         connection=None,
     )
@@ -306,7 +306,7 @@ def test_sqlite_driver_parameter_processing(sqlite_driver: SqliteDriver, mock_sq
         "SELECT * FROM users WHERE id = ? AND name = ?", parameters=tuple_params, config=sqlite_driver.config
     )
 
-    sqlite_driver._execute_impl(
+    sqlite_driver._execute_statement(
         statement=statement_with_params,  # Use the statement with parameters
         connection=None,
     )
@@ -324,7 +324,7 @@ def test_sqlite_driver_cursor_management(sqlite_driver: SqliteDriver, mock_sqlit
     statement = SQL("SELECT * FROM users")
 
     # Execute
-    result = sqlite_driver._execute_impl(
+    result = sqlite_driver._execute_statement(
         statement=statement,
         connection=None,
     )

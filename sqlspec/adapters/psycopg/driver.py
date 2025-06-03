@@ -58,7 +58,7 @@ class PsycopgSyncDriver(
         with connection.cursor() as cursor:
             yield cursor
 
-    def _execute_impl(
+    def _execute_statement(
         self,
         statement: SQL,
         connection: Optional[PsycopgSyncConnection] = None,
@@ -242,7 +242,7 @@ class PsycopgAsyncDriver(
         async with connection.cursor() as cursor:
             yield cursor
 
-    async def _execute_impl(
+    async def _execute_statement(
         self,
         statement: SQL,
         connection: Optional[PsycopgAsyncConnection] = None,

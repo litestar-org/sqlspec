@@ -67,7 +67,7 @@ class AsyncmyDriver(
             if hasattr(cursor, "close") and callable(cursor.close):
                 await ensure_async_callable(cursor.close)()  # pyright: ignore
 
-    async def _execute_impl(
+    async def _execute_statement(
         self,
         statement: "SQL",
         connection: "Optional[AsyncmyConnection]" = None,  # pyright: ignore

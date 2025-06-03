@@ -282,7 +282,7 @@ def test_adbc_driver_execute_impl_select(adbc_driver: AdbcDriver, mock_cursor: M
     mock_connection.cursor = Mock(return_value=mock_cursor)
 
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[123])
-    result = adbc_driver._execute_impl(statement)
+    result = adbc_driver._execute_statement(statement)
 
     assert result == mock_cursor
     mock_cursor.execute.assert_called_once()
@@ -298,7 +298,7 @@ def test_adbc_driver_execute_impl_script(adbc_driver: AdbcDriver, mock_cursor: M
     mock_cursor.statusmessage = "CREATE TABLE"
 
     statement = SQL("CREATE TABLE test AS SELECT 1 as id").as_script()
-    result = adbc_driver._execute_impl(statement)
+    result = adbc_driver._execute_statement(statement)
 
     assert result == "CREATE TABLE"
     mock_cursor.execute.assert_called_once()
@@ -312,7 +312,7 @@ def test_adbc_driver_execute_impl_script_no_status(adbc_driver: AdbcDriver, mock
         del mock_cursor.statusmessage
 
     statement = SQL("CREATE TABLE test AS SELECT 1 as id").as_script()
-    result = adbc_driver._execute_impl(statement)
+    result = adbc_driver._execute_statement(statement)
 
     assert result == "SCRIPT EXECUTED"
     mock_cursor.execute.assert_called_once()
@@ -327,7 +327,7 @@ def test_adbc_driver_execute_impl_many(adbc_driver: AdbcDriver, mock_cursor: Moc
     parameters = [["John"], ["Jane"], ["Bob"]]
     statement = SQL("INSERT INTO users (name) VALUES (?)").as_many(parameters)
 
-    result = adbc_driver._execute_impl(statement)
+    result = adbc_driver._execute_statement(statement)
 
     # The statement should have is_many=True and the correct parameters
     assert statement.is_many is True
@@ -343,7 +343,7 @@ def test_adbc_driver_execute_impl_with_connection_override(adbc_driver: AdbcDriv
 
     statement = SQL("SELECT 1")
 
-    result = adbc_driver._execute_impl(statement, connection=override_connection)
+    result = adbc_driver._execute_statement(statement, connection=override_connection)
 
     assert result == mock_cursor
     override_connection.cursor.assert_called_once()
@@ -357,7 +357,7 @@ def test_adbc_driver_execute_impl_no_parameters(adbc_driver: AdbcDriver, mock_cu
     mock_connection.cursor = Mock(return_value=mock_cursor)
 
     statement = SQL("SELECT * FROM users")
-    result = adbc_driver._execute_impl(statement)
+    result = adbc_driver._execute_statement(statement)
 
     assert result == mock_cursor
     mock_cursor.execute.assert_called_once_with(
@@ -371,7 +371,7 @@ def test_adbc_driver_execute_impl_list_parameters(adbc_driver: AdbcDriver, mock_
     mock_connection.cursor = Mock(return_value=mock_cursor)
 
     statement = SQL("SELECT * FROM users WHERE id IN ($1, $2)", parameters=[1, 2])
-    result = adbc_driver._execute_impl(statement)
+    result = adbc_driver._execute_statement(statement)
 
     assert result == mock_cursor
     mock_cursor.execute.assert_called_once()
@@ -385,7 +385,7 @@ def test_adbc_driver_execute_impl_single_parameter(adbc_driver: AdbcDriver, mock
     mock_connection.cursor = Mock(return_value=mock_cursor)
 
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=123)
-    result = adbc_driver._execute_impl(statement)
+    result = adbc_driver._execute_statement(statement)
 
     assert result == mock_cursor
     mock_cursor.execute.assert_called_once()
@@ -649,7 +649,7 @@ def test_adbc_driver_instrumentation_logging(mock_adbc_connection: Mock, mock_cu
 
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[123])
     # Parameters argument removed from _execute_impl call
-    cursor_result = driver._execute_impl(statement)
+    cursor_result = driver._execute_statement(statement)
     select_result = driver._wrap_select_result(statement, cursor_result)
 
     assert isinstance(select_result, SQLResult)

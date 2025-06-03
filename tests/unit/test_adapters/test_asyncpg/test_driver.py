@@ -87,7 +87,7 @@ async def test_asyncpg_driver_execute_impl_select(
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[1], config=asyncpg_driver.config)
 
     # Execute - parameters, is_many, is_script are part of SQL object
-    result = await asyncpg_driver._execute_impl(statement=statement)
+    result = await asyncpg_driver._execute_statement(statement=statement)
 
     # Verify connection methods were called
     mock_asyncpg_connection.fetch.assert_called_once_with("SELECT * FROM users WHERE id = $1", 1)
@@ -106,7 +106,7 @@ async def test_asyncpg_driver_execute_impl_insert(
     statement = SQL("INSERT INTO users (name) VALUES ($1)", parameters=["John"], config=asyncpg_driver.config)
 
     # Execute - parameters, is_many, is_script are part of SQL object
-    result = await asyncpg_driver._execute_impl(statement=statement)
+    result = await asyncpg_driver._execute_statement(statement=statement)
 
     # Verify connection methods were called
     mock_asyncpg_connection.execute.assert_called_once_with("INSERT INTO users (name) VALUES ($1)", "John")
@@ -128,7 +128,7 @@ async def test_asyncpg_driver_execute_impl_script(
     ).as_script()
 
     # Execute script - parameters, is_many, is_script are part of SQL object
-    script_result = await asyncpg_driver._execute_impl(script_statement)
+    script_result = await asyncpg_driver._execute_statement(script_statement)
 
     # Verify connection execute was called
     mock_asyncpg_connection.execute.assert_called_once()
@@ -147,7 +147,7 @@ async def test_asyncpg_driver_execute_impl_many(
     parameters = [["John"], ["Jane"], ["Bob"]]
     statement = SQL("INSERT INTO users (name) VALUES ($1)").as_many(parameters)
 
-    result = await asyncpg_driver._execute_impl(statement=statement)
+    result = await asyncpg_driver._execute_statement(statement=statement)
 
     # The statement should have is_many=True and the correct parameters
     assert statement.is_many is True
@@ -179,7 +179,7 @@ async def test_asyncpg_driver_execute_impl_parameter_processing(
     )
 
     # Execute - parameters, is_many, is_script are part of SQL object
-    result = await asyncpg_driver._execute_impl(statement=statement)
+    result = await asyncpg_driver._execute_statement(statement=statement)
 
     # Verify parameters were processed correctly
     mock_asyncpg_connection.fetch.assert_called_once_with("SELECT * FROM users WHERE id = $1 AND name = $2", 1, "John")
@@ -357,7 +357,7 @@ async def test_asyncpg_driver_error_handling(asyncpg_driver: AsyncpgDriver, mock
 
     # Test error propagation
     with pytest.raises(Exception, match="Database error"):
-        await asyncpg_driver._execute_impl(statement=statement)
+        await asyncpg_driver._execute_statement(statement=statement)
 
 
 @pytest.mark.asyncio
@@ -534,7 +534,7 @@ async def test_asyncpg_driver_logging_configuration(
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[1], config=asyncpg_driver.config)
 
     # Execute with logging enabled
-    await asyncpg_driver._execute_impl(statement=statement)
+    await asyncpg_driver._execute_statement(statement=statement)
 
     # Verify execution worked
     mock_asyncpg_connection.fetch.assert_called_once_with("SELECT * FROM users WHERE id = $1", 1)
@@ -602,7 +602,7 @@ async def test_asyncpg_driver_dict_parameter_handling(
         config=asyncpg_driver.config,
     ).as_many()
 
-    result_val = await asyncpg_driver._execute_impl(statement=statement)
+    result_val = await asyncpg_driver._execute_statement(statement=statement)
 
     mock_asyncpg_connection.executemany.assert_called_once()
     assert result_val == 2

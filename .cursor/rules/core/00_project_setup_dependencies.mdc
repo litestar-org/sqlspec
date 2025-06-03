@@ -1,0 +1,40 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Project Setup & Dependencies
+
+## Objective
+To ensure a consistent and reproducible development environment by standardizing package management, virtual environment usage, and command execution within the project.
+
+## Context
+This project uses `uv` for package management and virtual environments. Adherence to these rules is crucial for maintaining dependency integrity and ensuring that all development activities occur within the configured environment.
+
+## Rules
+
+### Package Management
+- **Tool**: Use `uv` for all Python package management.
+- **Declaration**: Declare all project dependencies, including development dependencies, in the `pyproject.toml` file.
+    ✅ **Good:** Dependencies are listed under `[project.dependencies]` or `[project.optional-dependencies]`.
+    ❌ **Avoid:** Managing dependencies outside `pyproject.toml` (e.g., manually with `pip install` without updating `pyproject.toml`).
+- **Versioning**: Ensure dependency versions are pinned or appropriately ranged in `pyproject.toml` to prevent unexpected breaking changes.
+- **Synchronization**: After adding or updating dependencies in `pyproject.toml`:
+    1. Run `uv pip compile pyproject.toml -o requirements.txt` (or the relevant `uv` command if not using `requirements.txt` directly).
+    2. Run `uv sync` to update the environment.
+    *(Note: The specific compile/sync commands might vary based on the exact `uv` workflow adopted by the project. Refer to `Makefile` or project-specific `uv` documentation if available.)*
+
+### Virtual Environment
+- **Activation**: Always work within the project's virtual environment (typically `.venv`, managed by `uv`).
+- **Verification**: Ensure your shell prompt indicates you are in the virtual environment before running project-related commands.
+
+### Command Prefix
+- **`uv run`**: Use the `uv run` prefix for executing Python scripts or commands that should run within the project's managed environment. This ensures the correct Python interpreter and dependencies are used.
+    ✅ **Good:** `uv run python myscript.py`
+    ✅ **Good:** `uv run pytest`
+    ❌ **Avoid:** `python myscript.py` (if it relies on project dependencies)
+    ❌ **Avoid:** `pytest` (if not configured to run via `uv run` or alias)
+
+## Exceptions
+- Global system utilities or tools explicitly intended to be run outside the project's virtual environment.
+- Commands specified in the `Makefile` might already incorporate `uv run` or manage the environment appropriately; follow the `Makefile` targets for common tasks.

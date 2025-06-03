@@ -1,0 +1,105 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Database Adapter Development
+
+## Objective
+To ensure that new database adapters are consistent with the existing adapter architecture, maintain high quality, and integrate seamlessly into the `sqlspec` ecosystem.
+
+## Context
+- New database adapters are a core extensibility point for `sqlspec`.
+- Consistency in design and implementation is crucial for maintainability and user experience.
+- `project.instructions.md` provides specific guidance on adapter placement and configuration patterns.
+
+## Rules
+
+### 1. Adherence to Existing Patterns
+- **Study Existing Adapters**: Before developing a new adapter, thoroughly review the structure and implementation of existing adapters in `sqlspec/adapters/`.
+- **Follow Established Patterns**: Emulate the design patterns, class structures, configuration handling (e.g., dedicated config modules like in `sqlspec/adapters/bigquery/config/` or `sqlspec/adapters/psycopg/config/`), and driver interaction logic found in mature adapters.
+- **Consistency is Key**: Strive for consistency in API exposure, error handling, and feature implementation comparable to other adapters.
+
+### 2. Directory Structure and Placement
+- **Location**: New database adapters must be placed in a new subdirectory within `sqlspec/adapters/` (e.g., `sqlspec/adapters/newdb/`).
+- **Modularity**: Organize the adapter code into logical modules (e.g., `config.py`, `driver.py`, ` DTOs.py` if needed).
+
+### 3. Configuration
+- **Dedicated Config**: If the adapter requires specific configuration options, follow the pattern of creating a dedicated configuration module or classes, similar to existing adapters.
+- **Clarity and Usability**: Configuration should be clear, well-documented, and easy for users to understand and provide.
+
+### 4. Testing
+- **Comprehensive Tests**: New adapters MUST include both unit and integration tests.
+    - **Unit Tests**: Place in `tests/unit/test_adapters/test_{adapter_name}/`. Mock external database interactions.
+    - **Integration Tests**: Place in `tests/integration/test_adapters/test_{adapter_name}/`. Test against a real instance of the database, using `pytest-databases` or similar mechanisms if applicable.
+- **Test Coverage**: Aim for high test coverage for all aspects of the adapter.
+
+### 5. Documentation
+- **Docstrings**: Provide clear and comprehensive docstrings for all public classes, methods, and functions within the adapter.
+- **Project Documentation**: Add a new section or page to the project documentation in `docs/` explaining how to use the new adapter, its configuration options, and any specific considerations.
+
+### 6. Code Quality
+- Adhere to all general project coding standards, including those for style, typing, linting, and error handling as defined in other `.mdc` rule files (e.g., in `core/`, `python/`, `quality/`).
+
+### 7. Method Splitting, Ordering, and Naming (MANDATORY)
+- **Driver Execution Method Splitting**: All driver classes MUST split execution logic into the following private methods:
+    - `_execute_statement`: The main dispatch method, which determines the execution mode and delegates to one of the following:
+        - `_execute`: Handles single-statement execution.
+        - `_execute_many`: Handles batch/many execution.
+        - `_execute_script`: Handles script execution.
+    - Each of these methods should contain only the logic relevant to its execution mode.
+- **Method Ordering**: For readability and consistency, these methods MUST appear in the following order at the top of the driver class:
+    1. `_execute_statement`
+    2. `_execute`
+    3. `_execute_many`
+    4. `_execute_script`
+- **Variable Naming**: Use concise, descriptive variable names. Prefer `sql` over verbose names like `final_sql`. Avoid unnecessary or overly detailed variable names.
+- **Minimize Needless Assignments**: Always favor in-lining expressions and re-using variables where possible, unless it would significantly harm readability. See `python/01_coding_patterns.mdc` for strict conciseness rules.
+- **Applicability**: This is a mandatory style for all new and refactored adapters.
+
+### 8. Transaction Management (MANDATORY)
+<!-- alwaysApply: true -->
+- **No Implicit Transaction Control**: Adapters MUST NOT issue `commit()` or `rollback()` calls. Transaction management is always the responsibility of the end user unless an explicit exception is documented in the rules for a specific adapter.
+- **Documentation**: This rule must be clearly documented in both code and user-facing documentation for each adapter.
+
+### 9. Cross-Adapter Consistency (MANDATORY)
+<!-- alwaysApply: true -->
+- **Shared Logic**: Any change to one adapter that affects shared logic, processing patterns, or architectural principles MUST be reflected in all adapters, unless the change is driver-specific and this is explicitly documented.
+- **Review Required**: When updating an adapter, review all other adapters for necessary parallel changes.
+
+### 10. Unified Processing Pipeline (UNBREAKABLE RULE)
+<!-- alwaysApply: true -->
+- **Parse Once, Transform Once, Validate/Analyze Once**: All adapters and pipelines MUST follow the principle of a single-pass processing pipeline: parse once, transform once, validate and analyze once. This is an unbreakable rule unless an explicit exception is written in these rules.
+- **Reference**: See `PIPELINE_OPTIMIZATION_SUMMARY.md` for rationale, implementation details, and performance benefits.
+- **Cross-Reference**: See also `.cursor/rules/sql/00_sql_authoring.mdc` and `.cursor/rules/core/01_code_structure_style.mdc` for related pipeline and processing architecture rules.
+
+### 11. Parameter Literalizer Caveats
+<!-- alwaysApply: true -->
+- **Known Tricky Area**: The parameter literalizer, which converts literals to bind parameters, is a known source of subtle bugs and test/debugging issues. Handle with extreme care. Any issues, workarounds, or deviations must be documented in the adapter and in the rules if they affect cross-adapter behavior.
+
+### 12. Testing and Quality Requirements
+<!-- alwaysApply: true -->
+- **Testing Pyramid**: Adapters must be covered by a comprehensive suite of tests, following the pyramid approach: more unit tests, fewer integration tests, minimal end-to-end tests.
+- **Pytest Function-Based Tests**: All pytest test cases must be written as standalone functions, not as methods in test classes, unless there is a compelling, documented reason. Refactor any existing class-based tests to function-based tests as part of ongoing maintenance.
+- **Parameterized Testing**: Use `pytest.mark.parametrize` for multiple scenarios. Each test should be independent and able to run in any order.
+- **Fast Feedback**: Unit tests should run quickly (<1ms per test when possible).
+- **Function-Based Tests**: Prefer simple test functions over test classes for readability and simplicity.
+- **Coverage Targets**: Unit tests must achieve 95%+ line coverage; integration tests 80%+.
+- **Test Structure**: Follow the established directory and naming conventions for unit and integration tests as modeled by the SQLite and asyncpg adapters.
+- **Mocking**: Use `Mock` for sync adapters, `AsyncMock` for async adapters. Fixtures should be reusable and type-annotated.
+- **Error and Edge Case Testing**: Always test both success and error scenarios, including edge cases and database-specific features.
+- **Performance and Metadata**: Include bulk operation and metadata tests where relevant.
+
+### 13. Refactoring and API Consistency
+- **_execute_statement API**: All adapters must implement `_execute_statement` with the signature and logic described in the current API guidelines: the SQL object is the single source of truth for SQL string, parameters, and execution mode (script/many/single). No separate is_many/is_script/parameters/config arguments.
+- **Pipeline Integration**: All adapters must integrate with the StatementPipeline and SQLProcessingContext architecture, ensuring a single-pass (parse/transform/validate/analyze once) pipeline. See [REF-011] in INTERNAL_REFERENCE.md for details.
+- **Cross-Adapter Consistency**: Any change to shared logic or patterns must be reflected in all adapters unless driver-specific and documented.
+
+### 14. Parameter Literalizer
+- **Special Caution**: The parameter literalizer is a known source of subtle bugs and must be handled with extreme care. Any issues, workarounds, or deviations must be documented in the adapter and in the rules if they affect cross-adapter behavior.
+
+### 15. Documentation and Reference
+- **Reference Pipeline and SQL Rules**: See `.cursor/rules/sql/00_sql_authoring.mdc` and `.cursor/rules/core/01_code_structure_style.mdc` for further pipeline and SQL authoring rules. 
+
+## Exceptions
+- If a new database has fundamentally different paradigms that necessitate deviation from existing patterns, these deviations must be clearly justified and discussed with the project maintainers.

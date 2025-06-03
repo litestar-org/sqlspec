@@ -65,7 +65,7 @@ class AiosqliteDriver(
         finally:
             await cursor.close()
 
-    async def _execute_impl(
+    async def _execute_statement(
         self,
         statement: SQL,
         connection: Optional[AiosqliteConnection] = None,

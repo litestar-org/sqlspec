@@ -16,7 +16,7 @@
 - **Common Base**: `CommonDriverAttributes[ConnectionT, DefaultRowT]` provides shared functionality
 - **Instrumentation Mixins**: `SyncInstrumentationMixin` and `AsyncInstrumentationMixin` for telemetry
 - **Protocol Classes**: `SyncDriverAdapterProtocol` and `AsyncDriverAdapterProtocol` define public API
-- **Abstract Methods**: Driver-specific implementations (`_execute_impl`, `_wrap_select_result`, `_wrap_execute_result`)
+- **Abstract Methods**: Driver-specific implementations (`_execute_statement`, `_wrap_select_result`, `_wrap_execute_result`)
 
 **USER BENEFIT**:
 
@@ -150,7 +150,7 @@ result = driver.execute("SELECT * FROM users", schema_type=User)
 sql_statement = self._build_statement(statement, config, *filters)
 
 # 2. Execute via driver-specific implementation
-raw_result = self._execute_impl(sql_statement, parameters, connection)
+raw_result = self._execute_statement(sql_statement, parameters, connection)
 
 # 3. Wrap result based on statement type
 if CommonDriverAttributes.returns_rows(sql_statement.expression):

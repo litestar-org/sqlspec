@@ -96,7 +96,7 @@ def test_duckdb_driver_execute_impl_select(duckdb_driver: DuckDBDriver, mock_duc
     statement = SQL("SELECT * FROM users WHERE id = ?", parameters=[1])
 
     # Execute
-    result = duckdb_driver._execute_impl(
+    result = duckdb_driver._execute_statement(
         statement=statement,
     )
 
@@ -116,7 +116,7 @@ def test_duckdb_driver_execute_impl_insert(duckdb_driver: DuckDBDriver, mock_duc
     statement = SQL("INSERT INTO users (name) VALUES (?)", parameters=["John"])
 
     # Execute
-    result = duckdb_driver._execute_impl(
+    result = duckdb_driver._execute_statement(
         statement=statement,
     )
 
@@ -136,7 +136,7 @@ def test_duckdb_driver_execute_impl_script(duckdb_driver: DuckDBDriver, mock_duc
     script_statement = SQL(
         "CREATE TABLE test (id INTEGER); INSERT INTO test VALUES (1);", config=duckdb_driver.config
     ).as_script()
-    script_result = duckdb_driver._execute_impl(script_statement)
+    script_result = duckdb_driver._execute_statement(script_statement)
 
     # Verify cursor was created and execute was called with static SQL
     # Note: SQL may be transformed by the pipeline (INTEGER -> INT)
@@ -155,7 +155,7 @@ def test_duckdb_driver_execute_impl_many(duckdb_driver: DuckDBDriver, mock_duckd
     parameters = [["John"], ["Jane"], ["Bob"]]
     statement = SQL("INSERT INTO users (name) VALUES (?)").as_many(parameters)
 
-    result = duckdb_driver._execute_impl(statement=statement)
+    result = duckdb_driver._execute_statement(statement=statement)
 
     # The statement should have is_many=True and the correct parameters
     assert statement.is_many is True
@@ -181,7 +181,7 @@ def test_duckdb_driver_execute_impl_parameter_processing(
     statement = SQL("SELECT * FROM users WHERE id = ? AND name = ?", parameters=[1, "John"])
 
     # Execute
-    result = duckdb_driver._execute_impl(
+    result = duckdb_driver._execute_statement(
         statement=statement,
     )
 
@@ -200,7 +200,7 @@ def test_duckdb_driver_execute_impl_single_parameter(duckdb_driver: DuckDBDriver
     statement = SQL("SELECT * FROM users WHERE id = ?", parameters=[42])
 
     # Execute
-    result = duckdb_driver._execute_impl(
+    result = duckdb_driver._execute_statement(
         statement=statement,
     )
 
@@ -375,7 +375,7 @@ def test_duckdb_driver_error_handling(duckdb_driver: DuckDBDriver, mock_duckdb_c
 
     # Test error propagation
     with pytest.raises(Exception, match="Database error"):
-        duckdb_driver._execute_impl(statement=statement)
+        duckdb_driver._execute_statement(statement=statement)
 
 
 def test_duckdb_driver_instrumentation(duckdb_driver: DuckDBDriver) -> None:
@@ -391,7 +391,7 @@ def test_duckdb_driver_instrumentation(duckdb_driver: DuckDBDriver) -> None:
 
     # Test logging enabled
     statement = SQL("SELECT * FROM users WHERE id = ?", parameters=[1])
-    result = duckdb_driver._execute_impl(
+    result = duckdb_driver._execute_statement(
         statement=statement,
     )
 
@@ -597,7 +597,7 @@ def test_duckdb_driver_logging_configuration(duckdb_driver: DuckDBDriver, mock_d
     statement = SQL("SELECT * FROM users WHERE id = ?", parameters=[1])
 
     # Execute with logging enabled
-    result = duckdb_driver._execute_impl(
+    result = duckdb_driver._execute_statement(
         statement=statement,
     )
 

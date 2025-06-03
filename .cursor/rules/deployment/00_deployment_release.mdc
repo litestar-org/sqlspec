@@ -1,0 +1,31 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Deployment and Release Guidelines
+
+## Objective
+To ensure smooth, consistent, and reliable deployment and release of the `sqlspec` project.
+
+## Context
+- The `CONTRIBUTING.rst` file outlines the current process for creating a new release, involving version bumping in `pyproject.toml`, GitHub releases, and Actions workflows.
+- Continuous Integration (CI) aspects are covered in `.cursor/rules/quality/01_pre_commit_ci.mdc`.
+- This section is a placeholder for any future specific, enforceable rules related to deployment or packaging that are not covered by CI or the procedural release guide.
+
+## Rules
+
+### 1. Release Process Adherence
+- **Follow `CONTRIBUTING.rst`**: For creating new releases, strictly follow the steps outlined in the `CONTRIBUTING.rst` document.
+    - This includes version incrementing in `pyproject.toml` (following SemVer and PEP 440).
+    - Drafting and publishing GitHub releases with appropriate tagging.
+    - Approving and monitoring the release workflow in GitHub Actions.
+
+### 2. Packaging (Placeholder)
+- (No specific rules defined in `project.instructions.md` beyond what `uv`, `hatchling`, and `pyproject.toml` manage. Adhere to configurations in `pyproject.toml` for build backend and targets.)
+
+### 3. Infrastructure (Placeholder)
+- (No specific rules defined in `project.instructions.md` related to infrastructure management beyond CI.)
+
+## Exceptions
+- Hotfixes or emergency patches might require expedited processes, but these should still be documented and communicated clearly with the team.

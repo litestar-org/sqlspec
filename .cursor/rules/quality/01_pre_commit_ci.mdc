@@ -1,0 +1,54 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Pre-commit Hooks & CI/CD Workflow
+
+## Objective
+To maintain code quality, consistency, and ensure that all contributions adhere to project standards before being merged, through automated checks and defined workflows.
+
+## Context
+- Pre-commit hooks are defined in `.pre-commit-config.yaml` and run automatically on commit if installed.
+- GitHub Actions workflows are defined in `.github/workflows/` and run on pull requests and pushes.
+- Commit messages must follow the Conventional Commits specification.
+
+## Rules
+
+### 1. Pre-commit Hook Adherence
+- **Installation**: Install pre-commit hooks locally by running `pre-commit install --hook-type commit-msg --hook-type pre-commit` (or an equivalent command like `make install` if it includes this step, as per `CONTRIBUTING.rst`).
+- **Execution**: Ensure all pre-commit hooks pass before pushing changes. These hooks enforce linting, formatting, type checking, and commit message conventions.
+- **Key Pre-commit Hooks (from `.pre-commit-config.yaml` and `project.instructions.md`):
+    - **`conventional-pre-commit`**: Enforces Conventional Commits format for commit messages (runs on `commit-msg` stage).
+    - **`ruff`**: Lints Python code using Ruff (with `--fix`).
+    - **`ruff-format`**: Formats Python code using Ruff.
+    - **`flake8-dunder-all`**: Ensures `__all__` is defined correctly in Python modules (using a tuple, excludes `test*` and `tools`).
+    - **`slotscheck`**: Verifies `__slots__` usage in Python classes (excludes `docs` and `.github`).
+    - **`codespell`**: Checks for common misspellings in code and documentation (ignores `uv.lock`).
+    - **`check-ast`**: Ensures Python code is valid Abstract Syntax Tree.
+    - **`check-case-conflict`**: Checks for files that would conflict on case-insensitive filesystems.
+    - **`check-toml`**: Validates TOML files (e.g., `pyproject.toml`).
+    - **`debug-statements`**: Prevents committing `pdb` or other debug statements in Python code.
+    - **`end-of-file-fixer`**: Ensures files end with a single newline.
+    - **`mixed-line-ending`**: Enforces consistent line endings.
+    - **`trailing-whitespace`**: Removes trailing whitespace.
+    - **`sphinx-lint`**: Lints Sphinx documentation files (`.rst`).
+    - **`pypi-readme` (local hook)**: Likely validates or generates the PyPI README (runs `python tools/pypi_readme.py`).
+
+### 2. Commit Messages (Conventional Commits)
+- **Format**: All commit messages MUST follow the Conventional Commits specification (e.g., `feat: add new feature`, `fix: resolve a bug`, `docs: update documentation`).
+- **Enforcement**: This is enforced by the `conventional-pre-commit` hook.
+    ✅ **Good:** `fix(adapter): correct off-by-one error in psycopg parser`
+    ✅ **Good:** `feat(service): implement caching layer for query results
+
+    This change introduces a new caching mechanism...
+    BREAKING CHANGE: The API for ... has changed.`
+    ❌ **Avoid:** `Fixed bug` or `Update code`
+
+### 3. Continuous Integration (CI) Workflow Adherence
+- **Contribution Guidelines**: Follow project contribution guidelines, if any (e.g., `CONTRIBUTING.rst`).
+- **GitHub Actions**: Be mindful of GitHub Actions workflows defined in `.github/workflows/`. These workflows typically run checks (linting, testing, building) on pull requests and pushes to main branches.
+- **Passing Checks**: Ensure all CI checks pass for your pull requests before requesting a review or merge.
+
+## Exceptions
+- In rare, justified cases, a specific pre-commit hook might be temporarily skipped for a commit using `git commit --no-verify`. This should be used sparingly and with a clear reason, as CI will likely still run all checks.

@@ -1,0 +1,48 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# SQL Authoring and Management
+
+## Objective
+To ensure SQL used within the project is correct, maintainable, and compatible with supported database dialects, leveraging `sqlglot` for validation and conversion where applicable.
+
+## Context
+- The `sqlspec` library interacts with various SQL databases and may involve authoring or processing SQL strings.
+- The `README.md` mentions the use of `sqlglot` for SQL dialect validation and conversion.
+- Specific internal SQL construction/handling within the `sqlspec` library (e.g., related to statement objects, raw SQL interaction, builder systems as hinted by draft rules) should follow the architectural patterns established within the library itself.
+
+## Rules
+
+### 1. SQL Dialect Awareness and Validation
+- **`sqlglot` Usage**: When dealing with SQL that needs to be dialect-specific or requires validation/conversion, utilize `sqlglot` capabilities as appropriate within the library's logic.
+- **Clarity**: SQL code, whether in `.sql` files or embedded in Python strings, should be clear, readable, and well-formatted.
+- **Parameterization**: Always use parameterized queries or equivalent safe mechanisms when constructing SQL with variable input to prevent SQL injection vulnerabilities. The `sqlspec` library's driver interfaces should handle this for query execution.
+
+### 2. Embedded SQL in Python
+- **Readability**: For complex SQL queries embedded in Python, consider using multi-line strings with appropriate indentation for readability.
+- **Tooling**: Be mindful that static analysis tools for SQL may have limited visibility into SQL strings embedded within Python code. Clear formatting and comments can aid understanding.
+
+### 3. Internal SQL Abstractions (for `sqlspec` contributors)
+- **Consistency**: If working on the `sqlspec` library itself, adhere to existing patterns and abstractions for SQL statement construction, processing, and execution (e.g., `SQL` object, builder patterns, etc.).
+- **Draft Rules Reference**: Legacy draft rules like `sql_statement_object.mdc`, `raw_sql_interaction.mdc`, and `sql_builder_system.mdc` (from `tmp/rules_outdate_draft/sql/`) hinted at internal mechanisms. While not being converted into formal universal rules here (as they are implementation-specific), they indicate areas where internal consistency is important for contributors to the `sqlspec` core.
+
+### 4. General SQL Best Practices
+- Follow general SQL best practices for performance, maintainability, and correctness (e.g., appropriate indexing for schemas, avoiding overly complex joins where simpler alternatives exist, using CTEs for clarity, etc.). These are beyond the scope of project-specific enforceable rules but are expected knowledge for developers working with SQL.
+
+### 5. Single-Pass Pipeline (UNBREAKABLE RULE)
+<!-- alwaysApply: true -->
+- **Parse Once, Transform Once, Validate/Analyze Once**: All SQL processing must follow a single-pass pipeline. This is an unbreakable rule for all internal SQL handling.
+- **Pipeline Architecture**: All SQL must be processed through the StatementPipeline and SQLProcessingContext architecture. See [REF-011] in INTERNAL_REFERENCE.md for details.
+- **Testing SQL Logic**: All SQL logic must be covered by parameterized tests, edge case scenarios, and dialect validation. Integration with the driver protocol must be tested for all supported dialects and parameterization styles.
+- **Cross-Reference**: See `.cursor/rules/adapters/00_adapter_development.mdc` and `.cursor/rules/core/01_code_structure_style.mdc` for further requirements.
+
+### 6. Pipeline Component Evaluation and Consolidation
+<!-- alwaysApply: true -->
+- **Evaluate Existing Components**: When working on pipelines (validators, transformers, processors), always review all existing components before adding or modifying logic.
+- **No Duplication**: Never duplicate logic that is already present in another validator, transformer, or processor. If similar logic is needed, refactor or generalize the existing component.
+- **Suggest Improvements**: If you find areas where logic can be consolidated, improved, or made more efficient, always suggest and document these improvements. Strive for a unified, DRY, and maintainable pipeline.
+
+## Exceptions
+- SQL snippets used purely for illustrative purposes in documentation or tests might not require strict dialect validation if their correctness in a specific context is clear.
