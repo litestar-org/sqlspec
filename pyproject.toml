@@ -99,7 +99,7 @@ test = [
   "pytest>=8.0.0",
   "pytest-asyncio>=0.23.8",
   "pytest-cov>=5.0.0",
-  "pytest-databases[postgres,oracle,mysql,bigquery,spanner]>=0.12.2",
+  "pytest-databases[postgres,oracle,mysql,bigquery,spanner,minio]>=0.12.2",
   "pytest-mock>=3.14.0",
   "pytest-sugar>=1.0.0",
   "pytest-xdist>=3.6.1",
@@ -361,6 +361,7 @@ ignore = [
   "TD003",   # Ruff - Missing issue link for TODO
   "TD002",   # Ruff - Missing author for TODO
   "PYI036",  # pyright - Missing type annotation for `__aexit__`
+  "A002",    # ruff - functiona argument is shadowing a python builtin
 ]
 select = ["ALL"]
 

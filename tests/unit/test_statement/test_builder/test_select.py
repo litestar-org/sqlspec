@@ -1245,3 +1245,61 @@ def test_as_schema_preserves_query_state() -> None:
     assert "active" in builder_with_schema._expression.sql().lower()
     assert builder_with_schema._parameters == builder._parameters
     assert builder_with_schema.dialect == builder.dialect
+
+
+def test_with_hint_statement_level() -> None:
+    builder = SelectBuilder().select("id").from_("users").with_hint("INDEX(users idx_users_name)")
+    query = builder.build()
+    assert query.sql.startswith("/*+ INDEX(users idx_users_name) */")
+    assert "SELECT" in query.sql
+
+
+def test_with_hint_multiple_statement_hints() -> None:
+    builder = SelectBuilder().select("id").from_("users").with_hint("INDEX(users idx_users_name)").with_hint("NOLOCK")
+    query = builder.build()
+    assert query.sql.startswith("/*+ INDEX(users idx_users_name) */ /*+ NOLOCK */")
+    assert "SELECT" in query.sql
+
+
+def test_with_hint_table_level_stored_not_injected() -> None:
+    builder = SelectBuilder().select("id").from_("users").with_hint("NOLOCK", location="table", table="users")
+    query = builder.build()
+    # Table-level hint should not be in SQL yet
+    assert "NOLOCK" not in query.sql or not query.sql.startswith("/*+ NOLOCK */")
+    # But it should be stored in _hints
+    assert any(h["location"] == "table" and h["hint"] == "NOLOCK" for h in builder._hints)
+
+
+def test_with_hint_chaining_and_dialect() -> None:
+    builder = (
+        SelectBuilder()
+        .select("id")
+        .from_("users")
+        .with_hint("INDEX(users idx_users_name)", dialect="oracle")
+        .with_hint("NOLOCK", dialect="sqlserver")
+    )
+    query = builder.build()
+    # Both hints should be present in the comment
+    assert "INDEX(users idx_users_name)" in query.sql
+    assert "NOLOCK" in query.sql
+    # Hints should be stored with dialect info
+    assert any(h["dialect"] == "oracle" for h in builder._hints)
+    assert any(h["dialect"] == "sqlserver" for h in builder._hints)
+
+
+def test_with_hint_table_level_injection() -> None:
+    builder = SelectBuilder().select("id").from_("users").with_hint("NOLOCK", location="table", table="users")
+    query = builder.build()
+    # Table-level hint should appear before the table name in FROM clause
+    assert "FROM /*+ NOLOCK */ users" in query.sql or "FROM/*+ NOLOCK */ users" in query.sql
+
+
+def test_with_hint_join_level_injection() -> None:
+    builder = (
+        SelectBuilder().select("u.id", "o.id").from_("users u").with_hint("NOLOCK", location="table", table="orders")
+    )
+    # Add a JOIN clause manually to the SQL for this test, since builder does not have a join method for this test
+    builder._expression = exp.Select().select("u.id", "o.id").from_("users u").join("orders o")
+    query = builder.build()
+    # Join-level hint should appear before the table name in JOIN clause
+    assert "JOIN /*+ NOLOCK */ orders" in query.sql or "JOIN/*+ NOLOCK */ orders" in query.sql

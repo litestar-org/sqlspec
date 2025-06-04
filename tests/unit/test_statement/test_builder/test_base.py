@@ -718,3 +718,211 @@ def test_query_builder_str_fallback() -> None:
     # Should not raise, should return default object __str__
     result = str(builder)
     assert result.startswith("<") and result.endswith(">")
+
+
+def test_create_materialized_view_basic() -> None:
+    from sqlspec.statement.builder.ddl import CreateMaterializedViewBuilder
+    from sqlspec.statement.builder.select import SelectBuilder
+
+    select_builder = SelectBuilder().select("id", "name").from_("users").where_eq("active", True)
+    builder = (
+        CreateMaterializedViewBuilder()
+        .name("active_users_mv")
+        .if_not_exists()
+        .columns("id", "name")
+        .as_select(select_builder)
+    )
+    result = builder.build()
+    sql = result.sql
+    assert "CREATE MATERIALIZED VIEW" in sql
+    assert "IF NOT EXISTS" in sql
+    assert "AS SELECT" in sql or "AS\nSELECT" in sql
+    assert "FROM users" in sql
+    assert "id" in sql and "name" in sql
+    assert True in result.parameters.values()
+
+
+def test_create_materialized_view_with_options() -> None:
+    from sqlspec.statement.builder.ddl import CreateMaterializedViewBuilder
+    from sqlspec.statement.builder.select import SelectBuilder
+
+    select_builder = SelectBuilder().select("id").from_("users")
+    builder = (
+        CreateMaterializedViewBuilder()
+        .name("mv1")
+        .as_select(select_builder)
+        .with_data()
+        .refresh_mode("ON COMMIT")
+        .storage_parameter("foo", "bar")
+        .tablespace("fastspace")
+        .using_index("idx_mv1")
+        .with_hint("/*+ PARALLEL(2) */")
+    )
+    result = builder.build()
+    sql = result.sql
+    assert "CREATE MATERIALIZED VIEW" in sql
+    assert "WITH_DATA" in sql or "NO_DATA" in sql or "WITH DATA" in sql or "NO DATA" in sql
+    assert "PARALLEL" in sql or "HINT" in sql or "PARALLEL(2)" in sql
+    assert "TABLESPACE" in sql or "fastspace" in sql
+    assert "USING_INDEX" in sql or "idx_mv1" in sql
+    assert "foo" in sql and "bar" in sql
+
+
+def test_create_materialized_view_parameter_merging() -> None:
+    from sqlspec.statement.builder.ddl import CreateMaterializedViewBuilder
+    from sqlspec.statement.builder.select import SelectBuilder
+
+    select_builder = SelectBuilder().select("id").from_("users").where_eq("status", "active")
+    builder = CreateMaterializedViewBuilder().name("mv2").as_select(select_builder)
+    result = builder.build()
+    # Parameter from SELECT should be merged
+    assert "active" in result.parameters.values()
+
+
+def test_create_view_basic() -> None:
+    from sqlspec.statement.builder.ddl import CreateViewBuilder
+    from sqlspec.statement.builder.select import SelectBuilder
+
+    select_builder = SelectBuilder().select("id", "name").from_("users").where_eq("active", True)
+    builder = CreateViewBuilder().name("active_users_v").if_not_exists().columns("id", "name").as_select(select_builder)
+    result = builder.build()
+    sql = result.sql
+    assert "CREATE VIEW" in sql
+    assert "IF NOT EXISTS" in sql
+    assert "AS SELECT" in sql or "AS\nSELECT" in sql
+    assert "FROM users" in sql
+    assert "id" in sql and "name" in sql
+    assert True in result.parameters.values()
+
+
+def test_create_view_with_hint() -> None:
+    from sqlspec.statement.builder.ddl import CreateViewBuilder
+    from sqlspec.statement.builder.select import SelectBuilder
+
+    select_builder = SelectBuilder().select("id").from_("users")
+    builder = CreateViewBuilder().name("v1").as_select(select_builder).with_hint("/*+ NO_MERGE */")
+    result = builder.build()
+    sql = result.sql
+    assert "CREATE VIEW" in sql
+    assert "NO_MERGE" in sql or "HINT" in sql
+
+
+def test_create_view_parameter_merging() -> None:
+    from sqlspec.statement.builder.ddl import CreateViewBuilder
+    from sqlspec.statement.builder.select import SelectBuilder
+
+    select_builder = SelectBuilder().select("id").from_("users").where_eq("status", "active")
+    builder = CreateViewBuilder().name("v2").as_select(select_builder)
+    result = builder.build()
+    # Parameter from SELECT should be merged
+    assert "active" in result.parameters.values()
+
+
+def test_alter_table_add_column_action() -> None:
+    from sqlspec.statement.builder.ddl import AlterTableBuilder
+
+    sql = AlterTableBuilder().table("users").action("ADD COLUMN age INT").build().sql
+    assert "ALTER TABLE" in sql and "ADD COLUMN" in sql and "age" in sql and "INT" in sql
+
+
+def test_alter_table_drop_column_action() -> None:
+    from sqlspec.statement.builder.ddl import AlterTableBuilder
+
+    sql = AlterTableBuilder().table("users").action("DROP COLUMN age").build().sql
+    assert "ALTER TABLE" in sql and "DROP COLUMN" in sql and "age" in sql
+
+
+def test_alter_table_rename_column_action() -> None:
+    from sqlspec.statement.builder.ddl import AlterTableBuilder
+
+    sql = AlterTableBuilder().table("users").action("RENAME COLUMN old_name TO new_name").build().sql
+    assert "ALTER TABLE" in sql and "RENAME COLUMN" in sql and "old_name" in sql and "new_name" in sql
+
+
+def test_alter_table_alter_column_type_action() -> None:
+    from sqlspec.statement.builder.ddl import AlterTableBuilder
+
+    sql = AlterTableBuilder().table("users").action("ALTER COLUMN age TYPE BIGINT").build().sql
+    assert "ALTER TABLE" in sql and "ALTER COLUMN" in sql and "age" in sql and "BIGINT" in sql
+
+
+def test_alter_table_set_default_action() -> None:
+    from sqlspec.statement.builder.ddl import AlterTableBuilder
+
+    sql = AlterTableBuilder().table("users").action("ALTER COLUMN age SET DEFAULT 42").build().sql
+    assert "ALTER TABLE" in sql and "SET DEFAULT" in sql and "age" in sql and "42" in sql
+
+
+def test_alter_table_drop_default_action() -> None:
+    from sqlspec.statement.builder.ddl import AlterTableBuilder
+
+    sql = AlterTableBuilder().table("users").action("ALTER COLUMN age DROP DEFAULT").build().sql
+    assert "ALTER TABLE" in sql and "DROP DEFAULT" in sql and "age" in sql
+
+
+def test_alter_table_set_property_action() -> None:
+    from sqlspec.statement.builder.ddl import AlterTableBuilder
+
+    sql = AlterTableBuilder().table("users").action("SET (fillfactor = 80)").build().sql
+    assert "ALTER TABLE" in sql and ("SET" in sql and "fillfactor" in sql)
+
+
+def test_alter_table_drop_property_action() -> None:
+    from sqlspec.statement.builder.ddl import AlterTableBuilder
+
+    sql = AlterTableBuilder().table("users").action("RESET (fillfactor)").build().sql
+    assert "ALTER TABLE" in sql and ("RESET" in sql and "fillfactor" in sql)
+
+
+def test_alter_table_with_hint_action() -> None:
+    from sqlspec.statement.builder.ddl import AlterTableBuilder
+
+    sql = AlterTableBuilder().table("users").action("ADD COLUMN age INT").with_hint("/*+ NOLOCK */").build().sql
+    assert "ALTER TABLE" in sql and ("NOLOCK" in sql or "HINT" in sql)
+
+
+def test_alter_table_error_if_no_action() -> None:
+    from sqlspec.statement.builder.ddl import AlterTableBuilder
+
+    builder = AlterTableBuilder().table("users")
+    with pytest.raises(Exception):
+        builder.build()
+
+
+def test_comment_on_table_builder() -> None:
+    from sqlspec.statement.builder.ddl import CommentOnBuilder
+
+    sql = CommentOnBuilder().on_table("users").is_("User table").build().sql
+    assert "COMMENT ON TABLE users IS 'User table'" in sql
+
+
+def test_comment_on_column_builder() -> None:
+    from sqlspec.statement.builder.ddl import CommentOnBuilder
+
+    sql = CommentOnBuilder().on_column("users", "age").is_("User age").build().sql
+    assert "COMMENT ON COLUMN users.age IS 'User age'" in sql
+
+
+def test_comment_on_builder_error() -> None:
+    import pytest
+
+    from sqlspec.statement.builder.ddl import CommentOnBuilder
+
+    with pytest.raises(Exception):
+        CommentOnBuilder().on_table("users").build()
+
+
+def test_rename_table_builder() -> None:
+    from sqlspec.statement.builder.ddl import RenameTableBuilder
+
+    sql = RenameTableBuilder().table("users").to("customers").build().sql
+    assert "ALTER TABLE users RENAME TO customers" in sql or "RENAME TO customers" in sql
+
+
+def test_rename_table_builder_error() -> None:
+    import pytest
+
+    from sqlspec.statement.builder.ddl import RenameTableBuilder
+
+    with pytest.raises(Exception):
+        RenameTableBuilder().table("users").build()

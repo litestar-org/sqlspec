@@ -9,12 +9,7 @@ from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 
 from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
-from sqlspec.statement.mixins import (
-    AsyncArrowMixin,
-    ResultConverter,
-    SQLTranslatorMixin,
-    SyncArrowMixin,
-)
+from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin, SyncArrowMixin
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig

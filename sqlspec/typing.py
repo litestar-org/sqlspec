@@ -9,8 +9,10 @@ from typing_extensions import TypeAlias, TypeGuard, TypeVar
 
 from sqlspec._typing import (
     AIOSQL_INSTALLED,
+    FSSPEC_INSTALLED,
     LITESTAR_INSTALLED,
     MSGSPEC_INSTALLED,
+    OBSTORE_INSTALLED,
     OPENTELEMETRY_INSTALLED,
     PROMETHEUS_INSTALLED,
     PYARROW_INSTALLED,
@@ -551,8 +553,10 @@ def is_expression(obj: "Any") -> "TypeGuard[exp.Expression]":
 
 __all__ = (
     "AIOSQL_INSTALLED",
+    "FSSPEC_INSTALLED",
     "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
+    "OBSTORE_INSTALLED",
     "PYARROW_INSTALLED",
     "PYDANTIC_INSTALLED",
     "PYDANTIC_USE_FAILFAST",

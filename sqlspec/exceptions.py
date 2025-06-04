@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 __all__ = (
     "ExtraParameterError",
+    "FileNotFoundInStorageError",
     "ImproperConfigurationError",
     "IntegrityError",
     "MissingDependencyError",
@@ -25,6 +26,7 @@ __all__ = (
     "SQLTransformationError",
     "SQLValidationError",
     "SerializationError",
+    "StorageOperationFailedError",
     "UnknownParameterError",
     "UnsafeSQLError",
 )
@@ -303,6 +305,14 @@ class NotFoundError(RepositoryError):
 
 class MultipleResultsFoundError(RepositoryError):
     """A single database result was required but more than one were found."""
+
+
+class StorageOperationFailedError(SQLSpecError):
+    """Raised when a storage backend operation fails (e.g., network, permission, API error)."""
+
+
+class FileNotFoundInStorageError(StorageOperationFailedError):
+    """Raised when a file or object is not found in the storage backend."""
 
 
 @contextmanager

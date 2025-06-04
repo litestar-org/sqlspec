@@ -457,10 +457,27 @@ except ImportError:
     AIOSQL_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
 
+try:
+    import fsspec
+
+    FSSPEC_INSTALLED = True
+except ImportError:
+    FSSPEC_INSTALLED = False
+
+try:
+    import obstore
+
+    OBSTORE_INSTALLED = True
+except ImportError:
+    OBSTORE_INSTALLED = False
+
+
 __all__ = (
     "AIOSQL_INSTALLED",
+    "FSSPEC_INSTALLED",
     "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
+    "OBSTORE_INSTALLED",
     "OPENTELEMETRY_INSTALLED",
     "PROMETHEUS_INSTALLED",
     "PYARROW_INSTALLED",

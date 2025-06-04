@@ -9,8 +9,12 @@ parameter binding and validation.
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder.base import QueryBuilder, SafeQuery
 from sqlspec.statement.builder.ddl import (
+    AlterTableBuilder,
     CreateIndexBuilder,
+    CreateMaterializedViewBuilder,
     CreateSchemaBuilder,
+    CreateTableAsSelectBuilder,
+    CreateViewBuilder,
     DDLBuilder,
     DropIndexBuilder,
     DropSchemaBuilder,
@@ -26,8 +30,12 @@ from sqlspec.statement.builder.select import SelectBuilder
 from sqlspec.statement.builder.update import UpdateBuilder
 
 __all__ = (
+    "AlterTableBuilder",
     "CreateIndexBuilder",
+    "CreateMaterializedViewBuilder",
     "CreateSchemaBuilder",
+    "CreateTableAsSelectBuilder",
+    "CreateViewBuilder",
     "DDLBuilder",
     "DeleteBuilder",
     "DropIndexBuilder",

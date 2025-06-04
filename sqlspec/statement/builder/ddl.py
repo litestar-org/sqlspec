@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     from sqlspec.statement.sql import SQL, SQLConfig
 
 __all__ = (
+    "AlterTableBuilder",
+    "CommentOnBuilder",
     "CreateIndexBuilder",
     "CreateSchemaBuilder",
     "CreateTableAsSelectBuilder",
@@ -21,6 +23,7 @@ __all__ = (
     "DropSchemaBuilder",
     "DropTableBuilder",
     "DropViewBuilder",
+    "RenameTableBuilder",
     "TruncateTableBuilder",
 )
 
@@ -441,4 +444,320 @@ class CreateTableAsSelectBuilder(DDLBuilder):
             exists=self._if_not_exists,
             expression=select_expr,
             schema=schema_expr,
+        )
+
+
+@dataclass
+class CreateMaterializedViewBuilder(DDLBuilder):
+    """Builder for CREATE MATERIALIZED VIEW [IF NOT EXISTS] ... AS SELECT ...
+
+    Supports optional column list, parameterized SELECT sources, and dialect-specific options.
+    """
+
+    _view_name: Optional[str] = None
+    _if_not_exists: bool = False
+    _columns: list[str] = field(default_factory=list)
+    _select_query: Optional[object] = None  # SQL, SelectBuilder, or str
+    _with_data: Optional[bool] = None  # True: WITH DATA, False: NO DATA, None: not set
+    _refresh_mode: Optional[str] = None
+    _storage_parameters: dict[str, Any] = field(default_factory=dict)
+    _tablespace: Optional[str] = None
+    _using_index: Optional[str] = None
+    _hints: list[str] = field(default_factory=list)
+
+    def name(self, view_name: str) -> Self:
+        self._view_name = view_name
+        return self
+
+    def if_not_exists(self) -> Self:
+        self._if_not_exists = True
+        return self
+
+    def columns(self, *cols: str) -> Self:
+        self._columns = list(cols)
+        return self
+
+    def as_select(self, select_query: object) -> Self:
+        self._select_query = select_query
+        return self
+
+    def with_data(self) -> Self:
+        self._with_data = True
+        return self
+
+    def no_data(self) -> Self:
+        self._with_data = False
+        return self
+
+    def refresh_mode(self, mode: str) -> Self:
+        self._refresh_mode = mode
+        return self
+
+    def storage_parameter(self, key: str, value: Any) -> Self:
+        self._storage_parameters[key] = value
+        return self
+
+    def tablespace(self, name: str) -> Self:
+        self._tablespace = name
+        return self
+
+    def using_index(self, index_name: str) -> Self:
+        self._using_index = index_name
+        return self
+
+    def with_hint(self, hint: str) -> Self:
+        self._hints.append(hint)
+        return self
+
+    def _create_base_expression(self) -> exp.Expression:
+        if not self._view_name:
+            self._raise_sql_builder_error("View name must be set for CREATE MATERIALIZED VIEW.")
+        if self._select_query is None:
+            self._raise_sql_builder_error("SELECT query must be set for CREATE MATERIALIZED VIEW.")
+
+        # Determine the SELECT expression and parameters
+        select_expr = None
+        select_params = None
+        from sqlspec.statement.builder.select import SelectBuilder
+        from sqlspec.statement.sql import SQL
+
+        if isinstance(self._select_query, SQL):
+            select_expr = self._select_query.expression
+            select_params = getattr(self._select_query, "parameters", None)
+        elif isinstance(self._select_query, SelectBuilder):
+            select_expr = getattr(self._select_query, "_expression", None)
+            select_params = getattr(self._select_query, "_parameters", None)
+        elif isinstance(self._select_query, str):
+            select_expr = exp.maybe_parse(self._select_query)
+            select_params = None
+        else:
+            self._raise_sql_builder_error("Unsupported type for SELECT query in materialized view.")
+        if select_expr is None or not isinstance(select_expr, exp.Select):
+            self._raise_sql_builder_error("SELECT query must be a valid SELECT expression.")
+
+        # Merge parameters from SELECT if present
+        if select_params:
+            for p_name, p_value in select_params.items():
+                self.add_parameter(p_value, name=p_name)
+
+        # Build schema/column list if provided
+        schema_expr = None
+        if self._columns:
+            schema_expr = exp.Schema(expressions=[exp.column(c) for c in self._columns])
+
+        # Build properties for dialect-specific options
+        props = []
+        if self._refresh_mode:
+            props.append(
+                exp.Property(this=exp.to_identifier("REFRESH_MODE"), value=exp.Literal.string(self._refresh_mode))
+            )
+        if self._tablespace:
+            props.append(exp.Property(this=exp.to_identifier("TABLESPACE"), value=exp.to_identifier(self._tablespace)))
+        if self._using_index:
+            props.append(
+                exp.Property(this=exp.to_identifier("USING_INDEX"), value=exp.to_identifier(self._using_index))
+            )
+        for k, v in self._storage_parameters.items():
+            props.append(exp.Property(this=exp.to_identifier(k), value=exp.Literal.string(str(v))))
+        if self._with_data is not None:
+            props.append(exp.Property(this=exp.to_identifier("WITH_DATA" if self._with_data else "NO_DATA")))
+        for hint in self._hints:
+            props.append(exp.Property(this=exp.to_identifier("HINT"), value=exp.Literal.string(hint)))
+        properties_node = exp.Properties(expressions=props) if props else None
+
+        return exp.Create(
+            kind="MATERIALIZED_VIEW",
+            this=exp.to_identifier(self._view_name),
+            exists=self._if_not_exists,
+            expression=select_expr,
+            schema=schema_expr,
+            properties=properties_node,
+        )
+
+
+@dataclass
+class CreateViewBuilder(DDLBuilder):
+    """Builder for CREATE VIEW [IF NOT EXISTS] ... AS SELECT ...
+
+    Supports optional column list, parameterized SELECT sources, and hints.
+    """
+
+    _view_name: Optional[str] = None
+    _if_not_exists: bool = False
+    _columns: list[str] = field(default_factory=list)
+    _select_query: Optional[object] = None  # SQL, SelectBuilder, or str
+    _hints: list[str] = field(default_factory=list)
+
+    def name(self, view_name: str) -> Self:
+        self._view_name = view_name
+        return self
+
+    def if_not_exists(self) -> Self:
+        self._if_not_exists = True
+        return self
+
+    def columns(self, *cols: str) -> Self:
+        self._columns = list(cols)
+        return self
+
+    def as_select(self, select_query: object) -> Self:
+        self._select_query = select_query
+        return self
+
+    def with_hint(self, hint: str) -> Self:
+        self._hints.append(hint)
+        return self
+
+    def _create_base_expression(self) -> exp.Expression:
+        if not self._view_name:
+            self._raise_sql_builder_error("View name must be set for CREATE VIEW.")
+        if self._select_query is None:
+            self._raise_sql_builder_error("SELECT query must be set for CREATE VIEW.")
+
+        # Determine the SELECT expression and parameters
+        select_expr = None
+        select_params = None
+        from sqlspec.statement.builder.select import SelectBuilder
+        from sqlspec.statement.sql import SQL
+
+        if isinstance(self._select_query, SQL):
+            select_expr = self._select_query.expression
+            select_params = getattr(self._select_query, "parameters", None)
+        elif isinstance(self._select_query, SelectBuilder):
+            select_expr = getattr(self._select_query, "_expression", None)
+            select_params = getattr(self._select_query, "_parameters", None)
+        elif isinstance(self._select_query, str):
+            select_expr = exp.maybe_parse(self._select_query)
+            select_params = None
+        else:
+            self._raise_sql_builder_error("Unsupported type for SELECT query in view.")
+        if select_expr is None or not isinstance(select_expr, exp.Select):
+            self._raise_sql_builder_error("SELECT query must be a valid SELECT expression.")
+
+        # Merge parameters from SELECT if present
+        if select_params:
+            for p_name, p_value in select_params.items():
+                self.add_parameter(p_value, name=p_name)
+
+        # Build schema/column list if provided
+        schema_expr = None
+        if self._columns:
+            schema_expr = exp.Schema(expressions=[exp.column(c) for c in self._columns])
+
+        # Build properties for hints
+        props = [exp.Property(this=exp.to_identifier("HINT"), value=exp.Literal.string(h)) for h in self._hints]
+        properties_node = exp.Properties(expressions=props) if props else None
+
+        return exp.Create(
+            kind="VIEW",
+            this=exp.to_identifier(self._view_name),
+            exists=self._if_not_exists,
+            expression=select_expr,
+            schema=schema_expr,
+            properties=properties_node,
+        )
+
+
+@dataclass
+class AlterTableBuilder(DDLBuilder):
+    """Builder for ALTER TABLE ... (limited to sqlglot support).
+
+    NOTE: sqlglot does not currently support granular ALTER TABLE actions as AST nodes.
+    This builder only supports a single string action for now.
+    """
+
+    _table_name: Optional[str] = None
+    _action: Optional[str] = None
+    _hints: list[str] = field(default_factory=list)
+
+    def table(self, table_name: str) -> Self:
+        self._table_name = table_name
+        return self
+
+    def action(self, action_sql: str) -> Self:
+        """Set the raw ALTER TABLE action as a string (e.g., 'ADD COLUMN age INT')."""
+        self._action = action_sql
+        return self
+
+    def with_hint(self, hint: str) -> Self:
+        self._hints.append(hint)
+        return self
+
+    def _create_base_expression(self) -> exp.Expression:
+        if not self._table_name:
+            self._raise_sql_builder_error("Table name must be set for ALTER TABLE.")
+        if not self._action:
+            self._raise_sql_builder_error("ALTER TABLE action must be specified as a string.")
+        # Build properties for hints
+        props = [exp.Property(this=exp.to_identifier("HINT"), value=exp.Literal.string(h)) for h in self._hints]
+        properties_node = exp.Properties(expressions=props) if props else None
+        return exp.Alter(
+            this=exp.to_table(self._table_name),
+            expression=exp.Literal.string(self._action),
+            properties=properties_node,
+        )
+
+
+@dataclass
+class CommentOnBuilder(DDLBuilder):
+    """Builder for COMMENT ON ... IS ... statements.
+
+    Supports COMMENT ON TABLE and COMMENT ON COLUMN.
+    """
+
+    _target_type: Optional[str] = None  # 'TABLE' or 'COLUMN'
+    _table: Optional[str] = None
+    _column: Optional[str] = None
+    _comment: Optional[str] = None
+
+    def on_table(self, table: str) -> Self:
+        self._target_type = "TABLE"
+        self._table = table
+        self._column = None
+        return self
+
+    def on_column(self, table: str, column: str) -> Self:
+        self._target_type = "COLUMN"
+        self._table = table
+        self._column = column
+        return self
+
+    def is_(self, comment: str) -> Self:
+        self._comment = comment
+        return self
+
+    def _create_base_expression(self) -> exp.Expression:
+        if self._target_type == "TABLE" and self._table and self._comment is not None:
+            sql = f"COMMENT ON TABLE {self._table} IS '{self._comment}'"
+        elif self._target_type == "COLUMN" and self._table and self._column and self._comment is not None:
+            sql = f"COMMENT ON COLUMN {self._table}.{self._column} IS '{self._comment}'"
+        else:
+            self._raise_sql_builder_error("Must specify target and comment for COMMENT ON statement.")
+        # Use exp.Command if available, else fallback to exp.Literal
+        return exp.Command(this=exp.Literal.string(sql)) if hasattr(exp, "Command") else exp.Literal.string(sql)
+
+
+@dataclass
+class RenameTableBuilder(DDLBuilder):
+    """Builder for ALTER TABLE ... RENAME TO ... statements.
+
+    Supports renaming a table.
+    """
+
+    _old_name: Optional[str] = None
+    _new_name: Optional[str] = None
+
+    def table(self, old_name: str) -> Self:
+        self._old_name = old_name
+        return self
+
+    def to(self, new_name: str) -> Self:
+        self._new_name = new_name
+        return self
+
+    def _create_base_expression(self) -> exp.Expression:
+        if not self._old_name or not self._new_name:
+            self._raise_sql_builder_error("Both old and new table names must be set for RENAME TABLE.")
+        return exp.Alter(
+            this=exp.to_table(self._old_name), expression=exp.Literal.string(f"RENAME TO {self._new_name}")
         )

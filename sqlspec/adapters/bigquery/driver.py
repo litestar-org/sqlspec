@@ -26,12 +26,7 @@ from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.exceptions import (
     SQLSpecError,
 )
-from sqlspec.statement.mixins import (
-    ResultConverter,
-    SQLTranslatorMixin,
-    SyncArrowMixin,
-    SyncParquetMixin,
-)
+from sqlspec.statement.mixins import ResultConverter, SQLTranslatorMixin, SyncArrowMixin
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -47,7 +42,7 @@ logger = logging.getLogger("sqlspec.adapters.bigquery")
 class BigQueryDriver(
     SyncDriverAdapterProtocol[BigQueryConnection, RowT],
     SyncArrowMixin[BigQueryConnection],
-    SyncParquetMixin[BigQueryConnection],
+    SyncArrowMixin[BigQueryConnection],
     SQLTranslatorMixin[BigQueryConnection],
     ResultConverter,
 ):

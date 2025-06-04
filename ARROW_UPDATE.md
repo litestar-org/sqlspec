@@ -63,9 +63,9 @@ To refactor the `ArrowMixin` (`select_to_arrow`) and `ParquetMixin` (`to_parquet
         # Convert list of dicts to list of PyArrow arrays (one per column)
         # This is a common pattern: transpose the list of dicts.
         columns_data = {col_name: [row.get(col_name) for row in rows] for col_name in column_names} # type: ignore
-        
+
         # Create PyArrow arrays for each column
-        pa_arrays = [] 
+        pa_arrays = []
         for col_name in column_names:
             try:
                 pa_arrays.append(pa.array(columns_data[col_name]))
@@ -140,14 +140,14 @@ To refactor the `ArrowMixin` (`select_to_arrow`) and `ParquetMixin` (`to_parquet
         # This assumes _execute and _wrap_select_result are available on self (the driver)
         raw_driver_result = self._execute(statement.to_sql(placeholder_style=self.parameter_style), statement.parameters, statement, connection, **kwargs)
         sql_result: SQLResult[RowT] = self._wrap_select_result(statement, raw_driver_result, schema_type=None) # Get as RowT
-        
+
         # 2. Call the overridable conversion method
         return self._convert_rows_to_arrow(sql_result.data if sql_result.data else [], statement, **kwargs)
 
     def _execute_and_write_to_parquet(self: 'SyncDriverAdapterProtocol', statement: 'SQL', connection: 'ConnectionT', path: Path, **kwargs: Any) -> None:
         raw_driver_result = self._execute(statement.to_sql(placeholder_style=self.parameter_style), statement.parameters, statement, connection, **kwargs)
         sql_result: SQLResult[RowT] = self._wrap_select_result(statement, raw_driver_result, schema_type=None)
-        
+
         self._write_rows_to_parquet(sql_result.data if sql_result.data else [], statement, path, **kwargs)
     ```
 
@@ -159,10 +159,10 @@ To refactor the `ArrowMixin` (`select_to_arrow`) and `ParquetMixin` (`to_parquet
         stmt_obj: 'SQL' = self._build_statement(statement_like, parameters, filters=list(filters), config=config or self.config)
         if not self.returns_rows(stmt_obj.expression):
             raise TypeError("select_to_arrow can only be used with SELECT statements.")
-        
+
         # The instrument_operation decorator/context manager needs to be able to call _execute_and_fetch_for_arrow
         # with the correct `self` (the driver instance).
-        # The `instrument_operation` expects the function to be executed as its last positional args, 
+        # The `instrument_operation` expects the function to be executed as its last positional args,
         # and `original_self` as the instance to call it on.
         return instrument_operation(
             self, # driver_obj for instrumentation context
@@ -209,14 +209,14 @@ To refactor the `ArrowMixin` (`select_to_arrow`) and `ParquetMixin` (`to_parquet
     async def _execute_and_fetch_for_arrow(self: 'AsyncDriverAdapterProtocol', statement: 'SQL', connection: 'ConnectionT', **kwargs: Any) -> 'ArrowTable':
         raw_driver_result = await self._execute(statement.to_sql(placeholder_style=self.parameter_style), statement.parameters, statement, connection, **kwargs)
         sql_result: SQLResult[RowT] = await self._wrap_select_result(statement, raw_driver_result, schema_type=None)
-        
+
         # _convert_rows_to_arrow is sync by default
         return self._convert_rows_to_arrow(sql_result.data if sql_result.data else [], statement, **kwargs)
 
     async def _execute_and_write_to_parquet(self: 'AsyncDriverAdapterProtocol', statement: 'SQL', connection: 'ConnectionT', path: Path, **kwargs: Any) -> None:
         raw_driver_result = await self._execute(statement.to_sql(placeholder_style=self.parameter_style), statement.parameters, statement, connection, **kwargs)
         sql_result: SQLResult[RowT] = await self._wrap_select_result(statement, raw_driver_result, schema_type=None)
-        
+
         # _write_rows_to_parquet default implementation is async
         await self._write_rows_to_parquet(sql_result.data if sql_result.data else [], statement, path, **kwargs)
     ```
@@ -229,7 +229,7 @@ To refactor the `ArrowMixin` (`select_to_arrow`) and `ParquetMixin` (`to_parquet
         stmt_obj: 'SQL' = self._build_statement(statement_like, parameters, filters=list(filters), config=config or self.config)
         if not self.returns_rows(stmt_obj.expression):
             raise TypeError("select_to_arrow can only be used with SELECT statements.")
-        
+
         return await instrument_operation_async(
             self,
             "select_to_arrow",

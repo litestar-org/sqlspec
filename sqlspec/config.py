@@ -36,6 +36,7 @@ __all__ = (
     "NoPoolAsyncConfig",
     "NoPoolSyncConfig",
     "StatementResultType",
+    "StorageConfig",
     "SyncConfigT",
     "SyncDatabaseConfig",
 )
@@ -49,6 +50,93 @@ ConfigT = TypeVar(
 DriverT = TypeVar("DriverT", bound="Union[SyncDriverAdapterProtocol[Any], AsyncDriverAdapterProtocol[Any]]")
 
 logger = logging.getLogger("sqlspec")
+
+
+@dataclass
+class StorageConfig:
+    """Configuration for storage backends."""
+
+    default_storage_key: "Optional[str]" = None
+    backends: "dict[str, dict[str, Any]]" = field(default_factory=dict)
+    auto_register: bool = True
+
+    # Default storage options applied to all operations
+    default_storage_options: dict[str, Any] = field(default_factory=dict)
+
+    # Per-scheme default options (e.g., s3://, gs://, file://)
+    scheme_defaults: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    # Default backend preference (obstore, fsspec, file)
+    preferred_backend: Optional[str] = None
+
+    # Global copy/export options
+    default_copy_options: dict[str, Any] = field(default_factory=dict)
+    default_export_options: dict[str, Any] = field(default_factory=dict)
+
+    # Format-specific options
+    csv_options: dict[str, Any] = field(default_factory=dict)
+    parquet_options: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Ensure all configs are properly isolated."""
+        self.default_storage_options = dict(self.default_storage_options)
+        self.scheme_defaults = {k: dict(v) for k, v in self.scheme_defaults.items()}
+        self.default_copy_options = dict(self.default_copy_options)
+        self.default_export_options = dict(self.default_export_options)
+        self.csv_options = dict(self.csv_options)
+        self.parquet_options = dict(self.parquet_options)
+
+    def get_storage_options(self, uri: str, **override_options: Any) -> dict[str, Any]:
+        """Get storage options for a specific URI with overrides."""
+        from urllib.parse import urlparse
+
+        scheme = urlparse(uri).scheme.lower() if uri else "file"
+
+        # Start with defaults
+        options = dict(self.default_storage_options)
+
+        # Add scheme-specific defaults
+        if scheme in self.scheme_defaults:
+            options.update(self.scheme_defaults[scheme])
+
+        # Add preferred backend if not specified
+        if self.preferred_backend and "backend" not in options:
+            options["backend"] = self.preferred_backend
+
+        # Apply overrides
+        options.update(override_options)
+
+        return options
+
+    def get_copy_options(self, format: str, **override_options: Any) -> dict[str, Any]:
+        """Get copy options for a specific format with overrides."""
+        options = dict(self.default_copy_options)
+
+        # Add format-specific options
+        if format.lower() == "csv" and self.csv_options:
+            options.update(self.csv_options)
+        elif format.lower() == "parquet" and self.parquet_options:
+            options.update(self.parquet_options)
+
+        # Apply overrides
+        options.update(override_options)
+
+        return options
+
+    def get_export_options(self, format: str, **override_options: Any) -> dict[str, Any]:
+        """Get export options for a specific format with overrides."""
+        options = dict(self.default_export_options)
+
+        # Add format-specific options
+        if format.lower() == "csv" and self.csv_options:
+            options.update(self.csv_options)
+        elif format.lower() == "parquet" and self.parquet_options:
+            options.update(self.parquet_options)
+
+        # Apply overrides
+        options.update(override_options)
+
+        return options
 
 
 @dataclass
@@ -89,6 +177,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     driver_type: "type[DriverT]" = field(init=False)
     pool_instance: "Optional[PoolT]" = field(default=None)
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
     _pool_metrics: Optional[dict[str, Any]] = field(default=None, init=False, repr=False, hash=False, compare=False)
     __is_async__: "ClassVar[bool]" = False
     __supports_connection_pooling__: "ClassVar[bool]" = False
@@ -202,6 +291,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     __supports_connection_pooling__ = False
     pool_instance: None = None
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
 
     def create_connection(self) -> ConnectionT:
         """Create connection with instrumentation."""
@@ -232,6 +322,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     __supports_connection_pooling__ = False
     pool_instance: None = None
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
 
     async def create_connection(self) -> ConnectionT:
         """Create connection with instrumentation."""
@@ -267,6 +358,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     __is_async__ = False
     __supports_connection_pooling__ = True
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
 
     def create_pool(self) -> PoolT:
         """Create pool with instrumentation.
@@ -346,6 +438,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     __is_async__ = True
     __supports_connection_pooling__ = True
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
 
     async def create_pool(self) -> PoolT:
         """Create pool with instrumentation.

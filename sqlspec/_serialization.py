@@ -2,7 +2,7 @@ import datetime
 import enum
 from typing import Any
 
-from sqlspec._typing import PYDANTIC_INSTALLED, BaseModel
+from sqlspec.typing import PYDANTIC_INSTALLED, BaseModel
 
 
 def _type_to_string(value: Any) -> str:  # pragma: no cover

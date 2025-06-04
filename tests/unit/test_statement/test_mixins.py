@@ -25,8 +25,10 @@ from sqlspec.statement.mixins import (
     SyncParquetMixin,
     _default_msgspec_deserializer,
 )
+from sqlspec.statement.mixins._copy_sync import SyncCopyOperationsMixin
 from sqlspec.statement.result import ArrowResult
 from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.storage.registry import BackendNotRegisteredError
 from sqlspec.typing import ArrowTable
 
 
@@ -683,3 +685,58 @@ def test_mixin_method_consistency(mixin_class: type, method_name: str, is_async:
             return await self._async_to_parquet_impl(stmt_obj, connection, **kwargs)
 
     TestMixin()
+
+
+class DummyCopyMixin(SyncCopyOperationsMixin):
+    def copy_from_uri(self, table_name, uri, **kwargs) -> str:
+        self._copy_from_uri_called = (table_name, uri, kwargs)
+        return "copy_from_uri_result"
+
+    def export_to_uri(self, source, uri, **kwargs) -> str:
+        self._export_to_uri_called = (source, uri, kwargs)
+        return "export_to_uri_result"
+
+    def _detect_format(self, file_path) -> str:
+        return "parquet"
+
+
+def test_copy_from_storage_success() -> None:
+    mixin = DummyCopyMixin()
+    backend = MagicMock()
+    backend.base_uri = "s3://bucket"
+    with patch("sqlspec.storage.registry.storage_registry.get_backend", return_value=backend):
+        result = mixin.copy_from_storage("mytable", "mykey", "folder/data.parquet")
+        assert result == "copy_from_uri_result"
+        assert mixin._copy_from_uri_called[0] == "mytable"
+        assert mixin._copy_from_uri_called[1] == "s3://bucket/folder/data.parquet"
+        assert mixin._copy_from_uri_called[2]["strategy"] == "append"
+        assert mixin._copy_from_uri_called[2]["format"] == "parquet"
+
+
+def test_export_to_storage_success() -> None:
+    mixin = DummyCopyMixin()
+    backend = MagicMock()
+    backend.base_uri = "gs://bucket"
+    with patch("sqlspec.storage.registry.storage_registry.get_backend", return_value=backend):
+        result = mixin.export_to_storage(
+            "SELECT * FROM t", "mykey", "folder/out.csv", format="csv", export_options={"foo": 1}
+        )
+        assert result == "export_to_uri_result"
+        assert mixin._export_to_uri_called[0] == "SELECT * FROM t"
+        assert mixin._export_to_uri_called[1] == "gs://bucket/folder/out.csv"
+        assert mixin._export_to_uri_called[2]["format"] == "csv"
+        assert mixin._export_to_uri_called[2]["storage_options"] == {"foo": 1}
+
+
+def test_copy_from_storage_missing_key() -> None:
+    mixin = DummyCopyMixin()
+    with patch("sqlspec.storage.registry.storage_registry.get_backend", side_effect=BackendNotRegisteredError("nope")):
+        with pytest.raises(BackendNotRegisteredError):
+            mixin.copy_from_storage("t", "missing", "file.csv")
+
+
+def test_export_to_storage_missing_key() -> None:
+    mixin = DummyCopyMixin()
+    with patch("sqlspec.storage.registry.storage_registry.get_backend", side_effect=BackendNotRegisteredError("nope")):
+        with pytest.raises(BackendNotRegisteredError):
+            mixin.export_to_storage("t", "missing", "file.csv")

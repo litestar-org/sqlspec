@@ -8,7 +8,7 @@ from duckdb import DuckDBPyConnection
 
 from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.exceptions import SQLConversionError
-from sqlspec.statement.mixins import ResultConverter, SQLTranslatorMixin, SyncArrowMixin
+from sqlspec.statement.mixins import ResultConverter, SQLTranslatorMixin, SyncArrowMixin, SyncCopyOperationsMixin
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -16,6 +16,8 @@ from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.telemetry import instrument_operation
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from sqlspec.config import InstrumentationConfig
 
 __all__ = ("DuckDBConnection", "DuckDBDriver")
@@ -32,6 +34,7 @@ class DuckDBDriver(
     SQLTranslatorMixin["DuckDBConnection"],
     SyncArrowMixin["DuckDBConnection"],
     ResultConverter,
+    SyncCopyOperationsMixin,
 ):
     """DuckDB Sync Driver Adapter with modern architecture.
 
@@ -61,6 +64,18 @@ class DuckDBDriver(
             instrumentation_config=instrumentation_config,
             default_row_type=default_row_type,
         )
+        # Auto-register storage backends from config
+        storage_config = getattr(config, "storage", None)
+        if storage_config and getattr(storage_config, "auto_register", True):
+            from sqlspec.storage.registry import storage_registry
+
+            for key, backend_config in getattr(storage_config, "backends", {}).items():
+                try:
+                    storage_registry.register_from_config(key, backend_config)
+                except Exception as e:
+                    logging.getLogger("sqlspec.adapters.duckdb").warning(
+                        f"Failed to register storage backend '{key}': {e}"
+                    )
 
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.QMARK
@@ -287,3 +302,15 @@ class DuckDBDriver(
             except Exception as e:
                 msg = f"Failed to convert DuckDB result to Arrow table: {e}"
                 raise SQLConversionError(msg) from e
+
+    def copy_from_path(
+        self,
+        table_name: "str",
+        file_path: "Union[str, Path]",
+        *,
+        strategy: "str" = "append",
+        format: "Optional[str]" = None,
+        **options: "Any",
+    ) -> "Any":
+        msg = "DuckDB copy_from_path not yet implemented"
+        raise NotImplementedError(msg)
