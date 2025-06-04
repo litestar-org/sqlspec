@@ -1,5 +1,6 @@
 """ADBC database configuration using TypedDict for better maintainability."""
 
+import inspect
 import logging
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict
@@ -31,6 +32,8 @@ class AdbcConnectionConfig(TypedDict, total=False):
     Universal configuration for ADBC connections supporting multiple database drivers
     including PostgreSQL, SQLite, DuckDB, BigQuery, Snowflake, and Flight SQL.
     """
+
+    # TODO: Remove this TypedDict after a few releases if runtime signature validation is stable.
 
     # Core connection parameters
     uri: NotRequired[str]
@@ -270,51 +273,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         )
         raise ImproperConfigurationError(msg)
 
-    @property
-    def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict for ADBC connect function.
-
-        Processes URI and formats parameters appropriately for different ADBC drivers.
-
-        Returns:
-            Configuration dict for adbc_driver_manager.dbapi.connect function.
-        """
-        config = {}
-        db_kwargs = dict(self.connection_config.get("db_kwargs", {}))
-        conn_kwargs = dict(self.connection_config.get("conn_kwargs", {}))
-
-        uri = self.connection_config.get("uri")
-        driver_name = self._resolve_driver_name()
-
-        # Handle URI processing for different drivers
-        if isinstance(uri, str):
-            if uri.startswith("sqlite://"):
-                db_kwargs["uri"] = uri.replace("sqlite://", "")
-            elif uri.startswith("duckdb://"):
-                db_kwargs["path"] = uri.replace("duckdb://", "")
-            else:
-                db_kwargs["uri"] = uri
-
-        # Copy other connection parameters to db_kwargs using dictionary comprehension
-        db_kwargs.update(
-            {
-                key: value
-                for key, value in self.connection_config.items()
-                if key not in {"driver_name", "uri", "db_kwargs", "conn_kwargs"} and value is not Empty
-            }
-        )
-
-        # BigQuery driver has special parameter handling
-        if "bigquery" in driver_name:
-            config["db_kwargs"] = db_kwargs
-        else:
-            config.update(db_kwargs)
-
-        if conn_kwargs:
-            config["conn_kwargs"] = conn_kwargs
-
-        return config
-
     def _get_connect_func(self) -> Callable[..., AdbcConnection]:
         """Get the ADBC driver connect function.
 
@@ -433,3 +391,24 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                 yield driver
 
         return session_manager()
+
+    @property
+    def connection_config_dict(self) -> dict[str, Any]:
+        """Get the connection configuration dictionary.
+
+        Returns:
+            The connection configuration dictionary.
+        """
+        config = {k: v for k, v in self.connection_config.items() if v is not Empty}
+        try:
+            connect_func = self._get_connect_func()
+            valid_params = set(inspect.signature(connect_func).parameters)
+        except Exception:
+            valid_params = set()
+        extra_keys = set(config) - valid_params
+        if extra_keys:
+            logger.debug(
+                "ADBC config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
+                list(extra_keys),
+            )
+        return {k: v for k, v in config.items() if k in valid_params}

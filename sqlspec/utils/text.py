@@ -73,7 +73,7 @@ def slugify(value: str, allow_unicode: bool = False, separator: Optional[str] = 
         value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
     value = value.lower().strip()
     sep = separator if separator is not None else "-"
-    if sep == "":
+    if not sep:
         # Remove all non-alphanumeric characters and return
         return re.sub(r"[^\w]+", "", value, flags=re.UNICODE)
     # Replace all runs of non-alphanumeric chars with the separator

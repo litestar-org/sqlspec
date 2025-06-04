@@ -1,5 +1,6 @@
 """SQLite database configuration using TypedDict for better maintainability."""
 
+import inspect
 import logging
 import sqlite3
 from contextlib import contextmanager
@@ -15,7 +16,7 @@ from sqlspec.typing import DictRow, Empty
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-logger = logging.getLogger("sqlspec.adapters.sqlite")
+logger = logging.getLogger(__name__)
 
 __all__ = ("SqliteConfig", "SqliteConnectionConfig", "sqlite3")
 
@@ -92,8 +93,18 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
     @property
     def connection_config_dict(self) -> dict[str, Any]:
         """Return the connection configuration as a dict."""
-        # Filter out empty values and return clean dict
-        return {k: v for k, v in self.connection_config.items() if v is not Empty}
+        config = {k: v for k, v in self.connection_config.items() if v is not Empty}
+        try:
+            valid_params = set(inspect.signature(sqlite3.connect).parameters)
+        except Exception:
+            valid_params = set()
+        extra_keys = set(config) - valid_params
+        if extra_keys:
+            logger.debug(
+                "Sqlite config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
+                list(extra_keys),
+            )
+        return {k: v for k, v in config.items() if k in valid_params}
 
     def create_connection(self) -> SqliteConnection:
         """Create and return a SQLite connection."""

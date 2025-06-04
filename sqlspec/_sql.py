@@ -6,12 +6,12 @@ This module provides the `sql` factory object for easy SQL construction:
 """
 
 import logging
-import re
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import sqlglot
 from sqlglot import exp
 from sqlglot.dialects.dialect import DialectType
+from sqlglot.errors import ParseError as SQLGlotParseError
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder import (
@@ -28,14 +28,6 @@ logger = logging.getLogger("sqlspec")
 
 MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2
-SQL_TYPE_PATTERNS = {
-    "SELECT": re.compile(r"^\s*(?:/\*.*?\*/\s*)*(?:--.*?\n\s*)*SELECT\\b", re.IGNORECASE | re.DOTALL),
-    "INSERT": re.compile(r"^\s*(?:/\*.*?\*/\s*)*(?:--.*?\n\s*)*INSERT\\b", re.IGNORECASE | re.DOTALL),
-    "UPDATE": re.compile(r"^\s*(?:/\*.*?\*/\s*)*(?:--.*?\n\s*)*UPDATE\\b", re.IGNORECASE | re.DOTALL),
-    "DELETE": re.compile(r"^\s*(?:/\*.*?\*/\s*)*(?:--.*?\n\s*)*DELETE\\b", re.IGNORECASE | re.DOTALL),
-    "MERGE": re.compile(r"^\s*(?:/\*.*?\*/\s*)*(?:--.*?\n\s*)*MERGE\\b", re.IGNORECASE | re.DOTALL),
-    "WITH": re.compile(r"^\s*(?:/\*.*?\*/\s*)*(?:--.*?\n\s*)*WITH\\b", re.IGNORECASE | re.DOTALL),
-}
 
 
 class SQLFactory:
@@ -78,10 +70,25 @@ class SQLFactory:
     """
 
     @classmethod
-    def detect_sql_type(cls, sql: str) -> str:
-        for typ, pat in SQL_TYPE_PATTERNS.items():
-            if pat.match(sql):
-                return typ
+    def detect_sql_type(cls, sql: str, dialect: Optional[DialectType] = None) -> str:
+        try:
+            # Minimal parsing just to get the command type
+            parsed_expr = sqlglot.parse_one(sql, read=dialect)
+            if parsed_expr and hasattr(parsed_expr, "key") and parsed_expr.key:
+                return parsed_expr.key.upper()
+            # Fallback for expressions that might not have a direct 'key'
+            # or where key is None (e.g. some DDL without explicit command like SET)
+            if parsed_expr:
+                # Attempt to get the class name as a fallback, e.g., "Set", "Command"
+                command_type = type(parsed_expr).__name__.upper()
+                # Handle specific cases like "COMMAND" which might be too generic
+                if command_type == "COMMAND" and hasattr(parsed_expr, "this") and parsed_expr.this:
+                    return str(parsed_expr.this).upper()  # e.g. "SET", "ALTER"
+                return command_type
+        except SQLGlotParseError:
+            logger.debug("Failed to parse SQL for type detection: %s", sql[:100])
+        except Exception as e:
+            logger.warning("Unexpected error during SQL type detection for '%s...': %s", sql[:50], e)
         return "UNKNOWN"
 
     def __init__(self, dialect: Optional[DialectType] = None) -> None:
@@ -172,13 +179,11 @@ class SQLFactory:
         if len(columns_or_sql) == 1 and isinstance(columns_or_sql[0], str):
             sql_candidate = columns_or_sql[0].strip()
             # Validate type
-            import re
-
-            if not re.match(r"^\s*(SELECT|WITH)\\b", sql_candidate, re.IGNORECASE):
-                detected = self.detect_sql_type(sql_candidate)
+            detected = self.detect_sql_type(sql_candidate, dialect=builder_dialect)
+            if detected not in {"SELECT", "WITH"}:
                 msg = (
                     f"sql.select() expects a SELECT or WITH statement, got {detected}. "
-                    f"Use sql.{detected.lower()}() instead."
+                    f"Use sql.{detected.lower()}() if a dedicated builder exists, or ensure the SQL is SELECT/WITH."
                 )
                 raise SQLBuilderError(msg)
             select_builder = SelectBuilder(dialect=builder_dialect)
@@ -202,11 +207,11 @@ class SQLFactory:
             builder.__post_init__()
         if table_or_sql:
             if self._looks_like_sql(table_or_sql):
-                detected = self.detect_sql_type(table_or_sql)
+                detected = self.detect_sql_type(table_or_sql, dialect=builder_dialect)
                 if detected not in {"INSERT", "SELECT"}:
                     msg = (
                         f"sql.insert() expects INSERT or SELECT (for insert-from-select), got {detected}. "
-                        f"Use sql.{detected.lower()}() instead."
+                        f"Use sql.{detected.lower()}() if a dedicated builder exists, or ensure the SQL is INSERT/SELECT."
                     )
                     raise SQLBuilderError(msg)
                 return self._populate_insert_from_sql(builder, table_or_sql)
@@ -223,11 +228,9 @@ class SQLFactory:
             builder.__post_init__()
         if table_or_sql:
             if self._looks_like_sql(table_or_sql):
-                detected = self.detect_sql_type(table_or_sql)
+                detected = self.detect_sql_type(table_or_sql, dialect=builder_dialect)
                 if detected != "UPDATE":
-                    msg = (
-                        f"sql.update() expects UPDATE statement, got {detected}. Use sql.{detected.lower()}() instead."
-                    )
+                    msg = f"sql.update() expects UPDATE statement, got {detected}. Use sql.{detected.lower()}() if a dedicated builder exists."
                     raise SQLBuilderError(msg)
                 return self._populate_update_from_sql(builder, table_or_sql)
             return builder.table(table_or_sql)
@@ -242,9 +245,9 @@ class SQLFactory:
         if builder._expression is None:
             builder.__post_init__()
         if table_or_sql and self._looks_like_sql(table_or_sql):
-            detected = self.detect_sql_type(table_or_sql)
+            detected = self.detect_sql_type(table_or_sql, dialect=builder_dialect)
             if detected != "DELETE":
-                msg = f"sql.delete() expects DELETE statement, got {detected}. Use sql.{detected.lower()}() instead."
+                msg = f"sql.delete() expects DELETE statement, got {detected}. Use sql.{detected.lower()}() if a dedicated builder exists."
                 raise SQLBuilderError(msg)
             return self._populate_delete_from_sql(builder, table_or_sql)
         return builder
@@ -259,9 +262,9 @@ class SQLFactory:
             builder.__post_init__()
         if table_or_sql:
             if self._looks_like_sql(table_or_sql):
-                detected = self.detect_sql_type(table_or_sql)
+                detected = self.detect_sql_type(table_or_sql, dialect=builder_dialect)
                 if detected != "MERGE":
-                    msg = f"sql.merge() expects MERGE statement, got {detected}. Use sql.{detected.lower()}() instead."
+                    msg = f"sql.merge() expects MERGE statement, got {detected}. Use sql.{detected.lower()}() if a dedicated builder exists."
                     raise SQLBuilderError(msg)
                 return self._populate_merge_from_sql(builder, table_or_sql)
             return builder.into(table_or_sql)

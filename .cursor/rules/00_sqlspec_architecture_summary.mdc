@@ -1,7 +1,7 @@
 ---
 description:
 globs:
-alwaysApply: false
+alwaysApply: true
 ---
 # SQLSpec Architecture Summary
 <!-- alwaysApply: true -->
@@ -191,7 +191,7 @@ To provide a comprehensive overview of the SQLSpec architecture, integrating rec
 
 ### Refactor Plans
 - `ADAPTER_EXECUTION_REFACTOR_PLAN.md` - Adapter standardization roadmap
-- `BUILDER_CLEANUP.md` - Mixin refactoring guidelines  
+- `BUILDER_CLEANUP.md` - Mixin refactoring guidelines
 - `PARSE_VS_PARSE_ONE.md` - Script execution improvements
 - `SQL_REFACTOR.md` - SQL class optimization patterns
 

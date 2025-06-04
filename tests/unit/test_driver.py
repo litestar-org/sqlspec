@@ -619,7 +619,7 @@ def test_sync_driver_execute_select() -> None:
     connection = MockConnection()
     driver = MockSyncDriver(connection)
 
-    with patch.object(driver, "_execute_impl") as mock_execute:
+    with patch.object(driver, "_execute_statement") as mock_execute:
         with patch.object(driver, "_wrap_select_result") as mock_wrap:
             mock_execute.return_value = [{"id": 1, "name": "test"}]
             mock_result = Mock()
@@ -637,7 +637,7 @@ def test_sync_driver_execute_insert() -> None:
     connection = MockConnection()
     driver = MockSyncDriver(connection)
 
-    with patch.object(driver, "_execute_impl") as mock_execute:
+    with patch.object(driver, "_execute_statement") as mock_execute:
         with patch.object(driver, "_wrap_execute_result") as mock_wrap:
             mock_execute.return_value = 1
             mock_result = Mock()
@@ -657,7 +657,7 @@ def test_sync_driver_execute_many() -> None:
 
     parameters = [{"name": "user1"}, {"name": "user2"}]
 
-    with patch.object(driver, "_execute_impl") as mock_execute:
+    with patch.object(driver, "_execute_statement") as mock_execute:
         with patch.object(driver, "_wrap_execute_result") as mock_wrap:
             mock_execute.return_value = 2
             mock_result = Mock()
@@ -682,7 +682,7 @@ def test_sync_driver_execute_script() -> None:
 
     script = "CREATE TABLE test (id INT); INSERT INTO test VALUES (1);"
 
-    with patch.object(driver, "_execute_impl") as mock_execute:
+    with patch.object(driver, "_execute_statement") as mock_execute:
         mock_execute.return_value = "Script executed successfully"
 
         # Use a non-strict config to avoid DDL validation issues
@@ -690,7 +690,7 @@ def test_sync_driver_execute_script() -> None:
         result = driver.execute_script(script, config=config)
 
         mock_execute.assert_called_once()
-        # Check that the statement passed to _execute_impl has is_script=True
+        # Check that the statement passed to _execute_statement has is_script=True
         call_args = mock_execute.call_args
         statement = call_args[1]["statement"]
         assert statement.is_script is True
@@ -706,7 +706,7 @@ def test_sync_driver_execute_with_parameters() -> None:
 
     parameters = {"id": 1, "name": "test"}
 
-    with patch.object(driver, "_execute_impl") as mock_execute:
+    with patch.object(driver, "_execute_statement") as mock_execute:
         with patch.object(driver, "_wrap_select_result") as mock_wrap:
             mock_execute.return_value = [{"id": 1, "name": "test"}]
             mock_wrap.return_value = Mock()
@@ -716,7 +716,7 @@ def test_sync_driver_execute_with_parameters() -> None:
             driver.execute("SELECT * FROM users WHERE id = :id", parameters=parameters, config=config)
 
             mock_execute.assert_called_once()
-            # Check that the statement passed to _execute_impl contains the parameters
+            # Check that the statement passed to _execute_statement contains the parameters
             call_args = mock_execute.call_args
             statement = call_args[1]["statement"]
             assert statement.parameters == parameters
@@ -742,7 +742,7 @@ async def test_async_driver_execute_select() -> None:
     connection = MockAsyncConnection()
     driver = MockAsyncDriver(connection)
 
-    with patch.object(driver, "_execute_impl") as mock_execute:
+    with patch.object(driver, "_execute_statement") as mock_execute:
         with patch.object(driver, "_wrap_select_result") as mock_wrap:
             mock_execute.return_value = AsyncMock(return_value=[{"id": 1, "name": "test"}])
             mock_result = Mock()
@@ -759,7 +759,7 @@ async def test_async_driver_execute_insert() -> None:
     connection = MockAsyncConnection()
     driver = MockAsyncDriver(connection)
 
-    with patch.object(driver, "_execute_impl") as mock_execute:
+    with patch.object(driver, "_execute_statement") as mock_execute:
         with patch.object(driver, "_wrap_execute_result") as mock_wrap:
             mock_execute.return_value = AsyncMock(return_value=1)
             mock_result = Mock()
@@ -778,7 +778,7 @@ async def test_async_driver_execute_many() -> None:
 
     parameters = [{"name": "user1"}, {"name": "user2"}]
 
-    with patch.object(driver, "_execute_impl") as mock_execute:
+    with patch.object(driver, "_execute_statement") as mock_execute:
         with patch.object(driver, "_wrap_execute_result") as mock_wrap:
             mock_execute.return_value = AsyncMock(return_value=2)
             mock_result = Mock()
@@ -800,7 +800,7 @@ async def test_async_driver_execute_script() -> None:
 
     script = "CREATE TABLE test (id INT); INSERT INTO test VALUES (1);"
 
-    with patch.object(driver, "_execute_impl") as mock_execute:
+    with patch.object(driver, "_execute_statement") as mock_execute:
         # For async, we need to return the actual value, not an AsyncMock
         mock_execute.return_value = "Async script executed successfully"
 
@@ -809,7 +809,7 @@ async def test_async_driver_execute_script() -> None:
         result = await driver.execute_script(script, config=config)
 
         mock_execute.assert_called_once()
-        # Check that the statement passed to _execute_impl has is_script=True
+        # Check that the statement passed to _execute_statement has is_script=True
         call_args = mock_execute.call_args
         statement = call_args[1]["statement"]
         assert statement.is_script is True
@@ -823,7 +823,7 @@ async def test_async_driver_execute_with_schema_type() -> None:
     connection = MockAsyncConnection()
     driver = MockAsyncDriver(connection)
 
-    with patch.object(driver, "_execute_impl") as mock_execute:
+    with patch.object(driver, "_execute_statement") as mock_execute:
         with patch.object(driver, "_wrap_select_result") as mock_wrap:
             mock_execute.return_value = AsyncMock(return_value=[{"id": 1, "name": "test"}])
             mock_wrap.return_value = AsyncMock(return_value=Mock())
@@ -837,22 +837,22 @@ async def test_async_driver_execute_with_schema_type() -> None:
 # Error Handling Tests
 
 
-def test_sync_driver_execute_impl_exception() -> None:
-    """Test sync driver _execute_impl exception handling."""
+def test_sync_driver_execute_statement_exception() -> None:
+    """Test sync driver _execute_statement exception handling."""
     connection = MockConnection()
     driver = MockSyncDriver(connection)
 
-    with patch.object(driver, "_execute_impl", side_effect=Exception("Database error")):
+    with patch.object(driver, "_execute_statement", side_effect=Exception("Database error")):
         with pytest.raises(Exception, match="Database error"):
             driver.execute("SELECT * FROM users")
 
 
-async def test_async_driver_execute_impl_exception() -> None:
-    """Test async driver _execute_impl exception handling."""
+async def test_async_driver_execute_statement_exception() -> None:
+    """Test async driver _execute_statement exception handling."""
     connection = MockAsyncConnection()
     driver = MockAsyncDriver(connection)
 
-    with patch.object(driver, "_execute_impl", side_effect=Exception("Async database error")):
+    with patch.object(driver, "_execute_statement", side_effect=Exception("Async database error")):
         with pytest.raises(Exception, match="Async database error"):
             await driver.execute("SELECT * FROM users")
 
@@ -862,7 +862,7 @@ def test_sync_driver_wrap_result_exception() -> None:
     connection = MockConnection()
     driver = MockSyncDriver(connection)
 
-    with patch.object(driver, "_execute_impl", return_value=[{"data": "test"}]):
+    with patch.object(driver, "_execute_statement", return_value=[{"data": "test"}]):
         with patch.object(driver, "_wrap_select_result", side_effect=Exception("Wrap error")):
             with pytest.raises(Exception, match="Wrap error"):
                 driver.execute("SELECT * FROM users")
@@ -873,7 +873,7 @@ async def test_async_driver_wrap_result_exception() -> None:
     connection = MockAsyncConnection()
     driver = MockAsyncDriver(connection)
 
-    with patch.object(driver, "_execute_impl", return_value=AsyncMock(return_value=[{"data": "test"}])):
+    with patch.object(driver, "_execute_statement", return_value=AsyncMock(return_value=[{"data": "test"}])):
         with patch.object(driver, "_wrap_select_result", side_effect=Exception("Async wrap error")):
             with pytest.raises(Exception, match="Async wrap error"):
                 await driver.execute("SELECT * FROM users")
@@ -930,7 +930,7 @@ def test_driver_returns_rows_detection(statement_type: str, expected_returns_row
     connection = MockConnection()
     driver = MockSyncDriver(connection)
 
-    with patch.object(driver, "_execute_impl") as mock_execute:
+    with patch.object(driver, "_execute_statement") as mock_execute:
         with patch.object(driver, "_wrap_select_result") as mock_wrap_select:
             with patch.object(driver, "_wrap_execute_result") as mock_wrap_execute:
                 mock_execute.return_value = [{"data": "test"}]
@@ -976,14 +976,14 @@ def test_sync_driver_multiple_connections() -> None:
     driver = MockSyncDriver(connection1)
 
     # Execute with default connection
-    with patch.object(driver, "_execute_impl") as mock_execute:
+    with patch.object(driver, "_execute_statement") as mock_execute:
         mock_execute.return_value = []
         driver.execute("SELECT 1", connection=None)
         _, kwargs = mock_execute.call_args
         assert kwargs["connection"] is connection1
 
     # Execute with override connection
-    with patch.object(driver, "_execute_impl") as mock_execute:
+    with patch.object(driver, "_execute_statement") as mock_execute:
         mock_execute.return_value = []
         driver.execute("SELECT 2", connection=connection2)
         _, kwargs = mock_execute.call_args

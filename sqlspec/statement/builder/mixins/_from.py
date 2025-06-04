@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from sqlglot import exp
 
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.typing import is_expression
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder.protocols import BuilderProtocol
@@ -35,8 +36,8 @@ class FromClauseMixin:
         from_expr: exp.Expression
         if isinstance(table, str):
             from_expr = exp.table_(table, alias=alias)
-        elif hasattr(table, "build"):
-            subquery = table.build()
+        elif is_expression(table):
+            subquery = table.build()  # type: ignore[attr-defined]
             subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(builder, "dialect", None)))
             from_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
             current_params = getattr(builder, "_parameters", None)

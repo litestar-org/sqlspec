@@ -1,5 +1,7 @@
 """Aiosqlite database configuration using TypedDict for better maintainability."""
 
+import inspect
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict
@@ -19,6 +21,8 @@ if TYPE_CHECKING:
 
 
 __all__ = ("AiosqliteConfig", "AiosqliteConnectionConfig")
+
+logger = logging.getLogger(__name__)
 
 
 class AiosqliteConnectionConfig(TypedDict, total=False):
@@ -96,12 +100,17 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
     def connection_config_dict(self) -> dict[str, Any]:
         """Return the connection configuration as a dict."""
         config = {k: v for k, v in self.connection_config.items() if v is not Empty}
-
-        # Set default database to :memory: if not specified
-        if "database" not in config:
-            config["database"] = ":memory:"
-
-        return config
+        try:
+            valid_params = set(inspect.signature(aiosqlite.connect).parameters)
+        except Exception:
+            valid_params = set()
+        extra_keys = set(config) - valid_params
+        if extra_keys:
+            logger.debug(
+                "AioSqlite config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
+                list(extra_keys),
+            )
+        return {k: v for k, v in config.items() if k in valid_params}
 
     async def _create_pool_impl(self) -> None:
         """Aiosqlite doesn't support pooling."""

@@ -7,47 +7,77 @@ alwaysApply: true
 <!-- alwaysApply: true -->
 
 ## Objective
-To ensure SQL used within the project is correct, maintainable, and compatible with supported database dialects, leveraging `sqlglot` for validation and conversion where applicable.
+To ensure SQL used within the project is correct, maintainable, efficient, and compatible with supported database dialects, leveraging `sqlglot` for parsing and dialect operations, and a robust, configurable single-pass processing pipeline.
 
 ## Context
-- The `sqlspec` library interacts with various SQL databases and may involve authoring or processing SQL strings.
-- The `README.md` mentions the use of `sqlglot` for SQL dialect validation and conversion.
-- Specific internal SQL construction/handling within the `sqlspec` library (e.g., related to statement objects, raw SQL interaction, builder systems as hinted by draft rules) should follow the architectural patterns established within the library itself.
+- The `sqlspec` library interacts with various SQL databases and involves authoring, parsing, transforming, validating, and processing SQL statements.
+- `sqlglot` is a key tool for SQL dialect validation, conversion, and expression tree manipulation.
+- A core architectural principle is the single-pass processing pipeline (`StatementPipeline`, `SQLProcessingContext`) to ensure efficiency and consistency.
+- `SQLConfig` plays a vital role in configuring this pipeline.
 
 ## Rules
 
-### 1. SQL Dialect Awareness and Validation
+### 1. SQL Dialect Awareness and `sqlglot` Usage
 <!-- alwaysApply: true -->
-- **`sqlglot` Usage**: When dealing with SQL that needs to be dialect-specific or requires validation/conversion, utilize `sqlglot` capabilities as appropriate within the library's logic.
+- **`sqlglot` for Parsing and Manipulation**: Utilize `sqlglot` for all SQL parsing into expression trees, dialect-specific rendering, and complex transformations.
+- **Dialect Specification**: Always be explicit about the target SQL dialect when using `sqlglot` functions for parsing or generation if ambiguity exists.
 - **Clarity**: SQL code, whether in `.sql` files or embedded in Python strings, should be clear, readable, and well-formatted.
-- **Parameterization**: Always use parameterized queries or equivalent safe mechanisms when constructing SQL with variable input to prevent SQL injection vulnerabilities. The `sqlspec` library's driver interfaces should handle this for query execution.
+- **Parameterization**: Always use parameterized queries. The `sqlspec` library's `SQL` object and driver interfaces manage parameterization for execution. Direct construction of SQL with unescaped variable input is PROHIBITED.
 
 ### 2. Embedded SQL in Python
 <!-- alwaysApply: true -->
-- **Readability**: For complex SQL queries embedded in Python, consider using multi-line strings with appropriate indentation for readability.
-- **Tooling**: Be mindful that static analysis tools for SQL may have limited visibility into SQL strings embedded within Python code. Clear formatting and comments can aid understanding.
+- **Readability**: For complex SQL queries embedded in Python, use multi-line strings with appropriate indentation. Consider dedicated SQL files for very large queries.
+- **No Dynamic String Formatting for SQL Structure**: Do not use Python string formatting (f-strings, `.format()`) to construct the *structure* of SQL queries with variable table names, column names, or SQL keywords. Use `sqlglot` expression APIs for programmatic construction if dynamic structure is unavoidable.
 
 ### 3. Internal SQL Abstractions (for `sqlspec` contributors)
 <!-- alwaysApply: true -->
-- **Consistency**: If working on the `sqlspec` library itself, adhere to existing patterns and abstractions for SQL statement construction, processing, and execution (e.g., `SQL` object, builder patterns, etc.).
-- **Draft Rules Reference**: Legacy draft rules like `sql_statement_object.mdc`, `raw_sql_interaction.mdc`, and `sql_builder_system.mdc` (from `tmp/rules_outdate_draft/sql/`) hinted at internal mechanisms. While not being converted into formal universal rules here (as they are implementation-specific), they indicate areas where internal consistency is important for contributors to the `sqlspec` core.
+- **`SQL` Object**: The `sqlspec.statement.sql.SQL` class is the primary abstraction for representing SQL statements and their parameters. All SQL to be executed via `sqlspec` drivers MUST be encapsulated in an `SQL` object.
+- **Builder Patterns**: When programmatic SQL construction is necessary, utilize the builder patterns provided within `sqlspec.statement.builder` (e.g., `SelectBuilder`, `InsertBuilder`). These builders should produce `sqlglot` expressions or `SQL` objects.
+- **Consistency**: Adhere to existing patterns and abstractions for SQL statement construction, processing, and execution as defined by the `SQL` class and the statement processing pipeline.
 
-### 4. General SQL Best Practices
+### 4. Single-Pass Pipeline Architecture (UNBREAKABLE RULE)
 <!-- alwaysApply: true -->
-- Follow general SQL best practices for performance, maintainability, and correctness (e.g., appropriate indexing for schemas, avoiding overly complex joins where simpler alternatives exist, using CTEs for clarity, etc.). These are beyond the scope of project-specific enforceable rules but are expected knowledge for developers working with SQL.
+- **Parse Once, Transform Once, Validate/Analyze Once**: All SQL processing within `sqlspec` (from raw SQL/expression to ready-for-driver form) MUST adhere to a single-pass pipeline. No redundant parsing, multiple transformation loops, or repeated validation/analysis of the same logical statement is allowed unless an explicit, documented exception for a highly specific, unavoidable scenario is approved.
+- **Mandatory Architecture**: All SQL processing MUST go through the `StatementPipeline` and `SQLProcessingContext` architecture. This is initiated by the `SQL` object's internal `_ensure_processed()` method.
+    - **`SQLProcessingContext`**: This context object carries the SQL expression, parameters, configuration, and other relevant data through the pipeline. While it can be modified by processors, these modifications should be clearly defined by each processor. The goal is a predictable flow of state.
+    - **`StatementPipeline`**: Executes a sequence of processors (validators, transformers, analyzers) on the `SQLProcessingContext`.
+- **Pipeline Output**: The `StatementPipeline.execute_pipeline` method MUST return a comprehensive result object encapsulating:
+    - The final transformed `sqlglot.Expression`.
+    - The final merged parameters and detailed `ParameterInfo`.
+    - A consolidated list/dictionary of all issues (errors, warnings, info messages) from all processors.
+    - The `StatementAnalysis` result.
+    This result is then cached by the `SQL` object.
+- **Early Exit / Short-Circuiting**: The `StatementPipeline` SHOULD support optional short-circuiting. If a processor reports a critical, unrecoverable error, the pipeline may halt further processing to save resources, even if `SQLConfig.strict_mode` is off. The pipeline result must indicate such an early exit.
 
-### 5. Single-Pass Pipeline (UNBREAKABLE RULE)
+### 5. Pipeline Configuration and Processors (MANDATORY)
 <!-- alwaysApply: true -->
-- **Parse Once, Transform Once, Validate/Analyze Once**: All SQL processing must follow a single-pass pipeline. This is an unbreakable rule for all internal SQL handling.
-- **Pipeline Architecture**: All SQL must be processed through the StatementPipeline and SQLProcessingContext architecture. See [REF-011] in INTERNAL_REFERENCE.md for details.
-- **Testing SQL Logic**: All SQL logic must be covered by parameterized tests, edge case scenarios, and dialect validation. Integration with the driver protocol must be tested for all supported dialects and parameterization styles.
-- **Cross-Reference**: See `.cursor/rules/adapters/00_adapter_development.mdc` and `.cursor/rules/core/01_code_structure_style.mdc` for further requirements.
+- **Declarative Pipeline Definition in `SQLConfig`**: `SQLConfig` MUST support declarative definition of statement processing pipelines. This includes specifying lists of processor *classes* or unique string identifiers/names for transformers, validators, and analyzers. The `StatementPipeline` (or `SQLConfig.get_statement_pipeline()`) is responsible for instantiating these processors.
+    - *Benefit*: Facilitates easier configuration, reduces risk of state sharing from reused processor instances, and allows conditional enabling/disabling.
+- **Granular Control in `SQLConfig`**: `SQLConfig` SHOULD allow fine-grained control over which individual processors (from defaults or custom lists) run or are excluded for a particular `SQL` object or configuration profile.
+- **Conditional Execution of Processors**: The pipeline architecture SHOULD support mechanisms for processors to declare prerequisites or for the pipeline to conditionally skip processors based on the `SQLProcessingContext` state (e.g., skip a complex validator if a basic syntax error was already found).
+- **`ProcessorProtocol` Clarity**: The `ProcessorProtocol` (and any specific sub-protocols for transformers, validators, analyzers) MUST have clear contracts regarding:
+    - What parts of the `SQLProcessingContext` they read.
+    - What parts of the `SQLProcessingContext` they may modify (if any).
+    - What explicit outputs they produce.
+    Processors should ideally be stateless or manage state very carefully if unavoidable.
 
-### 6. Pipeline Component Evaluation and Consolidation
+### 6. Pipeline Component Evaluation and Consolidation (MANDATORY)
 <!-- alwaysApply: true -->
-- **Evaluate Existing Components**: When working on pipelines (validators, transformers, processors), always review all existing components before adding or modifying logic.
-- **No Duplication**: Never duplicate logic that is already present in another validator, transformer, or processor. If similar logic is needed, refactor or generalize the existing component.
-- **Suggest Improvements**: If you find areas where logic can be consolidated, improved, or made more efficient, always suggest and document these improvements. Strive for a unified, DRY, and maintainable pipeline.
+- **Review Existing Components**: Before adding or modifying logic in pipeline processors (validators, transformers, analyzers), always review all existing components.
+- **No Duplication (DRY)**: NEVER duplicate logic already present in another processor. If similar functionality is needed, refactor or generalize the existing component, or create a new, more focused reusable component.
+- **Consolidation and Improvement**: Actively seek opportunities to consolidate, improve efficiency, or enhance the clarity of existing pipeline components. Document these suggestions and strive for a unified, maintainable pipeline.
+- **Testability**: Individual pipeline processors MUST be designed for easy unit testing in isolation. This requires that `SQLProcessingContext` can be easily mocked or constructed for test scenarios.
+
+### 7. Testing SQL Logic (MANDATORY)
+<!-- alwaysApply: true -->
+- **Comprehensive Coverage**: All SQL parsing, transformation, validation, and generation logic MUST be covered by parameterized tests.
+- **Edge Cases and Dialects**: Tests must include edge case scenarios and validation against all supported SQL dialects for dialect-sensitive operations.
+- **Parameterization Styles**: Test integration with driver protocols for all supported dialects and parameterization styles (e.g., qmark, numeric, format, pyformat).
+
+## Cross-References
+- See `.cursor/rules/sql/01_sql_class_implementation.mdc` for `SQL` object internal architecture.
+- See `.cursor/rules/core/01_code_structure_style.mdc` for general single-pass architecture rules.
+- See `.cursor/rules/adapters/00_adapter_development.mdc` for adapter integration with the pipeline.
 
 ## Exceptions
-- SQL snippets used purely for illustrative purposes in documentation or tests might not require strict dialect validation if their correctness in a specific context is clear.
+- SQL snippets used purely for illustrative purposes in documentation or simple tests might not require full pipeline processing if their context is self-contained and limited.

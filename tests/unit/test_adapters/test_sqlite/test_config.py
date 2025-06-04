@@ -39,10 +39,10 @@ def test_sqlite_connection_config_validation() -> None:
     # Test with invalid timeout type (should not raise at runtime)
     config = SqliteConnectionConfig(database=":memory:", timeout="invalid")  # type: ignore[typeddict-item]
     assert config["database"] == ":memory:"
-    assert config["timeout"] == "invalid"
+    assert config["timeout"] == "invalid"  # type: ignore[comparison-overlap]  # pyright: ignore
     # Test with invalid detect_types
     config2 = SqliteConnectionConfig(database=":memory:", detect_types="invalid")  # type: ignore[typeddict-item]
-    assert config2["detect_types"] == "invalid"
+    assert config2["detect_types"] == "invalid"  # type: ignore[comparison-overlap]  # pyright: ignore
 
 
 def test_sqlite_config_initialization() -> None:

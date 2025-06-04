@@ -1,9 +1,11 @@
 """DuckDB database configuration using TypedDict for better maintainability."""
 
+import inspect
 import logging
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict
 
+import duckdb
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.duckdb.driver import DuckDBConnection, DuckDBDriver
@@ -15,7 +17,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator
     from contextlib import AbstractContextManager
 
-logger = logging.getLogger("sqlspec.adapters.duckdb")
+logger = logging.getLogger(__name__)
 
 __all__ = (
     "DuckDBConfig",
@@ -62,6 +64,8 @@ class DuckDBConnectionConfig(TypedDict, total=False):
 
     All parameters for duckdb.connect() and configuration settings.
     """
+
+    # TODO: Remove this TypedDict after a few releases if runtime signature validation is stable.
 
     # Core connection parameters
     database: NotRequired[str]
@@ -257,34 +261,18 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict."""
-        # Filter out empty values and prepare config for duckdb.connect()
-        config_dict = {k: v for k, v in self.connection_config.items() if v is not Empty}
-
-        # Parameters that go directly to duckdb.connect()
-        connection_params = {}
-        duckdb_config_settings = {}
-
-        # Only database and read_only go directly to connect()
-        # Everything else goes into the config dictionary
-        for key, value in config_dict.items():
-            if key == "database":
-                connection_params["database"] = value
-            elif key == "read_only":
-                connection_params["read_only"] = value
-            elif key == "config":
-                # If user provided a config dict, merge it
-                if isinstance(value, dict):
-                    duckdb_config_settings.update(value)
-            else:
-                # All other parameters are DuckDB configuration settings
-                duckdb_config_settings[key] = value
-
-        # Add the config dictionary if we have settings
-        if duckdb_config_settings:
-            connection_params["config"] = duckdb_config_settings
-
-        return connection_params
+        config = {k: v for k, v in (self.connection_config or {}).items() if v is not Empty}
+        try:
+            valid_params = set(inspect.signature(duckdb.connect).parameters)
+        except Exception:
+            valid_params = set()
+        extra_keys = set(config) - valid_params
+        if extra_keys:
+            logger.debug(
+                "DuckDB config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
+                list(extra_keys),
+            )
+        return {k: v for k, v in config.items() if k in valid_params}
 
     def create_connection(self) -> DuckDBConnection:
         """Create and return a DuckDB connection with intelligent configuration applied."""

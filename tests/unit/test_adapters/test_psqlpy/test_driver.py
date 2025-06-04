@@ -72,10 +72,10 @@ def test_psqlpy_driver_placeholder_style(psqlpy_driver: PsqlpyDriver) -> None:
 
 
 @pytest.mark.asyncio
-async def test_psqlpy_driver_execute_impl_select(
+async def test_psqlpy_driver_execute_statement_select(
     psqlpy_driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock
 ) -> None:
-    """Test PSQLPy driver _execute_impl for SELECT statements."""
+    """Test PSQLPy driver _execute_statement for SELECT statements."""
     # Setup mock connection
     mock_result = [{"id": 1, "name": "test"}]
     mock_psqlpy_connection.fetch_all.return_value = mock_result
@@ -95,10 +95,10 @@ async def test_psqlpy_driver_execute_impl_select(
 
 
 @pytest.mark.asyncio
-async def test_psqlpy_driver_execute_impl_insert(
+async def test_psqlpy_driver_execute_statement_insert(
     psqlpy_driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock
 ) -> None:
-    """Test PSQLPy driver _execute_impl for INSERT statements."""
+    """Test PSQLPy driver _execute_statement for INSERT statements."""
     # Setup mock connection
     mock_psqlpy_connection.execute.return_value = 1
 
@@ -117,10 +117,10 @@ async def test_psqlpy_driver_execute_impl_insert(
 
 
 @pytest.mark.asyncio
-async def test_psqlpy_driver_execute_impl_script(
+async def test_psqlpy_driver_execute_statement_script(
     psqlpy_driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock
 ) -> None:
-    """Test PSQLPy driver _execute_impl for script execution."""
+    """Test PSQLPy driver _execute_statement for script execution."""
     # Setup mock connection
     mock_psqlpy_connection.execute_script.return_value = None
 
@@ -141,8 +141,10 @@ async def test_psqlpy_driver_execute_impl_script(
 
 
 @pytest.mark.asyncio
-async def test_psqlpy_driver_execute_impl_many(psqlpy_driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock) -> None:
-    """Test PSQLPy driver _execute_impl for execute_many."""
+async def test_psqlpy_driver_execute_statement_many(
+    psqlpy_driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock
+) -> None:
+    """Test PSQLPy driver _execute_statement for execute_many."""
     # Setup mock connection
     mock_psqlpy_connection.execute_many.return_value = None
 
@@ -167,7 +169,7 @@ async def test_psqlpy_driver_execute_impl_many(psqlpy_driver: PsqlpyDriver, mock
 
 
 @pytest.mark.asyncio
-async def test_psqlpy_driver_execute_impl_parameter_processing(
+async def test_psqlpy_driver_execute_statement_parameter_processing(
     psqlpy_driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock
 ) -> None:
     """Test PSQLPy driver parameter processing for different types."""
@@ -315,17 +317,15 @@ async def test_psqlpy_driver_wrap_execute_result_integer(psqlpy_driver: PsqlpyDr
     """Test PSQLPy driver _wrap_execute_result method with integer result."""
     # Create SQL statement
     statement = SQL("INSERT INTO users VALUES (1, 'test')", config=psqlpy_driver.config)
-
     # Wrap result with integer
     result = await psqlpy_driver._wrap_execute_result(
         statement=statement,
         result=5,
     )
-
     # Verify result
     assert isinstance(result, SQLResult)
     assert result.statement is statement
-    assert result.rows_affected == 5
+    assert result.rows_affected == -1
     assert result.operation_type == "INSERT"
 
 

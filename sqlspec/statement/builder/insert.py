@@ -118,9 +118,7 @@ class InsertBuilder(
         Returns:
             The type of result expected for INSERT operations.
         """
-        from sqlspec.statement.result import SQLResult
-
-        return SQLResult
+        return SQLResult[RowT]
 
     def _get_insert_expression(self) -> exp.Insert:
         """Safely gets and casts the internal expression to exp.Insert.

@@ -32,9 +32,9 @@ import dataclasses
 
 @pytest.mark.skipif(pydantic is None, reason="pydantic not installed")
 def test_as_schema_with_pydantic_model() -> None:
-    BaseModel = getattr(pydantic, "BaseModel", object)
+    BaseModel = getattr(pydantic, "BaseModel", object)  # pyright: ignore  #TODO: variable as type
 
-    class UserModel(BaseModel):  # type: ignore[base-class]
+    class UserModel(BaseModel):  # type: ignore[misc,valid-type]  # pyright: ignore  #TODO: invalid base class
         id: int
         name: str
 

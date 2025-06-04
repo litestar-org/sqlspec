@@ -8,6 +8,16 @@ parameter binding and validation.
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder.base import QueryBuilder, SafeQuery
+from sqlspec.statement.builder.ddl import (
+    CreateIndexBuilder,
+    CreateSchemaBuilder,
+    DDLBuilder,
+    DropIndexBuilder,
+    DropSchemaBuilder,
+    DropTableBuilder,
+    DropViewBuilder,
+    TruncateTableBuilder,
+)
 from sqlspec.statement.builder.delete import DeleteBuilder
 from sqlspec.statement.builder.insert import InsertBuilder
 from sqlspec.statement.builder.merge import MergeBuilder
@@ -16,13 +26,21 @@ from sqlspec.statement.builder.select import SelectBuilder
 from sqlspec.statement.builder.update import UpdateBuilder
 
 __all__ = (
+    "CreateIndexBuilder",
+    "CreateSchemaBuilder",
+    "DDLBuilder",
     "DeleteBuilder",
+    "DropIndexBuilder",
+    "DropSchemaBuilder",
+    "DropTableBuilder",
+    "DropViewBuilder",
     "InsertBuilder",
     "MergeBuilder",
     "QueryBuilder",
     "SQLBuilderError",
     "SafeQuery",
     "SelectBuilder",
+    "TruncateTableBuilder",
     "UpdateBuilder",
     "WhereClauseMixin",
 )

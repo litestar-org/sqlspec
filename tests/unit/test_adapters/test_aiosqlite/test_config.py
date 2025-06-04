@@ -1,5 +1,6 @@
 """Unit tests for AIOSQLite configuration."""
 
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -112,7 +113,13 @@ def test_aiosqlite_config_connection_config_dict() -> None:
 async def test_aiosqlite_config_create_connection(mock_connect: Mock) -> None:
     """Test AIOSQLite config create_connection method (mocked)."""
     mock_connection = AsyncMock()
-    mock_connect.return_value = mock_connection
+    mock_connection.__aenter__.return_value = mock_connection
+    mock_connection.__aexit__.return_value = None
+
+    async def _connect(**kwargs: Any) -> AsyncMock:
+        return mock_connection
+
+    mock_connect.side_effect = _connect
 
     connection_config = AiosqliteConnectionConfig(
         database=":memory:",
@@ -139,7 +146,13 @@ async def test_aiosqlite_config_create_connection(mock_connect: Mock) -> None:
 async def test_aiosqlite_config_provide_connection(mock_connect: Mock) -> None:
     """Test AIOSQLite config provide_connection context manager."""
     mock_connection = AsyncMock()
-    mock_connect.return_value = mock_connection
+    mock_connection.__aenter__.return_value = mock_connection
+    mock_connection.__aexit__.return_value = None
+
+    async def _connect(**kwargs: Any) -> AsyncMock:
+        return mock_connection
+
+    mock_connect.side_effect = _connect
 
     connection_config = AiosqliteConnectionConfig(database=":memory:")
     config = AiosqliteConfig(connection_config=connection_config)
@@ -159,7 +172,13 @@ async def test_aiosqlite_config_provide_connection(mock_connect: Mock) -> None:
 async def test_aiosqlite_config_provide_connection_error_handling(mock_connect: Mock) -> None:
     """Test AIOSQLite config provide_connection error handling."""
     mock_connection = AsyncMock()
-    mock_connect.return_value = mock_connection
+    mock_connection.__aenter__.return_value = mock_connection
+    mock_connection.__aexit__.return_value = None
+
+    async def _connect(**kwargs: Any) -> AsyncMock:
+        return mock_connection
+
+    mock_connect.side_effect = _connect
 
     connection_config = AiosqliteConnectionConfig(database=":memory:")
     config = AiosqliteConfig(connection_config=connection_config)
@@ -179,7 +198,13 @@ async def test_aiosqlite_config_provide_connection_error_handling(mock_connect: 
 async def test_aiosqlite_config_provide_session(mock_connect: Mock) -> None:
     """Test AIOSQLite config provide_session context manager."""
     mock_connection = AsyncMock()
-    mock_connect.return_value = mock_connection
+    mock_connection.__aenter__.return_value = mock_connection
+    mock_connection.__aexit__.return_value = None
+
+    async def _connect(**kwargs: Any) -> AsyncMock:
+        return mock_connection
+
+    mock_connect.side_effect = _connect
 
     connection_config = AiosqliteConnectionConfig(database=":memory:")
     config = AiosqliteConfig(connection_config=connection_config)

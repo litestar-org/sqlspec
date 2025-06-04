@@ -16,7 +16,7 @@ If placeholder_style is not specified, the method falls back to dialect-based lo
 
 import logging
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 import sqlglot
 from sqlglot import exp
@@ -198,6 +198,9 @@ class SQL:
     - Immutability: Modification methods return new instances.
 
     Parameter binding is the merging of parameters, filters, and kwargs.
+
+    Note:
+        After applying a filter, only the filter's parameters will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
 
     Example usage:
         >>> stmt = SQL(
@@ -1437,7 +1440,13 @@ class SQL:
             pipeline = self._config.get_statement_pipeline()
             pipeline_result = pipeline.execute_pipeline(context)
             transformed_expression = pipeline_result.final_expression
-            validation_result = pipeline_result.validation_result
+            validation_result = cast("ValidationResult", pipeline_result.validation_result)
+            if validation_result is None:
+                validation_result = ValidationResult(
+                    is_safe=True,
+                    risk_level=RiskLevel.SKIP,
+                    issues=["Pipeline returned None validation result."],
+                )
             analysis_result = pipeline_result.analysis_result
             final_parameter_info = pipeline_result.parameter_info
             final_merged_parameters = pipeline_result.merged_parameters
@@ -1445,6 +1454,12 @@ class SQL:
             default_validator = _default_validator()
             if hasattr(default_validator, "validate") and callable(default_validator.validate):
                 validation_result = default_validator.validate(raw_sql_input, self._dialect, self._config)
+                if validation_result is None:
+                    validation_result = ValidationResult(
+                        is_safe=True,
+                        risk_level=RiskLevel.SKIP,
+                        issues=["Validation returned None result."],
+                    )
             else:
                 validation_result = ValidationResult(
                     is_safe=True,

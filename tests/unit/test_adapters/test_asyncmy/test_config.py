@@ -341,11 +341,8 @@ async def test_asyncmy_config_provide_connection_with_pool() -> None:
     """Test Asyncmy config provide_connection context manager with pool."""
     mock_pool = AsyncMock()
     mock_connection = AsyncMock()
-
-    # Setup mock pool acquire context manager
     mock_pool.acquire.return_value.__aenter__.return_value = mock_connection
     mock_pool.acquire.return_value.__aexit__.return_value = None
-
     pool_config = AsyncmyPoolConfig(
         host="localhost",
         port=3306,
@@ -355,7 +352,6 @@ async def test_asyncmy_config_provide_connection_with_pool() -> None:
     )
     config = AsyncmyConfig(pool_config=pool_config)
     config.pool_instance = mock_pool
-
     # Test context manager behavior (with pool)
     async with config.provide_connection() as conn:
         assert conn is mock_connection

@@ -1,10 +1,13 @@
 """OracleDB database configuration using TypedDict for better maintainability."""
 
 import contextlib
+import inspect
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict
 
+import oracledb
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.oracledb.driver import (
@@ -31,6 +34,8 @@ __all__ = (
     "OraclePoolConfig",
     "OracleSyncConfig",
 )
+
+logger = logging.getLogger(__name__)
 
 
 class OracleConnectionConfig(TypedDict, total=False):
@@ -229,13 +234,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         """Return the driver type."""
         return OracleSyncDriver
 
-    @property
-    def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict."""
-        # Merge connection_config into pool_config, with pool_config taking precedence
-        merged_config = {**self.connection_config, **self.pool_config}
-        return {k: v for k, v in merged_config.items() if v is not Empty}
-
     def _create_pool_impl(self) -> "ConnectionPool":
         """Create the actual connection pool."""
         import oracledb
@@ -310,6 +308,22 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         if not self.pool_instance:
             self.pool_instance = self.create_pool()
         return self.pool_instance
+
+    @property
+    def connection_config_dict(self) -> dict[str, Any]:
+        merged_config = {**self.connection_config, **self.pool_config}
+        config = {k: v for k, v in merged_config.items() if v is not Empty}
+        try:
+            valid_params = set(inspect.signature(oracledb.connect).parameters)
+        except Exception:
+            valid_params = set()
+        extra_keys = set(config) - valid_params
+        if extra_keys:
+            logger.debug(
+                "Oracle config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
+                list(extra_keys),
+            )
+        return {k: v for k, v in config.items() if k in valid_params}
 
 
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnectionPool", OracleAsyncDriver]):

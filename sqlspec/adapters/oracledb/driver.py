@@ -129,13 +129,21 @@ class OracleSyncDriver(
     ) -> Any:
         with instrument_operation(self, "oracle_execute_many", "database"):
             conn = self._connection(connection)
-            params_list = param_list if isinstance(param_list, Sequence) else []
+            # Convert param_list to list[Any] if it's not already
+            if isinstance(param_list, list):
+                final_param_list = param_list
+            elif isinstance(param_list, (tuple, Sequence)):
+                final_param_list = list(param_list)
+            else:
+                # Single parameter set, wrap in list
+                final_param_list = [param_list] if param_list is not None else []
+
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL (executemany): %s", sql)
-            if self.instrumentation_config.log_parameters and params_list:
-                logger.debug("Query parameters (batch): %s", params_list)
+            if self.instrumentation_config.log_parameters and final_param_list:
+                logger.debug("Query parameters (batch): %s", final_param_list)
             with self._get_cursor(conn) as cursor:
-                cursor.executemany(sql, params_list)
+                cursor.executemany(sql, final_param_list)
                 return cursor
 
     def _execute_script(
@@ -381,13 +389,21 @@ class OracleAsyncDriver(
     ) -> Any:
         async with instrument_operation_async(self, "oracle_async_execute_many", "database"):
             conn = self._connection(connection)
-            params_list = param_list if isinstance(param_list, Sequence) else []
+            # Convert param_list to list[Any] if it's not already
+            if isinstance(param_list, list):
+                final_param_list = param_list
+            elif isinstance(param_list, (tuple, Sequence)):
+                final_param_list = list(param_list)
+            else:
+                # Single parameter set, wrap in list
+                final_param_list = [param_list] if param_list is not None else []
+
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL (executemany): %s", sql)
-            if self.instrumentation_config.log_parameters and params_list:
-                logger.debug("Query parameters (batch): %s", params_list)
+            if self.instrumentation_config.log_parameters and final_param_list:
+                logger.debug("Query parameters (batch): %s", final_param_list)
             async with self._get_cursor(conn) as cursor:
-                await cursor.executemany(sql, params_list)
+                await cursor.executemany(sql, final_param_list)
                 return cursor
 
     async def _execute_script(

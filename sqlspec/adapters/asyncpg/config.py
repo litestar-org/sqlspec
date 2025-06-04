@@ -1,9 +1,12 @@
 """AsyncPG database configuration using TypedDict for better maintainability."""
 
+import inspect
+import logging
 from collections.abc import AsyncGenerator, Awaitable
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict
 
+import asyncpg
 from asyncpg import Record
 from asyncpg import create_pool as asyncpg_create_pool
 from asyncpg.pool import PoolConnectionProxy
@@ -12,7 +15,6 @@ from typing_extensions import NotRequired
 from sqlspec._serialization import decode_json, encode_json
 from sqlspec.adapters.asyncpg.driver import AsyncpgConnection, AsyncpgDriver
 from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig
-from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow, Empty
 from sqlspec.utils.telemetry import instrument_operation_async
@@ -25,6 +27,8 @@ if TYPE_CHECKING:
 
 
 __all__ = ("AsyncpgConfig", "AsyncpgConnectionConfig", "AsyncpgPoolConfig")
+
+logger = logging.getLogger("sqlspec")
 
 
 class AsyncpgConnectionConfig(TypedDict, total=False):
@@ -215,43 +219,20 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """Return the connection configuration as a dict for asyncpg.connect().
 
         This method filters out pool-specific parameters that are not valid for asyncpg.connect().
-
-        Raises:
-            ImproperConfigurationError: If the configuration is invalid.
         """
-        # Merge connection_config into pool_config, with pool_config taking precedence
         merged_config = {**self.connection_config, **self.pool_config}
         config = {k: v for k, v in merged_config.items() if v is not Empty}
-
-        # Define pool-specific parameters that should not be passed to asyncpg.connect()
-        pool_only_params = {
-            "min_size",
-            "max_size",
-            "max_queries",
-            "max_inactive_connection_lifetime",
-            "setup",
-            "init",
-            "loop",
-            "connection_class",
-            "record_class",
-        }
-
-        # Filter out pool-specific parameters for connection creation
-        connection_config = {k: v for k, v in config.items() if k not in pool_only_params}
-
-        # Validate essential connection info
-        has_dsn = connection_config.get("dsn") is not None
-        has_host = connection_config.get("host") is not None
-
-        if not (has_dsn or has_host):
-            msg = f"AsyncPG configuration requires either 'dsn' or 'host' in pool_config. Current config: {connection_config}"
-            raise ImproperConfigurationError(msg)
-
-        # Set SSL to False by default for non-SSL environments (asyncpg 0.22.0+ defaults to 'prefer')
-        if "ssl" not in connection_config:
-            connection_config["ssl"] = False
-
-        return connection_config
+        try:
+            valid_params = set(inspect.signature(asyncpg.connect).parameters)
+        except Exception:
+            valid_params = set()
+        extra_keys = set(config) - valid_params
+        if extra_keys:
+            logger.debug(
+                "Asyncpg config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
+                list(extra_keys),
+            )
+        return {k: v for k, v in config.items() if k in valid_params}
 
     @property
     def pool_config_dict(self) -> dict[str, Any]:
@@ -260,19 +241,19 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Returns:
             A dictionary containing all pool configuration parameters.
         """
-        # Merge connection_config into pool_config, with pool_config taking precedence
         merged_config = {**self.connection_config, **self.pool_config}
         config = {k: v for k, v in merged_config.items() if v is not Empty}
-
-        # Set SSL to False by default for non-SSL environments
-        if "ssl" not in config:
-            config["ssl"] = False
-
-        # Set reasonable defaults for pool parameters to prevent connection issues
-        if "max_inactive_connection_lifetime" not in config:
-            config["max_inactive_connection_lifetime"] = 300.0  # 5 minutes
-
-        return config
+        try:
+            valid_params = set(inspect.signature(asyncpg_create_pool).parameters)
+        except Exception:
+            valid_params = set()
+        extra_keys = set(config) - valid_params
+        if extra_keys:
+            logger.debug(
+                "Asyncpg pool config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
+                list(extra_keys),
+            )
+        return {k: v for k, v in config.items() if k in valid_params}
 
     async def _create_pool_impl(self) -> "Pool[Record]":
         """Create the actual async connection pool."""

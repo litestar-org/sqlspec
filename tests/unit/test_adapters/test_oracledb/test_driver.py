@@ -153,10 +153,10 @@ async def test_oracle_async_driver_get_cursor(
     mock_cursor.close.assert_called_once()
 
 
-def test_oracle_sync_driver_execute_impl_select(
+def test_oracle_sync_driver_execute_statement_select(
     oracle_sync_driver: OracleSyncDriver, mock_oracle_sync_connection: Mock
 ) -> None:
-    """Test Oracle sync driver _execute_impl for SELECT statements."""
+    """Test Oracle sync driver _execute_statement for SELECT statements."""
     # Setup mock cursor
     mock_cursor = Mock()
     mock_oracle_sync_connection.cursor.return_value = mock_cursor
@@ -179,10 +179,10 @@ def test_oracle_sync_driver_execute_impl_select(
 
 
 @pytest.mark.asyncio
-async def test_oracle_async_driver_execute_impl_select(
+async def test_oracle_async_driver_execute_statement_select(
     oracle_async_driver: OracleAsyncDriver, mock_oracle_async_connection: AsyncMock
 ) -> None:
-    """Test Oracle async driver _execute_impl for SELECT statements."""
+    """Test Oracle async driver _execute_statement for SELECT statements."""
     # Setup mock cursor
     mock_cursor = AsyncMock()
     mock_oracle_async_connection.cursor.return_value = mock_cursor
@@ -204,10 +204,10 @@ async def test_oracle_async_driver_execute_impl_select(
     assert result is mock_cursor
 
 
-def test_oracle_sync_driver_execute_impl_insert(
+def test_oracle_sync_driver_execute_statement_insert(
     oracle_sync_driver: OracleSyncDriver, mock_oracle_sync_connection: Mock
 ) -> None:
-    """Test Oracle sync driver _execute_impl for INSERT statements."""
+    """Test Oracle sync driver _execute_statement for INSERT statements."""
     # Setup mock cursor
     mock_cursor = Mock()
     mock_cursor.rowcount = 1
@@ -230,10 +230,10 @@ def test_oracle_sync_driver_execute_impl_insert(
     assert result is mock_cursor
 
 
-def test_oracle_sync_driver_execute_impl_script(
+def test_oracle_sync_driver_execute_statement_script(
     oracle_sync_driver: OracleSyncDriver, mock_oracle_sync_connection: Mock
 ) -> None:
-    """Test Oracle sync driver _execute_impl for script execution."""
+    """Test Oracle sync driver _execute_statement for script execution."""
     # Setup mock cursor
     mock_cursor = Mock()
     mock_oracle_sync_connection.cursor.return_value = mock_cursor
@@ -251,10 +251,10 @@ def test_oracle_sync_driver_execute_impl_script(
     assert script_result == "SCRIPT EXECUTED"
 
 
-def test_oracle_sync_driver_execute_impl_many(
+def test_oracle_sync_driver_execute_statement_many(
     oracle_sync_driver: OracleSyncDriver, mock_oracle_sync_connection: Mock
 ) -> None:
-    """Test Oracle sync driver _execute_impl for execute_many."""
+    """Test Oracle sync driver _execute_statement for execute_many."""
     # Setup mock cursor
     mock_cursor = Mock()
     mock_cursor.rowcount = [1, 1, 1]  # Oracle can return list for executemany
@@ -281,7 +281,7 @@ def test_oracle_sync_driver_execute_impl_many(
     assert result is mock_cursor
 
 
-def test_oracle_sync_driver_execute_impl_parameter_processing(
+def test_oracle_sync_driver_execute_statement_parameter_processing(
     oracle_sync_driver: OracleSyncDriver, mock_oracle_sync_connection: Mock
 ) -> None:
     """Test Oracle sync driver parameter processing for different types."""
@@ -307,7 +307,7 @@ def test_oracle_sync_driver_execute_impl_parameter_processing(
     )
 
 
-def test_oracle_sync_driver_execute_impl_positional_parameters(
+def test_oracle_sync_driver_execute_statement_positional_parameters(
     oracle_sync_driver: OracleSyncDriver, mock_oracle_sync_connection: Mock
 ) -> None:
     """Test Oracle sync driver with positional parameters converted to named."""

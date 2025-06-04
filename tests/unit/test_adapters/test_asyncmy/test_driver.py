@@ -91,10 +91,10 @@ async def test_asyncmy_driver_get_cursor(asyncmy_driver: AsyncmyDriver, mock_asy
 
 
 @pytest.mark.asyncio
-async def test_asyncmy_driver_execute_impl_select(
+async def test_asyncmy_driver_execute_statement_select(
     asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock
 ) -> None:
-    """Test Asyncmy driver _execute_impl for SELECT statements."""
+    """Test Asyncmy driver _execute_statement for SELECT statements."""
     # Setup mock cursor
     mock_cursor = AsyncMock()
     mock_cursor.fetchall.return_value = [(1, "test")]
@@ -118,10 +118,10 @@ async def test_asyncmy_driver_execute_impl_select(
 
 
 @pytest.mark.asyncio
-async def test_asyncmy_driver_execute_impl_insert(
+async def test_asyncmy_driver_execute_statement_insert(
     asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock
 ) -> None:
-    """Test Asyncmy driver _execute_impl for INSERT statements."""
+    """Test Asyncmy driver _execute_statement for INSERT statements."""
     # Setup mock cursor
     mock_cursor = AsyncMock()
     mock_cursor.rowcount = 1
@@ -144,10 +144,10 @@ async def test_asyncmy_driver_execute_impl_insert(
 
 
 @pytest.mark.asyncio
-async def test_asyncmy_driver_execute_impl_script(
+async def test_asyncmy_driver_execute_statement_script(
     asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock
 ) -> None:
-    """Test Asyncmy driver _execute_impl for script execution."""
+    """Test Asyncmy driver _execute_statement for script execution."""
     # Setup mock cursor
     mock_cursor = AsyncMock()
     mock_asyncmy_connection.cursor.return_value.__aenter__.return_value = mock_cursor
@@ -174,10 +174,10 @@ async def test_asyncmy_driver_execute_impl_script(
 
 
 @pytest.mark.asyncio
-async def test_asyncmy_driver_execute_impl_many(
+async def test_asyncmy_driver_execute_statement_many(
     asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock
 ) -> None:
-    """Test Asyncmy driver _execute_impl for execute_many."""
+    """Test Asyncmy driver _execute_statement for execute_many."""
     # Setup mock cursor
     mock_cursor = AsyncMock()
     mock_cursor.rowcount = 3
@@ -205,7 +205,7 @@ async def test_asyncmy_driver_execute_impl_many(
 
 
 @pytest.mark.asyncio
-async def test_asyncmy_driver_execute_impl_parameter_processing(
+async def test_asyncmy_driver_execute_statement_parameter_processing(
     asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock
 ) -> None:
     """Test Asyncmy driver parameter processing for different types."""
@@ -406,8 +406,8 @@ async def test_asyncmy_driver_instrumentation(
     # Create SQL statement with parameters
     statement = SQL("SELECT * FROM users WHERE id = %s", parameters=[1], config=asyncmy_driver.config)
 
-    # Ensure mock_cursor is correctly available if used by the logging path of _execute_impl indirectly
-    # However, _execute_impl itself doesn't return the cursor directly for logging checks.
+    # Ensure mock_cursor is correctly available if used by the logging path of _execute_statement indirectly
+    # However, _execute_statement itself doesn't return the cursor directly for logging checks.
     # The primary check is that the execute method on the connection's cursor was called.
     # The mock_cursor setup is part of the mock_asyncmy_connection fixture.
     # We need to access the mock_cursor that mock_asyncmy_connection.cursor().__aenter__() would yield.

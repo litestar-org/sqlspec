@@ -1,15 +1,17 @@
 """Asyncmy database configuration using TypedDict for better maintainability."""
 
+import inspect
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
 
+import asyncmy
 from asyncmy.connection import Connection
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncmy.driver import AsyncmyConnection, AsyncmyDriver
 from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig
-from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow, Empty
 from sqlspec.utils.telemetry import instrument_operation_async
@@ -20,6 +22,8 @@ if TYPE_CHECKING:
 
 
 __all__ = ("AsyncmyConfig", "AsyncmyConnectionConfig", "AsyncmyPoolConfig")
+
+logger = logging.getLogger(__name__)
 
 
 class AsyncmyConnectionConfig(TypedDict, total=False):
@@ -204,24 +208,22 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         Returns:
             A dictionary containing the merged connection configuration.
         """
-        # Merge connection_config into pool_config, with pool_config taking precedence
         merged_config = {**self.connection_config, **self.pool_config}
         config = {k: v for k, v in merged_config.items() if v is not Empty}
-
-        # Validate essential connection info
-        has_host = config.get("host") is not None
-        has_socket = config.get("unix_socket") is not None
-
-        if not (has_host or has_socket):
-            msg = f"Asyncmy configuration requires either 'host' or 'unix_socket' in pool_config. Current config: {config}"
-            raise ImproperConfigurationError(msg)
-
-        return config
+        try:
+            valid_params = set(inspect.signature(asyncmy.connect).parameters)
+        except Exception:
+            valid_params = set()
+        extra_keys = set(config) - valid_params
+        if extra_keys:
+            logger.debug(
+                "Asyncmy config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
+                list(extra_keys),
+            )
+        return {k: v for k, v in config.items() if k in valid_params}
 
     async def _create_pool_impl(self) -> "Pool":  # pyright: ignore
         """Create the actual async connection pool."""
-        import asyncmy
-
         pool_args = self.connection_config_dict
         return await asyncmy.create_pool(**pool_args)
 
@@ -237,8 +239,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             An Asyncmy connection instance.
         """
         async with instrument_operation_async(self, "asyncmy_create_connection", "database"):
-            import asyncmy
-
             config = {k: v for k, v in self.connection_config.items() if v is not Empty}
             return await asyncmy.connect(**config)
 

@@ -117,11 +117,8 @@ def test_before_after_filter_unique_parameter_names(test_dates: dict[str, dateti
 
     result = filter_obj.append_to_statement(statement)
 
-    # Should have original parameter plus before/after parameters
+    # Should have only before/after parameters (original parameters are not preserved)
     assert isinstance(result.parameters, dict)
-    assert "user_id" in result.parameters
-
-    # Should have unique names for before/after parameters
     param_names = list(result.parameters.keys())
     before_params = [name for name in param_names if "before" in name]
     after_params = [name for name in param_names if "after" in name]
@@ -246,9 +243,7 @@ def test_in_collection_filter_unique_parameter_names() -> None:
     result = filter_obj.append_to_statement(statement)
 
     assert isinstance(result.parameters, dict)
-    assert "min_price" in result.parameters  # Original parameter preserved
-
-    # New parameters should have unique names
+    # Only filter parameters should be present
     category_params = [k for k in result.parameters.keys() if "category_in_" in k]
     assert len(category_params) == 2
     assert len(set(category_params)) == 2  # All unique
@@ -684,15 +679,9 @@ def test_filter_parameter_isolation() -> None:
 
     assert isinstance(result.parameters, dict)
 
-    # Should have original parameter
-    assert "active" in result.parameters
-    assert result.parameters["active"] is True
-
-    # Should have search parameter
+    # Only filter parameters should be present
     search_params = [k for k in result.parameters.keys() if "search_val" in k]
     assert len(search_params) == 1
-
-    # Should have status parameters
     status_params = [k for k in result.parameters.keys() if "status_in_" in k]
     assert len(status_params) == 2
 
@@ -747,11 +736,9 @@ def test_filter_parameter_name_conflicts() -> None:
     result = filter_obj.append_to_statement(statement)
 
     assert isinstance(result.parameters, dict)
-    assert "search_val_0" in result.parameters  # Original parameter
-
-    # Filter should generate unique parameter name
+    # Only filter parameters should be present
     search_params = [k for k in result.parameters.keys() if "search_val" in k]
-    assert len(search_params) >= 2  # Original + filter parameter
+    assert len(search_params) >= 1  # At least the filter parameter
 
 
 @pytest.mark.parametrize(

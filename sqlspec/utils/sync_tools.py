@@ -55,9 +55,9 @@ class CapacityLimiter:
 
     async def __aexit__(
         self,
-        exc_type: "Optional[type[BaseException]]",  # noqa: PYI036
-        exc_val: "Optional[BaseException]",  # noqa: PYI036
-        exc_tb: "Optional[TracebackType]",  # noqa: PYI036
+        exc_type: "Optional[type[BaseException]]",
+        exc_val: "Optional[BaseException]",
+        exc_tb: "Optional[TracebackType]",
     ) -> None:
         self.release()
 
@@ -215,9 +215,9 @@ class _ContextManagerWrapper(Generic[T]):
 
     async def __aexit__(
         self,
-        exc_type: "Optional[type[BaseException]]",  # noqa: PYI036
-        exc_val: "Optional[BaseException]",  # noqa: PYI036
-        exc_tb: "Optional[TracebackType]",  # noqa: PYI036
+        exc_type: "Optional[type[BaseException]]",
+        exc_val: "Optional[BaseException]",
+        exc_tb: "Optional[TracebackType]",
     ) -> "Optional[bool]":
         return self._cm.__exit__(exc_type, exc_val, exc_tb)
 

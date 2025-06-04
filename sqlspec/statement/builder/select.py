@@ -100,7 +100,7 @@ class SelectBuilder(
         if self._expression is None or not isinstance(self._expression, exp.Select):
             self._expression = exp.Select()
         # At this point, self._expression is exp.Select
-        return self._expression  # type: ignore[return-value]
+        return self._expression
 
     def as_schema(self, schema: "type[RowT]") -> "SelectBuilder[RowT]":
         """Return a new SelectBuilder instance parameterized with the given schema/model type.
@@ -120,5 +120,5 @@ class SelectBuilder(
         new_builder._parameters = self._parameters.copy()
         new_builder._parameter_counter = self._parameter_counter
         new_builder.dialect = self.dialect
-        new_builder._schema = schema  # type: ignore[attr-defined]
+        new_builder._schema = schema  # type: ignore[assignment]
         return cast("SelectBuilder[RowT]", new_builder)

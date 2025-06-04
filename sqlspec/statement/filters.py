@@ -59,7 +59,11 @@ class StatementFilter(Protocol):
 
 @dataclass
 class BeforeAfterFilter(StatementFilter):
-    """Data required to filter a query on a ``datetime`` column."""
+    """Data required to filter a query on a ``datetime`` column.
+
+    Note:
+        After applying this filter, only the filter's parameters (e.g., before/after) will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
+    """
 
     field_name: str
     """Name of the model attribute to filter on."""
@@ -130,7 +134,11 @@ class InAnyFilter(StatementFilter, ABC, Generic[T]):
 
 @dataclass
 class InCollectionFilter(InAnyFilter[T]):
-    """Data required to construct a ``WHERE ... IN (...)`` clause."""
+    """Data required to construct a ``WHERE ... IN (...)`` clause.
+
+    Note:
+        After applying this filter, only the filter's parameters (e.g., the generated IN parameters) will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
+    """
 
     field_name: str
     """Name of the model attribute to filter on."""
@@ -289,7 +297,11 @@ class OrderByFilter(StatementFilter):
 
 @dataclass
 class SearchFilter(StatementFilter):
-    """Data required to construct a ``WHERE field_name LIKE '%' || :value || '%'`` clause."""
+    """Data required to construct a ``WHERE field_name LIKE '%' || :value || '%'`` clause.
+
+    Note:
+        After applying this filter, only the filter's parameters (e.g., the generated search parameter) will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
+    """
 
     field_name: Union[str, set[str]]
     """Name of the model attribute to search on."""

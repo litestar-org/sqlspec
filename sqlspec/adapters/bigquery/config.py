@@ -1,9 +1,11 @@
 """BigQuery database configuration using TypedDict for better maintainability."""
 
 import contextlib
+import inspect
 import logging
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict
 
+from google.cloud import bigquery
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
 
@@ -22,7 +24,7 @@ if TYPE_CHECKING:
     from google.api_core.client_options import ClientOptions
     from google.auth.credentials import Credentials
 
-logger = logging.getLogger("sqlspec.adapters.bigquery")
+logger = logging.getLogger(__name__)
 
 __all__ = ("BigQueryConfig", "BigQueryConnectionConfig")
 
@@ -275,36 +277,18 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         Returns:
             Configuration dict for BigQuery Client constructor.
         """
-        # Fields that shouldn't go to the Client constructor
-        excluded_fields = {
-            "dataset_id",
-            "credentials_path",
-            "use_legacy_sql",
-            "use_query_cache",
-            "maximum_bytes_billed",
-            "enable_bigquery_ml",
-            "enable_gemini_integration",
-            "query_timeout_ms",
-            "job_timeout_ms",
-            "reservation_id",
-            "edition",
-            "enable_cross_cloud",
-            "enable_bigquery_omni",
-            "use_avro_logical_types",
-            "parquet_enable_list_inference",
-            "enable_column_level_security",
-            "enable_row_level_security",
-            "enable_dataframes",
-            "dataframes_backend",
-            "enable_continuous_queries",
-            "enable_vector_search",
-        }
-
-        return {
-            key: value
-            for key, value in self.connection_config.items()
-            if key not in excluded_fields and value is not Empty
-        }
+        config = {k: v for k, v in (self.connection_config or {}).items() if v is not Empty}
+        try:
+            valid_params = set(inspect.signature(bigquery.Client.__init__).parameters)
+        except Exception:
+            valid_params = set()
+        extra_keys = set(config) - valid_params
+        if extra_keys:
+            logger.debug(
+                "BigQuery config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
+                list(extra_keys),
+            )
+        return {k: v for k, v in config.items() if k in valid_params}
 
     def create_connection(self) -> BigQueryConnection:
         """Create and return a new BigQuery Client instance.

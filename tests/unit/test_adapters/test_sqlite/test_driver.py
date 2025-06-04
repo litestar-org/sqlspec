@@ -78,8 +78,8 @@ def test_sqlite_driver_placeholder_style(sqlite_driver: SqliteDriver) -> None:
     assert placeholder_style == "qmark"
 
 
-def test_sqlite_driver_execute_impl_select(sqlite_driver: SqliteDriver, mock_sqlite_connection: Mock) -> None:
-    """Test SQLite driver _execute_impl for SELECT statements."""
+def test_sqlite_driver_execute_statement_select(sqlite_driver: SqliteDriver, mock_sqlite_connection: Mock) -> None:
+    """Test SQLite driver _execute_statement for SELECT statements."""
     # Setup mock cursor
     mock_cursor = mock_sqlite_connection.cursor.return_value.__enter__.return_value
     mock_cursor.description = [("id",)]
@@ -100,8 +100,8 @@ def test_sqlite_driver_execute_impl_select(sqlite_driver: SqliteDriver, mock_sql
     assert result == {"column_names": ["id"], "data": [], "rowcount": mock_cursor.rowcount}
 
 
-def test_sqlite_driver_execute_impl_insert(sqlite_driver: SqliteDriver, mock_sqlite_connection: Mock) -> None:
-    """Test SQLite driver _execute_impl for INSERT statements."""
+def test_sqlite_driver_execute_statement_insert(sqlite_driver: SqliteDriver, mock_sqlite_connection: Mock) -> None:
+    """Test SQLite driver _execute_statement for INSERT statements."""
     # Setup mock cursor
     mock_cursor = mock_sqlite_connection.cursor.return_value.__enter__.return_value
     mock_cursor.description = [("id",)]
@@ -124,8 +124,8 @@ def test_sqlite_driver_execute_impl_insert(sqlite_driver: SqliteDriver, mock_sql
     assert result == 1
 
 
-def test_sqlite_driver_execute_impl_script(sqlite_driver: SqliteDriver, mock_sqlite_connection: Mock) -> None:
-    """Test SQLite driver _execute_impl for script execution."""
+def test_sqlite_driver_execute_statement_script(sqlite_driver: SqliteDriver, mock_sqlite_connection: Mock) -> None:
+    """Test SQLite driver _execute_statement for script execution."""
     # Setup mock cursor for script (description should be empty list)
     mock_cursor = mock_sqlite_connection.cursor.return_value.__enter__.return_value
     mock_cursor.description = []
@@ -147,8 +147,8 @@ def test_sqlite_driver_execute_impl_script(sqlite_driver: SqliteDriver, mock_sql
     assert result == "SCRIPT EXECUTED"
 
 
-def test_sqlite_driver_execute_impl_many(sqlite_driver: SqliteDriver, mock_sqlite_connection: Mock) -> None:
-    """Test SQLite driver _execute_impl for execute_many."""
+def test_sqlite_driver_execute_statement_many(sqlite_driver: SqliteDriver, mock_sqlite_connection: Mock) -> None:
+    """Test SQLite driver _execute_statement for execute_many."""
     # Setup mock cursor
     mock_cursor = mock_sqlite_connection.cursor.return_value.__enter__.return_value
     mock_cursor.description = [("id",)]

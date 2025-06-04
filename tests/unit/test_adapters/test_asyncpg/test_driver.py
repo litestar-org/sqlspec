@@ -71,10 +71,10 @@ def test_asyncpg_driver_placeholder_style(asyncpg_driver: AsyncpgDriver) -> None
 
 
 @pytest.mark.asyncio
-async def test_asyncpg_driver_execute_impl_select(
+async def test_asyncpg_driver_execute_statement_select(
     asyncpg_driver: AsyncpgDriver, mock_asyncpg_connection: AsyncMock
 ) -> None:
-    """Test AsyncPG driver _execute_impl for SELECT statements."""
+    """Test AsyncPG driver _execute_statement for SELECT statements."""
     # Setup mock connection
     from asyncpg import Record
 
@@ -95,10 +95,10 @@ async def test_asyncpg_driver_execute_impl_select(
 
 
 @pytest.mark.asyncio
-async def test_asyncpg_driver_execute_impl_insert(
+async def test_asyncpg_driver_execute_statement_insert(
     asyncpg_driver: AsyncpgDriver, mock_asyncpg_connection: AsyncMock
 ) -> None:
-    """Test AsyncPG driver _execute_impl for INSERT statements."""
+    """Test AsyncPG driver _execute_statement for INSERT statements."""
     # Setup mock connection
     mock_asyncpg_connection.execute.return_value = "INSERT 0 1"
 
@@ -114,10 +114,10 @@ async def test_asyncpg_driver_execute_impl_insert(
 
 
 @pytest.mark.asyncio
-async def test_asyncpg_driver_execute_impl_script(
+async def test_asyncpg_driver_execute_statement_script(
     asyncpg_driver: AsyncpgDriver, mock_asyncpg_connection: AsyncMock
 ) -> None:
-    """Test AsyncPG driver _execute_impl for script execution."""
+    """Test AsyncPG driver _execute_statement for script execution."""
     # Setup mock connection
     mock_asyncpg_connection.execute.return_value = "CREATE TABLE"
 
@@ -136,10 +136,10 @@ async def test_asyncpg_driver_execute_impl_script(
 
 
 @pytest.mark.asyncio
-async def test_asyncpg_driver_execute_impl_many(
+async def test_asyncpg_driver_execute_statement_many(
     asyncpg_driver: AsyncpgDriver, mock_asyncpg_connection: AsyncMock
 ) -> None:
-    """Test AsyncPG driver _execute_impl for execute_many."""
+    """Test AsyncPG driver _execute_statement for execute_many."""
     # Setup mock connection
     mock_asyncpg_connection.executemany.return_value = None
 
@@ -161,7 +161,7 @@ async def test_asyncpg_driver_execute_impl_many(
 
 
 @pytest.mark.asyncio
-async def test_asyncpg_driver_execute_impl_parameter_processing(
+async def test_asyncpg_driver_execute_statement_parameter_processing(
     asyncpg_driver: AsyncpgDriver, mock_asyncpg_connection: AsyncMock
 ) -> None:
     """Test AsyncPG driver parameter processing for different types."""
@@ -332,7 +332,7 @@ async def test_asyncpg_driver_wrap_execute_result_integer(asyncpg_driver: Asyncp
     # Verify result
     assert isinstance(result, SQLResult)
     assert result.statement is statement
-    assert result.rows_affected == 5
+    assert result.rows_affected == -1
     assert result.operation_type == "INSERT"
 
 

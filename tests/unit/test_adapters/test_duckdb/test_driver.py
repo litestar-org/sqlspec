@@ -86,8 +86,8 @@ def test_duckdb_driver_get_cursor(duckdb_driver: DuckDBDriver, mock_duckdb_conne
     mock_cursor.close.assert_called_once()
 
 
-def test_duckdb_driver_execute_impl_select(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
-    """Test DuckDB driver _execute_impl for SELECT statements."""
+def test_duckdb_driver_execute_statement_select(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
+    """Test DuckDB driver _execute_statement for SELECT statements."""
     # Setup mock cursor
     mock_cursor = Mock()
     mock_duckdb_connection.cursor.return_value = mock_cursor
@@ -106,8 +106,8 @@ def test_duckdb_driver_execute_impl_select(duckdb_driver: DuckDBDriver, mock_duc
     assert result is mock_cursor
 
 
-def test_duckdb_driver_execute_impl_insert(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
-    """Test DuckDB driver _execute_impl for INSERT statements."""
+def test_duckdb_driver_execute_statement_insert(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
+    """Test DuckDB driver _execute_statement for INSERT statements."""
     # Setup mock cursor
     mock_cursor = Mock()
     mock_duckdb_connection.cursor.return_value = mock_cursor
@@ -126,8 +126,8 @@ def test_duckdb_driver_execute_impl_insert(duckdb_driver: DuckDBDriver, mock_duc
     assert result is mock_cursor
 
 
-def test_duckdb_driver_execute_impl_script(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
-    """Test DuckDB driver _execute_impl for script execution."""
+def test_duckdb_driver_execute_statement_script(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
+    """Test DuckDB driver _execute_statement for script execution."""
     # Setup mock cursor
     mock_cursor = Mock()
     mock_duckdb_connection.cursor.return_value = mock_cursor
@@ -145,8 +145,8 @@ def test_duckdb_driver_execute_impl_script(duckdb_driver: DuckDBDriver, mock_duc
     assert script_result == "SCRIPT EXECUTED"
 
 
-def test_duckdb_driver_execute_impl_many(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
-    """Test DuckDB driver _execute_impl for execute_many."""
+def test_duckdb_driver_execute_statement_many(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
+    """Test DuckDB driver _execute_statement for execute_many."""
     # Setup mock cursor
     mock_cursor = Mock()
     mock_duckdb_connection.cursor.return_value = mock_cursor
@@ -169,7 +169,7 @@ def test_duckdb_driver_execute_impl_many(duckdb_driver: DuckDBDriver, mock_duckd
     assert result is mock_cursor
 
 
-def test_duckdb_driver_execute_impl_parameter_processing(
+def test_duckdb_driver_execute_statement_parameter_processing(
     duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock
 ) -> None:
     """Test DuckDB driver parameter processing for different types."""
@@ -190,7 +190,9 @@ def test_duckdb_driver_execute_impl_parameter_processing(
     assert result is mock_cursor
 
 
-def test_duckdb_driver_execute_impl_single_parameter(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
+def test_duckdb_driver_execute_statement_single_parameter(
+    duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock
+) -> None:
     """Test DuckDB driver with single parameter value."""
     # Setup mock cursor
     mock_cursor = Mock()

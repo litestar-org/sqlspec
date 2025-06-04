@@ -359,6 +359,8 @@ ignore = [
   "S101",    # S101 - Use of assert
   "FIX002",  # Ruff - Allow the use of TODO in comments
   "TD003",   # Ruff - Missing issue link for TODO
+  "TD002",   # Ruff - Missing author for TODO
+  "PYI036",  # pyright - Missing type annotation for `__aexit__`
 ]
 select = ["ALL"]
 

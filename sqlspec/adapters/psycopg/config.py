@@ -1,10 +1,12 @@
 """Psycopg database configuration using TypedDict for better maintainability."""
 
 import contextlib
+import inspect
 import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict
 
+import psycopg
 from psycopg import AsyncConnection, Connection, connect
 from psycopg.rows import DictRow as PsycopgDictRow
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
@@ -211,15 +213,19 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict."""
-        # Merge connection_config into pool_config, with pool_config taking precedence
         merged_config = {**self.connection_config, **self.pool_config}
-        config_dict = {k: v for k, v in merged_config.items() if v is not Empty}
-
-        # Ensure DictRow is used for consistent row types
-        config_dict["row_factory"] = PsycopgDictRow
-
-        return config_dict
+        config = {k: v for k, v in merged_config.items() if v is not Empty}
+        try:
+            valid_params = set(inspect.signature(psycopg.connect).parameters)
+        except Exception:
+            valid_params = set()
+        extra_keys = set(config) - valid_params
+        if extra_keys:
+            logger.debug(
+                "Psycopg config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
+                list(extra_keys),
+            )
+        return {k: v for k, v in config.items() if k in valid_params}
 
     def _create_pool_impl(self) -> "ConnectionPool":
         """Create the actual connection pool."""
@@ -358,15 +364,19 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict."""
-        # Merge connection_config into pool_config, with pool_config taking precedence
         merged_config = {**self.connection_config, **self.pool_config}
-        config_dict = {k: v for k, v in merged_config.items() if v is not Empty}
-
-        # Ensure DictRow is used for consistent row types
-        config_dict["row_factory"] = PsycopgDictRow
-
-        return config_dict
+        config = {k: v for k, v in merged_config.items() if v is not Empty}
+        try:
+            valid_params = set(inspect.signature(psycopg.connect).parameters)
+        except Exception:
+            valid_params = set()
+        extra_keys = set(config) - valid_params
+        if extra_keys:
+            logger.debug(
+                "Psycopg config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
+                list(extra_keys),
+            )
+        return {k: v for k, v in config.items() if k in valid_params}
 
     async def _create_pool_impl(self) -> "AsyncConnectionPool":
         """Create the actual async connection pool."""

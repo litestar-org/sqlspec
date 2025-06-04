@@ -3,102 +3,95 @@ description:
 globs:
 alwaysApply: false
 ---
-# SQL Class Implementation Requirements
+# `SQL` Class Implementation Standards
 <!-- alwaysApply: true -->
 
 ## Objective
-To ensure the `sqlspec.statement.sql.SQL` class is correctly implemented and prevent critical bugs discovered during recent debugging and refactoring efforts.
+To ensure the `sqlspec.statement.sql.SQL` class is implemented as a robust, efficient, and maintainable component for representing and processing SQL statements. This includes adhering to a "process once" internal model, clear state management, and consistent interaction with configuration and the statement processing pipeline.
 
 ## Context
-- The SQL class is the central immutable object representing a query and its state
-- Recent debugging revealed critical property implementation bugs and parameter handling issues
-- The "process once" refactor requires careful state management and pipeline integration
-- Script execution has specific requirements for parameter substitution and expression handling
+- The `SQL` class is central to `sqlspec`, handling SQL parsing, parameter processing, transformations, validation, and generation.
+- A key architectural principle is "process once": an `SQL` object should process its statement through a defined pipeline only once, caching the results. Subsequent operations use this cache unless a change invalidates it.
+- Internal consistency and predictable behavior are paramount, especially for methods that modify the statement (e.g., `_apply_filters`) or create new instances (e.g., `copy()`).
 
 ## Rules
 
-### 1. Property Implementation (CRITICAL BUG PREVENTION)
+### 1. "Process Once" Internal Architecture (MANDATORY)
 <!-- alwaysApply: true -->
-- **is_many and is_script Properties**: These properties MUST return the correct instance variables, not processed state flags
-    ```python
-    @property
-    def is_many(self) -> bool:
-        return self._is_many  # NOT processed.input_had_placeholders
+- **Unified Processed State Cache**: The `SQL` class MUST internally use a mechanism (e.g., a private dataclass like `_ProcessedState`) to cache all artifacts resulting from its processing pipeline. This includes:
+    - Initial raw SQL input and parameters.
+    - Parsed expression (e.g., `sqlglot.Expression`) before transformations.
+    - Transformed expression after all pipeline processors.
+    - Final parameter information (including resolved literals if `ParameterizeLiterals` is used).
+    - Final merged parameters ready for execution.
+    - Validation and analysis results from the pipeline.
+    - A snapshot of the `SQLConfig` used for the processing cycle.
+- **Lazy, Memoized Processing**: A central private method (e.g., `_ensure_processed()`) MUST act as the gatekeeper for accessing any processed data.
+    - This method is responsible for executing the full statement processing pipeline if a valid cached state does not exist or has been invalidated.
+    - The pipeline involves initial parsing (if enabled), parameter pre-processing, execution of transformers/validators/analyzers via `StatementPipeline` and `SQLProcessingContext`, and caching of all results into the `_ProcessedState`.
+- **Initialization (`__init__`)**: The `__init__` method MUST primarily store raw input arguments (statement string/expression, parameters, config, dialect, etc.) and initialize the processed state cache to an empty/invalid state. It MUST NOT trigger the full processing pipeline immediately.
 
-    @property
-    def is_script(self) -> bool:
-        return self._is_script  # NOT processed.input_had_placeholders
-    ```
-- **Bug Background**: Both properties were incorrectly returning `processed.input_had_placeholders`, preventing proper execution path dispatch in drivers
-- **Testing Requirement**: All property implementations must be covered by unit tests that verify the correct underlying state is returned
-
-### 2. Parameter Handling Patterns (MANDATORY)
+### 2. Property Access and `to_sql()` (MANDATORY)
 <!-- alwaysApply: true -->
-- **as_many() Implementation**: Must use `self._raw_parameters` to avoid triggering validation before no-validation config takes effect
-- **Parameter Validation Bypass**: For executemany operations, validation must be disabled at the config level, not bypassed through dummy states
-- **Raw vs Processed Parameters**: 
-    - Use `_raw_parameters` for operations that need to avoid validation pipeline
-    - Use `parameters` property for operations that require fully processed parameters
-- **Example Pattern**:
-    ```python
-    def as_many(self, parameters: "Optional[SQLParameterType]" = None) -> "SQL":
-        many_parameters = parameters if parameters is not None else self._raw_parameters
-        # Use raw parameters to avoid validation before config takes effect
-    ```
+- **Reliance on Cached State**: All public properties that expose aspects of the processed statement (e.g., `.expression`, `.parameters`, `.validation_result`, `.analysis_result`, `.sql` for the raw input) MUST retrieve their values by first calling the internal `_ensure_processed()` method and then accessing the relevant attribute from the cached `_ProcessedState`.
+- **`to_sql()` Behavior**: The `to_sql()` method MUST:
+    1. Call `_ensure_processed()` to ensure the statement is fully processed.
+    2. Use the cached `transformed_expression` and `final_merged_parameters` from `_ProcessedState` as the definitive inputs for generating the SQL string.
+    3. Internal helper methods for placeholder conversion and rendering MUST operate on this definitive processed state, not re-parse or re-evaluate raw inputs.
 
-### 3. Script Execution Requirements (MANDATORY)
+### 3. State Management for Modifying Operations (MANDATORY)
 <!-- alwaysApply: true -->
-- **as_script() Implementation**: Must preserve transformed expression and extracted parameter values for static parameter substitution
-    ```python
-    def as_script(self) -> "SQL":
-        processed = self._ensure_processed()  # Get current transformed state
-        # Pass processed state to preserve transformations and extracted parameters
-    ```
-- **Parameter Substitution**: Script execution must convert all parameters (including extracted ones) back to literals using `ParameterStyle.STATIC`
-- **Multi-Statement Parsing**: Scripts must use `sqlglot.parse()` not `sqlglot.parse_one()` to handle multiple statements
-- **Expression Preservation**: The `as_script()` method must preserve the current pipeline state, not create a fresh instance
+- **`_apply_filters()`**: When filters are applied:
+    1. A new combined `sqlglot.Expression` is created.
+    2. The internal representation of the statement (e.g., `self._raw_statement` or equivalent that feeds `_ensure_processed()`) MUST be updated to this new expression.
+    3. The internal `_processed_state` cache MUST be invalidated (e.g., set to `None`). This forces the next relevant property access or method call to re-run the full processing pipeline on the filtered expression.
+- **Other Modifying Methods (e.g., `where()`, `limit()`, `offset()`, `order_by()` if applicable)**: Any method that programmatically alters the underlying SQL structure MUST ensure that its base expression is derived from `self._ensure_processed().transformed_expression.copy()` (or an equivalent copy of the processed state). After modification, the `_processed_state` MUST be invalidated to reflect the change.
 
-### 4. Pipeline Integration (UNBREAKABLE RULE)
+### 4. State Management for Instantiation Methods (MANDATORY)
 <!-- alwaysApply: true -->
-- **Single-Pass Processing**: The `_ensure_processed()` method must implement true single-pass processing through StatementPipeline
-- **State Invalidation**: Any operation that modifies SQL content (`_apply_filters`, `copy()` with new statement) must set `_processed_state = None`
-- **Config Changes**: Operations that change processing configuration must trigger reprocessing
-- **Context Preservation**: When copying or modifying SQL objects, preserve relevant processing context to avoid redundant work
+- **`copy()` Method**:
+    - If `copy()` is called with arguments that change the statement, parameters, or parameter-affecting `kwargs`, the new `SQL` instance MUST be created with an invalidated `_processed_state` (forcing reprocessing).
+    - If `copy()` is called with a `config` that alters the processing pipeline (e.g., different transformers, validators, parsing enabled/disabled), the new instance MUST reprocess.
+    - If only `dialect` changes, while the `transformed_expression` might be reusable, `to_sql()` output differs. Full reprocessing upon dialect change is the default safe behavior unless specific optimizations for re-rendering are implemented and thoroughly tested.
+    - If `copy()` is called with no arguments that would alter the processed SQL, parameters, or effective config, the existing `_processed_state` MAY be passed to the new instance for efficiency, but this must be done carefully to ensure true state identity.
+- **`as_many()` Method**:
+    - Must set the internal `_is_many = True` flag.
+    - Must ensure the `SQLConfig` used for processing is appropriate for `executemany` (often disabling parsing/validation for the batch parameters part).
+    - Parameter handling for `as_many` (a sequence of parameter sets) is distinct and primarily relevant at the adapter execution stage. The `SQL` object holds these parameters, but its own processing pipeline might not deeply inspect each parameter set in the batch.
+    - May need to invalidate and re-trigger processing with the `executemany`-specific config.
+- **`as_script()` Method**:
+    - Must set the internal `_is_script = True` flag.
+    - MUST invalidate `_processed_state` to ensure that when `_ensure_processed()` runs, `SQL.to_expression` (or equivalent parsing logic) is invoked with `is_script=True`. This is critical for correct parsing of multi-statement scripts by `sqlglot`.
 
-### 5. Expression Handling (MANDATORY)
+### 5. Parameter Handling (MANDATORY)
 <!-- alwaysApply: true -->
-- **Command Expression**: Multi-statement scripts must be wrapped in `exp.Command(this="SCRIPT", expressions=statements)`
-- **Static Rendering**: Script expressions must handle `ParameterStyle.STATIC` by substituting extracted parameters back to literals
-- **Script Detection**: Auto-detection of scripts must analyze semicolon positions and remaining content after each semicolon
-- **Expression Copying**: Modification methods must use `expression.copy()` to avoid mutating shared state
+- **Integration with Processing Pipeline**: Parameter extraction (identifying placeholders in the original SQL), merging with provided parameters, and transformation (e.g., by `ParameterizeLiterals`) are integral parts of the `_ensure_processed()` pipeline.
+- **Final State**: The `_ProcessedState` cache MUST store the `final_merged_parameters` and `final_parameter_info` that result from this pipeline.
+- **Conversion Utilities**: Internal utilities like `_convert_to_dict_parameters()` or `_convert_to_list_parameters()` MUST operate on the `final_merged_parameters` and `final_parameter_info` obtained from a fully processed state.
 
-### 6. Testing Requirements (MANDATORY)
+### 6. `SQLConfig` Interaction (MANDATORY)
 <!-- alwaysApply: true -->
-- **Property Testing**: All properties must be tested to ensure they return correct underlying state
-- **Parameter Flow Testing**: Test parameter handling through the entire pipeline for all execution modes
-- **Script Execution Testing**: Verify multi-statement scripts execute all statements, not just the first
-- **Mock Context Managers**: Use `MagicMock` for cursor mocks that need context manager support (`__enter__`/`__exit__`)
-- **State Transition Testing**: Test that SQL object state changes correctly through copy(), as_many(), as_script() operations
+- **Immutability During Processing**: An `SQLConfig` instance associated with an `SQL` object's processing cycle (i.e., the one used by `_ensure_processed()` and snapshotted in `_ProcessedState`) MUST be treated as immutable for that cycle.
+- **Changes Trigger Reprocessing**: If an `SQL` object's `config` is changed externally in a way that affects the pipeline, subsequent operations must trigger reprocessing with the new config. The `copy()` method is the primary way to achieve an `SQL` object with a new configuration.
 
-### 7. Common Anti-Patterns to Avoid
+### 7. Caching Logic (MANDATORY)
 <!-- alwaysApply: true -->
-- **Property Implementation**: Never return processed state flags from instance property getters
-- **Parameter Access**: Don't access `.parameters` in methods that need to avoid validation
-- **Script Creation**: Don't create script instances without preserving transformed expressions
-- **State Management**: Don't modify SQL objects in-place; always return new instances
-- **Mock Setup**: Don't use basic `Mock()` for objects that need magic method support
+- **Centralized Cache**: All caching related to the processed state of the SQL statement (SQL string, expression, parameters, validation results, etc.) MUST be managed through the single `_ProcessedState` object and the `_ensure_processed()` mechanism.
+- **No Redundant Caches**: Separate, ad-hoc caches for parts of the processed state (e.g., `_cached_sql_string`, `_cached_validation_result`) are PROHIBITED. Their invalidation logic must be consolidated into the `_ProcessedState` lifecycle.
 
-### 8. Debug and Validation Patterns
+### 8. Internal Method Structure (RECOMMENDED)
 <!-- alwaysApply: true -->
-- **Execution Path Validation**: Verify that `is_many` and `is_script` correctly control driver execution paths
-- **Parameter Tracing**: Log parameter flow through validation, transformation, and execution stages
-- **Expression Inspection**: Validate that expressions are properly parsed and transformed before execution
-- **Script Statement Counting**: Verify that multi-statement scripts parse and execute all statements
+- **Private Methods**: Review private methods (`_` prefix) after refactoring to ensure they are genuinely internal and tied to instance state. Static utility functions should be made `staticmethod` or moved to a relevant utils module if not state-dependent.
+- **`SQL.to_expression` Static Method**: This static method is critical for initial parsing. Its logic for handling various input types (string, `SQL` object, `exp.Expression`) and auto-detecting scripts must be robust and well-tested, as it's a key first step in the `_ensure_processed()` pipeline.
+
+## Benefits of This Architecture
+- **Clarity**: Single, well-defined data flow for SQL processing.
+- **Correctness**: Reduced risk of inconsistent state or out-of-order operations.
+- **Performance**: Avoids redundant computations via robust caching.
+- **Maintainability**: Centralized logic simplifies debugging and enhancements.
 
 ## Cross-References
-- See `.cursor/rules/adapters/01_execution_method_structure.mdc` for adapter execution requirements
-- See `.cursor/rules/testing/01_adapter_testing_patterns.mdc` for testing patterns
-- See internal docs REF-011 for SQLStatement & StatementPipeline architecture details
+- See `.cursor/rules/sql/00_sql_authoring.mdc` for rules on the SQL processing pipeline itself.
 
 ## Exceptions
 - Emergency hotfixes may temporarily deviate from these patterns but must be documented and addressed in follow-up work

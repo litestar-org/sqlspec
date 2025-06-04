@@ -4,6 +4,7 @@ from dataclasses import Field, fields
 from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated, Any, Optional, Union, cast
 
+from sqlglot import exp
 from typing_extensions import TypeAlias, TypeGuard, TypeVar
 
 from sqlspec._typing import (
@@ -536,6 +537,18 @@ def is_dto_data(v: Any) -> TypeGuard[DTOData[Any]]:
     return LITESTAR_INSTALLED and isinstance(v, DTOData)
 
 
+def is_expression(obj: "Any") -> "TypeGuard[exp.Expression]":
+    """Check if a value is a sqlglot Expression.
+
+    Args:
+        obj: Value to check.
+
+    Returns:
+        bool
+    """
+    return isinstance(obj, exp.Expression)
+
+
 __all__ = (
     "AIOSQL_INSTALLED",
     "LITESTAR_INSTALLED",
@@ -595,6 +608,7 @@ __all__ = (
     "is_dict_with_field",
     "is_dict_without_field",
     "is_dto_data",
+    "is_expression",
     "is_msgspec_struct",
     "is_msgspec_struct_with_field",
     "is_msgspec_struct_without_field",

@@ -1,13 +1,14 @@
-from typing import Any
+from typing import Any, Optional
 
 from sqlspec._serialization import decode_json
 from sqlspec.exceptions import MissingDependencyError
 
 __all__ = ("open_fixture", "open_fixture_async")
 
+# TODO: determine if this is needed
 # Define Path and AsyncPath as None for test patching
-Path = None  # type: ignore
-AsyncPath = None  # type: ignore
+Path: "Optional[type]" = None  # pyright: ignore  #TODO: for test patching
+AsyncPath: "Optional[type]" = None  # pyright: ignore  #TODO: for test patching
 
 
 def open_fixture(fixtures_path: Any, fixture_name: str) -> Any:

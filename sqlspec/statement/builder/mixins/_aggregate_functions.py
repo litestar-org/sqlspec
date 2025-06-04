@@ -98,10 +98,11 @@ class AggregateFunctionsMixin:
             The current builder instance for method chaining.
         """
         col_expr = exp.column(column) if isinstance(column, str) else column
+        array_agg_expr: Union[exp.ArrayAgg, exp.Anonymous]
         try:
             array_agg_expr = exp.ArrayAgg(this=col_expr)
         except AttributeError:
-            array_agg_expr = exp.Anonymous(this="ARRAY_AGG", expressions=[col_expr])
+            array_agg_expr = exp.Anonymous(this="ARRAY_AGG", expressions=[col_expr])  # pyright: ignore  #TODO: fallback for dialects lacking ArrayAgg
         select_expr = exp.alias_(array_agg_expr, alias) if alias else array_agg_expr
         return self.select(select_expr)  # type: ignore[attr-defined]
 

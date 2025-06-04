@@ -3,7 +3,7 @@
 import importlib
 from importlib.util import find_spec
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 __all__ = (
     "import_string",
@@ -53,8 +53,18 @@ def import_string(dotted_path: str) -> "Any":
     Returns:
         object: The imported object.
     """
+
+    def _raise_import_error(msg: str, exc: "Optional[Exception]" = None) -> None:
+        if exc is not None:
+            raise ImportError(msg) from exc
+        raise ImportError(msg)
+
+    obj: Any = None
     try:
         parts = dotted_path.split(".")
+        module = None
+        i = len(parts)  # Initialize to full length
+
         for i in range(len(parts), 0, -1):
             module_path = ".".join(parts[:i])
             try:
@@ -63,8 +73,11 @@ def import_string(dotted_path: str) -> "Any":
             except ModuleNotFoundError:
                 continue
         else:
-            msg = f"{dotted_path} doesn't look like a module path"
-            raise ImportError(msg)
+            _raise_import_error(f"{dotted_path} doesn't look like a module path")
+
+        if module is None:
+            _raise_import_error(f"Failed to import any module from {dotted_path}")
+
         obj = module
         attrs = parts[i:]
         if not attrs and i == len(parts) and len(parts) > 1:
@@ -75,15 +88,13 @@ def import_string(dotted_path: str) -> "Any":
             except Exception:
                 return obj
             if not hasattr(parent_module, attr):
-                msg = f"Module '{parent_module_path}' has no attribute '{attr}' in '{dotted_path}'"
-                raise ImportError(msg)
+                _raise_import_error(f"Module '{parent_module_path}' has no attribute '{attr}' in '{dotted_path}'")
         for attr in attrs:
-            try:
-                obj = getattr(obj, attr)
-            except AttributeError as e:
-                msg = f"Module '{module.__name__}' has no attribute '{attr}' in '{dotted_path}'"
-                raise ImportError(msg) from e
-        return obj
-    except Exception as e:
-        msg = f"Could not import '{dotted_path}': {e}"
-        raise ImportError(msg) from e
+            if not hasattr(obj, attr):
+                _raise_import_error(
+                    f"Module '{module.__name__ if module is not None else 'unknown'}' has no attribute '{attr}' in '{dotted_path}'"
+                )
+            obj = getattr(obj, attr)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        _raise_import_error(f"Could not import '{dotted_path}': {e}", e)
+    return obj
