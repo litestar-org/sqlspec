@@ -1,12 +1,10 @@
 """AsyncPG database configuration using TypedDict for better maintainability."""
 
-import inspect
 import logging
 from collections.abc import AsyncGenerator, Awaitable
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict
 
-import asyncpg
 from asyncpg import Record
 from asyncpg import create_pool as asyncpg_create_pool
 from asyncpg.pool import PoolConnectionProxy
@@ -84,60 +82,13 @@ class AsyncpgConnectionConfig(TypedDict, total=False):
     """Server settings to apply on connection."""
 
 
-class AsyncpgPoolConfig(TypedDict, total=False):
+class AsyncpgPoolConfig(AsyncpgConnectionConfig, total=False):
     """AsyncPG pool configuration as TypedDict.
 
     All parameters for asyncpg.create_pool() including connection parameters.
     Based on latest AsyncPG documentation.
     """
 
-    # Connection parameters (inherit from connection config)
-    dsn: NotRequired[str]
-    """Connection DSN string."""
-
-    host: NotRequired[str]
-    """Database server host."""
-
-    port: NotRequired[int]
-    """Database server port."""
-
-    user: NotRequired[str]
-    """Database user."""
-
-    password: NotRequired[str]
-    """Database password."""
-
-    database: NotRequired[str]
-    """Database name."""
-
-    ssl: NotRequired[Any]
-    """SSL configuration (True, False, or SSLContext)."""
-
-    passfile: NotRequired[str]
-    """Path to password file."""
-
-    direct_tls: NotRequired[bool]
-    """Use direct TLS connection."""
-
-    connect_timeout: NotRequired[float]
-    """Connection timeout in seconds."""
-
-    command_timeout: NotRequired[float]
-    """Command timeout in seconds."""
-
-    statement_cache_size: NotRequired[int]
-    """Statement cache size."""
-
-    max_cached_statement_lifetime: NotRequired[int]
-    """Maximum cached statement lifetime in seconds."""
-
-    max_cacheable_statement_size: NotRequired[int]
-    """Maximum size of cacheable statements in bytes."""
-
-    server_settings: NotRequired[dict[str, str]]
-    """Server settings to apply on connection."""
-
-    # Pool-specific parameters
     min_size: NotRequired[int]
     """Minimum number of connections in the pool."""
 
@@ -171,6 +122,16 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
     __is_async__: ClassVar[bool] = True
     __supports_connection_pooling__: ClassVar[bool] = True
+
+    # Driver class reference for dialect resolution
+    driver_class: ClassVar[type[AsyncpgDriver]] = AsyncpgDriver
+
+    # Parameter style support information
+    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("numeric",)
+    """AsyncPG only supports $1, $2, ... (numeric) parameter style."""
+
+    preferred_parameter_style: ClassVar[str] = "numeric"
+    """AsyncPG's native parameter style is $1, $2, ... (numeric)."""
 
     def __init__(
         self,
@@ -220,19 +181,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         This method filters out pool-specific parameters that are not valid for asyncpg.connect().
         """
-        merged_config = {**self.connection_config, **self.pool_config}
-        config = {k: v for k, v in merged_config.items() if v is not Empty}
-        try:
-            valid_params = set(inspect.signature(asyncpg.connect).parameters)
-        except Exception:
-            valid_params = set()
-        extra_keys = set(config) - valid_params
-        if extra_keys:
-            logger.debug(
-                "Asyncpg config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
-                list(extra_keys),
-            )
-        return {k: v for k, v in config.items() if k in valid_params}
+        return {k: v for k, v in self.connection_config.items() if v is not Empty}
 
     @property
     def pool_config_dict(self) -> dict[str, Any]:
@@ -241,26 +190,14 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Returns:
             A dictionary containing all pool configuration parameters.
         """
-        merged_config = {**self.connection_config, **self.pool_config}
-        config = {k: v for k, v in merged_config.items() if v is not Empty}
-        try:
-            valid_params = set(inspect.signature(asyncpg_create_pool).parameters)
-        except Exception:
-            valid_params = set()
-        extra_keys = set(config) - valid_params
-        if extra_keys:
-            logger.debug(
-                "Asyncpg pool config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
-                list(extra_keys),
-            )
-        return {k: v for k, v in config.items() if k in valid_params}
+        return {k: v for k, v in self.pool_config.items() if v is not Empty}
 
-    async def _create_pool_impl(self) -> "Pool[Record]":
+    async def _create_pool(self) -> "Pool[Record]":
         """Create the actual async connection pool."""
         pool_args = self.pool_config_dict
         return await asyncpg_create_pool(**pool_args)
 
-    async def _close_pool_impl(self) -> None:
+    async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
         if self.pool_instance:
             await self.pool_instance.close()
@@ -315,9 +252,20 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             An AsyncpgDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as connection:
+            # Create statement config with parameter style info if not already set
+            statement_config = self.statement_config
+            if statement_config.allowed_parameter_styles is None:
+                from dataclasses import replace
+
+                statement_config = replace(
+                    statement_config,
+                    allowed_parameter_styles=self.supported_parameter_styles,
+                    target_parameter_style=self.preferred_parameter_style,
+                )
+
             yield self.driver_type(
                 connection=connection,
-                config=self.statement_config,
+                config=statement_config,
                 instrumentation_config=self.instrumentation,
             )
 

@@ -1,7 +1,7 @@
 from collections.abc import Generator
 from contextlib import contextmanager
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 __all__ = (
     "ExtraParameterError",
@@ -19,6 +19,8 @@ __all__ = (
     "RiskLevel",
     "SQLBuilderError",
     "SQLConversionError",
+    "SQLFileNotFoundError",
+    "SQLFileParseError",
     "SQLFileParsingError",
     "SQLInjectionError",
     "SQLParsingError",
@@ -74,6 +76,13 @@ class MissingDependencyError(SQLSpecError, ImportError):
             f"'pip install sqlspec[{install_package or package}]' to install sqlspec with the required extra "
             f"or 'pip install {install_package or package}' to install the package separately",
         )
+
+
+class BackendNotRegisteredError(SQLSpecError):
+    """Raised when a requested storage backend key is not registered."""
+
+    def __init__(self, backend_key: str) -> None:
+        super().__init__(f"Storage backend '{backend_key}' is not registered. Please register it before use.")
 
 
 class SQLLoadingError(SQLSpecError):
@@ -315,12 +324,67 @@ class FileNotFoundInStorageError(StorageOperationFailedError):
     """Raised when a file or object is not found in the storage backend."""
 
 
+class SQLFileNotFoundError(SQLSpecError):
+    """Raised when a SQL file cannot be found."""
+
+    def __init__(self, name: str, path: "Optional[str]" = None) -> None:
+        """Initialize the error.
+
+        Args:
+            name: Name of the SQL file.
+            path: Optional path where the file was expected.
+        """
+        message = f"SQL file '{name}' not found at path: {path}" if path else f"SQL file '{name}' not found"
+        super().__init__(message)
+        self.name = name
+        self.path = path
+
+
+class SQLFileParseError(SQLSpecError):
+    """Raised when a SQL file cannot be parsed."""
+
+    def __init__(self, name: str, path: str, original_error: "Exception") -> None:
+        """Initialize the error.
+
+        Args:
+            name: Name of the SQL file.
+            path: Path to the SQL file.
+            original_error: The underlying parsing error.
+        """
+        message = f"Failed to parse SQL file '{name}' at {path}: {original_error}"
+        super().__init__(message)
+        self.name = name
+        self.path = path
+        self.original_error = original_error
+
+
 @contextmanager
-def wrap_exceptions(wrap_exceptions: bool = True) -> Generator[None, None, None]:
+def wrap_exceptions(
+    wrap_exceptions: bool = True, suppress: "Optional[Union[type[Exception], tuple[type[Exception], ...]]]" = None
+) -> Generator[None, None, None]:
+    """Context manager for exception handling with optional suppression.
+
+    Args:
+        wrap_exceptions: If True, wrap exceptions in RepositoryError. If False, let them pass through.
+        suppress: Exception type(s) to suppress completely (like contextlib.suppress).
+                 If provided, these exceptions are caught and ignored.
+    """
     try:
         yield
 
     except Exception as exc:
+        # Handle suppression first
+        if suppress is not None and (
+            (isinstance(suppress, type) and isinstance(exc, suppress))
+            or (isinstance(suppress, tuple) and isinstance(exc, suppress))
+        ):
+            return  # Suppress this exception
+
+        # If it's already a SQLSpec exception, don't wrap it
+        if isinstance(exc, SQLSpecError):
+            raise
+
+        # Handle wrapping
         if wrap_exceptions is False:
             raise
         msg = "An error occurred during the operation."

@@ -116,10 +116,10 @@ class MockSyncPoolConfig(SyncDatabaseConfig[Any, Any, Any]):
     def provide_session(self, *args: Any, **kwargs: Any) -> Mock:
         return Mock()
 
-    def _create_pool_impl(self) -> Mock:
+    def _create_pool(self) -> Mock:
         return self.pool_instance or Mock()  # Ensure we always return a Mock
 
-    def _close_pool_impl(self) -> None:
+    def _close_pool(self) -> None:
         pass
 
 
@@ -147,10 +147,10 @@ class MockAsyncPoolConfig(AsyncDatabaseConfig[Any, Any, Any]):
     def provide_session(self, *args: Any, **kwargs: Any) -> AsyncMock:
         return AsyncMock()
 
-    async def _create_pool_impl(self) -> Mock:
+    async def _create_pool(self) -> Mock:
         return self.pool_instance or Mock()  # Ensure we always return a Mock
 
-    async def _close_pool_impl(self) -> None:
+    async def _close_pool(self) -> None:
         pass
 
 

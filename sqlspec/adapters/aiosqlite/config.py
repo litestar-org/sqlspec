@@ -1,6 +1,6 @@
+# ruff: noqa: PLR6301
 """Aiosqlite database configuration using TypedDict for better maintainability."""
 
-import inspect
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -63,6 +63,16 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
     __is_async__: ClassVar[bool] = True
     __supports_connection_pooling__: ClassVar[bool] = False
 
+    # Driver class reference for dialect resolution
+    driver_class: ClassVar[type[AiosqliteDriver]] = AiosqliteDriver
+
+    # Parameter style support information
+    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "named_colon")
+    """AIOSQLite supports ? (qmark) and :name (named_colon) parameter styles."""
+
+    preferred_parameter_style: ClassVar[str] = "qmark"
+    """AIOSQLite's native parameter style is ? (qmark)."""
+
     def __init__(
         self,
         connection_config: Optional[AiosqliteConnectionConfig] = None,
@@ -99,25 +109,15 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
     @property
     def connection_config_dict(self) -> dict[str, Any]:
         """Return the connection configuration as a dict."""
-        config = {k: v for k, v in self.connection_config.items() if v is not Empty}
-        try:
-            valid_params = set(inspect.signature(aiosqlite.connect).parameters)
-        except Exception:
-            valid_params = set()
-        extra_keys = set(config) - valid_params
-        if extra_keys:
-            logger.debug(
-                "AioSqlite config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
-                list(extra_keys),
-            )
-        return {k: v for k, v in config.items() if k in valid_params}
+        return {k: v for k, v in self.connection_config.items() if v is not Empty}
 
-    async def _create_pool_impl(self) -> None:
+    async def _create_pool(self) -> None:
         """Aiosqlite doesn't support pooling."""
         return
 
-    async def _close_pool_impl(self) -> None:
+    async def _close_pool(self) -> None:
         """Aiosqlite doesn't support pooling."""
+        return
 
     async def create_connection(self) -> AiosqliteConnection:
         """Create a single async connection.
@@ -162,16 +162,23 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
             An AiosqliteDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as connection:
+            # Create statement config with parameter style info if not already set
+            statement_config = self.statement_config
+            if statement_config.allowed_parameter_styles is None:
+                from dataclasses import replace
+
+                statement_config = replace(
+                    statement_config,
+                    allowed_parameter_styles=self.supported_parameter_styles,
+                    target_parameter_style=self.preferred_parameter_style,
+                )
+
             yield self.driver_type(
                 connection=connection,
-                config=self.statement_config,
+                config=statement_config,
                 instrumentation_config=self.instrumentation,
             )
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> None:
-        """Aiosqlite doesn't support pooling.
-
-        Returns:
-            None (no pool support).
-        """
+        """Aiosqlite doesn't support pooling."""
         return

@@ -314,9 +314,11 @@ def test_text_functions_empty_and_none_like_inputs() -> None:
     # Empty strings
     assert snake_case("") == ""
     assert slugify("") == ""
-    assert check_email("") == ""
+    with pytest.raises(ValueError):
+        check_email("")
 
     # Whitespace only
     assert snake_case("   ") == ""
     assert slugify("   ") == ""
-    assert check_email("   ") == "   "  # check_email just lowercases
+    with pytest.raises(ValueError):
+        check_email("   ")

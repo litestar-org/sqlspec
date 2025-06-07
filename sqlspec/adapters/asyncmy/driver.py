@@ -8,19 +8,19 @@ from asyncmy import Connection
 from litestar.utils import ensure_async_callable
 from typing_extensions import TypeAlias
 
+from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import AsyncDriverAdapterProtocol
-from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin
+from sqlspec.driver.mixins import AsyncStorageMixin, SQLTranslatorMixin, ToSchemaMixin
+from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.result import SQLResult
+from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.telemetry import instrument_operation_async
 
 if TYPE_CHECKING:
     from asyncmy.cursors import Cursor
-
-    from sqlspec.config import InstrumentationConfig
-    from sqlspec.statement.sql import SQL, SQLConfig
-
+    from sqlglot.dialects.dialect import DialectType
 
 __all__ = ("AsyncmyConnection", "AsyncmyDriver")
 
@@ -30,22 +30,20 @@ AsyncmyConnection: TypeAlias = Connection
 
 
 class AsyncmyDriver(
-    AsyncDriverAdapterProtocol[AsyncmyConnection, RowT],
-    AsyncArrowMixin[AsyncmyConnection],
-    SQLTranslatorMixin[AsyncmyConnection],
-    ResultConverter,
+    AsyncDriverAdapterProtocol[AsyncmyConnection, RowT], SQLTranslatorMixin, AsyncStorageMixin, ToSchemaMixin
 ):
     """Asyncmy MySQL/MariaDB Driver Adapter. Modern protocol implementation."""
 
-    dialect: str = "mysql"
+    dialect: "DialectType" = "mysql"
     __supports_arrow__: ClassVar[bool] = True
+    __supports_parquet__: ClassVar[bool] = False
 
     def __init__(
         self,
-        connection: "AsyncmyConnection",  # pyright: ignore
-        config: "Optional[SQLConfig]" = None,
-        instrumentation_config: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
+        connection: AsyncmyConnection,  # pyright: ignore
+        config: Optional[SQLConfig] = None,
+        instrumentation_config: Optional[InstrumentationConfig] = None,
+        default_row_type: type[DictRow] = DictRow,
     ) -> None:
         super().__init__(
             connection=connection,
@@ -58,18 +56,19 @@ class AsyncmyDriver(
         return ParameterStyle.PYFORMAT_POSITIONAL
 
     @asynccontextmanager
-    async def _get_cursor(self, connection: "Optional[AsyncmyConnection]" = None) -> "AsyncGenerator[Cursor, None]":  # pyright: ignore
+    async def _get_cursor(self, connection: "Optional[AsyncmyConnection]" = None) -> "AsyncGenerator[Cursor, None]":
         conn_to_use = connection or self.connection
         cursor: Cursor = await conn_to_use.cursor()
         try:
             yield cursor
         finally:
-            if hasattr(cursor, "close") and callable(cursor.close):
-                await ensure_async_callable(cursor.close)()  # pyright: ignore
+            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+                if callable(cursor.close):
+                    await ensure_async_callable(cursor.close)()  # pyright: ignore
 
     async def _execute_statement(
         self,
-        statement: "SQL",
+        statement: SQL,
         connection: "Optional[AsyncmyConnection]" = None,  # pyright: ignore
         **kwargs: Any,
     ) -> Any:
@@ -97,8 +96,8 @@ class AsyncmyDriver(
     async def _execute(
         self,
         sql: str,
-        params: Any,
-        statement: "SQL",
+        parameters: Any,
+        statement: SQL,
         connection: "Optional[AsyncmyConnection]" = None,
         **kwargs: Any,
     ) -> Any:
@@ -106,13 +105,13 @@ class AsyncmyDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            processed_params: Optional[Union[list[Any], tuple[Any, ...]]] = None
-            if params is not None:
-                processed_params = params if isinstance(params, (list, tuple)) else [params]
-            if self.instrumentation_config.log_parameters and processed_params:
-                logger.debug("Query parameters: %s", processed_params)
+            processed_parameters: Optional[Union[list[Any], tuple[Any, ...]]] = None
+            if parameters is not None:
+                processed_parameters = parameters if isinstance(parameters, (list, tuple)) else [parameters]
+            if self.instrumentation_config.log_parameters and processed_parameters:
+                logger.debug("Query parameters: %s", processed_parameters)
             async with self._get_cursor(conn) as cursor:
-                await cursor.execute(sql, processed_params)
+                await cursor.execute(sql, processed_parameters)
                 if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
                     return cursor
                 return cursor
@@ -159,10 +158,10 @@ class AsyncmyDriver(
 
     async def _wrap_select_result(
         self,
-        statement: "SQL",
-        result: "Any",
+        statement: SQL,
+        result: Any,
         schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: "Any",
+        **kwargs: Any,
     ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
         async with instrument_operation_async(self, "asyncmy_wrap_select", "database"):
             cursor = cast("Cursor", result)
@@ -206,14 +205,15 @@ class AsyncmyDriver(
 
     async def _wrap_execute_result(
         self,
-        statement: "SQL",
-        result: "Any",
-        **kwargs: "Any",
-    ) -> "SQLResult[RowT]":
+        statement: SQL,
+        result: Any,
+        **kwargs: Any,
+    ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "asyncmy_wrap_execute", "database"):
             operation_type = "UNKNOWN"
-            if statement.expression and hasattr(statement.expression, "key"):
-                operation_type = str(statement.expression.key).upper()
+            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+                if statement.expression:
+                    operation_type = str(statement.expression.key).upper()
 
             if isinstance(result, str) and result == "SCRIPT EXECUTED":
                 return SQLResult[RowT](
@@ -243,34 +243,6 @@ class AsyncmyDriver(
                 operation_type=operation_type,
             )
 
-    async def _select_to_arrow_impl(
-        self,
-        stmt_obj: "SQL",
-        connection: "AsyncmyConnection",  # pyright: ignore
-        **kwargs: "Any",
-    ) -> ArrowResult:
-        import pyarrow as pa
-
-        final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
-        final_params = stmt_obj.parameters
-
-        cursor = await connection.cursor()
-        await cursor.execute(final_sql, final_params or {})
-
-        results, description = await cursor.fetchall(), cursor.description
-        if not results:
-            column_names_from_desc = [col[0] for col in description or []]
-            return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=column_names_from_desc))
-
-        column_names = [column[0] for column in description or []]
-        if not column_names:
-            return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=[]))
-
-        columns_data = [list(col) for col in zip(*results)]
-
-        arrow_table = pa.Table.from_arrays(columns_data, names=column_names)
-        return ArrowResult(statement=stmt_obj, data=arrow_table)
-
-    def _connection(self, connection: Optional[AsyncmyConnection] = None) -> AsyncmyConnection:  # pyright: ignore
+    def _connection(self, connection: Optional[Connection] = None) -> Connection:  # pyright: ignore
         """Get the connection to use for the operation."""
         return connection or self.connection

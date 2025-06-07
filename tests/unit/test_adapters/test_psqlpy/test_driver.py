@@ -1,8 +1,11 @@
 """Unit tests for PSQLPy driver."""
 
+import tempfile
 from typing import Any, Union
 from unittest.mock import AsyncMock
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.psqlpy import PsqlpyConnection, PsqlpyDriver
@@ -393,10 +396,10 @@ async def test_psqlpy_driver_operation_type_detection(psqlpy_driver: PsqlpyDrive
 
 
 @pytest.mark.asyncio
-async def test_psqlpy_driver_select_to_arrow_basic(
+async def test_psqlpy_driver_fetch_arrow_table_basic(
     psqlpy_driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock
 ) -> None:
-    """Test PSQLPy driver select_to_arrow method basic functionality."""
+    """Test PSQLPy driver fetch_arrow_table method basic functionality."""
     # Setup mock connection and result data
     mock_data = [
         {"id": 1, "name": "Alice"},
@@ -407,8 +410,8 @@ async def test_psqlpy_driver_select_to_arrow_basic(
     # Create SQL statement
     statement = SQL("SELECT id, name FROM users")
 
-    # Execute select_to_arrow
-    result = await psqlpy_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = await psqlpy_driver.fetch_arrow_table(statement)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -418,10 +421,10 @@ async def test_psqlpy_driver_select_to_arrow_basic(
 
 
 @pytest.mark.asyncio
-async def test_psqlpy_driver_select_to_arrow_with_parameters(
+async def test_psqlpy_driver_fetch_arrow_table_with_parameters(
     psqlpy_driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock
 ) -> None:
-    """Test PSQLPy driver select_to_arrow method with parameters."""
+    """Test PSQLPy driver fetch_arrow_table method with parameters."""
     # Setup mock connection and result data
     mock_data = [{"id": 42, "name": "Test User"}]
     mock_psqlpy_connection.fetch_all.return_value = mock_data
@@ -429,8 +432,8 @@ async def test_psqlpy_driver_select_to_arrow_with_parameters(
     # Create SQL statement with parameters
     statement = SQL("SELECT id, name FROM users WHERE id = $1", parameters=[42])
 
-    # Execute select_to_arrow
-    result = await psqlpy_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = await psqlpy_driver.fetch_arrow_table(statement)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -440,29 +443,29 @@ async def test_psqlpy_driver_select_to_arrow_with_parameters(
 
 
 @pytest.mark.asyncio
-async def test_psqlpy_driver_select_to_arrow_non_query_error(psqlpy_driver: PsqlpyDriver) -> None:
-    """Test PSQLPy driver select_to_arrow with non-query statement raises error."""
+async def test_psqlpy_driver_fetch_arrow_table_non_query_error(psqlpy_driver: PsqlpyDriver) -> None:
+    """Test PSQLPy driver fetch_arrow_table with non-query statement raises error."""
     # Create non-query statement
     statement = SQL("INSERT INTO users VALUES (1, 'test')")
 
     # Test error for non-query
     with pytest.raises(TypeError, match="Cannot fetch Arrow table for a non-query statement"):
-        await psqlpy_driver.select_to_arrow(statement)
+        await psqlpy_driver.fetch_arrow_table(statement)
 
 
 @pytest.mark.asyncio
-async def test_psqlpy_driver_select_to_arrow_empty_result(
+async def test_psqlpy_driver_fetch_arrow_table_empty_result(
     psqlpy_driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock
 ) -> None:
-    """Test PSQLPy driver select_to_arrow with empty result."""
+    """Test PSQLPy driver fetch_arrow_table with empty result."""
     # Setup mock connection with no data
     mock_psqlpy_connection.fetch_all.return_value = []
 
     # Create SQL statement
     statement = SQL("SELECT id, name FROM users WHERE id > 1000")
 
-    # Execute select_to_arrow
-    result = await psqlpy_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = await psqlpy_driver.fetch_arrow_table(statement)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -471,8 +474,8 @@ async def test_psqlpy_driver_select_to_arrow_empty_result(
 
 
 @pytest.mark.asyncio
-async def test_psqlpy_driver_select_to_arrow_with_connection_override(psqlpy_driver: PsqlpyDriver) -> None:
-    """Test PSQLPy driver select_to_arrow with connection override."""
+async def test_psqlpy_driver_fetch_arrow_table_with_connection_override(psqlpy_driver: PsqlpyDriver) -> None:
+    """Test PSQLPy driver fetch_arrow_table with connection override."""
     # Create override connection
     override_connection = AsyncMock()
     mock_data = [{"id": 1}]
@@ -482,7 +485,7 @@ async def test_psqlpy_driver_select_to_arrow_with_connection_override(psqlpy_dri
     statement = SQL("SELECT id FROM users")
 
     # Execute with connection override
-    result = await psqlpy_driver.select_to_arrow(statement, connection=override_connection)
+    result = await psqlpy_driver.fetch_arrow_table(statement, connection=override_connection)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -524,7 +527,7 @@ def test_psqlpy_driver_mixins_integration(psqlpy_driver: PsqlpyDriver) -> None:
     assert isinstance(psqlpy_driver, ResultConverter)
 
     # Test mixin methods are available
-    assert hasattr(psqlpy_driver, "select_to_arrow")
+    assert hasattr(psqlpy_driver, "fetch_arrow_table")
     assert hasattr(psqlpy_driver, "to_schema")
     assert hasattr(psqlpy_driver, "returns_rows")
 
@@ -611,3 +614,38 @@ async def test_psqlpy_driver_prepared_statements(
     # Verify execution worked
     mock_psqlpy_connection.execute.assert_called_once_with("INSERT INTO users (name) VALUES ($1)", ["John"])
     assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_psqlpy_driver_fetch_arrow_table_arrowresult(
+    psqlpy_driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock
+) -> None:
+    """Test fetch_arrow_table returns ArrowResult with correct pyarrow.Table (async)."""
+    mock_psqlpy_connection.fetch_all.return_value = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+    statement = SQL("SELECT id, name FROM users")
+    result = await psqlpy_driver.fetch_arrow_table(statement)
+    assert isinstance(result, ArrowResult)
+    assert isinstance(result.data, pa.Table)
+    assert result.data.num_rows == 2
+    assert set(result.data.column_names) == {"id", "name"}
+
+
+@pytest.mark.asyncio
+async def test_psqlpy_driver_to_parquet(
+    psqlpy_driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """Test to_parquet writes correct data to a Parquet file (async)."""
+    mock_psqlpy_connection.fetch_all.return_value = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+    statement = SQL("SELECT id, name FROM users")
+    called = {}
+
+    def patched_write_table(table: Any, path: Any, **kwargs: Any) -> None:
+        called["table"] = table
+        called["path"] = path
+
+    monkeypatch.setattr(pq, "write_table", patched_write_table)
+    with tempfile.NamedTemporaryFile() as tmp:
+        await psqlpy_driver.export_to_storage(statement, tmp.name)
+        assert "table" in called
+        assert called["path"] == tmp.name
+        assert isinstance(called["table"], pa.Table)

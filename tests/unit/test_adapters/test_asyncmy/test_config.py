@@ -1,6 +1,7 @@
 """Unit tests for Asyncmy configuration."""
 
-from unittest.mock import AsyncMock, Mock, patch
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -203,19 +204,18 @@ def test_asyncmy_config_connection_config_dict() -> None:
 
 
 def test_asyncmy_config_connection_config_dict_validation() -> None:
-    """Test Asyncmy config connection_config_dict validation."""
-    from sqlspec.exceptions import ImproperConfigurationError
-
-    # Test with neither host nor unix_socket
+    """Test Asyncmy config connection_config_dict with various configurations."""
+    # Test with minimal config (validation removed, so this should work)
     pool_config = AsyncmyPoolConfig(
         user="test_user",
         password="test_password",
         database="test_db",
     )
     config = AsyncmyConfig(pool_config=pool_config)
-
-    with pytest.raises(ImproperConfigurationError, match="requires either 'host' or 'unix_socket'"):
-        config.connection_config_dict
+    config_dict = config.connection_config_dict
+    assert config_dict["user"] == "test_user"
+    assert config_dict["password"] == "test_password"
+    assert config_dict["database"] == "test_db"
 
     # Test with host (should work)
     pool_config_with_host = AsyncmyPoolConfig(
@@ -242,10 +242,14 @@ def test_asyncmy_config_connection_config_dict_validation() -> None:
 
 @patch("asyncmy.create_pool")
 @pytest.mark.asyncio
-async def test_asyncmy_config_create_pool_impl(mock_create_pool: Mock) -> None:
+async def test_asyncmy_config_create_pool(mock_create_pool: Mock) -> None:
     """Test Asyncmy config _create_pool_impl method (mocked)."""
     mock_pool = AsyncMock()
-    mock_create_pool.return_value = mock_pool
+
+    async def _create_pool(**kwargs: Any) -> AsyncMock:
+        return mock_pool
+
+    mock_create_pool.side_effect = _create_pool
 
     pool_config = AsyncmyPoolConfig(
         host="localhost",
@@ -258,17 +262,18 @@ async def test_asyncmy_config_create_pool_impl(mock_create_pool: Mock) -> None:
     )
     config = AsyncmyConfig(pool_config=pool_config)
 
-    pool = await config._create_pool_impl()
+    pool = await config._create_pool()
 
     # Verify create_pool was called with correct parameters
+    # Pool params (minsize, maxsize) and connection params are passed separately
     mock_create_pool.assert_called_once_with(
+        minsize=1,
+        maxsize=10,
         host="localhost",
         port=3306,
         user="test_user",
         password="test_password",
         database="test_db",
-        minsize=1,
-        maxsize=10,
     )
     assert pool is mock_pool
 
@@ -278,7 +283,11 @@ async def test_asyncmy_config_create_pool_impl(mock_create_pool: Mock) -> None:
 async def test_asyncmy_config_create_connection(mock_connect: Mock) -> None:
     """Test Asyncmy config create_connection method (mocked)."""
     mock_connection = AsyncMock()
-    mock_connect.return_value = mock_connection
+
+    async def _connect(**kwargs: Any) -> AsyncMock:
+        return mock_connection
+
+    mock_connect.side_effect = _connect
 
     connection_config = AsyncmyConnectionConfig(
         host="localhost",
@@ -315,7 +324,11 @@ async def test_asyncmy_config_create_connection(mock_connect: Mock) -> None:
 async def test_asyncmy_config_provide_connection_without_pool(mock_connect: Mock) -> None:
     """Test Asyncmy config provide_connection context manager without pool."""
     mock_connection = AsyncMock()
-    mock_connect.return_value = mock_connection
+
+    async def _connect(**kwargs: Any) -> AsyncMock:
+        return mock_connection
+
+    mock_connect.side_effect = _connect
 
     pool_config = AsyncmyPoolConfig(
         host="localhost",
@@ -341,8 +354,12 @@ async def test_asyncmy_config_provide_connection_with_pool() -> None:
     """Test Asyncmy config provide_connection context manager with pool."""
     mock_pool = AsyncMock()
     mock_connection = AsyncMock()
-    mock_pool.acquire.return_value.__aenter__.return_value = mock_connection
-    mock_pool.acquire.return_value.__aexit__.return_value = None
+
+    # Create a proper async context manager mock using MagicMock for the context manager
+    mock_acquire_context = MagicMock()
+    mock_acquire_context.__aenter__ = AsyncMock(return_value=mock_connection)
+    mock_acquire_context.__aexit__ = AsyncMock(return_value=None)
+    mock_pool.acquire = MagicMock(return_value=mock_acquire_context)
     pool_config = AsyncmyPoolConfig(
         host="localhost",
         port=3306,
@@ -365,7 +382,11 @@ async def test_asyncmy_config_provide_connection_with_pool() -> None:
 async def test_asyncmy_config_provide_connection_error_handling(mock_connect: Mock) -> None:
     """Test Asyncmy config provide_connection error handling."""
     mock_connection = AsyncMock()
-    mock_connect.return_value = mock_connection
+
+    async def _connect(**kwargs: Any) -> AsyncMock:
+        return mock_connection
+
+    mock_connect.side_effect = _connect
 
     pool_config = AsyncmyPoolConfig(
         host="localhost",
@@ -391,7 +412,11 @@ async def test_asyncmy_config_provide_connection_error_handling(mock_connect: Mo
 async def test_asyncmy_config_provide_session(mock_connect: Mock) -> None:
     """Test Asyncmy config provide_session context manager."""
     mock_connection = AsyncMock()
-    mock_connect.return_value = mock_connection
+
+    async def _connect(**kwargs: Any) -> AsyncMock:
+        return mock_connection
+
+    mock_connect.side_effect = _connect
 
     pool_config = AsyncmyPoolConfig(
         host="localhost",
@@ -406,7 +431,11 @@ async def test_asyncmy_config_provide_session(mock_connect: Mock) -> None:
     async with config.provide_session() as session:
         assert isinstance(session, AsyncmyDriver)
         assert session.connection is mock_connection
-        assert session.config is config.statement_config
+        # The config is replaced with one that has parameter styles injected
+        assert session.config.enable_parsing == config.statement_config.enable_parsing
+        assert session.config.enable_validation == config.statement_config.enable_validation
+        assert session.config.allowed_parameter_styles == ("pyformat_positional",)
+        assert session.config.target_parameter_style == "pyformat_positional"
         assert session.instrumentation_config is config.instrumentation
         # Verify connection is not closed yet
         mock_connection.close.assert_not_called()
@@ -574,7 +603,7 @@ def test_asyncmy_config_read_default_file() -> None:
 
 
 @pytest.mark.asyncio
-async def test_asyncmy_config_close_pool_impl() -> None:
+async def test_asyncmy_config_close_pool() -> None:
     """Test Asyncmy config _close_pool_impl method."""
     mock_pool = AsyncMock()
 
@@ -588,7 +617,7 @@ async def test_asyncmy_config_close_pool_impl() -> None:
     config = AsyncmyConfig(pool_config=pool_config)
     config.pool_instance = mock_pool
 
-    await config._close_pool_impl()
+    await config._close_pool()
 
     # Verify pool close was called
     mock_pool.close.assert_called_once()

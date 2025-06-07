@@ -1,22 +1,32 @@
 # ruff: noqa: PLR6301
-import logging
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
-from typing import Any, ClassVar, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
 from psycopg import AsyncConnection, Connection
 from psycopg.rows import DictRow as PsycopgDictRow
+from sqlglot.dialects.dialect import DialectType
 
 from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
-from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin, SyncArrowMixin
+from sqlspec.driver.mixins import (
+    AsyncStorageMixin,
+    SQLTranslatorMixin,
+    SyncStorageMixin,
+    ToSchemaMixin,
+)
+from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
 
-logger = logging.getLogger("sqlspec")
+if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
+
+logger = get_logger("adapters.psycopg")
 
 __all__ = ("PsycopgAsyncConnection", "PsycopgAsyncDriver", "PsycopgSyncConnection", "PsycopgSyncDriver")
 
@@ -25,15 +35,13 @@ PsycopgAsyncConnection = AsyncConnection[PsycopgDictRow]
 
 
 class PsycopgSyncDriver(
-    SyncDriverAdapterProtocol[PsycopgSyncConnection, RowT],
-    SQLTranslatorMixin[PsycopgSyncConnection],
-    SyncArrowMixin[PsycopgSyncConnection],
-    ResultConverter,
+    SyncDriverAdapterProtocol[PsycopgSyncConnection, RowT], SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
 ):
     """Psycopg Sync Driver Adapter. Refactored for new protocol."""
 
-    dialect: str = "postgres"
-    __supports_arrow__: ClassVar[bool] = False
+    dialect: "DialectType" = "postgres"
+    __supports_arrow__: ClassVar[bool] = True
+    __supports_parquet__: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -88,14 +96,14 @@ class PsycopgSyncDriver(
     def _execute(
         self,
         sql: str,
-        params: Any,
+        parameters: Any,
         statement: SQL,
         connection: Optional[PsycopgSyncConnection] = None,
         **kwargs: Any,
     ) -> Any:
         with instrument_operation(self, "psycopg_execute", "database"):
             conn = self._connection(connection)
-            final_driver_params = params if params is not None and isinstance(params, dict) else {}
+            final_driver_params = parameters if parameters is not None and isinstance(parameters, dict) else {}
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
             if self.instrumentation_config.log_parameters and final_driver_params:
@@ -177,8 +185,9 @@ class PsycopgSyncDriver(
     ) -> SQLResult[RowT]:
         with instrument_operation(self, "psycopg_wrap_execute", "database"):
             operation_type = "UNKNOWN"
-            if statement.expression and hasattr(statement.expression, "key"):
-                operation_type = str(statement.expression.key).upper()
+            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+                if statement.expression:
+                    operation_type = str(statement.expression.key).upper()
 
             if isinstance(result, str):
                 return SQLResult[RowT](
@@ -193,15 +202,16 @@ class PsycopgSyncDriver(
             rows_affected = getattr(cursor, "rowcount", -1)
 
             returned_data: list[dict[str, Any]] = []
-            if hasattr(cursor, "description") and cursor.description:
-                try:
-                    fetched_returning_data = cursor.fetchall()
-                    if fetched_returning_data:
-                        returned_data = [dict(row) for row in fetched_returning_data]
+            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+                if cursor.description:
+                    try:
+                        fetched_returning_data = cursor.fetchall()
+                        if fetched_returning_data:
+                            returned_data = [dict(row) for row in fetched_returning_data]
                         if not rows_affected or rows_affected == -1:
                             rows_affected = len(returned_data)
-                except Exception as e:  # pragma: no cover
-                    logger.debug("Could not fetch RETURNING data in _wrap_execute_result: %s", e)
+                    except Exception as e:  # pragma: no cover
+                        logger.debug("Could not fetch RETURNING data in _wrap_execute_result: %s", e)
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)
@@ -220,23 +230,15 @@ class PsycopgSyncDriver(
         """Get the connection to use for the operation."""
         return connection or self.connection
 
-    def _select_to_arrow_impl(
-        self, stmt_obj: "SQL", connection: "PsycopgSyncConnection", **kwargs: "Any"
-    ) -> "ArrowResult":
-        msg = "Arrow export is not implemented for Psycopg sync driver."
-        raise NotImplementedError(msg)
-
 
 class PsycopgAsyncDriver(
-    AsyncDriverAdapterProtocol[PsycopgAsyncConnection, RowT],
-    SQLTranslatorMixin[PsycopgAsyncConnection],
-    AsyncArrowMixin[PsycopgAsyncConnection],
-    ResultConverter,
+    AsyncDriverAdapterProtocol[PsycopgAsyncConnection, RowT], SQLTranslatorMixin, AsyncStorageMixin, ToSchemaMixin
 ):
     """Psycopg Async Driver Adapter. Refactored for new protocol."""
 
-    dialect: str = "postgres"
-    __supports_arrow__: ClassVar[bool] = False
+    dialect: "DialectType" = "postgres"
+    __supports_arrow__: ClassVar[bool] = True
+    __supports_parquet__: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -290,14 +292,14 @@ class PsycopgAsyncDriver(
     async def _execute(
         self,
         sql: str,
-        params: Any,
+        parameters: Any,
         statement: SQL,
         connection: Optional[PsycopgAsyncConnection] = None,
         **kwargs: Any,
     ) -> Any:
         async with instrument_operation_async(self, "psycopg_async_execute", "database"):
             conn = self._connection(connection)
-            final_driver_params = params if params is not None and isinstance(params, dict) else {}
+            final_driver_params = parameters if parameters is not None and isinstance(parameters, dict) else {}
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
             if self.instrumentation_config.log_parameters and final_driver_params:
@@ -336,7 +338,9 @@ class PsycopgAsyncDriver(
                 logger.debug("Executing SQL script: %s", script)
             async with self._get_cursor(conn) as cursor:
                 await cursor.execute(script_sql=script)
-                return cursor.statusmessage if hasattr(cursor, "statusmessage") else "SCRIPT EXECUTED"
+                with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+                    return cursor.statusmessage
+                return "SCRIPT EXECUTED"
 
     async def _wrap_select_result(  # pyright: ignore
         self,
@@ -379,8 +383,9 @@ class PsycopgAsyncDriver(
     ) -> SQLResult[RowT]:
         with instrument_operation(self, "psycopg_wrap_execute", "database"):
             operation_type = "UNKNOWN"
-            if statement.expression and hasattr(statement.expression, "key"):
-                operation_type = str(statement.expression.key).upper()
+            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+                if statement.expression:
+                    operation_type = str(statement.expression.key).upper()
 
             if isinstance(result, str):
                 return SQLResult[RowT](
@@ -395,15 +400,16 @@ class PsycopgAsyncDriver(
             rows_affected = getattr(cursor, "rowcount", -1)
 
             returned_data: list[dict[str, Any]] = []
-            if hasattr(cursor, "description") and cursor.description:
-                try:
-                    fetched_returning_data = await cursor.fetchall()
-                    if fetched_returning_data:
-                        returned_data = [dict(row) for row in fetched_returning_data]
-                        if not rows_affected or rows_affected == -1:
-                            rows_affected = len(returned_data)
-                except Exception as e:  # pragma: no cover
-                    logger.debug("Could not fetch RETURNING data in async _wrap_execute_result: %s", e)
+            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+                if cursor.description:
+                    try:
+                        fetched_returning_data = await cursor.fetchall()
+                        if fetched_returning_data:
+                            returned_data = [dict(row) for row in fetched_returning_data]
+                            if not rows_affected or rows_affected == -1:
+                                rows_affected = len(returned_data)
+                    except Exception as e:  # pragma: no cover
+                        logger.debug("Could not fetch RETURNING data in async _wrap_execute_result: %s", e)
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)
@@ -421,9 +427,3 @@ class PsycopgAsyncDriver(
     def _connection(self, connection: Optional[PsycopgAsyncConnection] = None) -> PsycopgAsyncConnection:
         """Get the connection to use for the operation."""
         return connection or self.connection
-
-    async def _select_to_arrow_impl(
-        self, stmt_obj: "SQL", connection: "PsycopgAsyncConnection", **kwargs: "Any"
-    ) -> "ArrowResult":
-        msg = "Arrow export is not implemented for Psycopg async driver."
-        raise NotImplementedError(msg)

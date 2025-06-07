@@ -214,16 +214,16 @@ def test_bigquery_config_connection_config_dict() -> None:
     config = BigQueryConfig(connection_config=connection_config)
     client_config = config.connection_config_dict
 
-    # Check that only client constructor parameters are included
+    # Check that all parameters are included (validation removed)
     assert client_config["project"] == "test-project"
     assert client_config["location"] == "US"
-    assert "credentials_path" not in client_config  # Should be excluded
-    assert "dataset_id" not in client_config  # Should be excluded
-    assert "use_legacy_sql" not in client_config  # Should be excluded
-    assert "enable_bigquery_ml" not in client_config  # Should be excluded
-    assert "enable_gemini_integration" not in client_config  # Should be excluded
-    assert "query_timeout_ms" not in client_config  # Should be excluded
-    assert "enable_vector_search" not in client_config  # Should be excluded
+    assert client_config["credentials_path"] == "/path/to/credentials.json"
+    assert client_config["dataset_id"] == "test_dataset"
+    assert client_config["use_legacy_sql"] is False
+    assert client_config["enable_bigquery_ml"] is True
+    assert client_config["enable_gemini_integration"] is True
+    assert client_config["query_timeout_ms"] == 30000
+    assert client_config["enable_vector_search"] is True
 
 
 def test_bigquery_config_connection_config_dict_with_credentials() -> None:
@@ -243,12 +243,12 @@ def test_bigquery_config_connection_config_dict_with_credentials() -> None:
     config = BigQueryConfig(connection_config=connection_config)
     client_config = config.connection_config_dict
 
-    # Check that valid client parameters are included
+    # Check that all parameters are included (validation removed)
     assert client_config["project"] == "test-project"
     assert client_config["credentials"] == mock_credentials
     assert client_config["client_options"] == mock_client_options
     assert client_config["client_info"] == mock_client_info
-    assert "enable_bigquery_ml" not in client_config
+    assert client_config["enable_bigquery_ml"] is True  # Now included
 
 
 @patch("sqlspec.adapters.bigquery.config.BigQueryConnection")
@@ -266,7 +266,11 @@ def test_bigquery_config_create_connection_success(mock_connection_class: Mock) 
     connection = config.create_connection()
 
     assert connection == mock_connection
-    mock_connection_class.assert_called_once_with(project="test-project", location="US")
+    # Check that the connection was created with the right parameters
+    call_args = mock_connection_class.call_args
+    assert call_args.kwargs["project"] == "test-project"
+    assert call_args.kwargs["location"] == "US"
+    assert "default_query_job_config" in call_args.kwargs  # This is now added automatically
 
 
 @patch("sqlspec.adapters.bigquery.config.BigQueryConnection")

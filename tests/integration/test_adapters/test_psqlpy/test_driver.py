@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any, Literal
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig, PsqlpyPoolConfig
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.sql import SQL
 
 if TYPE_CHECKING:
     from pytest_databases.docker.postgres import PostgresService
@@ -450,3 +454,36 @@ async def test_delete_operation(psqlpy_config: PsqlpyConfig) -> None:
         assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert select_result.data[0]["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_psqlpy_fetch_arrow_table(psqlpy_config: PsqlpyConfig) -> None:
+    """Integration test: fetch_arrow_table returns ArrowResult with correct pyarrow.Table."""
+    async with psqlpy_config.provide_session() as driver:
+        await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("arrow1",))
+        await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("arrow2",))
+        statement = SQL("SELECT name FROM test_table ORDER BY name")
+        result = await driver.fetch_arrow_table(statement)
+        assert isinstance(result, ArrowResult)
+        table = result.data
+        assert isinstance(table, pa.Table)
+        assert table.num_rows == 2
+        assert set(table.column_names) == {"name"}
+        names = table.column("name").to_pylist()
+        assert "arrow1" in names and "arrow2" in names
+
+
+@pytest.mark.asyncio
+async def test_psqlpy_to_parquet(psqlpy_config: PsqlpyConfig) -> None:
+    """Integration test: to_parquet writes correct data to a Parquet file."""
+    async with psqlpy_config.provide_session() as driver:
+        await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("pq1",))
+        await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("pq2",))
+        statement = SQL("SELECT name FROM test_table ORDER BY name")
+        with tempfile.NamedTemporaryFile() as tmp:
+            await driver.export_to_storage(statement, tmp.name)
+            table = pq.read_table(tmp.name)
+            assert table.num_rows == 2
+            assert set(table.column_names) == {"name"}
+            names = table.column("name").to_pylist()
+            assert "pq1" in names and "pq2" in names

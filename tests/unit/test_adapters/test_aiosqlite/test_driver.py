@@ -1,8 +1,11 @@
 """Unit tests for AIOSQLite driver."""
 
+import tempfile
 from typing import Any, Union
 from unittest.mock import AsyncMock
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConnection, AiosqliteDriver
@@ -447,10 +450,10 @@ async def test_aiosqlite_driver_operation_type_detection(aiosqlite_driver: Aiosq
 
 
 @pytest.mark.asyncio
-async def test_aiosqlite_driver_select_to_arrow_basic(
+async def test_aiosqlite_driver_fetch_arrow_table_basic(
     aiosqlite_driver: AiosqliteDriver, mock_aiosqlite_connection: AsyncMock
 ) -> None:
-    """Test AIOSQLite driver select_to_arrow method basic functionality."""
+    """Test AIOSQLite driver fetch_arrow_table method basic functionality."""
     # Setup mock cursor and result data
     mock_cursor = AsyncMock()
     mock_cursor.description = [("id", None), ("name", None)]
@@ -463,8 +466,8 @@ async def test_aiosqlite_driver_select_to_arrow_basic(
     mock_cursor.execute.return_value = None
     # Create SQL statement
     statement = SQL("SELECT id, name FROM users")
-    # Execute select_to_arrow
-    result = await aiosqlite_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = await aiosqlite_driver.fetch_arrow_table(statement)
     # Verify result
     assert isinstance(result, ArrowResult)
     # Verify connection operations
@@ -473,10 +476,10 @@ async def test_aiosqlite_driver_select_to_arrow_basic(
 
 
 @pytest.mark.asyncio
-async def test_aiosqlite_driver_select_to_arrow_with_parameters(
+async def test_aiosqlite_driver_fetch_arrow_table_with_parameters(
     aiosqlite_driver: AiosqliteDriver, mock_aiosqlite_connection: AsyncMock
 ) -> None:
-    """Test AIOSQLite driver select_to_arrow method with parameters."""
+    """Test AIOSQLite driver fetch_arrow_table method with parameters."""
     # Setup mock cursor and result data
     mock_cursor = AsyncMock()
     mock_cursor.description = [("id", None), ("name", None)]
@@ -489,8 +492,8 @@ async def test_aiosqlite_driver_select_to_arrow_with_parameters(
     mock_cursor.execute.return_value = None
     # Create SQL statement with parameters
     statement = SQL("SELECT id, name FROM users WHERE id = ?", parameters=[42])
-    # Execute select_to_arrow
-    result = await aiosqlite_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = await aiosqlite_driver.fetch_arrow_table(statement)
     # Verify result
     assert isinstance(result, ArrowResult)
     # Verify connection operations with parameters
@@ -499,21 +502,21 @@ async def test_aiosqlite_driver_select_to_arrow_with_parameters(
 
 
 @pytest.mark.asyncio
-async def test_aiosqlite_driver_select_to_arrow_non_query_error(aiosqlite_driver: AiosqliteDriver) -> None:
-    """Test AIOSQLite driver select_to_arrow with non-query statement raises error."""
+async def test_aiosqlite_driver_fetch_arrow_table_non_query_error(aiosqlite_driver: AiosqliteDriver) -> None:
+    """Test AIOSQLite driver fetch_arrow_table with non-query statement raises error."""
     # Create non-query statement
     statement = SQL("INSERT INTO users VALUES (1, 'test')")
 
     # Test error for non-query
     with pytest.raises(TypeError, match="Cannot fetch Arrow table for a non-query statement"):
-        await aiosqlite_driver.select_to_arrow(statement)
+        await aiosqlite_driver.fetch_arrow_table(statement)
 
 
 @pytest.mark.asyncio
-async def test_aiosqlite_driver_select_to_arrow_empty_result(
+async def test_aiosqlite_driver_fetch_arrow_table_empty_result(
     aiosqlite_driver: AiosqliteDriver, mock_aiosqlite_connection: AsyncMock
 ) -> None:
-    """Test AIOSQLite driver select_to_arrow with empty result."""
+    """Test AIOSQLite driver fetch_arrow_table with empty result."""
     # Setup mock cursor with no data
     mock_cursor = AsyncMock()
     mock_cursor.description = [("id", None), ("name", None)]
@@ -526,9 +529,9 @@ async def test_aiosqlite_driver_select_to_arrow_empty_result(
     mock_cursor.execute.return_value = None
     # Create SQL statement
     statement = SQL("SELECT id, name FROM users WHERE id > 1000")
-    # Execute select_to_arrow
+    # Execute fetch_arrow_table
     try:
-        result = await aiosqlite_driver.select_to_arrow(statement)
+        result = await aiosqlite_driver.fetch_arrow_table(statement)
         assert isinstance(result, ArrowResult)
         assert result.data.num_rows == 0
     except ValueError as e:
@@ -537,8 +540,8 @@ async def test_aiosqlite_driver_select_to_arrow_empty_result(
 
 
 @pytest.mark.asyncio
-async def test_aiosqlite_driver_select_to_arrow_with_connection_override(aiosqlite_driver: AiosqliteDriver) -> None:
-    """Test AIOSQLite driver select_to_arrow with connection override."""
+async def test_aiosqlite_driver_fetch_arrow_table_with_connection_override(aiosqlite_driver: AiosqliteDriver) -> None:
+    """Test AIOSQLite driver fetch_arrow_table with connection override."""
     # Create override connection
     override_connection = AsyncMock()
     mock_cursor = AsyncMock()
@@ -553,7 +556,7 @@ async def test_aiosqlite_driver_select_to_arrow_with_connection_override(aiosqli
     # Create SQL statement
     statement = SQL("SELECT id FROM users")
     # Execute with connection override
-    result = await aiosqlite_driver.select_to_arrow(statement, connection=override_connection)
+    result = await aiosqlite_driver.fetch_arrow_table(statement, connection=override_connection)
     # Verify result
     assert isinstance(result, ArrowResult)
     # Verify override connection was used
@@ -599,7 +602,7 @@ def test_aiosqlite_driver_mixins_integration(aiosqlite_driver: AiosqliteDriver) 
     assert isinstance(aiosqlite_driver, ResultConverter)
 
     # Test mixin methods are available
-    assert hasattr(aiosqlite_driver, "select_to_arrow")
+    assert hasattr(aiosqlite_driver, "fetch_arrow_table")
     assert hasattr(aiosqlite_driver, "to_schema")
     assert hasattr(aiosqlite_driver, "returns_rows")
 
@@ -613,3 +616,54 @@ def test_aiosqlite_driver_returns_rows_method(aiosqlite_driver: AiosqliteDriver)
     # Test with INSERT statement
     insert_stmt = SQL("INSERT INTO users VALUES (1, 'test')")
     assert aiosqlite_driver.returns_rows(insert_stmt.expression) is False
+
+
+@pytest.mark.asyncio
+async def test_aiosqlite_driver_fetch_arrow_table_arrowresult(
+    aiosqlite_driver: AiosqliteDriver, mock_aiosqlite_connection: AsyncMock
+) -> None:
+    """Test fetch_arrow_table returns ArrowResult with correct pyarrow.Table (async)."""
+    mock_cursor = AsyncMock()
+    mock_cursor.description = [("id", None), ("name", None)]
+    mock_cursor.fetchall.return_value = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+
+    async def _cursor(*args: Any, **kwargs: Any) -> AsyncMock:
+        return mock_cursor
+
+    mock_aiosqlite_connection.cursor.side_effect = _cursor
+    mock_cursor.execute.return_value = None
+    statement = SQL("SELECT id, name FROM users")
+    result = await aiosqlite_driver.fetch_arrow_table(statement)
+    assert isinstance(result, ArrowResult)
+    assert isinstance(result.data, pa.Table)
+    assert result.data.num_rows == 2
+    assert set(result.data.column_names) == {"id", "name"}
+
+
+@pytest.mark.asyncio
+async def test_aiosqlite_driver_to_parquet(
+    aiosqlite_driver: AiosqliteDriver, mock_aiosqlite_connection: AsyncMock, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """Test to_parquet writes correct data to a Parquet file (async)."""
+    mock_cursor = AsyncMock()
+    mock_cursor.description = [("id", None), ("name", None)]
+    mock_cursor.fetchall.return_value = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+
+    async def _cursor(*args: Any, **kwargs: Any) -> AsyncMock:
+        return mock_cursor
+
+    mock_aiosqlite_connection.cursor.side_effect = _cursor
+    mock_cursor.execute.return_value = None
+    statement = SQL("SELECT id, name FROM users")
+    called = {}
+
+    def patched_write_table(table: Any, path: Any, **kwargs: Any) -> None:
+        called["table"] = table
+        called["path"] = path
+
+    monkeypatch.setattr(pq, "write_table", patched_write_table)
+    with tempfile.NamedTemporaryFile() as tmp:
+        await aiosqlite_driver.export_to_storage(statement, tmp.name)
+        assert "table" in called
+        assert called["path"] == tmp.name
+        assert isinstance(called["table"], pa.Table)

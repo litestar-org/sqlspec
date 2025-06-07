@@ -1,7 +1,6 @@
 """OracleDB database configuration using TypedDict for better maintainability."""
 
 import contextlib
-import inspect
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -196,6 +195,16 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
     __is_async__: ClassVar[bool] = False
     __supports_connection_pooling__: ClassVar[bool] = True
 
+    # Driver class reference for dialect resolution
+    driver_class: ClassVar[type[OracleSyncDriver]] = OracleSyncDriver
+
+    # Parameter style support information
+    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_colon", "numeric")
+    """OracleDB supports :name (named_colon) and :1 (numeric) parameter styles."""
+
+    preferred_parameter_style: ClassVar[str] = "named_colon"
+    """OracleDB's preferred parameter style is :name (named_colon)."""
+
     def __init__(
         self,
         pool_config: "OraclePoolConfig",
@@ -225,7 +234,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
     @property
     def connection_type(self) -> type[OracleSyncConnection]:  # type: ignore[override]
         """Return the connection type."""
-        import oracledb
 
         return oracledb.Connection
 
@@ -234,13 +242,12 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         """Return the driver type."""
         return OracleSyncDriver
 
-    def _create_pool_impl(self) -> "ConnectionPool":
+    def _create_pool(self) -> "ConnectionPool":
         """Create the actual connection pool."""
-        import oracledb
 
         return oracledb.create_pool(**self.connection_config_dict)
 
-    def _close_pool_impl(self) -> None:
+    def _close_pool(self) -> None:
         """Close the actual connection pool."""
         if self.pool_instance:
             self.pool_instance.close()
@@ -292,9 +299,20 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
             An OracleSyncDriver instance.
         """
         with self.provide_connection(*args, **kwargs) as conn:
+            # Create statement config with parameter style info if not already set
+            statement_config = self.statement_config
+            if statement_config.allowed_parameter_styles is None:
+                from dataclasses import replace
+
+                statement_config = replace(
+                    statement_config,
+                    allowed_parameter_styles=self.supported_parameter_styles,
+                    target_parameter_style=self.preferred_parameter_style,
+                )
+
             driver = self.driver_type(
                 connection=conn,
-                config=self.statement_config,
+                config=statement_config,
                 instrumentation_config=self.instrumentation,
             )
             yield driver
@@ -312,18 +330,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
     @property
     def connection_config_dict(self) -> dict[str, Any]:
         merged_config = {**self.connection_config, **self.pool_config}
-        config = {k: v for k, v in merged_config.items() if v is not Empty}
-        try:
-            valid_params = set(inspect.signature(oracledb.connect).parameters)
-        except Exception:
-            valid_params = set()
-        extra_keys = set(config) - valid_params
-        if extra_keys:
-            logger.debug(
-                "Oracle config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
-                list(extra_keys),
-            )
-        return {k: v for k, v in config.items() if k in valid_params}
+        return {k: v for k, v in merged_config.items() if v is not Empty}
 
 
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnectionPool", OracleAsyncDriver]):
@@ -331,6 +338,16 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
 
     __is_async__: ClassVar[bool] = True
     __supports_connection_pooling__: ClassVar[bool] = True
+
+    # Driver class reference for dialect resolution
+    driver_class: ClassVar[type[OracleAsyncDriver]] = OracleAsyncDriver
+
+    # Parameter style support information
+    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_colon", "numeric")
+    """OracleDB supports :name (named_colon) and :1 (numeric) parameter styles."""
+
+    preferred_parameter_style: ClassVar[str] = "named_colon"
+    """OracleDB's preferred parameter style is :name (named_colon)."""
 
     def __init__(
         self,
@@ -361,7 +378,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
     @property
     def connection_type(self) -> type[OracleAsyncConnection]:  # type: ignore[override]
         """Return the connection type."""
-        import oracledb
 
         return oracledb.AsyncConnection
 
@@ -377,14 +393,13 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         merged_config = {**self.connection_config, **self.pool_config}
         return {k: v for k, v in merged_config.items() if v is not Empty}
 
-    async def _create_pool_impl(self) -> "AsyncConnectionPool":
+    async def _create_pool(self) -> "AsyncConnectionPool":
         """Create the actual async connection pool."""
-        import oracledb
 
         # Note: oracledb.create_pool_async returns a pool directly, not a coroutine
         return oracledb.create_pool_async(**self.connection_config_dict)
 
-    async def _close_pool_impl(self) -> None:
+    async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
         if self.pool_instance:
             await self.pool_instance.close()
@@ -436,9 +451,20 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
             An OracleAsyncDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as conn:
+            # Create statement config with parameter style info if not already set
+            statement_config = self.statement_config
+            if statement_config.allowed_parameter_styles is None:
+                from dataclasses import replace
+
+                statement_config = replace(
+                    statement_config,
+                    allowed_parameter_styles=self.supported_parameter_styles,
+                    target_parameter_style=self.preferred_parameter_style,
+                )
+
             driver = self.driver_type(
                 connection=conn,
-                config=self.statement_config,
+                config=statement_config,
                 instrumentation_config=self.instrumentation,
             )
             yield driver

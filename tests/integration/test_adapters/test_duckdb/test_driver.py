@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Generator
 from typing import Any, Literal
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.sql import SQL
 
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 
@@ -174,9 +177,9 @@ def test_select_arrow(duckdb_session: DuckDBDriver, params: Any, style: ParamSty
     assert insert_result.rows_affected == 1
 
     # Test select_arrow using mixins
-    if hasattr(duckdb_session, "select_to_arrow"):
+    if hasattr(duckdb_session, "fetch_arrow_table"):
         select_sql = "SELECT name, id FROM test_table WHERE id = 1"
-        arrow_result = duckdb_session.select_to_arrow(select_sql)
+        arrow_result = duckdb_session.fetch_arrow_table(select_sql)
 
         assert isinstance(arrow_result, ArrowResult)
         arrow_table = arrow_result.data
@@ -505,7 +508,7 @@ def test_duckdb_performance_bulk_operations(duckdb_session: DuckDBDriver) -> Non
 @pytest.mark.xdist_group("duckdb")
 def test_duckdb_arrow_integration_comprehensive(duckdb_session: DuckDBDriver) -> None:
     """Test comprehensive Arrow integration with DuckDB."""
-    if not hasattr(duckdb_session, "select_to_arrow"):
+    if not hasattr(duckdb_session, "fetch_arrow_table"):
         pytest.skip("DuckDB driver does not support Arrow operations")
 
     # Create table with various data types for Arrow testing
@@ -527,7 +530,7 @@ def test_duckdb_arrow_integration_comprehensive(duckdb_session: DuckDBDriver) ->
     """)
 
     # Test Arrow result with filtering
-    arrow_result = duckdb_session.select_to_arrow(
+    arrow_result = duckdb_session.fetch_arrow_table(
         "SELECT id, name, value FROM arrow_test WHERE active = ? ORDER BY id", parameters=[True]
     )
 
@@ -548,7 +551,7 @@ def test_duckdb_arrow_integration_comprehensive(duckdb_session: DuckDBDriver) ->
     assert values == [123.45, 345.67, 567.89]
 
     # Test Arrow with aggregation
-    agg_arrow_result = duckdb_session.select_to_arrow("""
+    agg_arrow_result = duckdb_session.fetch_arrow_table("""
         SELECT
             active,
             COUNT(*) as count,
@@ -708,3 +711,20 @@ def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> No
 
     # Clean up
     duckdb_session.execute_script("DROP TABLE result_methods_test")
+
+
+@pytest.mark.xdist_group("duckdb")
+def test_duckdb_to_parquet(duckdb_session: DuckDBDriver) -> None:
+    """Integration test: to_parquet writes correct data to a Parquet file using DuckDB native API."""
+    duckdb_session.execute("CREATE TABLE IF NOT EXISTS test_table (id INTEGER, name VARCHAR)")
+    duckdb_session.execute("INSERT INTO test_table (id, name) VALUES (?, ?)", (1, "arrow1"))
+    duckdb_session.execute("INSERT INTO test_table (id, name) VALUES (?, ?)", (2, "arrow2"))
+    statement = SQL("SELECT id, name FROM test_table ORDER BY id")
+    with tempfile.NamedTemporaryFile() as tmp:
+        duckdb_session.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
+        table = pq.read_table(tmp.name)
+        assert table.num_rows == 2
+        assert table.column_names == ["id", "name"]
+        data = table.to_pylist()
+        assert data[0]["id"] == 1 and data[0]["name"] == "arrow1"
+        assert data[1]["id"] == 2 and data[1]["name"] == "arrow2"

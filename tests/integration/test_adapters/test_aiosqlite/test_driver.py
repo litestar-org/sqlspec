@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import AsyncGenerator
 from typing import Any, Literal
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.sql import SQL, SQLConfig
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -465,3 +468,34 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
     assert temp_result.data[0]["name"] == "temp"
 
     await aiosqlite_session.execute("DETACH DATABASE temp_db", config=non_strict_config)
+
+
+@pytest.mark.asyncio
+async def test_aiosqlite_fetch_arrow_table(aiosqlite_session: AiosqliteDriver) -> None:
+    """Integration test: fetch_arrow_table returns ArrowResult with correct pyarrow.Table."""
+    await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("arrow1", 111))
+    await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("arrow2", 222))
+    statement = SQL("SELECT name, value FROM test_table ORDER BY name")
+    result = await aiosqlite_session.fetch_arrow_table(statement)
+    assert isinstance(result, ArrowResult)
+    table = result.data
+    assert isinstance(table, pa.Table)
+    assert table.num_rows == 2
+    assert set(table.column_names) == {"name", "value"}
+    names = table.column("name").to_pylist()
+    assert "arrow1" in names and "arrow2" in names
+
+
+@pytest.mark.asyncio
+async def test_aiosqlite_to_parquet(aiosqlite_session: AiosqliteDriver) -> None:
+    """Integration test: to_parquet writes correct data to a Parquet file."""
+    await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("pq1", 123))
+    await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("pq2", 456))
+    statement = SQL("SELECT name, value FROM test_table ORDER BY name")
+    with tempfile.NamedTemporaryFile() as tmp:
+        await aiosqlite_session.export_to_storage(statement, tmp.name)
+        table = pq.read_table(tmp.name)
+        assert table.num_rows == 2
+        assert set(table.column_names) == {"name", "value"}
+        names = table.column("name").to_pylist()
+        assert "pq1" in names and "pq2" in names

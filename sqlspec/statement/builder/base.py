@@ -1,4 +1,3 @@
-# ruff: noqa: SLF001
 """Safe SQL query builder with validation and parameter binding.
 
 This module provides a fluent interface for building SQL queries safely,
@@ -6,7 +5,7 @@ with automatic parameter binding and validation.
 """
 
 import contextlib
-import logging
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, NoReturn, Optional, TypeVar, Union
@@ -19,8 +18,13 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.utils.correlation import CorrelationContext
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from sqlspec.config import InstrumentationConfig
     from sqlspec.statement.result import StatementResult
 
 __all__ = (
@@ -28,7 +32,7 @@ __all__ = (
     "SafeQuery",
 )
 
-logger = logging.getLogger("sqlspec")
+logger = get_logger("statement.builder")
 
 # Result type variable
 ResultT = TypeVar("ResultT", bound="StatementResult[Any]")
@@ -52,6 +56,7 @@ class QueryBuilder(ABC, Generic[ResultT]):
     """
 
     dialect: DialectType = field(default=None)
+    instrumentation_config: Optional["InstrumentationConfig"] = field(default=None)
     _expression: Optional[exp.Expression] = field(default=None, init=False, repr=False, compare=False, hash=False)
     # Internally, builders will use a dictionary for named parameters.
     _parameters: dict[str, Any] = field(default_factory=dict, init=False, repr=False, compare=False, hash=False)
@@ -140,6 +145,25 @@ class QueryBuilder(ABC, Generic[ResultT]):
         self._parameters[param_name_to_use] = value
         return self, param_name_to_use
 
+    def _generate_unique_parameter_name(self, base_name: str) -> str:
+        """Generate unique parameter name when collision occurs.
+
+        Args:
+            base_name: The desired base name for the parameter
+
+        Returns:
+            A unique parameter name that doesn't exist in current parameters
+        """
+        if base_name not in self._parameters:
+            return base_name
+
+        i = 1
+        while True:
+            name = f"{base_name}_{i}"
+            if name not in self._parameters:
+                return name
+            i += 1
+
     def with_cte(self: Self, alias: str, query: "Union[QueryBuilder[Any], exp.Select, str]") -> Self:
         """Adds a Common Table Expression (CTE) to the query.
 
@@ -190,47 +214,111 @@ class QueryBuilder(ABC, Generic[ResultT]):
         self._with_ctes[alias] = exp.CTE(this=cte_select_expression, alias=exp.to_table(alias))
         return self
 
+    @contextlib.contextmanager
+    def _debug_build_phase(self, phase: str) -> "Iterator[None]":
+        """Debug logging for build phases.
+
+        Args:
+            phase: The name of the build phase
+
+        Yields:
+            None: Context manager for the build phase, logging start and end times.
+        """
+        if self.instrumentation_config and self.instrumentation_config.debug_mode:
+            logger.debug("Starting build phase: %s", phase, extra={"phase": phase})
+            start = time.perf_counter()
+            try:
+                yield
+            finally:
+                duration = time.perf_counter() - start
+                logger.debug(
+                    "Completed build phase: %s in %.3fms",
+                    phase,
+                    duration * 1000,
+                    extra={"phase": phase, "duration_ms": duration * 1000},
+                )
+        else:
+            yield
+
     def build(self) -> "SafeQuery":
         """Builds the SQL query string and parameters.
 
         Returns:
             SafeQuery: A dataclass containing the SQL string and parameters.
         """
+        correlation_id = CorrelationContext.get()
+        start_time = time.perf_counter()
+
+        # Log builder start if configured
+        if self.instrumentation_config and self.instrumentation_config.log_queries:
+            logger.info(
+                "Building %s query",
+                self.__class__.__name__,
+                extra={
+                    "builder_type": self.__class__.__name__,
+                    "has_ctes": bool(self._with_ctes),
+                    "parameter_count": len(self._parameters),
+                    "correlation_id": correlation_id,
+                },
+            )
+
         if self._expression is None:
             self._raise_sql_builder_error("QueryBuilder expression not initialized.")
         # self._expression is known to be not None here.
-        final_expression = self._expression.copy()
+
+        with self._debug_build_phase("copy_expression"):
+            final_expression = self._expression.copy()
 
         if self._with_ctes:
-            if hasattr(final_expression, "with_") and callable(getattr(final_expression, "with_", None)):
-                processed_expression = final_expression
-                for alias, cte_node in self._with_ctes.items():
-                    processed_expression = processed_expression.with_(  # pyright: ignore
-                        cte_node.args["this"],  # The SELECT expression
-                        as_=alias,  # The alias
-                        copy=False,
+            with self._debug_build_phase("process_ctes"):
+                if hasattr(final_expression, "with_") and callable(getattr(final_expression, "with_", None)):
+                    processed_expression = final_expression
+                    for alias, cte_node in self._with_ctes.items():
+                        processed_expression = processed_expression.with_(  # pyright: ignore
+                            cte_node.args["this"],  # The SELECT expression
+                            as_=alias,  # The alias
+                            copy=False,
+                        )
+                    final_expression = processed_expression
+                elif isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union)):
+                    ctes_for_with_expression = list(self._with_ctes.values())
+                    if ctes_for_with_expression:
+                        final_expression = exp.With(expressions=ctes_for_with_expression, this=final_expression)
+                else:
+                    logger.warning(
+                        "Expression type %s may not support CTEs. CTEs will not be added.",
+                        type(final_expression).__name__,
                     )
-                final_expression = processed_expression
-            elif isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union)):
-                ctes_for_with_expression = list(self._with_ctes.values())
-                if ctes_for_with_expression:
-                    final_expression = exp.With(expressions=ctes_for_with_expression, this=final_expression)
-            else:
-                logger.warning(
-                    "Expression type %s may not support CTEs. CTEs will not be added.",
-                    type(final_expression).__name__,
-                )
-        try:
-            sql_string = final_expression.sql(dialect=self.dialect_name, pretty=True)
-        except Exception as e:
-            problematic_sql_for_log = "Could not serialize problematic expression."
-            with contextlib.suppress(Exception):
-                problematic_sql_for_log = final_expression.sql(dialect=self.dialect_name)
 
-            logger.exception("Error generating SQL. Problematic SQL (approx): %s", problematic_sql_for_log)
-            err_msg = f"Error generating SQL from expression: {e!s}"
-            # self._raise_sql_builder_error will make sql_string known as potentially unbound if not for NoReturn
-            self._raise_sql_builder_error(err_msg, e)
+        with self._debug_build_phase("generate_sql"):
+            try:
+                sql_string = final_expression.sql(dialect=self.dialect_name, pretty=True)
+            except Exception as e:
+                problematic_sql_for_log = "Could not serialize problematic expression."
+                with contextlib.suppress(Exception):
+                    problematic_sql_for_log = final_expression.sql(dialect=self.dialect_name)
+
+                logger.exception("Error generating SQL. Problematic SQL (approx): %s", problematic_sql_for_log)
+                err_msg = f"Error generating SQL from expression: {e!s}"
+                # self._raise_sql_builder_error will make sql_string known as potentially unbound if not for NoReturn
+                self._raise_sql_builder_error(err_msg, e)
+
+        # Log completion
+        duration = time.perf_counter() - start_time
+        if self.instrumentation_config and self.instrumentation_config.log_queries:
+            logger.info(
+                "Built %s query in %.3fms",
+                self.__class__.__name__,
+                duration * 1000,
+                extra={
+                    "builder_type": self.__class__.__name__,
+                    "sql_length": len(sql_string),
+                    "parameter_count": len(self._parameters),
+                    "duration_ms": duration * 1000,
+                    "correlation_id": correlation_id,
+                },
+            )
+
         # sql_string is now guaranteed to be assigned if no error was raised.
         return SafeQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=self.dialect)
 

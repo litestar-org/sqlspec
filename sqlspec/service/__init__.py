@@ -5,11 +5,16 @@ from typing import (
 
 from sqlspec.config import DriverT
 from sqlspec.service._util import ResultConverter, find_filter
+from sqlspec.service.base import InstrumentedService
 from sqlspec.service.pagination import OffsetPagination
+from sqlspec.service.service import AsyncDatabaseService, DatabaseService
 from sqlspec.statement.filters import FilterTypeT, LimitOffsetFilter, StatementFilter
 
 __all__ = (
+    "AsyncDatabaseService",
+    "DatabaseService",
     "FilterTypeT",
+    "InstrumentedService",
     "LimitOffsetFilter",
     "OffsetPagination",
     "ResultConverter",

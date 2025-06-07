@@ -6,6 +6,7 @@ This is used to ensure compatibility when one or more of the libraries are insta
 
 from collections.abc import Iterable, Mapping
 from enum import Enum
+from importlib.util import find_spec
 from typing import (
     Any,
     ClassVar,
@@ -22,9 +23,13 @@ from typing_extensions import Literal, TypeVar, dataclass_transform
 
 @runtime_checkable
 class DataclassProtocol(Protocol):
-    """Protocol for instance checking dataclasses."""
+    """Protocol for instance checking dataclasses.
 
-    __dataclass_fields__: ClassVar[dict[str, Any]]
+    This protocol only requires the presence of `__dataclass_fields__`, which is the
+    standard attribute that Python's dataclasses module adds to all dataclass instances.
+    """
+
+    __dataclass_fields__: "ClassVar[dict[str, Any]]"
 
 
 T = TypeVar("T")
@@ -44,15 +49,15 @@ except ImportError:
     class BaseModel(Protocol):  # type: ignore[no-redef]
         """Placeholder Implementation"""
 
-        model_fields: ClassVar[dict[str, Any]]
+        model_fields: "ClassVar[dict[str, Any]]"
 
         def model_dump(
             self,
             /,
             *,
-            include: Optional[Any] = None,
-            exclude: Optional[Any] = None,
-            context: Optional[Any] = None,
+            include: "Optional[Any]" = None,
+            exclude: "Optional[Any]" = None,
+            context: "Optional[Any]" = None,
             by_alias: bool = False,
             exclude_unset: bool = False,
             exclude_defaults: bool = False,
@@ -68,9 +73,9 @@ except ImportError:
             self,
             /,
             *,
-            include: Optional[Any] = None,
-            exclude: Optional[Any] = None,
-            context: Optional[Any] = None,
+            include: "Optional[Any]" = None,
+            exclude: "Optional[Any]" = None,
+            context: "Optional[Any]" = None,
             by_alias: bool = False,
             exclude_unset: bool = False,
             exclude_defaults: bool = False,
@@ -90,9 +95,9 @@ except ImportError:
             self,
             type: Any,  # noqa: A002
             *,
-            config: Optional[Any] = None,
+            config: "Optional[Any]" = None,
             _parent_depth: int = 2,
-            module: Optional[str] = None,
+            module: "Optional[str]" = None,
         ) -> None:
             """Init"""
 
@@ -101,10 +106,10 @@ except ImportError:
             object: Any,
             /,
             *,
-            strict: Optional[bool] = None,
-            from_attributes: Optional[bool] = None,
-            context: Optional[dict[str, Any]] = None,
-            experimental_allow_partial: Union[bool, Literal["off", "on", "trailing-strings"]] = False,
+            strict: "Optional[bool]" = None,
+            from_attributes: "Optional[bool]" = None,
+            context: "Optional[dict[str, Any]]" = None,
+            experimental_allow_partial: "Union[bool, Literal['off', 'on', 'trailing-strings']]" = False,
         ) -> "T_co":
             """Stub"""
             return cast("T_co", object)
@@ -136,16 +141,16 @@ except ImportError:
     class Struct(Protocol):  # type: ignore[no-redef]
         """Placeholder Implementation"""
 
-        __struct_fields__: ClassVar[tuple[str, ...]]
+        __struct_fields__: "ClassVar[tuple[str, ...]]"
 
     def convert(  # type: ignore[no-redef]
         obj: Any,
-        type: Union[Any, type[T]],  # noqa: A002
+        type: "Union[Any, type[T]]",  # noqa: A002
         *,
         strict: bool = True,
         from_attributes: bool = False,
-        dec_hook: Optional[Callable[[type, Any], Any]] = None,
-        builtin_types: Optional[Iterable[type]] = None,
+        dec_hook: "Optional[Callable[[type, Any], Any]]" = None,
+        builtin_types: "Optional[Iterable[type]]" = None,
         str_keys: bool = False,
     ) -> "Union[T, Any]":
         """Placeholder implementation"""
@@ -200,33 +205,76 @@ Empty: Final = EmptyEnum.EMPTY
 class ArrowTableResult(Protocol):
     """This is a typed shim for pyarrow.Table."""
 
-    def to_batches(self, batch_size: int) -> Any: ...
-    def num_rows(self) -> int: ...
-    def num_columns(self) -> int: ...
-    def to_pydict(self) -> dict[str, Any]: ...
-    def to_string(self) -> str: ...
+    def to_batches(self, batch_size: int) -> Any:
+        return None
+
+    def num_rows(self) -> int:
+        return 0
+
+    def num_columns(self) -> int:
+        return 0
+
+    def to_pydict(self) -> dict[str, Any]:
+        return {}
+
+    def to_string(self) -> str:
+        return ""
+
     def from_arrays(
         self,
         arrays: list[Any],
-        names: Optional[list[str]] = None,
-        schema: Optional[Any] = None,
-        metadata: Optional[Mapping[str, Any]] = None,
-    ) -> Any: ...
+        names: "Optional[list[str]]" = None,
+        schema: "Optional[Any]" = None,
+        metadata: "Optional[Mapping[str, Any]]" = None,
+    ) -> Any:
+        return None
+
     def from_pydict(
         self,
         mapping: dict[str, Any],
-        schema: Optional[Any] = None,
-        metadata: Optional[Mapping[str, Any]] = None,
-    ) -> Any: ...
-    def from_batches(self, batches: Iterable[Any], schema: Optional[Any] = None) -> Any: ...
+        schema: "Optional[Any]" = None,
+        metadata: "Optional[Mapping[str, Any]]" = None,
+    ) -> Any:
+        return None
+
+    def from_batches(self, batches: Iterable[Any], schema: Optional[Any] = None) -> Any:
+        return None
+
+
+@runtime_checkable
+class ArrowRecordBatchResult(Protocol):
+    """This is a typed shim for pyarrow.RecordBatch."""
+
+    def num_rows(self) -> int:
+        return 0
+
+    def num_columns(self) -> int:
+        return 0
+
+    def to_pydict(self) -> dict[str, Any]:
+        return {}
+
+    def to_pandas(self) -> Any:
+        return None
+
+    def schema(self) -> Any:
+        return None
+
+    def column(self, i: int) -> Any:
+        return None
+
+    def slice(self, offset: int = 0, length: "Optional[int]" = None) -> Any:
+        return None
 
 
 try:
+    from pyarrow import RecordBatch as ArrowRecordBatch
     from pyarrow import Table as ArrowTable
 
     PYARROW_INSTALLED = True
 except ImportError:
     ArrowTable = ArrowTableResult  # type: ignore[assignment,misc]
+    ArrowRecordBatch = ArrowRecordBatchResult  # type: ignore[assignment,misc]
 
     PYARROW_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
@@ -252,15 +300,15 @@ except ImportError:
             self,
             exception: "Exception",
             attributes: "Optional[Mapping[str, Any]]" = None,
-            timestamp: Optional[int] = None,
+            timestamp: "Optional[int]" = None,
             escaped: bool = False,
         ) -> None:
             return None
 
-        def set_status(self, status: Any, description: Optional[str] = None) -> None:
+        def set_status(self, status: Any, description: "Optional[str]" = None) -> None:
             return None
 
-        def end(self, end_time: Optional[int] = None) -> None:
+        def end(self, end_time: "Optional[int]" = None) -> None:
             return None
 
         def __enter__(self) -> "Span":
@@ -287,8 +335,8 @@ except ImportError:
         def get_tracer(
             self,
             instrumenting_module_name: str,
-            instrumenting_library_version: Optional[str] = None,
-            schema_url: Optional[str] = None,
+            instrumenting_library_version: "Optional[str]" = None,
+            schema_url: "Optional[str]" = None,
             tracer_provider: Any = None,
         ) -> Tracer:
             return Tracer()  # type: ignore[abstract] # pragma: no cover
@@ -420,56 +468,45 @@ except ImportError:
     class AiosqlSyncProtocol(Protocol):  # type: ignore[no-redef]
         """Placeholder for aiosql SyncDriverAdapterProtocol"""
 
-        is_aio_driver: ClassVar[bool]
+        is_aio_driver: "ClassVar[bool]"
 
         def process_sql(self, query_name: str, op_type: Any, sql: str) -> str: ...
         def select(
-            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: Optional[Any] = None
+            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: "Optional[Any]" = None
         ) -> Any: ...
         def select_one(
-            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: Optional[Any] = None
-        ) -> Optional[Any]: ...
-        def select_value(self, conn: Any, query_name: str, sql: str, parameters: Any) -> Optional[Any]: ...
+            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: "Optional[Any]" = None
+        ) -> "Optional[Any]": ...
+        def select_value(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Optional[Any]": ...
         def select_cursor(self, conn: Any, query_name: str, sql: str, parameters: Any) -> Any: ...
         def insert_update_delete(self, conn: Any, query_name: str, sql: str, parameters: Any) -> int: ...
         def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: Any) -> int: ...
-        def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: Any) -> Optional[Any]: ...
+        def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Optional[Any]": ...
 
     @runtime_checkable
     class AiosqlAsyncProtocol(Protocol):  # type: ignore[no-redef]
         """Placeholder for aiosql AsyncDriverAdapterProtocol"""
 
-        is_aio_driver: ClassVar[bool]
+        is_aio_driver: "ClassVar[bool]"
 
         def process_sql(self, query_name: str, op_type: Any, sql: str) -> str: ...
         async def select(
-            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: Optional[Any] = None
+            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: "Optional[Any]" = None
         ) -> Any: ...
         async def select_one(
-            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: Optional[Any] = None
-        ) -> Optional[Any]: ...
-        async def select_value(self, conn: Any, query_name: str, sql: str, parameters: Any) -> Optional[Any]: ...
+            self, conn: Any, query_name: str, sql: str, parameters: Any, record_class: "Optional[Any]" = None
+        ) -> "Optional[Any]": ...
+        async def select_value(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Optional[Any]": ...
         async def select_cursor(self, conn: Any, query_name: str, sql: str, parameters: Any) -> Any: ...
         async def insert_update_delete(self, conn: Any, query_name: str, sql: str, parameters: Any) -> None: ...
         async def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: Any) -> None: ...
-        async def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: Any) -> Optional[Any]: ...
+        async def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: Any) -> "Optional[Any]": ...
 
     AIOSQL_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
 
-try:
-    import fsspec
-
-    FSSPEC_INSTALLED = True
-except ImportError:
-    FSSPEC_INSTALLED = False
-
-try:
-    import obstore
-
-    OBSTORE_INSTALLED = True
-except ImportError:
-    OBSTORE_INSTALLED = False
+FSSPEC_INSTALLED = bool(find_spec("fsspec"))
+OBSTORE_INSTALLED = bool(find_spec("obstore"))
 
 
 __all__ = (
@@ -488,6 +525,8 @@ __all__ = (
     "AiosqlProtocol",
     "AiosqlSQLOperationType",
     "AiosqlSyncProtocol",
+    "ArrowRecordBatch",
+    "ArrowRecordBatchResult",
     "ArrowTable",
     "ArrowTableResult",
     "BaseModel",

@@ -8,10 +8,14 @@ from sqlspec.config import AsyncConfigT, DatabaseConfigProtocol, DriverT, SyncCo
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.config import DatabaseConfig
 from sqlspec.typing import ConnectionT, PoolT
+from sqlspec.utils.correlation import CorrelationContext
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from click import Group
     from litestar.config.app import AppConfig
+
+logger = get_logger("extensions.litestar")
 
 
 class SQLSpec(InitPluginProtocol, SQLSpecBase):
@@ -57,12 +61,53 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
         Returns:
             The updated :class:`AppConfig <.config.app.AppConfig>` instance.
         """
+        logger.info(
+            "Initializing SQLSpec plugin",
+            extra={
+                "config_count": len(self._plugin_configs),
+                "correlation_id": CorrelationContext.get(),
+            },
+        )
+
         self._validate_dependency_keys()
 
         def store_sqlspec_in_state() -> None:
             app_config.state.sqlspec = self
+            logger.debug(
+                "SQLSpec plugin stored in application state",
+                extra={
+                    "correlation_id": CorrelationContext.get(),
+                },
+            )
 
         app_config.on_startup.append(store_sqlspec_in_state)
+
+        # Add correlation middleware if enabled
+        correlation_enabled = any(
+            c.enable_correlation_middleware and c.config.instrumentation.generate_correlation_id
+            for c in self._plugin_configs
+        )
+
+        if correlation_enabled:
+            from sqlspec.extensions.litestar.middleware import CorrelationMiddleware
+
+            # Check if middleware is already added
+            has_correlation_middleware = any(
+                (isinstance(mw, type) and issubclass(mw, CorrelationMiddleware))
+                or (
+                    hasattr(mw, "middleware")
+                    and isinstance(mw.middleware, type)
+                    and issubclass(mw.middleware, CorrelationMiddleware)
+                )
+                for mw in app_config.middleware
+            )
+
+            if not has_correlation_middleware:
+                app_config.middleware.append(CorrelationMiddleware)
+                logger.info(
+                    "Added correlation tracking middleware",
+                    extra={"correlation_id": CorrelationContext.get()},
+                )
 
         # Register types for injection
         app_config.signature_types.extend(

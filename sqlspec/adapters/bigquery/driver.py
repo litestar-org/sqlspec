@@ -1,10 +1,10 @@
 # ruff: noqa: PLR6301
 import datetime
 import logging
-from collections.abc import Iterable, Iterator
-from contextlib import suppress
+from collections.abc import Iterator
 from decimal import Decimal
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     ClassVar,
@@ -23,14 +23,18 @@ from google.cloud.bigquery.table import Row as BigQueryRow
 
 from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import SyncDriverAdapterProtocol
+from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
 from sqlspec.exceptions import (
     SQLSpecError,
+    wrap_exceptions,
 )
-from sqlspec.statement.mixins import ResultConverter, SQLTranslatorMixin, SyncArrowMixin
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, RowT
+
+if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
 
 __all__ = ("BigQueryConnection", "BigQueryDriver")
 
@@ -38,13 +42,13 @@ BigQueryConnection = Client
 
 logger = logging.getLogger("sqlspec.adapters.bigquery")
 
+# Table name parsing constants
+FULLY_QUALIFIED_PARTS = 3  # project.dataset.table
+DATASET_TABLE_PARTS = 2  # dataset.table
+
 
 class BigQueryDriver(
-    SyncDriverAdapterProtocol[BigQueryConnection, RowT],
-    SyncArrowMixin[BigQueryConnection],
-    SyncArrowMixin[BigQueryConnection],
-    SQLTranslatorMixin[BigQueryConnection],
-    ResultConverter,
+    SyncDriverAdapterProtocol["BigQueryConnection", RowT], SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
 ):
     """Advanced BigQuery Driver with comprehensive Google Cloud capabilities.
 
@@ -54,7 +58,7 @@ class BigQueryDriver(
     - execute_script() - Multi-statement scripts and DDL operations
     """
 
-    dialect: str = "bigquery"
+    dialect: "DialectType" = "bigquery"
     connection: BigQueryConnection
     __supports_arrow__: ClassVar[bool] = True
     __supports_parquet__: ClassVar[bool] = True
@@ -108,6 +112,16 @@ class BigQueryDriver(
     def _get_placeholder_style(self) -> ParameterStyle:
         """BigQuery uses named parameters with @ prefix."""
         return ParameterStyle.NAMED_AT
+
+    def _copy_job_config_attrs(self, source_config: QueryJobConfig, target_config: QueryJobConfig) -> None:
+        """Copy non-private attributes from source config to target config."""
+        for attr in dir(source_config):
+            if attr.startswith("_"):
+                continue
+            with wrap_exceptions(suppress=AttributeError):
+                value = getattr(source_config, attr)
+                if value is not None:
+                    setattr(target_config, attr, value)
 
     @staticmethod
     def _get_bq_param_type(value: Any) -> tuple[Optional[str], Optional[str]]:
@@ -213,23 +227,11 @@ class BigQueryDriver(
 
         # Apply default configuration if available
         if self._default_query_job_config:
-            # Copy settings from default config
-            for attr in dir(self._default_query_job_config):
-                if not attr.startswith("_") and hasattr(final_job_config, attr):
-                    with suppress(Exception):
-                        value = getattr(self._default_query_job_config, attr)
-                        if value is not None:
-                            setattr(final_job_config, attr, value)
+            self._copy_job_config_attrs(self._default_query_job_config, final_job_config)
 
         # Apply override configuration if provided
         if job_config:
-            # Copy settings from override config
-            for attr in dir(job_config):
-                if not attr.startswith("_") and hasattr(final_job_config, attr):
-                    with suppress(Exception):
-                        value = getattr(job_config, attr)
-                        if value is not None:
-                            setattr(final_job_config, attr, value)
+            self._copy_job_config_attrs(job_config, final_job_config)
 
         # Set query parameters
         final_job_config.query_parameters = bq_query_parameters or []
@@ -295,13 +297,13 @@ class BigQueryDriver(
     def _execute(
         self,
         sql: str,
-        params: Any,
+        parameters: Any,
         statement: SQL,
         connection: Optional[BigQueryConnection] = None,
         **kwargs: Any,
     ) -> Any:
         # Prepare BigQuery parameters
-        bq_params = self._prepare_bq_query_parameters(params or {}) if params else []
+        bq_params = self._prepare_bq_query_parameters(parameters or {}) if parameters else []
         return self._run_query_job(sql, bq_params, connection=connection)
 
     def _execute_many(
@@ -371,8 +373,9 @@ class BigQueryDriver(
 
     def _wrap_execute_result(self, statement: SQL, result: Any, **kwargs: Any) -> "SQLResult[RowT]":
         operation_type = "UNKNOWN"
-        if statement.expression and hasattr(statement.expression, "key"):
-            operation_type = str(statement.expression.key).upper()
+        with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+            if statement.expression:
+                operation_type = str(statement.expression.key).upper()
 
         metadata = {}
         rows_affected = 0
@@ -401,42 +404,6 @@ class BigQueryDriver(
         return SQLResult[RowT](
             statement=statement, data=[], rows_affected=rows_affected, operation_type=operation_type, metadata=metadata
         )
-
-    def _select_to_arrow_impl(
-        self,
-        stmt_obj: "SQL",
-        connection: "BigQueryConnection",
-        **kwargs: Any,
-    ) -> "ArrowResult":
-        job_config = kwargs.get("job_config")
-        final_sql_str = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
-
-        params_from_sql_object = stmt_obj.get_parameters(style=self._get_placeholder_style())
-        params_dict: dict[str, Any] = {}
-        if params_from_sql_object is not None:
-            if isinstance(params_from_sql_object, dict):
-                params_dict = params_from_sql_object
-            else:
-                logger.warning(
-                    "Expected a dict of parameters for BigQuery NAMED_AT style, got %s. Attempting to adapt.",
-                    type(params_from_sql_object),
-                )
-                if isinstance(params_from_sql_object, Iterable) and not isinstance(
-                    params_from_sql_object, (str, bytes)
-                ):
-                    params_dict = {f"param_{i}": v for i, v in enumerate(params_from_sql_object)}
-                elif params_from_sql_object is not None:
-                    params_dict = {"param_0": params_from_sql_object}
-
-        query_job = self._run_query_job(
-            final_sql_str, self._prepare_bq_query_parameters(params_dict), connection=connection, job_config=job_config
-        )
-
-        return ArrowResult(statement=stmt_obj, data=query_job.to_arrow(bqstorage_client=kwargs.get("bqstorage_client")))
-
-    def _to_parquet_impl(self, stmt_obj: "SQL", connection: "Optional[Client]" = None, **kwargs: "Any") -> None:
-        msg = "Parquet export is not implemented for BigQuery driver."
-        raise NotImplementedError(msg)
 
     def _connection(self, connection: "Optional[Client]" = None) -> "Client":
         """Get the connection to use for the operation."""

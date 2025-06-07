@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import operator
+import uuid
 from collections.abc import Generator
 from typing import Any, Literal
 
+import fsspec
+import pyarrow.parquet as pq
 import pytest
 from pytest_databases.docker.bigquery import BigQueryService
 
 from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver
 from sqlspec.statement.result import SQLResult
+from sqlspec.statement.sql import SQL
+from sqlspec.storage import storage_registry
+from sqlspec.storage.backends.fsspec import FsspecBackend
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -539,3 +545,42 @@ def test_bigquery_analytical_functions(bigquery_session: BigQueryDriver, bigquer
     # Highest value should have row_num = 1
     highest_a = max(product_a_rows, key=operator.itemgetter("value"))
     assert highest_a["row_num"] == 1
+
+
+@pytest.mark.xdist_group("bigquery")
+def test_bigquery_to_parquet_gcs_export(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+    """Integration test: to_parquet exports to GCS and file can be read back as Parquet."""
+    # Skip if GCS credentials are not available
+    try:
+        fs = fsspec.filesystem("gs")
+        # Try listing buckets to check credentials
+        _ = fs.ls("")
+    except Exception:
+        pytest.skip("GCS credentials not available for integration test.")
+    # Register FsspecBackend for the test bucket
+    bucket = "sqlspec-test-bucket"  # Replace with a real test bucket
+    key = f"gs://{bucket}"
+    backend = FsspecBackend(protocol="gs", base_path="", bucket=bucket)
+    try:
+        storage_registry.register_backend(key, backend)
+    except Exception:
+        pass  # Already registered is fine
+    # Insert test data
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+    bigquery_session.execute(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", (1, "gcs1", 101))
+    bigquery_session.execute(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", (2, "gcs2", 202))
+    # Export to a unique gs:// path
+    unique_id = uuid.uuid4().hex
+    gcs_path = f"gs://{bucket}/sqlspec_test_{unique_id}.parquet"
+    statement = SQL(f"SELECT id, name, value FROM {table_name} ORDER BY id")
+    bigquery_session.export_to_storage(statement, gcs_path)  # type: ignore[attr-defined]
+    # Verify file exists and can be read as Parquet
+    with fs.open(gcs_path, "rb") as f:
+        table = pq.read_table(f)
+        assert table.num_rows == 2
+        assert set(table.column_names) >= {"id", "name", "value"}
+        data = table.to_pylist()
+        assert any(row["name"] == "gcs1" and row["value"] == 101 for row in data)
+        assert any(row["name"] == "gcs2" and row["value"] == 202 for row in data)
+    # Cleanup
+    fs.rm(gcs_path)

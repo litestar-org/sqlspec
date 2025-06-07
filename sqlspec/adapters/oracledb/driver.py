@@ -1,40 +1,41 @@
 # ruff: noqa: PLR6301
-import logging
 from collections.abc import AsyncGenerator, Generator, Sequence
 from contextlib import asynccontextmanager, contextmanager
-from typing import Any, ClassVar, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
-import pyarrow as pa
 from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 
 from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
-from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin, SyncArrowMixin
+from sqlspec.driver.mixins import AsyncStorageMixin, SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
+from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import ArrowTable, DictRow, ModelDTOT, RowT
+from sqlspec.typing import DictRow, ModelDTOT, RowT
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import ensure_async_
 from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
+
+if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
 
 __all__ = ("OracleAsyncConnection", "OracleAsyncDriver", "OracleSyncConnection", "OracleSyncDriver")
 
 OracleSyncConnection = Connection
 OracleAsyncConnection = AsyncConnection
 
-logger = logging.getLogger("sqlspec")
+logger = get_logger("adapters.oracledb")
 
 
 class OracleSyncDriver(
-    SyncDriverAdapterProtocol[OracleSyncConnection, RowT],
-    SyncArrowMixin[OracleSyncConnection],
-    SQLTranslatorMixin[OracleSyncConnection],
-    ResultConverter,
+    SyncDriverAdapterProtocol[OracleSyncConnection, RowT], SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
 ):
     """Oracle Sync Driver Adapter. Refactored for new protocol."""
 
-    dialect: str = "oracle"
+    dialect: "DialectType" = "oracle"
     __supports_arrow__: ClassVar[bool] = True
+    __supports_parquet__: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -92,14 +93,14 @@ class OracleSyncDriver(
     def _execute(
         self,
         sql: str,
-        params: Any,
+        parameters: Any,
         statement: SQL,
         connection: Optional[OracleSyncConnection] = None,
         **kwargs: Any,
     ) -> Any:
         with instrument_operation(self, "oracle_execute", "database"):
             conn = self._connection(connection)
-            final_driver_params = params
+            final_driver_params = parameters
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
             if self.instrumentation_config.log_parameters and final_driver_params:
@@ -197,8 +198,9 @@ class OracleSyncDriver(
     ) -> SQLResult[RowT]:
         with instrument_operation(self, "oracle_wrap_execute", "database"):
             operation_type = "UNKNOWN"
-            if statement.expression and hasattr(statement.expression, "key"):
-                operation_type = str(statement.expression.key).upper()
+            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+                if statement.expression:
+                    operation_type = str(statement.expression.key).upper()
 
             rows_affected = -1
             status_message: Optional[str] = None
@@ -209,12 +211,13 @@ class OracleSyncDriver(
                 status_message = result
             else:
                 cursor = cast("Cursor", result)
-                if cursor and hasattr(cursor, "rowcount"):
-                    rc = cursor.rowcount
-                    if isinstance(rc, list):  # For batch operations, rowcount might be a list
-                        rows_affected = sum(rc)
-                    elif isinstance(rc, int):
-                        rows_affected = rc
+                with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+                    if cursor:
+                        rc = cursor.rowcount
+                        if isinstance(rc, list):  # For batch operations, rowcount might be a list
+                            rows_affected = sum(rc)
+                        elif isinstance(rc, int):
+                            rows_affected = rc
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)
@@ -230,69 +233,15 @@ class OracleSyncDriver(
                 metadata={"status_message": status_message} if status_message else {},
             )
 
-    def _select_to_arrow_impl(
-        self,
-        stmt_obj: "SQL",
-        connection: "OracleSyncConnection",
-        **kwargs: Any,
-    ) -> "ArrowResult":
-        # SQL object (stmt_obj) is already built and validated by the mixin.
-        # returns_rows check is done by the mixin.
-        # Instrumentation is handled by the mixin (SyncArrowMixin).
-        # pyarrow as pa is imported at the top of the file.
-
-        final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
-        oracle_params = stmt_obj.get_parameters(style=self._get_placeholder_style())
-
-        oracle_params_dict: dict[str, Any]
-        if oracle_params is None:
-            oracle_params_dict = {}
-        elif isinstance(oracle_params, dict):
-            oracle_params_dict = oracle_params
-        elif isinstance(oracle_params, (list, tuple)):
-            # Oracle named params are like :p0, :p1. SQL.get_parameters should ideally return a dict.
-            # If it returns a list/tuple for named style, this conversion is a fallback.
-            oracle_params_dict = {f"p{i}": v for i, v in enumerate(oracle_params)}
-        else:  # Single parameter
-            oracle_params_dict = {"p0": oracle_params}  # Fallback for a single non-dict/sequence param
-
-        if self.instrumentation_config.log_queries:
-            logger.debug("Executing Oracle Sync Arrow query: %s", final_sql)
-        if self.instrumentation_config.log_parameters and oracle_params_dict:
-            logger.debug("Query parameters for Oracle Sync Arrow: %s", oracle_params_dict)
-
-        with self._get_cursor(connection) as cursor:
-            cursor.execute(final_sql, oracle_params_dict)
-            native_df = False
-            if hasattr(cursor, "fetch_df_all"):
-                rows = cursor.fetch_df_all()  # pyright: ignore
-                native_df = True
-            else:
-                rows = cursor.fetchall()
-            column_names = [col[0] for col in cursor.description or []]
-            if not rows:
-                column_names_from_desc = [col[0] for col in cursor.description or []]
-                return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=column_names_from_desc))
-            if native_df:
-                arrow_table = rows
-            else:
-                empty_cols: list[list[str]] = [[] for _ in column_names]
-                list_of_cols = list(zip(*rows)) if rows else empty_cols
-
-                arrow_table = pa.Table.from_arrays(list_of_cols, names=column_names)
-            return ArrowResult(statement=stmt_obj, data=cast("ArrowTable", arrow_table))
-
 
 class OracleAsyncDriver(
-    AsyncDriverAdapterProtocol[OracleAsyncConnection, RowT],
-    AsyncArrowMixin[OracleAsyncConnection],
-    SQLTranslatorMixin[OracleAsyncConnection],
-    ResultConverter,
+    AsyncDriverAdapterProtocol[OracleAsyncConnection, RowT], SQLTranslatorMixin, AsyncStorageMixin, ToSchemaMixin
 ):
     """Oracle Async Driver Adapter. Refactored for new protocol."""
 
     dialect: str = "oracle"
     __supports_arrow__: ClassVar[bool] = True
+    __supports_parquet__: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -352,14 +301,14 @@ class OracleAsyncDriver(
     async def _execute(
         self,
         sql: str,
-        params: Any,
+        parameters: Any,
         statement: SQL,
         connection: Optional[OracleAsyncConnection] = None,
         **kwargs: Any,
     ) -> Any:
         async with instrument_operation_async(self, "oracle_async_execute", "database"):
             conn = self._connection(connection)
-            final_driver_params = params
+            final_driver_params = parameters
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
             if self.instrumentation_config.log_parameters and final_driver_params:
@@ -457,8 +406,9 @@ class OracleAsyncDriver(
     ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "oracle_async_wrap_execute", "database"):
             operation_type = "UNKNOWN"
-            if statement.expression and hasattr(statement.expression, "key"):
-                operation_type = str(statement.expression.key).upper()
+            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+                if statement.expression:
+                    operation_type = str(statement.expression.key).upper()
 
             rows_affected = -1
             status_message: Optional[str] = None
@@ -469,12 +419,13 @@ class OracleAsyncDriver(
                 status_message = result
             else:
                 cursor = cast("AsyncCursor", result)
-                if cursor and hasattr(cursor, "rowcount"):
-                    rc = cursor.rowcount
-                    if isinstance(rc, list):
-                        rows_affected = sum(rc)
-                    elif isinstance(rc, int):
-                        rows_affected = rc
+                with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+                    if cursor:
+                        rc = cursor.rowcount
+                        if isinstance(rc, list):
+                            rows_affected = sum(rc)
+                        elif isinstance(rc, int):
+                            rows_affected = rc
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)
@@ -486,52 +437,3 @@ class OracleAsyncDriver(
                 operation_type=operation_type,
                 metadata={"status_message": status_message} if status_message else {},
             )
-
-    async def _select_to_arrow_impl(
-        self,
-        stmt_obj: "SQL",
-        connection: "OracleAsyncConnection",
-        **kwargs: Any,
-    ) -> "ArrowResult":
-        # SQL object (stmt_obj) is already built and validated by the mixin.
-        # returns_rows check is done by the mixin.
-        # Instrumentation is handled by the mixin (AsyncArrowMixin).
-        # pyarrow as pa is imported at the top of the file.
-
-        final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
-        oracle_params = stmt_obj.get_parameters(style=self._get_placeholder_style())
-        oracle_params_dict: dict[str, Any]
-        if oracle_params is None:
-            oracle_params_dict = {}
-        elif isinstance(oracle_params, dict):
-            oracle_params_dict = oracle_params
-        elif isinstance(oracle_params, (list, tuple)):
-            oracle_params_dict = {f"p{i}": v for i, v in enumerate(oracle_params)}
-        else:
-            oracle_params_dict = {"p0": oracle_params}
-
-        if self.instrumentation_config.log_queries:
-            logger.debug("Executing Oracle Async Arrow query: %s", final_sql)
-        if self.instrumentation_config.log_parameters and oracle_params_dict:
-            logger.debug("Query parameters for Oracle Async Arrow: %s", oracle_params_dict)
-
-        async with self._get_cursor(connection) as cursor:
-            await cursor.execute(final_sql, oracle_params_dict)
-            native_df = False
-            if hasattr(cursor, "fetch_df_all"):
-                rows = await cursor.fetch_df_all()  # pyright: ignore
-                native_df = True
-            else:
-                rows = await cursor.fetchall()
-            column_names = [col[0] for col in cursor.description or []]
-            if not rows:
-                column_names_from_desc = [col[0] for col in cursor.description or []]
-                return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=column_names_from_desc))
-            if native_df:
-                arrow_table = rows
-            else:
-                empty_cols: list[list[str]] = [[] for _ in column_names]
-                list_of_cols = list(zip(*rows)) if rows else empty_cols
-
-                arrow_table = pa.Table.from_arrays(list_of_cols, names=column_names)
-            return ArrowResult(statement=stmt_obj, data=cast("ArrowTable", arrow_table))

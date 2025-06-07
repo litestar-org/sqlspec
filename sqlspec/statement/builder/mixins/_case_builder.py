@@ -1,3 +1,4 @@
+# mypy: disable-error-code="valid-type,type-var"
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
@@ -13,7 +14,7 @@ __all__ = ("CaseBuilder", "CaseBuilderMixin")
 class CaseBuilderMixin:
     """Mixin providing CASE expression functionality for SQL builders."""
 
-    def case_(self, alias: Optional[str] = None) -> "CaseBuilder":
+    def case_(self, alias: "Optional[str]" = None) -> "CaseBuilder":
         """Create a CASE expression for the SELECT clause.
 
         Args:
@@ -29,11 +30,11 @@ class CaseBuilderMixin:
 class CaseBuilder:
     """Builder for CASE expressions."""
 
-    _parent: "QueryBuilder[RowT]"  # type: ignore[type-var]
+    _parent: "QueryBuilder[RowT]"  # type: ignore[valid-type]
     _alias: Optional[str]
     _case_expr: exp.Case
 
-    def __init__(self, parent: "QueryBuilder[RowT]", alias: Optional[str] = None) -> None:  # type: ignore[type-var]
+    def __init__(self, parent: "QueryBuilder[RowT]", alias: "Optional[str]" = None) -> None:  # type: ignore[valid-type,type-var]
         """Initialize CaseBuilder.
 
         Args:
@@ -44,7 +45,7 @@ class CaseBuilder:
         self._alias = alias
         self._case_expr = exp.Case()
 
-    def when(self, condition: Union[str, exp.Expression], value: Any) -> "CaseBuilder":
+    def when(self, condition: "Union[str, exp.Expression]", value: "Any") -> "CaseBuilder":
         """Add WHEN clause to CASE expression.
 
         Args:
@@ -65,7 +66,7 @@ class CaseBuilder:
         self._case_expr.args["ifs"].append(when_clause)
         return self
 
-    def else_(self, value: Any) -> "CaseBuilder":
+    def else_(self, value: "Any") -> "CaseBuilder":
         """Add ELSE clause to CASE expression.
 
         Args:
@@ -86,4 +87,4 @@ class CaseBuilder:
             The parent builder instance.
         """
         select_expr = exp.alias_(self._case_expr, self._alias) if self._alias else self._case_expr
-        return cast("QueryBuilder[RowT]", self._parent.select(select_expr))  # type: ignore[type-var]
+        return cast("QueryBuilder[RowT]", self._parent.select(select_expr))  # type: ignore[attr-defined]

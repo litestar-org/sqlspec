@@ -66,11 +66,11 @@ class MockDatabaseConfig(SyncDatabaseConfig[MockConnection, MockPool, Any]):
     def close_pool(self) -> None:
         pass
 
-    def _create_pool_impl(self) -> MockPool:
+    def _create_pool(self) -> MockPool:
         """Implementation for creating a pool."""
         return MockPool()
 
-    def _close_pool_impl(self) -> None:
+    def _close_pool(self) -> None:
         """Implementation for closing a pool."""
         pass
 

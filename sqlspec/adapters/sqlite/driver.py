@@ -1,5 +1,5 @@
+# ruff: noqa: PLR6301
 import contextlib
-import logging
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -8,36 +8,39 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 from typing_extensions import TypeAlias
 
 from sqlspec.driver import SyncDriverAdapterProtocol
-from sqlspec.statement.mixins import ResultConverter, SQLTranslatorMixin
+from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
+from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.telemetry import instrument_operation
 
 if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.config import InstrumentationConfig
 
 __all__ = ("SqliteConnection", "SqliteDriver")
 
-logger = logging.getLogger("sqlspec")
+logger = get_logger("adapters.sqlite")
 
 SqliteConnection: TypeAlias = sqlite3.Connection
 
 
 class SqliteDriver(
-    SyncDriverAdapterProtocol[SqliteConnection, RowT],
-    SQLTranslatorMixin[SqliteConnection],
-    ResultConverter,
+    SyncDriverAdapterProtocol[SqliteConnection, RowT], SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
 ):
-    """SQLite Sync Driver Adapter.
+    """SQLite Sync Driver Adapter with Arrow/Parquet export support.
 
     Refactored to align with the new enhanced driver architecture and
     instrumentation standards following the psycopg pattern.
     """
 
-    __supports_arrow__: "ClassVar[bool]" = False
-    dialect: str = "sqlite"
+    __supports_arrow__: "ClassVar[bool]" = True
+    __supports_parquet__: "ClassVar[bool]" = False
+    dialect: "DialectType" = "sqlite"
     parameter_style: ParameterStyle = ParameterStyle.QMARK
 
     def __init__(
@@ -107,7 +110,7 @@ class SqliteDriver(
     def _execute(
         self,
         sql: str,
-        params: Any,
+        parameters: Any,
         statement: SQL,
         connection: Optional[SqliteConnection] = None,
         **kwargs: Any,
@@ -119,15 +122,15 @@ class SqliteDriver(
                 logger.debug("Executing SQLite SQL: %s", sql)
             if (
                 self.instrumentation_config.log_parameters
-                and params
-                and not (not statement.is_many and params == () and statement.parameters is None)
+                and parameters
+                and not (not statement.is_many and parameters == () and statement.parameters is None)
             ):
-                logger.debug("SQLite query parameters: %s", params)
+                logger.debug("SQLite query parameters: %s", parameters)
             with self._get_cursor(conn) as cursor:
-                if isinstance(params, dict):
-                    cursor.execute(sql, params)
+                if isinstance(parameters, dict):
+                    cursor.execute(sql, parameters)
                 else:
-                    cursor.execute(sql, params or ())
+                    cursor.execute(sql, parameters or ())
                 if self.returns_rows(statement.expression):
                     fetched_data: list[sqlite3.Row] = cursor.fetchall()
                     column_names = [col[0] for col in cursor.description or []]
@@ -220,8 +223,9 @@ class SqliteDriver(
     ) -> SQLResult[RowT]:
         with instrument_operation(self, "sqlite_wrap_execute", "database"):
             operation_type = "UNKNOWN"
-            if statement.expression and hasattr(statement.expression, "key"):
-                operation_type = str(statement.expression.key).upper()
+            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+                if statement.expression:
+                    operation_type = str(statement.expression.key).upper()
 
             # result is "SCRIPT EXECUTED" for successful scripts
             if isinstance(result, str) and result == "SCRIPT EXECUTED":
@@ -243,7 +247,7 @@ class SqliteDriver(
                 rows_affected = getattr(cursor, "rowcount", -1)
                 last_inserted_id = getattr(cursor, "lastrowid", None)
 
-            # SQLite DML operations (without RETURNING which isn't standardly fetched this way) don't populate cursor.fetchall()
+            # SQLite DML operations (without RETURNING which isn't typically fetched this way) don't populate cursor.fetchall()
             # So, data is typically empty.
             returned_data: list[dict[str, Any]] = []
 

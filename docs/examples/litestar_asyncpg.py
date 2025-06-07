@@ -13,12 +13,13 @@ The Asyncpg database also demonstrates how to use the plugin loader and `secrets
 # ]
 # ///
 
-from typing import Annotated, Optional
+from typing import Annotated, Any
 
 from litestar import Litestar, get
 from litestar.params import Dependency
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgPoolConfig
+from sqlspec.driver import SQLResult
 from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec, providers
 from sqlspec.filters import FilterTypes
 
@@ -29,10 +30,8 @@ from sqlspec.filters import FilterTypes
 )
 async def simple_asyncpg(
     db_session: AsyncpgDriver, filters: Annotated[list[FilterTypes], Dependency(skip_validation=True)]
-) -> Optional[dict[str, str]]:
-    return await db_session.select_one_or_none(
-        "SELECT greeting FROM (select 'Hello, world!' as greeting) as t", *filters
-    )
+) -> SQLResult[dict[str, Any]]:
+    return await db_session.execute("SELECT greeting FROM (select 'Hello, world!' as greeting) as t", *filters)
 
 
 sqlspec = SQLSpec(

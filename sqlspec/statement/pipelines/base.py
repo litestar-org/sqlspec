@@ -5,7 +5,6 @@ SQL processing steps, such as transformations and validations.
 """
 
 import contextlib
-import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Generic, Optional
 
@@ -16,6 +15,8 @@ from typing_extensions import TypeVar
 
 from sqlspec.exceptions import RiskLevel, SQLValidationError
 from sqlspec.statement.pipelines.context import SQLProcessingContext, StatementPipelineResult
+from sqlspec.utils.correlation import CorrelationContext
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -36,7 +37,7 @@ __all__ = (
 )
 
 
-logger = logging.getLogger("sqlspec")
+logger = get_logger("pipelines")
 
 ExpressionT = TypeVar("ExpressionT", bound="exp.Expression")
 ResultT = TypeVar("ResultT")
@@ -123,6 +124,20 @@ class StatementPipeline:
 
     def execute_pipeline(self, context: "SQLProcessingContext") -> "StatementPipelineResult":
         """Executes the full pipeline (transform, validate, analyze) using the SQLProcessingContext."""
+        correlation_id = CorrelationContext.get()
+
+        # Log pipeline start with context
+        if context.config.debug_mode:
+            logger.debug(
+                "Starting SQL pipeline processing",
+                extra={
+                    "sql_length": len(context.initial_sql_string),
+                    "transformer_count": len(self.transformers),
+                    "validator_count": len(self.validators),
+                    "analyzer_count": len(self.analyzers),
+                    "correlation_id": correlation_id,
+                },
+            )
 
         # Ensure initial expression is in context
         if context.current_expression is None:
@@ -168,6 +183,16 @@ class StatementPipeline:
         # 1. Transformation Stage
         if context.config.enable_transformations:
             for transformer in self.transformers:
+                transformer_name = transformer.__class__.__name__
+                if context.config.debug_mode:
+                    logger.debug(
+                        "Running transformer: %s",
+                        transformer_name,
+                        extra={
+                            "transformer": transformer_name,
+                            "correlation_id": correlation_id,
+                        },
+                    )
                 # Transformers take context, modify context.current_expression
                 # and potentially context.extracted_parameters_from_pipeline.
                 # The return value of transformer.process is (modified_expr, None)
@@ -183,6 +208,16 @@ class StatementPipeline:
             all_issues: list[str] = []
             highest_risk = RiskLevel.SKIP
             for validator_component in self.validators:
+                validator_name = validator_component.__class__.__name__
+                if context.config.debug_mode:
+                    logger.debug(
+                        "Running validator: %s",
+                        validator_name,
+                        extra={
+                            "validator": validator_name,
+                            "correlation_id": correlation_id,
+                        },
+                    )
                 # Validators take context. current_expression is read from context.
                 # They should return (expression, ValidationResult_part)
                 # The expression returned by a validator should be the one it received (context.current_expression)
@@ -196,6 +231,15 @@ class StatementPipeline:
                 context.validation_result = ValidationResult(
                     is_safe=highest_risk.value < RiskLevel.MEDIUM.value, risk_level=highest_risk, issues=all_issues
                 )
+                if context.config.debug_mode:
+                    logger.warning(
+                        "Validation issues found",
+                        extra={
+                            "issues": all_issues,
+                            "risk_level": highest_risk.name,
+                            "correlation_id": correlation_id,
+                        },
+                    )
             else:
                 context.validation_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
         else:  # Validation disabled
@@ -243,8 +287,9 @@ class SQLValidator(ProcessorProtocol[exp.Expression]):
         """Add a validator to the pipeline."""
         self.validators.append(validator)
 
+    @staticmethod
     def _process_single_validator(
-        self, validator_instance: "ProcessorProtocol[exp.Expression]", context: "SQLProcessingContext"
+        validator_instance: "ProcessorProtocol[exp.Expression]", context: "SQLProcessingContext"
     ) -> "Optional[ValidationResult]":
         """Process a single validator and handle any exceptions.
 
@@ -266,9 +311,7 @@ class SQLValidator(ProcessorProtocol[exp.Expression]):
             )
         return validation_result
 
-    def process(
-        self, context: "SQLProcessingContext"
-    ) -> "tuple[exp.Expression, ValidationResult]":  # Always return ValidationResult, not Optional
+    def process(self, context: "SQLProcessingContext") -> "tuple[exp.Expression, ValidationResult]":
         """Process the expression through all configured validators.
 
         Args:
@@ -301,7 +344,7 @@ class SQLValidator(ProcessorProtocol[exp.Expression]):
 
     def validate(
         self,
-        sql: "Statement",  # This is the input string or expression
+        sql: "Statement",
         dialect: "DialectType",
         config: "Optional[SQLConfig]" = None,
     ) -> "ValidationResult":

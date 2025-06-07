@@ -23,6 +23,7 @@ from sqlspec._typing import (
     AiosqlProtocol,  # pyright: ignore[reportAttributeAccessIssue]
     AiosqlSQLOperationType,  # pyright: ignore[reportAttributeAccessIssue]
     AiosqlSyncProtocol,  # pyright: ignore[reportAttributeAccessIssue]
+    ArrowRecordBatch,
     ArrowTable,
     BaseModel,
     Counter,  # pyright: ignore[reportAttributeAccessIssue]
@@ -557,6 +558,8 @@ __all__ = (
     "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
     "OBSTORE_INSTALLED",
+    "OPENTELEMETRY_INSTALLED",
+    "PROMETHEUS_INSTALLED",
     "PYARROW_INSTALLED",
     "PYDANTIC_INSTALLED",
     "PYDANTIC_USE_FAILFAST",
@@ -566,9 +569,11 @@ __all__ = (
     "AiosqlProtocol",
     "AiosqlSQLOperationType",
     "AiosqlSyncProtocol",
+    "ArrowRecordBatch",
     "ArrowTable",
     "BaseModel",
     "BulkModelDict",
+    "ConnectionT",
     "Counter",
     "DataclassProtocol",
     "DictRow",
@@ -641,8 +646,9 @@ if TYPE_CHECKING:
         from msgspec import UNSET, Struct, UnsetType, convert  # noqa: TC004
 
     if not PYARROW_INSTALLED:
-        from sqlspec._typing import ArrowTable
+        from sqlspec._typing import ArrowRecordBatch, ArrowTable
     else:
+        from pyarrow import RecordBatch as ArrowRecordBatch  # noqa: TC004
         from pyarrow import Table as ArrowTable  # noqa: TC004
     if not LITESTAR_INSTALLED:
         from sqlspec._typing import DTOData

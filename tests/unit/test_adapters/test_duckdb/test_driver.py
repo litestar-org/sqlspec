@@ -1,5 +1,6 @@
 """Unit tests for DuckDB driver."""
 
+import tempfile
 from unittest.mock import Mock
 
 import pytest
@@ -71,6 +72,14 @@ def test_duckdb_driver_placeholder_style(duckdb_driver: DuckDBDriver) -> None:
     """Test DuckDB driver placeholder style detection."""
     placeholder_style = duckdb_driver._get_placeholder_style()
     assert placeholder_style == "qmark"
+
+
+def test_duckdb_config_dialect_property() -> None:
+    """Test DuckDB config dialect property."""
+    from sqlspec.adapters.duckdb import DuckDBConfig
+
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    assert config.dialect == "duckdb"
 
 
 def test_duckdb_driver_get_cursor(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
@@ -433,8 +442,8 @@ def test_duckdb_driver_operation_type_detection(duckdb_driver: DuckDBDriver) -> 
         assert result.operation_type == expected_op_type
 
 
-def test_duckdb_driver_select_to_arrow_basic(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
-    """Test DuckDB driver select_to_arrow method basic functionality."""
+def test_duckdb_driver_fetch_arrow_table_basic(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
+    """Test DuckDB driver fetch_arrow_table method basic functionality."""
     # Setup mock cursor and arrow table
     mock_cursor = Mock()
     mock_arrow_table = Mock()
@@ -445,8 +454,8 @@ def test_duckdb_driver_select_to_arrow_basic(duckdb_driver: DuckDBDriver, mock_d
     # Create SQL statement
     statement = SQL("SELECT id, name FROM users")
 
-    # Execute select_to_arrow
-    result = duckdb_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = duckdb_driver.fetch_arrow_table(statement)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -459,10 +468,10 @@ def test_duckdb_driver_select_to_arrow_basic(duckdb_driver: DuckDBDriver, mock_d
     mock_cursor.fetch_arrow_table.assert_called_once()
 
 
-def test_duckdb_driver_select_to_arrow_with_parameters(
+def test_duckdb_driver_fetch_arrow_table_with_parameters(
     duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock
 ) -> None:
-    """Test DuckDB driver select_to_arrow method with parameters."""
+    """Test DuckDB driver fetch_arrow_table method with parameters."""
     # Setup mock cursor and arrow table
     mock_cursor = Mock()
     mock_arrow_table = Mock()
@@ -474,8 +483,8 @@ def test_duckdb_driver_select_to_arrow_with_parameters(
     statement = SQL("SELECT id, name FROM users WHERE id = ?", parameters=[42])
     parameters = [42]
 
-    # Execute select_to_arrow
-    result = duckdb_driver.select_to_arrow(statement, parameters=parameters)
+    # Execute fetch_arrow_table
+    result = duckdb_driver.fetch_arrow_table(statement, parameters=parameters)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -487,20 +496,20 @@ def test_duckdb_driver_select_to_arrow_with_parameters(
     mock_cursor.fetch_arrow_table.assert_called_once()
 
 
-def test_duckdb_driver_select_to_arrow_non_query_error(duckdb_driver: DuckDBDriver) -> None:
-    """Test DuckDB driver select_to_arrow with non-query statement raises error."""
+def test_duckdb_driver_fetch_arrow_table_non_query_error(duckdb_driver: DuckDBDriver) -> None:
+    """Test DuckDB driver fetch_arrow_table with non-query statement raises error."""
     # Create non-query statement
     statement = SQL("INSERT INTO users VALUES (1, 'test')")
 
     # Test error for non-query
     with pytest.raises(TypeError, match="Cannot fetch Arrow table for a non-query statement"):
-        duckdb_driver.select_to_arrow(statement)
+        duckdb_driver.fetch_arrow_table(statement)
 
 
-def test_duckdb_driver_select_to_arrow_execute_returns_none(
+def test_duckdb_driver_fetch_arrow_table_execute_returns_none(
     duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock
 ) -> None:
-    """Test DuckDB driver select_to_arrow when execute returns None."""
+    """Test DuckDB driver fetch_arrow_table when execute returns None."""
     # Setup mock cursor that returns None
     mock_cursor = Mock()
     mock_duckdb_connection.cursor.return_value = mock_cursor
@@ -511,11 +520,11 @@ def test_duckdb_driver_select_to_arrow_execute_returns_none(
 
     # Test error when execute returns None
     with pytest.raises(Exception, match="DuckDB execute returned None"):
-        duckdb_driver.select_to_arrow(statement)
+        duckdb_driver.fetch_arrow_table(statement)
 
 
-def test_duckdb_driver_select_to_arrow_fetch_error(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
-    """Test DuckDB driver select_to_arrow when fetch_arrow_table fails."""
+def test_duckdb_driver_fetch_arrow_table_fetch_error(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
+    """Test DuckDB driver fetch_arrow_table when fetch_arrow_table fails."""
     # Setup mock cursor that raises error on fetch_arrow_table
     mock_cursor = Mock()
     mock_duckdb_connection.cursor.return_value = mock_cursor
@@ -527,13 +536,13 @@ def test_duckdb_driver_select_to_arrow_fetch_error(duckdb_driver: DuckDBDriver, 
 
     # Test error handling
     with pytest.raises(Exception, match="Failed to convert DuckDB result to Arrow table"):
-        duckdb_driver.select_to_arrow(statement)
+        duckdb_driver.fetch_arrow_table(statement)
 
 
-def test_duckdb_driver_select_to_arrow_with_sql_object(
+def test_duckdb_driver_fetch_arrow_table_with_sql_object(
     duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock
 ) -> None:
-    """Test DuckDB driver select_to_arrow with SQL object directly."""
+    """Test DuckDB driver fetch_arrow_table with SQL object directly."""
     # Setup mock cursor and arrow table
     mock_cursor = Mock()
     mock_arrow_table = Mock()
@@ -544,8 +553,8 @@ def test_duckdb_driver_select_to_arrow_with_sql_object(
     # Create SQL statement object
     sql_statement = SQL("SELECT id, name FROM users WHERE active = ?", parameters=[True])
 
-    # Execute select_to_arrow
-    result = duckdb_driver.select_to_arrow(sql_statement)
+    # Execute fetch_arrow_table
+    result = duckdb_driver.fetch_arrow_table(sql_statement)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -558,8 +567,8 @@ def test_duckdb_driver_select_to_arrow_with_sql_object(
     mock_cursor.fetch_arrow_table.assert_called_once()
 
 
-def test_duckdb_driver_select_to_arrow_with_connection_override(duckdb_driver: DuckDBDriver) -> None:
-    """Test DuckDB driver select_to_arrow with connection override."""
+def test_duckdb_driver_fetch_arrow_table_with_connection_override(duckdb_driver: DuckDBDriver) -> None:
+    """Test DuckDB driver fetch_arrow_table with connection override."""
     # Create override connection
     override_connection = Mock()
     mock_cursor = Mock()
@@ -572,7 +581,7 @@ def test_duckdb_driver_select_to_arrow_with_connection_override(duckdb_driver: D
     statement = SQL("SELECT id FROM users")
 
     # Execute with connection override
-    result = duckdb_driver.select_to_arrow(statement, connection=override_connection)
+    result = duckdb_driver.fetch_arrow_table(statement, connection=override_connection)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -618,7 +627,7 @@ def test_duckdb_driver_mixins_integration(duckdb_driver: DuckDBDriver) -> None:
     assert isinstance(duckdb_driver, ResultConverter)
 
     # Test mixin methods are available
-    assert hasattr(duckdb_driver, "select_to_arrow")
+    assert hasattr(duckdb_driver, "fetch_arrow_table")
     assert hasattr(duckdb_driver, "to_schema")
     assert hasattr(duckdb_driver, "returns_rows")
 
@@ -632,3 +641,17 @@ def test_duckdb_driver_returns_rows_method(duckdb_driver: DuckDBDriver) -> None:
     # Test with INSERT statement
     insert_stmt = SQL("INSERT INTO users VALUES (1, 'test')")
     assert duckdb_driver.returns_rows(insert_stmt.expression) is False
+
+
+def test_duckdb_driver_to_parquet(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
+    """Test to_parquet writes correct data to a Parquet file using DuckDB native API."""
+    mock_cursor = Mock()
+    mock_duckdb_connection.cursor.return_value = mock_cursor
+    mock_cursor.execute.return_value = mock_cursor
+    # Simulate DuckDB relation with write_parquet method
+    mock_cursor.write_parquet = Mock()
+    statement = SQL("SELECT id, name FROM users")
+    with tempfile.NamedTemporaryFile() as tmp:
+        duckdb_driver.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
+        mock_cursor.write_parquet.assert_called_once_with(tmp.name)
+    mock_cursor.close.assert_called_once()

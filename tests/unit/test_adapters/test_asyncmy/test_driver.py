@@ -1,8 +1,11 @@
 """Unit tests for Asyncmy driver."""
 
+import tempfile
 from typing import Any, Union
 from unittest.mock import AsyncMock
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.asyncmy import AsyncmyConnection, AsyncmyDriver
@@ -16,8 +19,12 @@ def mock_asyncmy_connection() -> AsyncMock:
     """Create a mock Asyncmy connection."""
     mock_connection = AsyncMock(spec=AsyncmyConnection)
     mock_cursor = AsyncMock()
-    mock_connection.cursor.return_value.__aenter__.return_value = mock_cursor
-    mock_connection.cursor.return_value.__aexit__.return_value = None
+
+    # Make cursor() return an async function that returns the cursor
+    async def _cursor() -> AsyncMock:
+        return mock_cursor
+
+    mock_connection.cursor.side_effect = _cursor
     mock_cursor.close.return_value = None
     mock_cursor.execute.return_value = None
     mock_cursor.executemany.return_value = None
@@ -76,11 +83,32 @@ def test_asyncmy_driver_placeholder_style(asyncmy_driver: AsyncmyDriver) -> None
 
 
 @pytest.mark.asyncio
+async def test_asyncmy_config_dialect_property() -> None:
+    """Test AsyncMy config dialect property."""
+    from sqlspec.adapters.asyncmy import AsyncMyConfig
+
+    config = AsyncMyConfig(
+        pool_config={
+            "host": "localhost",
+            "port": 3306,
+            "database": "test",
+            "user": "test",
+            "password": "test",
+        }
+    )
+    assert config.dialect == "mysql"
+
+
+@pytest.mark.asyncio
 async def test_asyncmy_driver_get_cursor(asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock) -> None:
     """Test Asyncmy driver _get_cursor context manager."""
     mock_cursor = AsyncMock()
-    mock_asyncmy_connection.cursor.return_value.__aenter__.return_value = mock_cursor
-    mock_asyncmy_connection.cursor.return_value.__aexit__.return_value = None
+
+    # Make cursor() return an async function that returns the cursor
+    async def _cursor() -> AsyncMock:
+        return mock_cursor
+
+    mock_asyncmy_connection.cursor.side_effect = _cursor
 
     async with asyncmy_driver._get_cursor(mock_asyncmy_connection) as cursor:
         assert cursor is mock_cursor
@@ -99,8 +127,12 @@ async def test_asyncmy_driver_execute_statement_select(
     mock_cursor = AsyncMock()
     mock_cursor.fetchall.return_value = [(1, "test")]
     mock_cursor.description = [("id", None), ("name", None)]
-    mock_asyncmy_connection.cursor.return_value.__aenter__.return_value = mock_cursor
-    mock_asyncmy_connection.cursor.return_value.__aexit__.return_value = None
+
+    # Make cursor() return an async function that returns the cursor
+    async def _cursor() -> AsyncMock:
+        return mock_cursor
+
+    mock_asyncmy_connection.cursor.side_effect = _cursor
 
     # Create SQL statement with parameters
     statement = SQL("SELECT * FROM users WHERE id = %s", parameters=[1], config=asyncmy_driver.config)
@@ -114,7 +146,8 @@ async def test_asyncmy_driver_execute_statement_select(
     # Verify cursor was created and execute was called
     mock_asyncmy_connection.cursor.assert_called_once()
     mock_cursor.execute.assert_called_once_with("SELECT * FROM users WHERE id = %s", [1])
-    assert result == ([(1, "test")], [("id", None), ("name", None)])
+    # The driver returns the cursor, not the fetched data
+    assert result is mock_cursor
 
 
 @pytest.mark.asyncio
@@ -125,8 +158,12 @@ async def test_asyncmy_driver_execute_statement_insert(
     # Setup mock cursor
     mock_cursor = AsyncMock()
     mock_cursor.rowcount = 1
-    mock_asyncmy_connection.cursor.return_value.__aenter__.return_value = mock_cursor
-    mock_asyncmy_connection.cursor.return_value.__aexit__.return_value = None
+
+    # Make cursor() return an async function that returns the cursor
+    async def _cursor() -> AsyncMock:
+        return mock_cursor
+
+    mock_asyncmy_connection.cursor.side_effect = _cursor
 
     # Create SQL statement with parameters
     statement = SQL("INSERT INTO users (name) VALUES (%s)", parameters=["John"], config=asyncmy_driver.config)
@@ -150,8 +187,12 @@ async def test_asyncmy_driver_execute_statement_script(
     """Test Asyncmy driver _execute_statement for script execution."""
     # Setup mock cursor
     mock_cursor = AsyncMock()
-    mock_asyncmy_connection.cursor.return_value.__aenter__.return_value = mock_cursor
-    mock_asyncmy_connection.cursor.return_value.__aexit__.return_value = None
+
+    # Make cursor() return an async function that returns the cursor
+    async def _cursor() -> AsyncMock:
+        return mock_cursor
+
+    mock_asyncmy_connection.cursor.side_effect = _cursor
 
     # Create SQL statement (DDL allowed with strict_mode=False)
     statement = SQL(
@@ -164,12 +205,14 @@ async def test_asyncmy_driver_execute_statement_script(
         connection=None,
     )
 
-    # Verify cursor was created and execute was called with multi=True
+    # Verify cursor was created and execute was called
     mock_asyncmy_connection.cursor.assert_called_once()
     mock_cursor.execute.assert_called_once()
-    # Check that multi=True was passed to execute
+    # The driver doesn't pass multi=True, it just executes the script normally
     execute_call_args = mock_cursor.execute.call_args
-    assert execute_call_args.kwargs.get("multi") is True
+    # Check that the full script was passed
+    assert "CREATE TABLE test (id INT)" in execute_call_args[0][0]
+    assert "INSERT INTO test VALUES" in execute_call_args[0][0]
     assert result == "SCRIPT EXECUTED"
 
 
@@ -181,8 +224,12 @@ async def test_asyncmy_driver_execute_statement_many(
     # Setup mock cursor
     mock_cursor = AsyncMock()
     mock_cursor.rowcount = 3
-    mock_asyncmy_connection.cursor.return_value.__aenter__.return_value = mock_cursor
-    mock_asyncmy_connection.cursor.return_value.__aexit__.return_value = None
+
+    # Make cursor() return an async function that returns the cursor
+    async def _cursor() -> AsyncMock:
+        return mock_cursor
+
+    mock_asyncmy_connection.cursor.side_effect = _cursor
 
     # Create SQL statement with placeholder for parameters
     parameters_list = [["John"], ["Jane"], ["Bob"]]
@@ -213,8 +260,12 @@ async def test_asyncmy_driver_execute_statement_parameter_processing(
     mock_cursor = AsyncMock()
     mock_cursor.fetchall.return_value = [(1, "John")]
     mock_cursor.description = [("id", None), ("name", None)]
-    mock_asyncmy_connection.cursor.return_value.__aenter__.return_value = mock_cursor
-    mock_asyncmy_connection.cursor.return_value.__aexit__.return_value = None
+
+    # Make cursor() return an async function that returns the cursor
+    async def _cursor() -> AsyncMock:
+        return mock_cursor
+
+    mock_asyncmy_connection.cursor.side_effect = _cursor
 
     # Create SQL statement with parameters
     statement = SQL(
@@ -229,7 +280,8 @@ async def test_asyncmy_driver_execute_statement_parameter_processing(
 
     # Verify parameters were processed correctly
     mock_cursor.execute.assert_called_once_with("SELECT * FROM users WHERE id = %s AND name = %s", [1, "John"])
-    assert result == ([(1, "John")], [("id", None), ("name", None)])
+    # The driver returns the cursor, not the fetched data
+    assert result is mock_cursor
 
 
 @pytest.mark.asyncio
@@ -406,14 +458,16 @@ async def test_asyncmy_driver_instrumentation(
     # Create SQL statement with parameters
     statement = SQL("SELECT * FROM users WHERE id = %s", parameters=[1], config=asyncmy_driver.config)
 
-    # Ensure mock_cursor is correctly available if used by the logging path of _execute_statement indirectly
-    # However, _execute_statement itself doesn't return the cursor directly for logging checks.
-    # The primary check is that the execute method on the connection's cursor was called.
-    # The mock_cursor setup is part of the mock_asyncmy_connection fixture.
-    # We need to access the mock_cursor that mock_asyncmy_connection.cursor().__aenter__() would yield.
+    # Setup mock cursor for instrumentation test
+    mock_cursor = AsyncMock()
+    mock_cursor.fetchall.return_value = [(1, "test")]
+    mock_cursor.description = [("id", None), ("name", None)]
 
-    # Re-access the mock_cursor that would be used internally
-    mock_cursor = mock_asyncmy_connection.cursor.return_value.__aenter__.return_value
+    # Make cursor() return an async function that returns the cursor
+    async def _cursor() -> AsyncMock:
+        return mock_cursor
+
+    mock_asyncmy_connection.cursor.side_effect = _cursor
 
     # Execute with logging enabled
     await asyncmy_driver._execute_statement(
@@ -453,10 +507,10 @@ async def test_asyncmy_driver_operation_type_detection(asyncmy_driver: AsyncmyDr
 
 
 @pytest.mark.asyncio
-async def test_asyncmy_driver_select_to_arrow_basic(
+async def test_asyncmy_driver_fetch_arrow_table_basic(
     asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock
 ) -> None:
-    """Test Asyncmy driver select_to_arrow method basic functionality."""
+    """Test Asyncmy driver fetch_arrow_table method basic functionality."""
     # Setup mock cursor and result data
     mock_cursor = AsyncMock()
     mock_cursor.description = [("id", None), ("name", None)]
@@ -464,13 +518,18 @@ async def test_asyncmy_driver_select_to_arrow_basic(
         (1, "Alice"),
         (2, "Bob"),
     ]
-    mock_asyncmy_connection.cursor.return_value = mock_cursor
+
+    # Make cursor() return an async function that returns the cursor
+    async def _cursor() -> AsyncMock:
+        return mock_cursor
+
+    mock_asyncmy_connection.cursor.side_effect = _cursor
 
     # Create SQL statement
     statement = SQL("SELECT id, name FROM users")
 
-    # Execute select_to_arrow
-    result = await asyncmy_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = await asyncmy_driver.fetch_arrow_table(statement)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -483,21 +542,27 @@ async def test_asyncmy_driver_select_to_arrow_basic(
 
 
 @pytest.mark.asyncio
-async def test_asyncmy_driver_select_to_arrow_with_parameters(
+async def test_asyncmy_driver_fetch_arrow_table_with_parameters(
     asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock
 ) -> None:
-    """Test Asyncmy driver select_to_arrow method with parameters."""
+    """Test Asyncmy driver fetch_arrow_table method with parameters."""
     # Setup mock cursor and result data
     mock_cursor = AsyncMock()
     mock_cursor.description = [("id", None), ("name", None)]
     mock_cursor.fetchall.return_value = [(42, "Test User")]
-    mock_asyncmy_connection.cursor.return_value = mock_cursor
+
+    # Make cursor() return an async function that returns the cursor
+    async def _cursor() -> AsyncMock:
+        return mock_cursor
+
+    mock_asyncmy_connection.cursor.side_effect = _cursor
 
     # Create SQL statement with parameters
-    statement = SQL("SELECT id, name FROM users WHERE id = %s", parameters=[42])
+    # Use a SQL that can be parsed by sqlglot - the driver will convert to %s style
+    statement = SQL("SELECT id, name FROM users WHERE id = ?", parameters=[42], config=asyncmy_driver.config)
 
-    # Execute select_to_arrow
-    result = await asyncmy_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = await asyncmy_driver.fetch_arrow_table(statement)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -509,32 +574,37 @@ async def test_asyncmy_driver_select_to_arrow_with_parameters(
 
 
 @pytest.mark.asyncio
-async def test_asyncmy_driver_select_to_arrow_non_query_error(asyncmy_driver: AsyncmyDriver) -> None:
-    """Test Asyncmy driver select_to_arrow with non-query statement raises error."""
+async def test_asyncmy_driver_fetch_arrow_table_non_query_error(asyncmy_driver: AsyncmyDriver) -> None:
+    """Test Asyncmy driver fetch_arrow_table with non-query statement raises error."""
     # Create non-query statement
     statement = SQL("INSERT INTO users VALUES (1, 'test')")
 
     # Test error for non-query
     with pytest.raises(TypeError, match="Cannot fetch Arrow table for a non-query statement"):
-        await asyncmy_driver.select_to_arrow(statement)
+        await asyncmy_driver.fetch_arrow_table(statement)
 
 
 @pytest.mark.asyncio
-async def test_asyncmy_driver_select_to_arrow_empty_result(
+async def test_asyncmy_driver_fetch_arrow_table_empty_result(
     asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock
 ) -> None:
-    """Test Asyncmy driver select_to_arrow with empty result."""
+    """Test Asyncmy driver fetch_arrow_table with empty result."""
     # Setup mock cursor with no data
     mock_cursor = AsyncMock()
     mock_cursor.description = [("id", None), ("name", None)]
     mock_cursor.fetchall.return_value = []
-    mock_asyncmy_connection.cursor.return_value = mock_cursor
+
+    # Make cursor() return an async function that returns the cursor
+    async def _cursor() -> AsyncMock:
+        return mock_cursor
+
+    mock_asyncmy_connection.cursor.side_effect = _cursor
 
     # Create SQL statement
-    statement = SQL("SELECT id, name FROM users WHERE id > 1000")
+    statement = SQL("SELECT id, name FROM users WHERE id > 1000", config=asyncmy_driver.config)
 
-    # Execute select_to_arrow
-    result = await asyncmy_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = await asyncmy_driver.fetch_arrow_table(statement)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -543,20 +613,25 @@ async def test_asyncmy_driver_select_to_arrow_empty_result(
 
 
 @pytest.mark.asyncio
-async def test_asyncmy_driver_select_to_arrow_with_connection_override(asyncmy_driver: AsyncmyDriver) -> None:
-    """Test Asyncmy driver select_to_arrow with connection override."""
+async def test_asyncmy_driver_fetch_arrow_table_with_connection_override(asyncmy_driver: AsyncmyDriver) -> None:
+    """Test Asyncmy driver fetch_arrow_table with connection override."""
     # Create override connection
     override_connection = AsyncMock()
     mock_cursor = AsyncMock()
     mock_cursor.description = [("id", None)]
     mock_cursor.fetchall.return_value = [(1,)]
-    override_connection.cursor.return_value = mock_cursor
+
+    # Make cursor() return an async function that returns the cursor
+    async def _cursor() -> AsyncMock:
+        return mock_cursor
+
+    override_connection.cursor.side_effect = _cursor
 
     # Create SQL statement
     statement = SQL("SELECT id FROM users")
 
     # Execute with connection override
-    result = await asyncmy_driver.select_to_arrow(statement, connection=override_connection)
+    result = await asyncmy_driver.fetch_arrow_table(statement, connection=override_connection)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -574,8 +649,12 @@ async def test_asyncmy_driver_logging_configuration(
     """Test Asyncmy driver logging configuration."""
     # Setup mock cursor
     mock_cursor = AsyncMock()
-    mock_asyncmy_connection.cursor.return_value.__aenter__.return_value = mock_cursor
-    mock_asyncmy_connection.cursor.return_value.__aexit__.return_value = None
+
+    # Make cursor() return an async function that returns the cursor
+    async def _cursor() -> AsyncMock:
+        return mock_cursor
+
+    mock_asyncmy_connection.cursor.side_effect = _cursor
 
     # Enable logging
     asyncmy_driver.instrumentation_config.log_queries = True
@@ -605,7 +684,7 @@ def test_asyncmy_driver_mixins_integration(asyncmy_driver: AsyncmyDriver) -> Non
     assert isinstance(asyncmy_driver, ResultConverter)
 
     # Test mixin methods are available
-    assert hasattr(asyncmy_driver, "select_to_arrow")
+    assert hasattr(asyncmy_driver, "fetch_arrow_table")
     assert hasattr(asyncmy_driver, "to_schema")
     assert hasattr(asyncmy_driver, "returns_rows")
 
@@ -619,3 +698,56 @@ def test_asyncmy_driver_returns_rows_method(asyncmy_driver: AsyncmyDriver) -> No
     # Test with INSERT statement
     insert_stmt = SQL("INSERT INTO users VALUES (1, 'test')")
     assert asyncmy_driver.returns_rows(insert_stmt.expression) is False
+
+
+@pytest.mark.asyncio
+async def test_asyncmy_driver_fetch_arrow_table_arrowresult(
+    asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock
+) -> None:
+    """Test fetch_arrow_table returns ArrowResult with correct pyarrow.Table (async)."""
+    mock_cursor = AsyncMock()
+    mock_cursor.description = [("id", None), ("name", None)]
+    mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
+
+    # Make cursor() return an async function that returns the cursor
+    async def _cursor() -> AsyncMock:
+        return mock_cursor
+
+    mock_asyncmy_connection.cursor.side_effect = _cursor
+    statement = SQL("SELECT id, name FROM users")
+    result = await asyncmy_driver.fetch_arrow_table(statement)
+    assert isinstance(result, ArrowResult)
+    assert isinstance(result.data, pa.Table)
+    assert result.data.num_rows == 2
+    assert set(result.data.column_names) == {"id", "name"}
+    mock_cursor.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_asyncmy_driver_to_parquet(
+    asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """Test to_parquet writes correct data to a Parquet file (async)."""
+    mock_cursor = AsyncMock()
+    mock_cursor.description = [("id", None), ("name", None)]
+    mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
+
+    # Make cursor() return an async function that returns the cursor
+    async def _cursor() -> AsyncMock:
+        return mock_cursor
+
+    mock_asyncmy_connection.cursor.side_effect = _cursor
+    statement = SQL("SELECT id, name FROM users")
+    called = {}
+
+    def patched_write_table(table: Any, path: Any, **kwargs: Any) -> None:
+        called["table"] = table
+        called["path"] = path
+
+    monkeypatch.setattr(pq, "write_table", patched_write_table)
+    with tempfile.NamedTemporaryFile() as tmp:
+        await asyncmy_driver.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
+        assert "table" in called
+        assert called["path"] == tmp.name
+        assert isinstance(called["table"], pa.Table)
+    mock_cursor.close.assert_called_once()

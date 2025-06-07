@@ -339,7 +339,7 @@ def test_psycopg_async_config_connection_config_dict() -> None:
 
 
 @patch("psycopg_pool.ConnectionPool")
-def test_psycopg_sync_config_create_pool_impl(mock_pool_class: Mock) -> None:
+def test_psycopg_sync_config_create_pool(mock_pool_class: Mock) -> None:
     """Test Psycopg sync config _create_pool_impl method (mocked)."""
     mock_pool = Mock()
     mock_pool_class.side_effect = lambda *args: mock_pool  # type: ignore
@@ -353,13 +353,13 @@ def test_psycopg_sync_config_create_pool_impl(mock_pool_class: Mock) -> None:
         max_size=10,
     )
     config = PsycopgSyncConfig(pool_config=pool_config)
-    pool = config._create_pool_impl()
+    pool = config._create_pool()
     assert pool is mock_pool
 
 
 @patch("psycopg_pool.AsyncConnectionPool")
 @pytest.mark.asyncio
-async def test_psycopg_async_config_create_pool_impl(mock_pool_class: Mock) -> None:
+async def test_psycopg_async_config_create_pool(mock_pool_class: Mock) -> None:
     """Test Psycopg async config _create_pool_impl method (mocked)."""
     mock_pool = AsyncMock()
     mock_pool_class.side_effect = lambda *args: mock_pool  # type: ignore
@@ -373,7 +373,7 @@ async def test_psycopg_async_config_create_pool_impl(mock_pool_class: Mock) -> N
         max_size=10,
     )
     config = PsycopgAsyncConfig(pool_config=pool_config)
-    pool = await config._create_pool_impl()
+    pool = await config._create_pool()
     assert pool is mock_pool
 
 
@@ -745,7 +745,7 @@ def test_psycopg_config_options() -> None:
     assert config.pool_config.get("options") == "-c search_path=public,private -c statement_timeout=30s"
 
 
-def test_psycopg_sync_config_close_pool_impl() -> None:
+def test_psycopg_sync_config_close_pool() -> None:
     """Test Psycopg sync config _close_pool_impl method."""
     mock_pool = Mock()
 
@@ -759,14 +759,14 @@ def test_psycopg_sync_config_close_pool_impl() -> None:
     config = PsycopgSyncConfig(pool_config=pool_config)
     config.pool_instance = mock_pool
 
-    config._close_pool_impl()
+    config._close_pool()
 
     # Verify pool close was called
     mock_pool.close.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_psycopg_async_config_close_pool_impl() -> None:
+async def test_psycopg_async_config_close_pool() -> None:
     """Test Psycopg async config _close_pool_impl method."""
     mock_pool = AsyncMock()
 
@@ -780,7 +780,7 @@ async def test_psycopg_async_config_close_pool_impl() -> None:
     config = PsycopgAsyncConfig(pool_config=pool_config)
     config.pool_instance = mock_pool
 
-    await config._close_pool_impl()
+    await config._close_pool()
 
     # Verify pool close was called
     mock_pool.close.assert_called_once()

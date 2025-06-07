@@ -7,6 +7,7 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.statement.parameters import ParameterInfo
+    from sqlspec.statement.pipelines.aggregator import AggregatedResults
     from sqlspec.statement.pipelines.analyzers import StatementAnalysis
     from sqlspec.statement.pipelines.base import ValidationResult
     from sqlspec.statement.sql import SQLConfig
@@ -51,6 +52,9 @@ class SQLProcessingContext:
     analysis_result: Optional["StatementAnalysis"] = None
     """Result from the statement analysis stage."""
 
+    aggregated_results: Optional["AggregatedResults"] = None
+    """Aggregated results from all pipeline processors."""
+
     # --- Flags and metadata ---
     input_sql_had_placeholders: bool = False
     """Flag indicating if the initial_sql_string already contained placeholders."""
@@ -89,6 +93,9 @@ class StatementPipelineResult:
 
     input_sql_had_placeholders: bool
     """Whether the original input SQL string had placeholders."""
+
+    aggregated_results: Optional["AggregatedResults"] = None
+    """Aggregated results from all pipeline processors."""
 
     # Add any other final state from the context that the SQL object needs
     # e.g., if ParameterizeLiterals modifies parameter_info, that should be reflected

@@ -1,4 +1,3 @@
-# ruff: noqa: TRY301
 import contextlib
 import logging
 from collections.abc import Iterator, Sequence
@@ -8,10 +7,10 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 from adbc_driver_manager.dbapi import Connection, Cursor
 
 from sqlspec.driver import SyncDriverAdapterProtocol
-from sqlspec.exceptions import SQLConversionError
-from sqlspec.statement.mixins import ResultConverter, SQLTranslatorMixin, SyncArrowMixin
+from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
+from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.telemetry import instrument_operation
@@ -27,10 +26,7 @@ AdbcConnection = Connection
 
 
 class AdbcDriver(
-    SyncDriverAdapterProtocol["AdbcConnection", RowT],
-    SQLTranslatorMixin["AdbcConnection"],
-    SyncArrowMixin["AdbcConnection"],
-    ResultConverter,
+    SyncDriverAdapterProtocol["AdbcConnection", RowT], SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
 ):
     """ADBC Sync Driver Adapter with modern architecture.
 
@@ -45,8 +41,8 @@ class AdbcDriver(
     - Driver manager abstraction for easy multi-database support
     """
 
-    dialect: str = "adbc"
     __supports_arrow__: ClassVar[bool] = True
+    __supports_parquet__: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -73,7 +69,7 @@ class AdbcDriver(
             "bigquery": ParameterStyle.NAMED_AT,
             "snowflake": ParameterStyle.QMARK,
         }
-        return dialect_style_map.get(self.dialect, ParameterStyle.QMARK)
+        return dialect_style_map.get(str(self.dialect), ParameterStyle.QMARK)
 
     @staticmethod
     def _get_dialect(connection: "AdbcConnection") -> str:
@@ -148,20 +144,28 @@ class AdbcDriver(
     def _execute(
         self,
         sql: str,
-        params: Any,
+        parameters: Any,
         statement: SQL,
         connection: Optional["AdbcConnection"] = None,
         **kwargs: Any,
     ) -> Any:
         conn = self._connection(connection)
         final_exec_params: Optional[list[Any]] = None
-        if params is not None:
-            if isinstance(params, list):
-                final_exec_params = params
-            elif hasattr(params, "__iter__") and not isinstance(params, (str, bytes)):
-                final_exec_params = list(params)
+        if parameters is not None:
+            if isinstance(parameters, dict):
+                # For dict parameters, extract values for positional placeholders
+                final_exec_params = list(parameters.values())
+            elif isinstance(parameters, list):
+                final_exec_params = parameters
             else:
-                final_exec_params = [params]
+                try:
+                    if not isinstance(parameters, (str, bytes)):
+                        iter(parameters)  # Test if iterable
+                        final_exec_params = list(parameters)
+                    else:
+                        final_exec_params = [parameters]
+                except (AttributeError, TypeError):
+                    final_exec_params = [parameters]
         with self._get_cursor(conn) as cursor:
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
@@ -247,8 +251,9 @@ class AdbcDriver(
     ) -> SQLResult[RowT]:
         with instrument_operation(self, "adbc_wrap_execute", "database"):
             operation_type = "UNKNOWN"
-            if statement.expression and hasattr(statement.expression, "key"):
-                operation_type = str(statement.expression.key).upper()
+            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+                if statement.expression:
+                    operation_type = str(statement.expression.key).upper()
 
             if isinstance(result, str):
                 return SQLResult[RowT](
@@ -260,21 +265,27 @@ class AdbcDriver(
                 )
 
             cursor = result
-            rows_affected = cursor.rowcount if hasattr(cursor, "rowcount") else -1
+            try:
+                rows_affected = cursor.rowcount
+            except AttributeError:
+                rows_affected = -1
 
             returned_data: list[dict[str, Any]] = []
             column_names_for_returning: list[str] = []
 
-            if hasattr(cursor, "description") and cursor.description:
-                try:
-                    fetched_returning_data = cursor.fetchall()
-                    if fetched_returning_data:
-                        column_names_for_returning = [col[0] for col in cursor.description or []]
-                        returned_data = [dict(zip(column_names_for_returning, row)) for row in fetched_returning_data]
-                        if rows_affected == -1 and returned_data:
-                            rows_affected = len(returned_data)
-                except Exception as e:  # pragma: no cover
-                    logger.debug("Could not fetch RETURNING data in ADBC _wrap_execute_result: %s", e)
+            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+                if cursor.description:
+                    try:
+                        fetched_returning_data = cursor.fetchall()
+                        if fetched_returning_data:
+                            column_names_for_returning = [col[0] for col in cursor.description or []]
+                            returned_data = [
+                                dict(zip(column_names_for_returning, row)) for row in fetched_returning_data
+                            ]
+                            if rows_affected == -1 and returned_data:
+                                rows_affected = len(returned_data)
+                    except Exception as e:  # pragma: no cover
+                        logger.debug("Could not fetch RETURNING data in ADBC _wrap_execute_result: %s", e)
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)
@@ -288,45 +299,3 @@ class AdbcDriver(
                 operation_type=operation_type,
                 column_names=column_names_for_returning,
             )
-
-    def _select_to_arrow_impl(
-        self,
-        stmt_obj: "SQL",
-        connection: "AdbcConnection",
-        **kwargs: Any,
-    ) -> "ArrowResult":
-        final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
-        ordered_params = stmt_obj.get_parameters(style=self._get_placeholder_style())
-
-        final_params: Optional[list[Any]] = None
-        if ordered_params is not None:
-            if isinstance(ordered_params, list):
-                final_params = ordered_params
-            elif hasattr(ordered_params, "__iter__") and not isinstance(ordered_params, (str, bytes)):
-                final_params = list(ordered_params)
-            else:
-                final_params = [ordered_params]
-
-        with self._get_cursor(connection) as cursor:
-            if self.instrumentation_config.log_queries:
-                logger.debug("Executing ADBC Arrow query: %s", final_sql)
-            if self.instrumentation_config.log_parameters and final_params:
-                logger.debug("Query parameters for ADBC Arrow: %s", final_params)
-
-            cursor.execute(final_sql, final_params or [])
-
-            try:
-                arrow_table = cursor.fetch_arrow_table()
-                if arrow_table is None:
-                    msg = "ADBC cursor.fetch_arrow_table() returned None. Expected an Arrow Table."
-                    raise SQLConversionError(msg)
-
-                return ArrowResult(statement=stmt_obj, data=arrow_table)
-            except Exception as e:
-                if "fetch_arrow_table() returned None" in str(e):
-                    import pyarrow as pa
-
-                    return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=[]))
-
-                msg = f"Failed to convert ADBC result to Arrow table: {e}"
-                raise SQLConversionError(msg) from e

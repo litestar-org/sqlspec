@@ -6,6 +6,5 @@ returning SQL objects that work with existing SQLSpec execution.
 """
 
 from sqlspec.extensions.aiosql.adapter import AiosqlAsyncAdapter, AiosqlService, AiosqlSyncAdapter
-from sqlspec.extensions.aiosql.loader import AiosqlLoader
 
-__all__ = ("AiosqlAsyncAdapter", "AiosqlLoader", "AiosqlService", "AiosqlSyncAdapter")
+__all__ = ("AiosqlAsyncAdapter", "AiosqlService", "AiosqlSyncAdapter")

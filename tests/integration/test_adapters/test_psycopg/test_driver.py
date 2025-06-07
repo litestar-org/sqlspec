@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Generator
 from typing import Any, Literal
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
 from sqlspec.adapters.psycopg.config import PsycopgPoolConfig
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.sql import SQL
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -537,3 +541,34 @@ def test_psycopg_copy_operations(psycopg_session: PsycopgSyncDriver) -> None:
     except Exception:
         # COPY operations might not be supported
         pytest.skip("COPY operations not supported in this psycopg implementation")
+
+
+@pytest.mark.xdist_group("postgres")
+def test_psycopg_fetch_arrow_table(psycopg_session: PsycopgSyncDriver) -> None:
+    """Integration test: fetch_arrow_table returns ArrowResult with correct pyarrow.Table."""
+    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("arrow1", 111))
+    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("arrow2", 222))
+    statement = SQL("SELECT name, value FROM test_table ORDER BY name")
+    result = psycopg_session.fetch_arrow_table(statement)
+    assert isinstance(result, ArrowResult)
+    table = result.data
+    assert isinstance(table, pa.Table)
+    assert table.num_rows == 2
+    assert set(table.column_names) == {"name", "value"}
+    names = table.column("name").to_pylist()
+    assert "arrow1" in names and "arrow2" in names
+
+
+@pytest.mark.xdist_group("postgres")
+def test_psycopg_to_parquet(psycopg_session: PsycopgSyncDriver) -> None:
+    """Integration test: to_parquet writes correct data to a Parquet file."""
+    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("pq1", 123))
+    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("pq2", 456))
+    statement = SQL("SELECT name, value FROM test_table ORDER BY name")
+    with tempfile.NamedTemporaryFile() as tmp:
+        psycopg_session.export_to_storage(statement, tmp.name)
+        table = pq.read_table(tmp.name)
+        assert table.num_rows == 2
+        assert set(table.column_names) == {"name", "value"}
+        names = table.column("name").to_pylist()
+        assert "pq1" in names and "pq2" in names

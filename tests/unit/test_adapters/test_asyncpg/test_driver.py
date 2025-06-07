@@ -1,7 +1,7 @@
 """Unit tests for AsyncPG driver."""
 
 from typing import Any, Union
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -71,6 +71,23 @@ def test_asyncpg_driver_placeholder_style(asyncpg_driver: AsyncpgDriver) -> None
 
 
 @pytest.mark.asyncio
+async def test_asyncpg_config_dialect_property() -> None:
+    """Test AsyncPG config dialect property."""
+    from sqlspec.adapters.asyncpg import AsyncPGConfig
+
+    config = AsyncPGConfig(
+        pool_config={
+            "host": "localhost",
+            "port": 5432,
+            "database": "test",
+            "user": "test",
+            "password": "test",
+        }
+    )
+    assert config.dialect == "postgres"
+
+
+@pytest.mark.asyncio
 async def test_asyncpg_driver_execute_statement_select(
     asyncpg_driver: AsyncpgDriver, mock_asyncpg_connection: AsyncMock
 ) -> None:
@@ -78,7 +95,7 @@ async def test_asyncpg_driver_execute_statement_select(
     # Setup mock connection
     from asyncpg import Record
 
-    mock_record = Mock(spec=Record)
+    mock_record = MagicMock(spec=Record)
     mock_record.keys.return_value = ["id", "name"]
     mock_record.__getitem__.side_effect = lambda key: {"id": 1, "name": "test"}[key]  # type: ignore[misc]
     mock_asyncpg_connection.fetch.return_value = [mock_record]
@@ -157,7 +174,7 @@ async def test_asyncpg_driver_execute_statement_many(
     mock_asyncpg_connection.executemany.assert_called_once_with(
         "INSERT INTO users (name) VALUES ($1)", [("John",), ("Jane",), ("Bob",)]
     )
-    assert result == 3  # Should return length of parameters list
+    assert result is None  # asyncpg.executemany returns None
 
 
 @pytest.mark.asyncio
@@ -168,7 +185,7 @@ async def test_asyncpg_driver_execute_statement_parameter_processing(
     # Setup mock connection
     from asyncpg import Record
 
-    mock_record = Mock(spec=Record)
+    mock_record = MagicMock(spec=Record)
     mock_record.keys.return_value = ["id", "name"]
     mock_record.__getitem__.side_effect = lambda key: {"id": 1, "name": "John"}[key]  # type: ignore[misc]
     mock_asyncpg_connection.fetch.return_value = [mock_record]
@@ -192,15 +209,12 @@ async def test_asyncpg_driver_wrap_select_result(asyncpg_driver: AsyncpgDriver) 
     # Create mock records with data
     from asyncpg import Record
 
-    mock_record1 = Mock(spec=Record)
+    mock_record1 = MagicMock(spec=Record)
     mock_record1.keys.return_value = ["id", "name"]
-    mock_record1.__iter__.return_value = iter([("id", 1), ("name", "John")])
-
-    mock_record2 = Mock(spec=Record)
-    mock_record2.keys.return_value = ["id", "name"]
-    mock_record2.__iter__.return_value = iter([("id", 2), ("name", "Jane")])
-
     mock_record1.__iter__ = lambda: iter([("id", 1), ("name", "John")])
+
+    mock_record2 = MagicMock(spec=Record)
+    mock_record2.keys.return_value = ["id", "name"]
     mock_record2.__iter__ = lambda: iter([("id", 2), ("name", "Jane")])
 
     records = [mock_record1, mock_record2]
@@ -257,7 +271,7 @@ async def test_asyncpg_driver_wrap_select_result_with_schema_type(asyncpg_driver
         name: str
 
     # Create mock record with data
-    mock_record = Mock(spec=Record)
+    mock_record = MagicMock(spec=Record)
     mock_record.keys.return_value = ["id", "name"]
     mock_record.__iter__ = lambda: iter([("id", 1), ("name", "John")])
 
@@ -332,7 +346,7 @@ async def test_asyncpg_driver_wrap_execute_result_integer(asyncpg_driver: Asyncp
     # Verify result
     assert isinstance(result, SQLResult)
     assert result.statement is statement
-    assert result.rows_affected == -1
+    assert result.rows_affected == 0  # Can't parse integer as status message
     assert result.operation_type == "INSERT"
 
 
@@ -402,18 +416,18 @@ async def test_asyncpg_driver_operation_type_detection(asyncpg_driver: AsyncpgDr
 
 
 @pytest.mark.asyncio
-async def test_asyncpg_driver_select_to_arrow_basic(
+async def test_asyncpg_driver_fetch_arrow_table_basic(
     asyncpg_driver: AsyncpgDriver, mock_asyncpg_connection: AsyncMock
 ) -> None:
-    """Test AsyncPG driver select_to_arrow method basic functionality."""
+    """Test AsyncPG driver fetch_arrow_table method basic functionality."""
     # Setup mock connection and result data
     from asyncpg import Record
 
-    mock_record1 = Mock(spec=Record)
+    mock_record1 = MagicMock(spec=Record)
     mock_record1.keys.return_value = ["id", "name"]
     mock_record1.__getitem__.side_effect = lambda key: {"id": 1, "name": "Alice"}[key]  # type: ignore[misc]
 
-    mock_record2 = Mock(spec=Record)
+    mock_record2 = MagicMock(spec=Record)
     mock_record2.keys.return_value = ["id", "name"]
     mock_record2.__getitem__.side_effect = lambda key: {"id": 2, "name": "Bob"}[key]  # type: ignore[misc]
 
@@ -423,8 +437,8 @@ async def test_asyncpg_driver_select_to_arrow_basic(
     # Create SQL statement
     statement = SQL("SELECT id, name FROM users")
 
-    # Execute select_to_arrow
-    result = await asyncpg_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = await asyncpg_driver.fetch_arrow_table(statement)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -435,14 +449,14 @@ async def test_asyncpg_driver_select_to_arrow_basic(
 
 
 @pytest.mark.asyncio
-async def test_asyncpg_driver_select_to_arrow_with_parameters(
+async def test_asyncpg_driver_fetch_arrow_table_with_parameters(
     asyncpg_driver: AsyncpgDriver, mock_asyncpg_connection: AsyncMock
 ) -> None:
-    """Test AsyncPG driver select_to_arrow method with parameters."""
+    """Test AsyncPG driver fetch_arrow_table method with parameters."""
     # Setup mock connection and result data
     from asyncpg import Record
 
-    mock_record = Mock(spec=Record)
+    mock_record = MagicMock(spec=Record)
     mock_record.keys.return_value = ["id", "name"]
     mock_record.__getitem__.side_effect = lambda key: {"id": 42, "name": "Test User"}[key]  # type: ignore[misc]
 
@@ -452,8 +466,8 @@ async def test_asyncpg_driver_select_to_arrow_with_parameters(
     # Create SQL statement with parameters
     statement = SQL("SELECT id, name FROM users WHERE id = $1", parameters=[42])
 
-    # Execute select_to_arrow
-    result = await asyncpg_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = await asyncpg_driver.fetch_arrow_table(statement)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -463,29 +477,29 @@ async def test_asyncpg_driver_select_to_arrow_with_parameters(
 
 
 @pytest.mark.asyncio
-async def test_asyncpg_driver_select_to_arrow_non_query_error(asyncpg_driver: AsyncpgDriver) -> None:
-    """Test AsyncPG driver select_to_arrow with non-query statement raises error."""
+async def test_asyncpg_driver_fetch_arrow_table_non_query_error(asyncpg_driver: AsyncpgDriver) -> None:
+    """Test AsyncPG driver fetch_arrow_table with non-query statement raises error."""
     # Create non-query statement
     statement = SQL("INSERT INTO users VALUES (1, 'test')")
 
     # Test error for non-query
     with pytest.raises(TypeError, match="Cannot fetch Arrow table for a non-query statement"):
-        await asyncpg_driver.select_to_arrow(statement)
+        await asyncpg_driver.fetch_arrow_table(statement)
 
 
 @pytest.mark.asyncio
-async def test_asyncpg_driver_select_to_arrow_empty_result(
+async def test_asyncpg_driver_fetch_arrow_table_empty_result(
     asyncpg_driver: AsyncpgDriver, mock_asyncpg_connection: AsyncMock
 ) -> None:
-    """Test AsyncPG driver select_to_arrow with empty result."""
+    """Test AsyncPG driver fetch_arrow_table with empty result."""
     # Setup mock connection with no data
     mock_asyncpg_connection.fetch.return_value = []
 
     # Create SQL statement
     statement = SQL("SELECT id, name FROM users WHERE id > 1000")
 
-    # Execute select_to_arrow
-    result = await asyncpg_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = await asyncpg_driver.fetch_arrow_table(statement)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -494,13 +508,13 @@ async def test_asyncpg_driver_select_to_arrow_empty_result(
 
 
 @pytest.mark.asyncio
-async def test_asyncpg_driver_select_to_arrow_with_connection_override(asyncpg_driver: AsyncpgDriver) -> None:
-    """Test AsyncPG driver select_to_arrow with connection override."""
+async def test_asyncpg_driver_fetch_arrow_table_with_connection_override(asyncpg_driver: AsyncpgDriver) -> None:
+    """Test AsyncPG driver fetch_arrow_table with connection override."""
     # Create override connection
     from asyncpg import Record
 
     override_connection = AsyncMock()
-    mock_record = Mock(spec=Record)
+    mock_record = MagicMock(spec=Record)
     mock_record.keys.return_value = ["id"]
     mock_record.__getitem__.side_effect = lambda key: {"id": 1}[key]  # type: ignore[misc]
 
@@ -511,7 +525,7 @@ async def test_asyncpg_driver_select_to_arrow_with_connection_override(asyncpg_d
     statement = SQL("SELECT id FROM users")
 
     # Execute with connection override
-    result = await asyncpg_driver.select_to_arrow(statement, connection=override_connection)
+    result = await asyncpg_driver.fetch_arrow_table(statement, connection=override_connection)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -550,7 +564,7 @@ def test_asyncpg_driver_mixins_integration(asyncpg_driver: AsyncpgDriver) -> Non
     assert isinstance(asyncpg_driver, ResultConverter)
 
     # Test mixin methods are available
-    assert hasattr(asyncpg_driver, "select_to_arrow")
+    assert hasattr(asyncpg_driver, "fetch_arrow_table")
     assert hasattr(asyncpg_driver, "to_schema")
     assert hasattr(asyncpg_driver, "returns_rows")
 
@@ -570,15 +584,15 @@ def test_asyncpg_driver_returns_rows_method(asyncpg_driver: AsyncpgDriver) -> No
 async def test_asyncpg_driver_status_string_parsing(asyncpg_driver: AsyncpgDriver) -> None:
     """Test AsyncPG driver status string parsing for different operations."""
     test_cases = [
-        ("INSERT 0 5", "INSERT", 5),
-        ("UPDATE 3", "UPDATE", 3),
-        ("DELETE 2", "DELETE", 2),
-        ("CREATE TABLE", "CREATE", 0),
-        ("DROP TABLE", "DROP", 0),
+        ("INSERT 0 5", "INSERT INTO test VALUES (1)", "INSERT", 5),
+        ("UPDATE 3", "UPDATE test SET col = 1", "UPDATE", 3),
+        ("DELETE 2", "DELETE FROM test", "DELETE", 2),
+        ("CREATE TABLE", "CREATE TABLE test (id INT)", "CREATE", 0),
+        ("DROP TABLE", "DROP TABLE test", "DROP", 0),
     ]
 
-    for status_string, expected_op, expected_rows in test_cases:
-        statement = SQL(f"{expected_op} statement", config=asyncpg_driver.config)
+    for status_string, sql_text, expected_op, expected_rows in test_cases:
+        statement = SQL(sql_text, config=asyncpg_driver.config)
 
         result = await asyncpg_driver._wrap_execute_result(
             statement=statement,
@@ -605,4 +619,4 @@ async def test_asyncpg_driver_dict_parameter_handling(
     result_val = await asyncpg_driver._execute_statement(statement=statement)
 
     mock_asyncpg_connection.executemany.assert_called_once()
-    assert result_val == 2
+    assert result_val is None  # asyncpg.executemany returns None

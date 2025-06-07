@@ -336,12 +336,22 @@ def test_validation_enabled_safe_sql(mock_validation_result: ValidationResult) -
     config = SQLConfig(enable_validation=True, strict_mode=True)
 
     # Mock the pipeline instead of the validator factory
-    with patch.object(config, "get_pipeline") as mock_get_pipeline:
+    with patch.object(config, "get_statement_pipeline") as mock_get_pipeline:
         mock_pipeline = Mock()
         from sqlglot import parse_one
 
+        from sqlspec.statement.pipelines.context import StatementPipelineResult
+
         actual_expr = parse_one("SELECT * FROM users")
-        mock_pipeline.execute.return_value = (actual_expr, mock_validation_result)
+        mock_result = StatementPipelineResult(
+            final_expression=actual_expr,
+            validation_result=mock_validation_result,
+            analysis_result=None,
+            parameter_info=[],
+            merged_parameters=None,
+            input_sql_had_placeholders=False,
+        )
+        mock_pipeline.execute_pipeline.return_value = mock_result
         mock_get_pipeline.return_value = mock_pipeline
 
         stmt = SQL("SELECT * FROM users", config=config)
@@ -356,16 +366,30 @@ def test_validation_enabled_unsafe_sql_strict_mode(unsafe_validation_result: Val
     config = SQLConfig(enable_validation=True, strict_mode=True)
 
     # Mock the pipeline instead of the validator factory
-    with patch.object(config, "get_pipeline") as mock_get_pipeline:
+    with patch.object(config, "get_statement_pipeline") as mock_get_pipeline:
         mock_pipeline = Mock()
         from sqlglot import parse_one
 
+        from sqlspec.statement.pipelines.context import StatementPipelineResult
+
         actual_expr = parse_one("DROP TABLE users")
-        mock_pipeline.execute.return_value = (actual_expr, unsafe_validation_result)
+        mock_result = StatementPipelineResult(
+            final_expression=actual_expr,
+            validation_result=unsafe_validation_result,
+            analysis_result=None,
+            parameter_info=[],
+            merged_parameters=None,
+            input_sql_had_placeholders=False,
+        )
+        mock_pipeline.execute_pipeline.return_value = mock_result
         mock_get_pipeline.return_value = mock_pipeline
 
+        # Create the SQL object - no error during construction
+        stmt = SQL("DROP TABLE users", config=config)
+
+        # Error should be raised when accessing properties that trigger processing
         with pytest.raises(SQLValidationError):
-            SQL("DROP TABLE users", config=config)
+            _ = stmt.sql  # This should trigger validation and raise
 
 
 def test_validation_enabled_unsafe_sql_non_strict_mode(unsafe_validation_result: ValidationResult) -> None:
@@ -373,12 +397,22 @@ def test_validation_enabled_unsafe_sql_non_strict_mode(unsafe_validation_result:
     config = SQLConfig(enable_validation=True, strict_mode=False)
 
     # Mock the pipeline instead of the validator factory
-    with patch.object(config, "get_pipeline") as mock_get_pipeline:
+    with patch.object(config, "get_statement_pipeline") as mock_get_pipeline:
         mock_pipeline = Mock()
         from sqlglot import parse_one
 
+        from sqlspec.statement.pipelines.context import StatementPipelineResult
+
         actual_expr = parse_one("DROP TABLE users")
-        mock_pipeline.execute.return_value = (actual_expr, unsafe_validation_result)
+        mock_result = StatementPipelineResult(
+            final_expression=actual_expr,
+            validation_result=unsafe_validation_result,
+            analysis_result=None,
+            parameter_info=[],
+            merged_parameters=None,
+            input_sql_had_placeholders=False,
+        )
+        mock_pipeline.execute_pipeline.return_value = mock_result
         mock_get_pipeline.return_value = mock_pipeline
 
         stmt = SQL("DROP TABLE users", config=config)
@@ -393,8 +427,11 @@ def test_validation_disabled() -> None:
     config = SQLConfig(enable_validation=False)
     stmt = SQL("DROP TABLE users", config=config)
 
-    # Should not validate anything
-    assert stmt.validation_result is None
+    # Should have a skipped validation result
+    assert stmt.validation_result is not None
+    assert stmt.validation_result.is_safe is True
+    assert stmt.validation_result.risk_level == RiskLevel.SKIP
+    assert "disabled" in str(stmt.validation_result.issues).lower()
 
 
 def test_validate_method() -> None:
@@ -694,8 +731,10 @@ def test_equality_and_hashing() -> None:
 
 def test_invalid_sql_parsing() -> None:
     """Test handling of invalid SQL."""
+    stmt = SQL("INVALID SQL SYNTAX HERE", config=SQLConfig(strict_mode=True))
+    # Error should be raised when accessing properties that trigger processing
     with pytest.raises(SQLValidationError):
-        SQL("INVALID SQL SYNTAX HERE", config=SQLConfig(strict_mode=True))
+        _ = stmt.sql  # This should trigger parsing and raise
 
 
 def test_empty_sql_handling() -> None:
@@ -765,7 +804,10 @@ def test_validation_result_property() -> None:
 
     # With validation disabled
     stmt_without_validation = SQL("SELECT * FROM users", config=SQLConfig(enable_validation=False))
-    assert stmt_without_validation.validation_result is None
+    # Should have a skipped validation result
+    assert stmt_without_validation.validation_result is not None
+    assert stmt_without_validation.validation_result.is_safe is True
+    assert stmt_without_validation.validation_result.risk_level == RiskLevel.SKIP
 
 
 def test_mixed_parameter_styles_in_sql_string() -> None:

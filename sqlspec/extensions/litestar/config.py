@@ -48,6 +48,7 @@ class DatabaseConfig:
     commit_mode: "CommitMode" = field(default=DEFAULT_COMMIT_MODE)
     extra_commit_statuses: "Optional[set[int]]" = field(default=None)
     extra_rollback_statuses: "Optional[set[int]]" = field(default=None)
+    enable_correlation_middleware: bool = field(default=True)
     connection_provider: "Callable[[State, Scope], AsyncGenerator[ConnectionT, None]]" = field(  # pyright: ignore[reportGeneralTypeIssues]
         init=False, repr=False, hash=False
     )

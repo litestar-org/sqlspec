@@ -351,7 +351,7 @@ def test_oracle_async_config_connection_config_dict() -> None:
 
 
 @patch("oracledb.create_pool")
-def test_oracle_sync_config_create_pool_impl(mock_pool_func: Mock) -> None:
+def test_oracle_sync_config_create_pool(mock_pool_func: Mock) -> None:
     """Test Oracle sync config _create_pool_impl method (mocked)."""
     mock_pool = Mock()
     mock_pool_func.return_value = mock_pool
@@ -367,7 +367,7 @@ def test_oracle_sync_config_create_pool_impl(mock_pool_func: Mock) -> None:
     )
     config = OracleSyncConfig(pool_config=pool_config)
 
-    pool = config._create_pool_impl()
+    pool = config._create_pool()
 
     # Verify create_pool was called with correct parameters
     mock_pool_func.assert_called_once()
@@ -384,7 +384,7 @@ def test_oracle_sync_config_create_pool_impl(mock_pool_func: Mock) -> None:
 
 @patch("oracledb.create_pool_async")
 @pytest.mark.asyncio
-async def test_oracle_async_config_create_pool_impl(mock_pool_func: Mock) -> None:
+async def test_oracle_async_config_create_pool(mock_pool_func: Mock) -> None:
     """Test Oracle async config _create_pool_impl method (mocked)."""
     mock_pool = AsyncMock()
     mock_pool_func.return_value = mock_pool
@@ -400,7 +400,7 @@ async def test_oracle_async_config_create_pool_impl(mock_pool_func: Mock) -> Non
     )
     config = OracleAsyncConfig(pool_config=pool_config)
 
-    pool = await config._create_pool_impl()
+    pool = await config._create_pool()
 
     # Verify create_pool_async was called with correct parameters
     mock_pool_func.assert_called_once()
@@ -894,7 +894,7 @@ def test_oracle_config_events_and_mode() -> None:
     assert config.pool_config.get("events") is True
 
 
-def test_oracle_sync_config_close_pool_impl() -> None:
+def test_oracle_sync_config_close_pool() -> None:
     """Test Oracle sync config _close_pool_impl method."""
     mock_pool = Mock()
 
@@ -906,14 +906,14 @@ def test_oracle_sync_config_close_pool_impl() -> None:
     config = OracleSyncConfig(pool_config=pool_config)
     config.pool_instance = mock_pool
 
-    config._close_pool_impl()
+    config._close_pool()
 
     # Verify pool close was called
     mock_pool.close.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_oracle_async_config_close_pool_impl() -> None:
+async def test_oracle_async_config_close_pool() -> None:
     """Test Oracle async config _close_pool_impl method."""
     mock_pool = AsyncMock()
 
@@ -925,7 +925,7 @@ async def test_oracle_async_config_close_pool_impl() -> None:
     config = OracleAsyncConfig(pool_config=pool_config)
     config.pool_instance = mock_pool
 
-    await config._close_pool_impl()
+    await config._close_pool()
 
     # Verify pool close was called
     mock_pool.close.assert_called_once()

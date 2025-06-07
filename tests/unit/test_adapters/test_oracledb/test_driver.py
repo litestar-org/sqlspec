@@ -1,8 +1,11 @@
 """Unit tests for OracleDB drivers."""
 
+import tempfile
 from typing import Any, Union
 from unittest.mock import AsyncMock, Mock
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.oracledb import (
@@ -605,7 +608,7 @@ def test_oracle_sync_driver_mixins_integration(oracle_sync_driver: OracleSyncDri
     assert isinstance(oracle_sync_driver, ResultConverter)
 
     # Test mixin methods are available
-    assert hasattr(oracle_sync_driver, "select_to_arrow")
+    assert hasattr(oracle_sync_driver, "fetch_arrow_table")
     assert hasattr(oracle_sync_driver, "to_schema")
     assert hasattr(oracle_sync_driver, "returns_rows")
 
@@ -620,7 +623,7 @@ def test_oracle_async_driver_mixins_integration(oracle_async_driver: OracleAsync
     assert isinstance(oracle_async_driver, ResultConverter)
 
     # Test mixin methods are available
-    assert hasattr(oracle_async_driver, "select_to_arrow")
+    assert hasattr(oracle_async_driver, "fetch_arrow_table")
     assert hasattr(oracle_async_driver, "to_schema")
     assert hasattr(oracle_async_driver, "returns_rows")
 
@@ -647,10 +650,10 @@ def test_oracle_async_driver_returns_rows_method(oracle_async_driver: OracleAsyn
     assert oracle_async_driver.returns_rows(insert_stmt.expression) is False
 
 
-def test_oracle_sync_driver_select_to_arrow_basic(
+def test_oracle_sync_driver_fetch_arrow_table_basic(
     oracle_sync_driver: OracleSyncDriver, mock_oracle_sync_connection: Mock
 ) -> None:
-    """Test Oracle sync driver select_to_arrow method basic functionality."""
+    """Test Oracle sync driver fetch_arrow_table method basic functionality."""
     # Setup mock cursor and result data
     mock_cursor = Mock()
     mock_cursor.description = [("ID",), ("NAME",)]
@@ -660,8 +663,8 @@ def test_oracle_sync_driver_select_to_arrow_basic(
     # Create SQL statement
     statement = SQL("SELECT id, name FROM users")
 
-    # Execute select_to_arrow
-    result = oracle_sync_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = oracle_sync_driver.fetch_arrow_table(statement)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -672,10 +675,10 @@ def test_oracle_sync_driver_select_to_arrow_basic(
     mock_cursor.close.assert_called_once()
 
 
-def test_oracle_sync_driver_select_to_arrow_with_parameters(
+def test_oracle_sync_driver_fetch_arrow_table_with_parameters(
     oracle_sync_driver: OracleSyncDriver, mock_oracle_sync_connection: Mock
 ) -> None:
-    """Test Oracle sync driver select_to_arrow method with parameters."""
+    """Test Oracle sync driver fetch_arrow_table method with parameters."""
     # Setup mock cursor and result data
     mock_cursor = Mock()
     mock_cursor.description = [("ID",), ("NAME",)]
@@ -685,8 +688,8 @@ def test_oracle_sync_driver_select_to_arrow_with_parameters(
     # Create SQL statement with parameters
     statement = SQL("SELECT id, name FROM users WHERE id = :user_id", parameters={"user_id": 42})
 
-    # Execute select_to_arrow
-    result = oracle_sync_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = oracle_sync_driver.fetch_arrow_table(statement)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -695,20 +698,20 @@ def test_oracle_sync_driver_select_to_arrow_with_parameters(
     mock_cursor.execute.assert_called_once_with("SELECT id, name FROM users WHERE id = :user_id", {"user_id": 42})
 
 
-def test_oracle_sync_driver_select_to_arrow_non_query_error(oracle_sync_driver: OracleSyncDriver) -> None:
-    """Test Oracle sync driver select_to_arrow with non-query statement raises error."""
+def test_oracle_sync_driver_fetch_arrow_table_non_query_error(oracle_sync_driver: OracleSyncDriver) -> None:
+    """Test Oracle sync driver fetch_arrow_table with non-query statement raises error."""
     # Create non-query statement
     statement = SQL("INSERT INTO users VALUES (1, 'test')")
 
     # Test error for non-query
     with pytest.raises(TypeError, match="Cannot fetch Arrow table for a non-query statement"):
-        oracle_sync_driver.select_to_arrow(statement)
+        oracle_sync_driver.fetch_arrow_table(statement)
 
 
-def test_oracle_sync_driver_select_to_arrow_empty_result(
+def test_oracle_sync_driver_fetch_arrow_table_empty_result(
     oracle_sync_driver: OracleSyncDriver, mock_oracle_sync_connection: Mock
 ) -> None:
-    """Test Oracle sync driver select_to_arrow with empty result."""
+    """Test Oracle sync driver fetch_arrow_table with empty result."""
     # Setup mock cursor with no data
     mock_cursor = Mock()
     mock_cursor.description = [("ID",), ("NAME",)]
@@ -718,8 +721,8 @@ def test_oracle_sync_driver_select_to_arrow_empty_result(
     # Create SQL statement
     statement = SQL("SELECT id, name FROM users WHERE id > 1000")
 
-    # Execute select_to_arrow
-    result = oracle_sync_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = oracle_sync_driver.fetch_arrow_table(statement)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -728,10 +731,10 @@ def test_oracle_sync_driver_select_to_arrow_empty_result(
 
 
 @pytest.mark.asyncio
-async def test_oracle_async_driver_select_to_arrow_basic(
+async def test_oracle_async_driver_fetch_arrow_table_basic(
     oracle_async_driver: OracleAsyncDriver, mock_oracle_async_connection: AsyncMock
 ) -> None:
-    """Test Oracle async driver select_to_arrow method basic functionality."""
+    """Test Oracle async driver fetch_arrow_table method basic functionality."""
     # Setup mock cursor and result data
     mock_cursor = AsyncMock()
     mock_cursor.description = [("ID",), ("NAME",)]
@@ -741,8 +744,8 @@ async def test_oracle_async_driver_select_to_arrow_basic(
     # Create SQL statement
     statement = SQL("SELECT id, name FROM users")
 
-    # Execute select_to_arrow
-    result = await oracle_async_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = await oracle_async_driver.fetch_arrow_table(statement)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -754,10 +757,10 @@ async def test_oracle_async_driver_select_to_arrow_basic(
 
 
 @pytest.mark.asyncio
-async def test_oracle_async_driver_select_to_arrow_with_parameters(
+async def test_oracle_async_driver_fetch_arrow_table_with_parameters(
     oracle_async_driver: OracleAsyncDriver, mock_oracle_async_connection: AsyncMock
 ) -> None:
-    """Test Oracle async driver select_to_arrow method with parameters."""
+    """Test Oracle async driver fetch_arrow_table method with parameters."""
     # Setup mock cursor and result data
     mock_cursor = AsyncMock()
     mock_cursor.description = [("ID",), ("NAME",)]
@@ -767,8 +770,8 @@ async def test_oracle_async_driver_select_to_arrow_with_parameters(
     # Create SQL statement with parameters
     statement = SQL("SELECT id, name FROM users WHERE id = :user_id", parameters={"user_id": 42})
 
-    # Execute select_to_arrow
-    result = await oracle_async_driver.select_to_arrow(statement)
+    # Execute fetch_arrow_table
+    result = await oracle_async_driver.fetch_arrow_table(statement)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -778,20 +781,20 @@ async def test_oracle_async_driver_select_to_arrow_with_parameters(
 
 
 @pytest.mark.asyncio
-async def test_oracle_async_driver_select_to_arrow_non_query_error(oracle_async_driver: OracleAsyncDriver) -> None:
-    """Test Oracle async driver select_to_arrow with non-query statement raises error."""
+async def test_oracle_async_driver_fetch_arrow_table_non_query_error(oracle_async_driver: OracleAsyncDriver) -> None:
+    """Test Oracle async driver fetch_arrow_table with non-query statement raises error."""
     # Create non-query statement
     statement = SQL("INSERT INTO users VALUES (1, 'test')")
 
     # Test error for non-query
     with pytest.raises(TypeError, match="Cannot fetch Arrow table for a non-query statement"):
-        await oracle_async_driver.select_to_arrow(statement)
+        await oracle_async_driver.fetch_arrow_table(statement)
 
 
-def test_oracle_sync_driver_select_to_arrow_with_connection_override(
+def test_oracle_sync_driver_fetch_arrow_table_with_connection_override(
     oracle_sync_driver: OracleSyncDriver,
 ) -> None:
-    """Test Oracle sync driver select_to_arrow with connection override."""
+    """Test Oracle sync driver fetch_arrow_table with connection override."""
     # Create override connection
     override_connection = Mock()
     mock_cursor = Mock()
@@ -803,7 +806,7 @@ def test_oracle_sync_driver_select_to_arrow_with_connection_override(
     statement = SQL("SELECT id FROM users")
 
     # Execute with connection override
-    result = oracle_sync_driver.select_to_arrow(statement, connection=override_connection)
+    result = oracle_sync_driver.fetch_arrow_table(statement, connection=override_connection)
 
     # Verify result
     assert isinstance(result, ArrowResult)
@@ -990,3 +993,90 @@ def test_oracle_driver_uppercase_column_names(oracle_sync_driver: OracleSyncDriv
         {"USER_ID": 1, "USER_NAME": "John Doe", "CREATED_DATE": "2023-01-01"},
         {"USER_ID": 2, "USER_NAME": "Jane Smith", "CREATED_DATE": "2023-01-02"},
     ]
+
+
+# --- Arrow/Parquet Export Tests ---
+def test_oracle_sync_driver_fetch_arrow_table(
+    oracle_sync_driver: OracleSyncDriver, mock_oracle_sync_connection: Mock
+) -> None:
+    """Test fetch_arrow_table returns ArrowResult with correct pyarrow.Table (sync)."""
+    mock_cursor = Mock()
+    mock_cursor.description = [("id",), ("name",)]
+    mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
+    mock_oracle_sync_connection.cursor.return_value = mock_cursor
+    statement = SQL("SELECT id, name FROM users")
+    result = oracle_sync_driver.fetch_arrow_table(statement)
+    assert isinstance(result, ArrowResult)
+    assert isinstance(result.data, pa.Table)
+    assert result.data.num_rows == 2
+    assert set(result.data.column_names) == {"id", "name"}
+    mock_cursor.close.assert_called_once()
+
+
+def test_oracle_sync_driver_to_parquet(
+    oracle_sync_driver: OracleSyncDriver, mock_oracle_sync_connection: Mock, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """Test to_parquet writes correct data to a Parquet file (sync)."""
+    mock_cursor = Mock()
+    mock_cursor.description = [("id",), ("name",)]
+    mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
+    mock_oracle_sync_connection.cursor.return_value = mock_cursor
+    statement = SQL("SELECT id, name FROM users")
+    called = {}
+
+    def patched_write_table(table: Any, path: Any, **kwargs: Any) -> None:
+        called["table"] = table
+        called["path"] = path
+
+    monkeypatch.setattr(pq, "write_table", patched_write_table)
+    with tempfile.NamedTemporaryFile() as tmp:
+        oracle_sync_driver.export_to_storage(statement, tmp.name)
+        assert "table" in called
+        assert called["path"] == tmp.name
+        assert isinstance(called["table"], pa.Table)
+    mock_cursor.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_oracle_async_driver_fetch_arrow_table(
+    oracle_async_driver: OracleAsyncDriver, mock_oracle_async_connection: AsyncMock
+) -> None:
+    """Test fetch_arrow_table returns ArrowResult with correct pyarrow.Table (async)."""
+    mock_cursor = AsyncMock()
+    mock_cursor.description = [("id",), ("name",)]
+    mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
+    mock_oracle_async_connection.cursor.return_value = mock_cursor
+    statement = SQL("SELECT id, name FROM users")
+    result = await oracle_async_driver.fetch_arrow_table(statement)
+    assert isinstance(result, ArrowResult)
+    assert isinstance(result.data, pa.Table)
+    assert result.data.num_rows == 2
+    assert set(result.data.column_names) == {"id", "name"}
+    mock_cursor.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_oracle_async_driver_to_parquet(
+    oracle_async_driver: OracleAsyncDriver,
+    mock_oracle_async_connection: AsyncMock,
+    monkeypatch: "pytest.MonkeyPatch",
+) -> None:
+    """Test to_parquet writes correct data to a Parquet file (async)."""
+    mock_cursor = AsyncMock()
+    mock_cursor.description = [("id",), ("name",)]
+    mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
+    mock_oracle_async_connection.cursor.return_value = mock_cursor
+    statement = SQL("SELECT id, name FROM users")
+    called = {}
+
+    def patched_write_table(table: Any, path: Any, **kwargs: Any) -> None:
+        called["table"] = table
+        called["path"] = path
+
+    monkeypatch.setattr(pq, "write_table", patched_write_table)
+    with tempfile.NamedTemporaryFile() as tmp:
+        await oracle_async_driver.export_to_storage(statement, tmp.name)
+        assert "table" in called
+        assert called["path"] == tmp.name
+        assert isinstance(called["table"], pa.Table)
+    mock_cursor.close.assert_called_once()

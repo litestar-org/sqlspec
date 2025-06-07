@@ -24,3 +24,6 @@ class OffsetPagination(Generic[T]):
     """
     total: int
     """Total number of items."""
+
+
+# TODO: Add other pagination types, such as cursor-based pagination.

@@ -1,5 +1,4 @@
 # ruff: noqa: PLR6301
-import logging
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
@@ -7,16 +6,17 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 from duckdb import DuckDBPyConnection
 
 from sqlspec.driver import SyncDriverAdapterProtocol
-from sqlspec.exceptions import SQLConversionError
-from sqlspec.statement.mixins import ResultConverter, SQLTranslatorMixin, SyncArrowMixin, SyncCopyOperationsMixin
+from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
+from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.telemetry import instrument_operation
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.config import InstrumentationConfig
 
@@ -26,15 +26,11 @@ __all__ = ("DuckDBConnection", "DuckDBDriver")
 DuckDBConnection = DuckDBPyConnection
 
 
-logger = logging.getLogger("sqlspec")
+logger = get_logger("adapters.duckdb")
 
 
 class DuckDBDriver(
-    SyncDriverAdapterProtocol["DuckDBConnection", RowT],
-    SQLTranslatorMixin["DuckDBConnection"],
-    SyncArrowMixin["DuckDBConnection"],
-    ResultConverter,
-    SyncCopyOperationsMixin,
+    SyncDriverAdapterProtocol["DuckDBConnection", RowT], SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
 ):
     """DuckDB Sync Driver Adapter with modern architecture.
 
@@ -48,8 +44,9 @@ class DuckDBDriver(
     - Zero-copy operations where possible
     """
 
-    dialect: str = "duckdb"
+    dialect: "DialectType" = "duckdb"
     __supports_arrow__: ClassVar[bool] = True
+    __supports_parquet__: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -67,15 +64,21 @@ class DuckDBDriver(
         # Auto-register storage backends from config
         storage_config = getattr(config, "storage", None)
         if storage_config and getattr(storage_config, "auto_register", True):
-            from sqlspec.storage.registry import storage_registry
+            self._register_storage_backends(storage_config)
 
-            for key, backend_config in getattr(storage_config, "backends", {}).items():
-                try:
-                    storage_registry.register_from_config(key, backend_config)
-                except Exception as e:
-                    logging.getLogger("sqlspec.adapters.duckdb").warning(
-                        f"Failed to register storage backend '{key}': {e}"
-                    )
+    def _register_storage_backends(self, storage_config: Any) -> None:
+        for key, backend_config in getattr(storage_config, "backends", {}).items():
+            self._register_storage_backend_from_config(key, backend_config)
+
+    def _register_storage_backend_from_config(self, key: str, backend_config: Any) -> None:
+        from sqlspec.storage import storage_registry
+
+        logger = get_logger("adapters.duckdb")
+        # Intentionally catch per-backend errors to allow partial registration and robust startup.
+        try:
+            storage_registry.register(key, backend_config)
+        except Exception as e:
+            logger.warning("Failed to register storage backend '%s': %s", key, e)
 
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.QMARK
@@ -119,20 +122,32 @@ class DuckDBDriver(
     def _execute(
         self,
         sql: str,
-        params: Any,
+        parameters: Any,
         statement: SQL,
         connection: Optional["DuckDBConnection"] = None,
         **kwargs: Any,
     ) -> Any:
         conn = self._connection(connection)
         final_exec_params: Optional[list[Any]] = None
-        if params is not None:
-            if isinstance(params, list):
-                final_exec_params = params
-            elif hasattr(params, "__iter__") and not isinstance(params, (str, bytes)):
-                final_exec_params = list(params)
+        if parameters is not None:
+            if isinstance(parameters, list):
+                final_exec_params = parameters
+            elif isinstance(parameters, dict):
+                # For dict parameters from literal extraction (param_0, param_1, etc.)
+                if parameters and all(key.startswith("param_") for key in parameters):
+                    final_exec_params = [parameters[f"param_{i}"] for i in range(len(parameters))]
+                else:
+                    # For other dict parameters, convert values to list
+                    final_exec_params = list(parameters.values())
             else:
-                final_exec_params = [params]
+                try:
+                    if not isinstance(parameters, (str, bytes)):
+                        iter(parameters)  # Test if iterable
+                        final_exec_params = list(parameters)
+                    else:
+                        final_exec_params = [parameters]
+                except (AttributeError, TypeError):
+                    final_exec_params = [parameters]
         with self._get_cursor(conn) as cursor:
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
@@ -230,8 +245,9 @@ class DuckDBDriver(
     ) -> SQLResult[RowT]:
         with instrument_operation(self, "duckdb_wrap_execute", "database"):
             operation_type = "UNKNOWN"
-            if statement.expression and hasattr(statement.expression, "key"):
-                operation_type = str(statement.expression.key).upper()
+            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+                if statement.expression:
+                    operation_type = str(statement.expression.key).upper()
 
             rows_affected = -1
 
@@ -262,55 +278,3 @@ class DuckDBDriver(
                 rows_affected=rows_affected,
                 operation_type=operation_type,
             )
-
-    def _select_to_arrow_impl(
-        self,
-        stmt_obj: "SQL",
-        connection: "DuckDBConnection",
-        **kwargs: Any,
-    ) -> "ArrowResult":
-        final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
-        ordered_params = stmt_obj.get_parameters(style=self._get_placeholder_style())
-
-        final_params: Optional[list[Any]] = None
-        if ordered_params is not None:
-            if isinstance(ordered_params, list):
-                final_params = ordered_params
-            elif hasattr(ordered_params, "__iter__") and not isinstance(ordered_params, (str, bytes)):
-                final_params = list(ordered_params)
-            else:
-                final_params = [ordered_params]
-
-        with self._get_cursor(connection) as cursor:
-            if self.instrumentation_config.log_queries:
-                logger.debug("Executing DuckDB Arrow query: %s", final_sql)
-            if self.instrumentation_config.log_parameters and final_params:
-                logger.debug("Query parameters for DuckDB Arrow: %s", final_params)
-
-            relation = cursor.execute(final_sql, final_params or [])
-            if relation is None:
-                import pyarrow as pa
-
-                logger.warning(
-                    "DuckDB execute returned None where a relation was expected for Arrow conversion. Returning empty table."
-                )
-                return ArrowResult(statement=stmt_obj, data=pa.Table.from_arrays([], names=[]))
-
-            try:
-                arrow_table = cursor.fetch_arrow_table()
-                return ArrowResult(statement=stmt_obj, data=arrow_table)
-            except Exception as e:
-                msg = f"Failed to convert DuckDB result to Arrow table: {e}"
-                raise SQLConversionError(msg) from e
-
-    def copy_from_path(
-        self,
-        table_name: "str",
-        file_path: "Union[str, Path]",
-        *,
-        strategy: "str" = "append",
-        format: "Optional[str]" = None,
-        **options: "Any",
-    ) -> "Any":
-        msg = "DuckDB copy_from_path not yet implemented"
-        raise NotImplementedError(msg)

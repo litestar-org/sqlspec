@@ -11,6 +11,8 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
     async_config = AsyncpgConfig(
         pool_config=AsyncpgPoolConfig(
             dsn=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            min_size=1,
+            max_size=2,
         ),
     )
 

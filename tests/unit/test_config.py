@@ -218,11 +218,11 @@ class MockSyncPoolConfig(SyncDatabaseConfig[MockConnection, MockPool, MockDriver
     def provide_session(self, *args: Any, **kwargs: Any) -> Mock:
         return Mock()
 
-    def _create_pool_impl(self) -> MockPool:
+    def _create_pool(self) -> MockPool:
         self._pool = MockPool("test_pool")
         return self._pool
 
-    def _close_pool_impl(self) -> None:
+    def _close_pool(self) -> None:
         if self._pool:
             self._pool.close()
             self._pool = None
@@ -252,11 +252,11 @@ class MockAsyncPoolConfig(AsyncDatabaseConfig[MockAsyncConnection, MockAsyncPool
     def provide_session(self, *args: Any, **kwargs: Any) -> AsyncMock:
         return AsyncMock()
 
-    async def _create_pool_impl(self) -> MockAsyncPool:
+    async def _create_pool(self) -> MockAsyncPool:
         self._pool = MockAsyncPool("test_async_pool")
         return self._pool
 
-    async def _close_pool_impl(self) -> None:
+    async def _close_pool(self) -> None:
         if self._pool:
             await self._pool.close()
             self._pool = None

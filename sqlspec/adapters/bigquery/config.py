@@ -1,11 +1,9 @@
 """BigQuery database configuration using TypedDict for better maintainability."""
 
 import contextlib
-import inspect
 import logging
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict
 
-from google.cloud import bigquery
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
 
@@ -156,6 +154,16 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     __is_async__: ClassVar[bool] = False
     __supports_connection_pooling__: ClassVar[bool] = False
 
+    # Driver class reference for dialect resolution
+    driver_class: ClassVar[type[BigQueryDriver]] = BigQueryDriver
+
+    # Parameter style support information
+    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_at",)
+    """BigQuery only supports @name (named_at) parameter style."""
+
+    preferred_parameter_style: ClassVar[str] = "named_at"
+    """BigQuery's native parameter style is @name (named_at)."""
+
     def __init__(
         self,
         connection_config: Optional[BigQueryConnectionConfig] = None,
@@ -247,6 +255,10 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         if "dataset_id" in self.connection_config:
             dataset_id = self.connection_config["dataset_id"]
             if isinstance(dataset_id, str):
+                # If project is specified, create fully qualified dataset ID
+                project = self.connection_config.get("project")
+                if project and "." not in dataset_id:
+                    dataset_id = f"{project}.{dataset_id}"
                 job_config.default_dataset = dataset_id
 
         # Configure query cache
@@ -277,18 +289,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         Returns:
             Configuration dict for BigQuery Client constructor.
         """
-        config = {k: v for k, v in (self.connection_config or {}).items() if v is not Empty}
-        try:
-            valid_params = set(inspect.signature(bigquery.Client.__init__).parameters)
-        except Exception:
-            valid_params = set()
-        extra_keys = set(config) - valid_params
-        if extra_keys:
-            logger.debug(
-                "BigQuery config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
-                list(extra_keys),
-            )
-        return {k: v for k, v in config.items() if k in valid_params}
+        return {k: v for k, v in (self.connection_config or {}).items() if v is not Empty}
 
     def create_connection(self) -> BigQueryConnection:
         """Create and return a new BigQuery Client instance.
@@ -375,9 +376,20 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         @contextlib.contextmanager
         def session_manager() -> "Generator[BigQueryDriver, None, None]":
             with self.provide_connection(*args, **kwargs) as connection:
+                # Create statement config with parameter style info if not already set
+                statement_config = self.statement_config
+                if statement_config.allowed_parameter_styles is None:
+                    from dataclasses import replace
+
+                    statement_config = replace(
+                        statement_config,
+                        allowed_parameter_styles=self.supported_parameter_styles,
+                        target_parameter_style=self.preferred_parameter_style,
+                    )
+
                 driver = self.driver_type(
                     connection=connection,
-                    config=self.statement_config,
+                    config=statement_config,
                     instrumentation_config=self.instrumentation,
                     default_row_type=self.default_row_type,
                     # Pass BigQuery-specific configurations

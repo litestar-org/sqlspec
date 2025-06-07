@@ -1,8 +1,12 @@
 """Unit tests for Psycopg drivers."""
 
+import tempfile
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.psycopg import (
@@ -12,7 +16,7 @@ from sqlspec.adapters.psycopg import (
     PsycopgSyncDriver,
 )
 from sqlspec.config import InstrumentationConfig
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -114,6 +118,14 @@ def test_psycopg_async_driver_initialization(mock_psycopg_async_connection: Asyn
 def test_psycopg_sync_driver_dialect_property(psycopg_sync_driver: PsycopgSyncDriver) -> None:
     """Test Psycopg sync driver dialect property."""
     assert psycopg_sync_driver.dialect == "postgres"
+
+
+def test_psycopg_config_dialect_property() -> None:
+    """Test Psycopg config dialect property."""
+    from sqlspec.adapters.psycopg import PsycopgConfig
+
+    config = PsycopgConfig(connection_string="postgresql://test:test@localhost/test")
+    assert config.dialect == "postgres"
 
 
 def test_psycopg_async_driver_dialect_property(psycopg_async_driver: PsycopgAsyncDriver) -> None:
@@ -674,3 +686,84 @@ def test_psycopg_sync_driver_dict_row_handling(psycopg_sync_driver: PsycopgSyncD
     assert result.statement is statement
     assert result.data == [mock_row1, mock_row2]
     assert result.column_names == ["id", "name"]
+
+
+# --- Arrow/Parquet Export Tests ---
+def test_psycopg_sync_driver_fetch_arrow_table(
+    psycopg_sync_driver: PsycopgSyncDriver, mock_psycopg_sync_connection: Mock
+) -> None:
+    """Test fetch_arrow_table returns ArrowResult with correct pyarrow.Table (sync)."""
+    mock_cursor = mock_psycopg_sync_connection.cursor.return_value.__enter__.return_value
+    mock_cursor.description = [Mock(name="id"), Mock(name="name")]
+    mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
+    statement = SQL("SELECT id, name FROM users")
+    result = psycopg_sync_driver.fetch_arrow_table(statement)
+    assert isinstance(result, ArrowResult)
+    assert isinstance(result.data, pa.Table)
+    assert result.data.num_rows == 2
+    assert set(result.data.column_names) == {"id", "name"}
+
+
+def test_psycopg_sync_driver_to_parquet(
+    psycopg_sync_driver: PsycopgSyncDriver, mock_psycopg_sync_connection: Mock, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """Test to_parquet writes correct data to a Parquet file (sync)."""
+    mock_cursor = mock_psycopg_sync_connection.cursor.return_value.__enter__.return_value
+    mock_cursor.description = [Mock(name="id"), Mock(name="name")]
+    mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
+    statement = SQL("SELECT id, name FROM users")
+    called = {}
+
+    def patched_write_table(table: Any, path: Any, **kwargs: Any) -> None:
+        called["table"] = table
+        called["path"] = path
+
+    monkeypatch.setattr(pq, "write_table", patched_write_table)
+    with tempfile.NamedTemporaryFile() as tmp:
+        psycopg_sync_driver.export_to_storage(statement, tmp.name)
+        assert "table" in called
+        assert called["path"] == tmp.name
+        assert isinstance(called["table"], pa.Table)
+
+
+@pytest.mark.asyncio
+async def test_psycopg_async_driver_fetch_arrow_table(
+    psycopg_async_driver: PsycopgAsyncDriver, mock_psycopg_async_connection: AsyncMock
+) -> None:
+    """Test fetch_arrow_table returns ArrowResult with correct pyarrow.Table (async)."""
+    mock_cursor = mock_psycopg_async_connection.cursor.return_value.__aenter__.return_value
+    mock_cursor.description = [Mock(name="id"), Mock(name="name")]
+    mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
+    statement = SQL("SELECT id, name FROM users")
+    result = await psycopg_async_driver.fetch_arrow_table(statement)
+    assert isinstance(result, ArrowResult)
+    assert isinstance(result.data, pa.Table)
+    assert result.data.num_rows == 2
+    assert set(result.data.column_names) == {"id", "name"}
+
+
+@pytest.mark.asyncio
+async def test_psycopg_async_driver_to_parquet(
+    psycopg_async_driver: PsycopgAsyncDriver,
+    mock_psycopg_async_connection: AsyncMock,
+    monkeypatch: "pytest.MonkeyPatch",
+) -> None:
+    """Test to_parquet writes correct data to a Parquet file (async)."""
+    mock_cursor = mock_psycopg_async_connection.cursor.return_value.__aenter__.return_value
+    mock_cursor.description = [Mock(name="id"), Mock(name="name")]
+    mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
+    statement = SQL("SELECT id, name FROM users")
+    called = {}
+
+    def patched_write_table(table: Any, path: Any, **kwargs: Any) -> None:
+        called["table"] = table
+        called["path"] = path
+
+    monkeypatch.setattr(pq, "write_table", patched_write_table)
+    import tempfile
+
+    with tempfile.NamedTemporaryFile() as tmp:
+        await psycopg_async_driver.export_to_storage(statement, tmp.name)
+        assert "table" in called
+        assert called["path"] == tmp.name
+        assert isinstance(called["table"], pa.Table)

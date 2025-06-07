@@ -1,6 +1,5 @@
 import asyncio
 import atexit
-import logging
 from collections.abc import Awaitable, Coroutine
 from typing import (
     TYPE_CHECKING,
@@ -21,7 +20,9 @@ from sqlspec.config import (
     SyncConfigT,
     SyncDatabaseConfig,
 )
+from sqlspec.exceptions import wrap_exceptions
 from sqlspec.typing import DictRow
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
 
 __all__ = ("SQLSpec",)
 
-logger = logging.getLogger("sqlspec")
+logger = get_logger()
 
 
 class SQLSpec:
@@ -45,6 +46,15 @@ class SQLSpec:
     def __init__(self) -> None:
         self._configs: dict[Any, DatabaseConfigProtocol[Any, Any, Any]] = {}
         atexit.register(self._cleanup_pools)
+
+    @staticmethod
+    def _get_config_name(obj: Any) -> str:
+        """Get display name for configuration object."""
+        with wrap_exceptions(suppress=AttributeError):
+            return obj.__name__
+        return str(
+            obj
+        )  # wrap exceptions just continues here instead of returning in the even t of an error.  This is actually reachable
 
     def _cleanup_pools(self) -> None:
         """Clean up all registered connection pools."""
@@ -141,7 +151,7 @@ class SQLSpec:
             msg = f"No configuration found for {name}"
             raise KeyError(msg)
 
-        logger.debug("Retrieved configuration: %s", name.__name__ if hasattr(name, "__name__") else name)
+        logger.debug("Retrieved configuration: %s", self._get_config_name(name))
         return config
 
     @overload
@@ -192,7 +202,7 @@ class SQLSpec:
             config_name = config.__class__.__name__
         else:
             config = self.get_config(name)
-            config_name = name.__name__ if hasattr(name, "__name__") else str(name)
+            config_name = self._get_config_name(name)
 
         logger.debug("Getting connection for config: %s", config_name, extra={"config_type": config_name})
         return config.create_connection()
@@ -245,7 +255,7 @@ class SQLSpec:
             config_name = config.__class__.__name__
         else:
             config = self.get_config(name)
-            config_name = name.__name__ if hasattr(name, "__name__") else str(name)
+            config_name = self._get_config_name(name)
 
         logger.debug("Getting session for config: %s", config_name, extra={"config_type": config_name})
 
@@ -255,12 +265,15 @@ class SQLSpec:
 
             async def _create_driver_async() -> "DriverT":
                 resolved_connection = await connection_obj
+                default_row_type = DictRow
+                with wrap_exceptions(suppress=AttributeError):
+                    default_row_type = config.default_row_type  # pyright: ignore # TODO: readd this?
                 driver = cast(  # pyright: ignore
                     "DriverT",
                     config.driver_type(
                         connection=resolved_connection,
                         instrumentation_config=config.instrumentation,
-                        default_row_type=getattr(config, "default_row_type", DictRow),
+                        default_row_type=default_row_type,
                     ),
                 )
                 logger.debug("Created async driver session for config: %s", config_name)
@@ -268,10 +281,13 @@ class SQLSpec:
 
             return _create_driver_async()
 
+        default_row_type = DictRow
+        with wrap_exceptions(suppress=AttributeError):
+            default_row_type = config.default_row_type  # pyright: ignore
         driver = config.driver_type(
             connection=connection_obj,
             instrumentation_config=config.instrumentation,
-            default_row_type=getattr(config, "default_row_type", DictRow),
+            default_row_type=default_row_type,
         )
         logger.debug("Created sync driver session for config: %s", config_name)
         return cast("DriverT", driver)  # pyright: ignore
@@ -333,7 +349,7 @@ class SQLSpec:
             config_name = config.__class__.__name__
         else:
             config = self.get_config(name)
-            config_name = name.__name__ if hasattr(name, "__name__") else str(name)
+            config_name = self._get_config_name(name)
 
         logger.debug("Providing connection context for config: %s", config_name, extra={"config_type": config_name})
         return config.provide_connection(*args, **kwargs)
@@ -394,7 +410,7 @@ class SQLSpec:
             config_name = config.__class__.__name__
         else:
             config = self.get_config(name)
-            config_name = name.__name__ if hasattr(name, "__name__") else str(name)
+            config_name = self._get_config_name(name)
 
         logger.debug("Providing session context for config: %s", config_name, extra={"config_type": config_name})
         return config.provide_session(*args, **kwargs)
@@ -498,7 +514,7 @@ class SQLSpec:
             config_name = config.__class__.__name__
         else:
             config = self.get_config(name)
-            config_name = name.__name__ if hasattr(name, "__name__") else str(name)
+            config_name = self._get_config_name(name)
 
         if config.support_connection_pooling:
             logger.debug("Closing pool for config: %s", config_name, extra={"config_type": config_name})

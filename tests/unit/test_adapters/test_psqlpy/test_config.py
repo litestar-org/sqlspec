@@ -231,7 +231,7 @@ def test_psqlpy_config_connection_config_dict_validation() -> None:
 
 @patch("sqlspec.adapters.psqlpy.config.ConnectionPool")
 @pytest.mark.asyncio
-async def test_psqlpy_config_create_pool_impl(mock_pool_class: Mock) -> None:
+async def test_psqlpy_config_create_pool(mock_pool_class: Mock) -> None:
     """Test PSQLPy config _create_pool_impl method (mocked)."""
     mock_pool = AsyncMock()
     mock_pool_class.return_value = mock_pool
@@ -246,7 +246,7 @@ async def test_psqlpy_config_create_pool_impl(mock_pool_class: Mock) -> None:
     )
     config = PsqlpyConfig(pool_config=pool_config)
 
-    pool = await config._create_pool_impl()
+    pool = await config._create_pool()
 
     # Verify ConnectionPool was called with correct parameters
     mock_pool_class.assert_called_once_with(
@@ -566,7 +566,7 @@ def test_psqlpy_config_options() -> None:
 
 
 @pytest.mark.asyncio
-async def test_psqlpy_config_close_pool_impl() -> None:
+async def test_psqlpy_config_close_pool() -> None:
     """Test PSQLPy config _close_pool_impl method."""
     mock_pool = AsyncMock()
     pool_config = PsqlpyPoolConfig(
@@ -578,7 +578,7 @@ async def test_psqlpy_config_close_pool_impl() -> None:
     )
     config = PsqlpyConfig(pool_config=pool_config)
     config.pool_instance = mock_pool
-    await config._close_pool_impl()
+    await config._close_pool()
     # Verify pool close was called
     mock_pool.close.assert_called_once()
 

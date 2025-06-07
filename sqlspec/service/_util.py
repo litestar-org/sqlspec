@@ -9,10 +9,10 @@ from typing import (
     overload,
 )
 
+from sqlspec.driver.mixins._result_utils import _DEFAULT_TYPE_DECODERS, _default_msgspec_deserializer
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.service.pagination import OffsetPagination
 from sqlspec.statement.filters import FilterTypeT, LimitOffsetFilter, StatementFilter
-from sqlspec.statement.mixins import _DEFAULT_TYPE_DECODERS, _default_msgspec_deserializer
 from sqlspec.typing import (
     BaseModel,
     DataclassProtocol,
@@ -53,6 +53,7 @@ def find_filter(
     )
 
 
+# TODO: add overloads for each type of pagination in the future
 class ResultConverter:
     """Simple mixin to help convert to dictionary or list of dictionaries to specified schema type.
 

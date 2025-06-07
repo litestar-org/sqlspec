@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 from psqlpy import Connection, QueryResult
 
 from sqlspec.driver import AsyncDriverAdapterProtocol
-from sqlspec.statement.mixins import AsyncArrowMixin, ResultConverter, SQLTranslatorMixin
+from sqlspec.driver.mixins import AsyncStorageMixin, SQLTranslatorMixin, ToSchemaMixin
+from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -16,6 +17,8 @@ from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.telemetry import instrument_operation_async
 
 if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.config import InstrumentationConfig
 
 __all__ = ("PsqlpyConnection", "PsqlpyDriver")
@@ -32,10 +35,7 @@ class BatchResult:
 
 
 class PsqlpyDriver(
-    AsyncDriverAdapterProtocol[PsqlpyConnection, RowT],
-    SQLTranslatorMixin[PsqlpyConnection],
-    AsyncArrowMixin[PsqlpyConnection],
-    ResultConverter,
+    AsyncDriverAdapterProtocol[PsqlpyConnection, RowT], SQLTranslatorMixin, AsyncStorageMixin, ToSchemaMixin
 ):
     """Psqlpy Driver Adapter.
 
@@ -43,8 +43,9 @@ class PsqlpyDriver(
     instrumentation standards following the psycopg pattern.
     """
 
-    __supports_arrow__: ClassVar[bool] = False
-    dialect: str = "postgres"
+    __supports_arrow__: ClassVar[bool] = True
+    __supports_parquet__: ClassVar[bool] = False
+    dialect: "DialectType" = "postgres"
 
     def __init__(
         self,
@@ -93,7 +94,7 @@ class PsqlpyDriver(
     async def _execute(
         self,
         sql: str,
-        params: Any,
+        parameters: Any,
         statement: SQL,
         connection: Optional[PsqlpyConnection] = None,
         **kwargs: Any,
@@ -101,8 +102,14 @@ class PsqlpyDriver(
         async with instrument_operation_async(self, "psqlpy_execute", "database"):
             conn = self._connection(connection)
             final_driver_params: Optional[list[Any]] = None
-            if params is not None:
-                final_driver_params = list(params) if isinstance(params, (list, tuple)) else [params]
+            if parameters is not None:
+                if isinstance(parameters, dict):
+                    # For dict parameters with numeric placeholders, extract values
+                    final_driver_params = list(parameters.values())
+                elif isinstance(parameters, (list, tuple)):
+                    final_driver_params = list(parameters)
+                else:
+                    final_driver_params = [parameters]
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing psqlpy SQL: %s", sql)
             if self.instrumentation_config.log_parameters and final_driver_params:
@@ -188,8 +195,9 @@ class PsqlpyDriver(
     ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "psqlpy_async_wrap_execute", "database"):
             operation_type = "UNKNOWN"
-            if statement.expression and hasattr(statement.expression, "key"):
-                operation_type = str(statement.expression.key).upper()
+            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
+                if statement.expression:
+                    operation_type = str(statement.expression.key).upper()
 
             rows_affected = -1
             status_message: Optional[str] = None
@@ -221,26 +229,3 @@ class PsqlpyDriver(
     def _connection(self, connection: Optional[PsqlpyConnection] = None) -> PsqlpyConnection:
         """Get the connection to use for the operation."""
         return connection or self.connection
-
-    async def _select_to_arrow_impl(
-        self,
-        stmt_obj: SQL,
-        connection: Optional[PsqlpyConnection] = None,
-        **kwargs: Any,
-    ) -> Any:
-        """Implementation for select_to_arrow method."""
-        async with instrument_operation_async(self, "psqlpy_select_to_arrow", "database"):
-            conn = self._connection(connection)
-
-            final_sql = stmt_obj.to_sql(placeholder_style=self._get_placeholder_style())
-            final_driver_params: Optional[list[Any]] = None
-
-            params_to_execute = stmt_obj.parameters
-            if params_to_execute is not None:
-                if isinstance(params_to_execute, (list, tuple)):
-                    final_driver_params = list(params_to_execute)
-                else:
-                    final_driver_params = [params_to_execute]
-
-            # Fetch data for Arrow conversion using the correct psqlpy method
-            return await conn.fetch(final_sql, parameters=final_driver_params)

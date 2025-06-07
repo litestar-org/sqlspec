@@ -3,7 +3,7 @@
 import datetime
 import math
 from decimal import Decimal
-from typing import Union
+from typing import Any, Union
 from unittest.mock import Mock, patch
 
 import pytest
@@ -22,6 +22,8 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.storage import storage_registry
+from sqlspec.storage.backends.fsspec import FsspecBackend
 from sqlspec.typing import DictRow
 
 
@@ -533,10 +535,10 @@ def test_bigquery_driver_execute_many_with_job_config(
 
 
 @patch("sqlspec.adapters.bigquery.driver.pyarrow")
-def test_bigquery_driver_select_to_arrow(
+def test_bigquery_driver_fetch_arrow_table(
     mock_pyarrow: Mock, bigquery_driver: BigQueryDriver, mock_bigquery_connection: Mock
 ) -> None:
-    """Test BigQueryDriver.select_to_arrow for Arrow format results."""
+    """Test BigQueryDriver.fetch_arrow_table for Arrow format results."""
     # Mock Arrow table
     mock_arrow_table = Mock()
     mock_pyarrow.Table.from_pandas.return_value = mock_arrow_table
@@ -551,7 +553,7 @@ def test_bigquery_driver_select_to_arrow(
 
     statement = SQL("SELECT * FROM users")
 
-    result = bigquery_driver.select_to_arrow(statement)
+    result = bigquery_driver.fetch_arrow_table(statement)
 
     assert isinstance(result, ArrowResult)
     assert result.statement == statement
@@ -648,3 +650,53 @@ def test_bigquery_driver_job_config_precedence(mock_bigquery_connection: Mock) -
     )
 
     assert driver._default_query_job_config == driver_job_config
+
+
+def test_to_parquet_raises_if_not_gcs(bigquery_driver: BigQueryDriver) -> None:
+    """Test that to_parquet raises if the path is not a gs:// URI."""
+    statement = SQL("SELECT * FROM project.dataset.table")
+    with pytest.raises(ValueError, match="requires a GCS path"):
+        bigquery_driver.export_to_storage(statement, "/tmp/not-gcs.parquet")  # type: ignore[attr-defined]
+
+
+def test_to_parquet_raises_if_bucket_not_registered(
+    bigquery_driver: BigQueryDriver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that to_parquet raises if the GCS bucket is not registered as a storage backend."""
+    statement = SQL("SELECT * FROM project.dataset.table")
+    # Ensure storage registry is empty
+    monkeypatch.setattr(storage_registry, "list_registered_keys", lambda: [])  # type: ignore
+    with pytest.raises(ValueError, match="not registered as a storage backend key"):
+        bigquery_driver.export_to_storage(statement, "gs://unregistered-bucket/file.parquet")  # type: ignore[attr-defined]
+
+
+def test_to_parquet_calls_extract_table(monkeypatch: pytest.MonkeyPatch, bigquery_driver: BigQueryDriver) -> None:
+    """Test that to_parquet calls extract_table with correct arguments if path and bucket are valid."""
+    bucket = "test-bucket"
+    backend = FsspecBackend(protocol="gs", base_path="", bucket=bucket)
+    key = "gs://test-bucket"
+    # Patch storage_registry to return our backend for the bucket
+    monkeypatch.setattr(storage_registry, "list_registered_keys", lambda: [key])  # type: ignore
+    monkeypatch.setattr(storage_registry, "get_backend", lambda k: backend)  # type: ignore
+    # Patch BigQuery client extract_table
+    called: dict[str, Any] = {}
+
+    class DummyJob:
+        def result(self) -> None:
+            called["waited"] = True
+
+    def fake_extract_table(table_ref: Any, path: str, job_config: Any = None, location: Any = None) -> DummyJob:
+        called["table_ref"] = table_ref
+        called["path"] = path
+        called["job_config"] = job_config
+        called["location"] = location
+        return DummyJob()
+
+    bigquery_driver.connection.extract_table = fake_extract_table  # type: ignore
+    # Use a valid table reference in SQL
+    statement = SQL("SELECT * FROM project.dataset.table")
+    bigquery_driver.export_to_storage(statement, f"gs://{bucket}/file.parquet")  # type: ignore[attr-defined]
+    assert called["path"] == f"gs://{bucket}/file.parquet"
+    assert called["waited"] is True
+    # Check that the job_config is for PARQUET
+    assert getattr(called["job_config"], "destination_format", None) == "PARQUET"

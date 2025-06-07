@@ -1,9 +1,11 @@
 # ruff: noqa: SLF001
-import logging
 import time
 from collections.abc import Generator
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any
+
+from sqlspec.utils.correlation import CorrelationContext
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -13,7 +15,7 @@ __all__ = (
     "instrument_operation_async",
 )
 
-logger = logging.getLogger("sqlspec.telemetry")
+logger = get_logger("telemetry")
 
 
 @contextmanager
@@ -44,8 +46,18 @@ def instrument_operation(
     final_custom_tags = getattr(driver_obj.instrumentation_config, "custom_tags", {}).copy()
     final_custom_tags.update(custom_tags)
 
+    # Get correlation ID
+    correlation_id = CorrelationContext.get()
+
     if driver_obj.instrumentation_config.log_queries:
-        logger.info("Starting %s operation", operation_name, extra={"operation_type": operation_type})
+        logger.info(
+            "Starting %s operation",
+            operation_name,
+            extra={
+                "operation_type": operation_type,
+                "correlation_id": correlation_id,
+            },
+        )
 
     span = None
     if hasattr(driver_obj, "_tracer") and driver_obj._tracer:
@@ -53,6 +65,10 @@ def instrument_operation(
         span.set_attribute("operation.type", operation_type)
         span.set_attribute("db.system", getattr(driver_obj, "dialect", "unknown"))
         span.set_attribute("service.name", driver_obj.instrumentation_config.service_name)
+
+        # Add correlation ID to span
+        if correlation_id:
+            span.set_attribute("correlation_id", correlation_id)
 
         for key, value in final_custom_tags.items():
             span.set_attribute(key, value)
@@ -66,7 +82,12 @@ def instrument_operation(
                 "Completed %s in %.3fms",
                 operation_name,
                 latency * 1000,
-                extra={"operation_type": operation_type, "latency_ms": latency * 1000, "status": "success"},
+                extra={
+                    "operation_type": operation_type,
+                    "latency_ms": latency * 1000,
+                    "status": "success",
+                    "correlation_id": correlation_id,
+                },
             )
 
         # Update metrics
@@ -99,6 +120,7 @@ def instrument_operation(
                     "latency_ms": latency * 1000,
                     "status": "error",
                     "error_type": type(e).__name__,
+                    "correlation_id": correlation_id,
                 },
             )
 
@@ -146,8 +168,18 @@ async def instrument_operation_async(
     final_custom_tags = getattr(driver_obj.instrumentation_config, "custom_tags", {}).copy()
     final_custom_tags.update(custom_tags)
 
+    # Get correlation ID
+    correlation_id = CorrelationContext.get()
+
     if driver_obj.instrumentation_config.log_queries:
-        logger.info("Starting %s operation", operation_name, extra={"operation_type": operation_type})
+        logger.info(
+            "Starting %s operation",
+            operation_name,
+            extra={
+                "operation_type": operation_type,
+                "correlation_id": correlation_id,
+            },
+        )
 
     span = None
     if hasattr(driver_obj, "_tracer") and driver_obj._tracer:
@@ -155,6 +187,10 @@ async def instrument_operation_async(
         span.set_attribute("operation.type", operation_type)
         span.set_attribute("db.system", getattr(driver_obj, "dialect", "unknown"))
         span.set_attribute("service.name", driver_obj.instrumentation_config.service_name)
+
+        # Add correlation ID to span
+        if correlation_id:
+            span.set_attribute("correlation_id", correlation_id)
 
         for key, value in final_custom_tags.items():
             span.set_attribute(key, value)
@@ -168,7 +204,12 @@ async def instrument_operation_async(
                 "Completed %s in %.3fms",
                 operation_name,
                 latency * 1000,
-                extra={"operation_type": operation_type, "latency_ms": latency * 1000, "status": "success"},
+                extra={
+                    "operation_type": operation_type,
+                    "latency_ms": latency * 1000,
+                    "status": "success",
+                    "correlation_id": correlation_id,
+                },
             )
 
         # Update metrics
@@ -201,6 +242,7 @@ async def instrument_operation_async(
                     "latency_ms": latency * 1000,
                     "status": "error",
                     "error_type": type(e).__name__,
+                    "correlation_id": correlation_id,
                 },
             )
 

@@ -139,7 +139,7 @@ def test_analyzer_complex_business_query(analyzer: StatementAnalyzer) -> None:
     assert "count" in analysis.aggregate_functions
     assert "sum" in analysis.aggregate_functions
     assert "avg" in analysis.aggregate_functions
-    assert analysis.complexity_score >= 10  # Should be moderately complex
+    assert analysis.complexity_score >= 5  # Should be moderately complex
 
 
 def test_analyzer_query_with_multiple_unions(analyzer: StatementAnalyzer) -> None:

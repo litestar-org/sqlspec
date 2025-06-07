@@ -32,7 +32,6 @@ def adbc_session(postgres_service: PostgresService) -> AdbcConfig:
     """Create an ADBC session for PostgreSQL."""
     return AdbcConfig(
         connection_config={
-            "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            "driver_name": "adbc_driver_postgresql",
+            "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         }
     )

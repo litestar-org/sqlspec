@@ -1,13 +1,17 @@
 """Integration tests for SQLite driver implementation."""
 
 import math
+import tempfile
 from collections.abc import Generator
 from typing import Any, Literal
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteConnectionConfig, SqliteDriver
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.sql import SQL
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -420,3 +424,33 @@ def test_sqlite_performance_bulk_operations(sqlite_session: SqliteDriver) -> Non
     assert page_result.data is not None
     assert len(page_result.data) == 10
     assert page_result.data[0]["name"] == "bulk_user_20"
+
+
+@pytest.mark.xdist_group("sqlite")
+def test_sqlite_fetch_arrow_table(sqlite_session: SqliteDriver) -> None:
+    """Integration test: fetch_arrow_table returns ArrowResult with correct pyarrow.Table."""
+    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("arrow1", 111))
+    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("arrow2", 222))
+    statement = SQL("SELECT name, value FROM test_table ORDER BY name")
+    result = sqlite_session.fetch_arrow_table(statement)
+    assert isinstance(result, ArrowResult)
+    assert isinstance(result.data, pa.Table)
+    assert result.data.num_rows == 2
+    assert result.data.column_names == ["name", "value"]
+    assert result.data.column("name").to_pylist() == ["arrow1", "arrow2"]
+    assert result.data.column("value").to_pylist() == [111, 222]
+
+
+@pytest.mark.xdist_group("sqlite")
+def test_sqlite_to_parquet(sqlite_session: SqliteDriver) -> None:
+    """Integration test: to_parquet writes correct data to a Parquet file."""
+    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("pq1", 10))
+    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("pq2", 20))
+    statement = SQL("SELECT name, value FROM test_table ORDER BY name")
+    with tempfile.NamedTemporaryFile(suffix=".parquet") as tmpfile:
+        sqlite_session.export_to_storage(statement, path=tmpfile.name)  # type: ignore[attr-defined]
+        table = pq.read_table(tmpfile.name)
+        assert table.num_rows == 2
+        assert table.column_names == ["name", "value"]
+        assert table.column("name").to_pylist() == ["pq1", "pq2"]
+        assert table.column("value").to_pylist() == [10, 20]

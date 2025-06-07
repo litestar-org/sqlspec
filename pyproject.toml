@@ -1,6 +1,6 @@
 [project]
 authors = [{ name = "Cody Fincher", email = "cody@litestar.dev" }]
-dependencies = ["typing-extensions", "sqlglot", "eval_type_backport; python_version < \"3.10\"", "click"]
+dependencies = ["typing-extensions", "eval_type_backport; python_version < \"3.10\"", "click", "sqlglot>=19.9.0"]
 description = "SQL Experiments in Python"
 license = "MIT"
 maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
@@ -236,6 +236,7 @@ testpaths = ["tests"]
 [tool.mypy]
 packages = ["sqlspec", "tests"]
 python_version = "3.9"
+exclude = ["tmp/", ".tmp/", ".bugs/"]
 
 disallow_any_generics = false
 disallow_untyped_decorators = true
@@ -283,7 +284,7 @@ module = "tests.*"
 
 [tool.pyright]
 disableBytesTypePromotions = true
-exclude = ["**/node_modules", "**/__pycache__", ".venv", "tools", "docs"]
+exclude = ["**/node_modules", "**/__pycache__", ".venv", "tools", "docs", "tmp", ".tmp", ".bugs"]
 include = ["sqlspec", "tests"]
 pythonVersion = "3.9"
 reportMissingTypeStubs = false
@@ -303,7 +304,7 @@ venv = ".venv"
 strict-imports = false
 
 [tool.ruff]
-exclude = [".venv", "node_modules"]
+exclude = [".venv", "node_modules", "tmp", ".tmp", ".bugs"]
 line-length = 120
 src = ["sqlspec", "tests", "docs/examples", "tools"]
 target-version = "py39"
@@ -362,6 +363,8 @@ ignore = [
   "TD002",   # Ruff - Missing author for TODO
   "PYI036",  # pyright - Missing type annotation for `__aexit__`
   "A002",    # ruff - functiona argument is shadowing a python builtin
+  "DOC202",  # pydocstyle - Code should not have a return section in the docstring
+  "SLF001",  # ruff - access of private method outside of class
 ]
 select = ["ALL"]
 

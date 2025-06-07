@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import AsyncGenerator
 from typing import Any, Literal
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, AsyncmyPoolConfig
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.sql import SQL
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -552,3 +556,34 @@ async def test_asyncmy_mysql_charset_collation(asyncmy_session: AsyncmyDriver) -
 
     # Clean up
     await asyncmy_session.execute_script("DROP TABLE charset_test")
+
+
+@pytest.mark.xdist_group("mysql")
+async def test_asyncmy_fetch_arrow_table(asyncmy_session: AsyncmyDriver) -> None:
+    """Integration test: fetch_arrow_table returns ArrowResult with correct pyarrow.Table."""
+    await asyncmy_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("arrow1", 111))
+    await asyncmy_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("arrow2", 222))
+    statement = SQL("SELECT name, value FROM test_table ORDER BY name")
+    result = await asyncmy_session.fetch_arrow_table(statement)
+    assert isinstance(result, ArrowResult)
+    table = result.data
+    assert isinstance(table, pa.Table)
+    assert table.num_rows == 2
+    assert set(table.column_names) == {"name", "value"}
+    names = table.column("name").to_pylist()
+    assert "arrow1" in names and "arrow2" in names
+
+
+@pytest.mark.xdist_group("mysql")
+async def test_asyncmy_to_parquet(asyncmy_session: AsyncmyDriver) -> None:
+    """Integration test: to_parquet writes correct data to a Parquet file."""
+    await asyncmy_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("pq1", 1))
+    await asyncmy_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("pq2", 2))
+    statement = SQL("SELECT name, value FROM test_table ORDER BY name")
+    with tempfile.NamedTemporaryFile() as tmp:
+        await asyncmy_session.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
+        table = pq.read_table(tmp.name)
+        assert table.num_rows == 2
+        assert set(table.column_names) == {"name", "value"}
+        names = table.column("name").to_pylist()
+        assert "pq1" in names and "pq2" in names

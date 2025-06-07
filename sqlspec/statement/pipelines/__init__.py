@@ -15,6 +15,7 @@ Key Components:
 """
 
 from sqlspec.statement.pipelines import analyzers, transformers, validators
+from sqlspec.statement.pipelines.aggregator import AggregatedResults, ResultAggregator
 from sqlspec.statement.pipelines.analyzers import (
     StatementAnalysis,
     StatementAnalyzer,
@@ -32,23 +33,26 @@ from sqlspec.statement.pipelines.transformers import (
     ParameterizeLiterals,
 )
 from sqlspec.statement.pipelines.validators import (
-    PreventDDL,
-    PreventInjection,
-    RiskyDML,
-    SuspiciousKeywords,
-    TautologyConditions,
+    DMLSafetyConfig,
+    DMLSafetyValidator,
+    PerformanceConfig,
+    PerformanceValidator,
 )
 
 __all__ = (
+    # Result Aggregation
+    "AggregatedResults",
     # Concrete Transformers
     "CommentRemover",
+    # Concrete Validators (individual checks or groups)
+    "DMLSafetyConfig",
+    "DMLSafetyValidator",
     "HintRemover",
     "ParameterizeLiterals",
-    # Concrete Validators (individual checks or groups)
-    "PreventDDL",
-    "PreventInjection",
+    "PerformanceConfig",
+    "PerformanceValidator",
     "ProcessorProtocol",
-    "RiskyDML",
+    "ResultAggregator",
     "SQLProcessingContext",
     "SQLValidator",
     "StatementAnalysis",
@@ -57,8 +61,6 @@ __all__ = (
     # Core Pipeline & Context
     "StatementPipeline",
     "StatementPipelineResult",
-    "SuspiciousKeywords",
-    "TautologyConditions",
     "ValidationResult",
     # Module exports
     "analyzers",

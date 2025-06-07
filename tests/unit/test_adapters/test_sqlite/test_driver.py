@@ -1,12 +1,16 @@
 """Unit tests for SQLite driver."""
 
+import tempfile
+from typing import Any
 from unittest.mock import MagicMock, Mock
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConnection, SqliteDriver
 from sqlspec.config import InstrumentationConfig
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -76,6 +80,14 @@ def test_sqlite_driver_placeholder_style(sqlite_driver: SqliteDriver) -> None:
     """Test SQLite driver placeholder style detection."""
     placeholder_style = sqlite_driver._get_placeholder_style()
     assert placeholder_style == "qmark"
+
+
+def test_sqlite_config_dialect_property() -> None:
+    """Test SQLite config dialect property."""
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    assert config.dialect == "sqlite"
 
 
 def test_sqlite_driver_execute_statement_select(sqlite_driver: SqliteDriver, mock_sqlite_connection: Mock) -> None:
@@ -437,3 +449,51 @@ def test_sqlite_connection_config_validation() -> None:
     except Exception:
         pass  # Accept any exception for now
     # No assertion: just ensure no crash
+
+
+def test_sqlite_driver_fetch_arrow_table(sqlite_driver: SqliteDriver, mock_sqlite_connection: Mock) -> None:
+    """Test fetch_arrow_table returns ArrowResult with correct pyarrow.Table."""
+    mock_cursor = mock_sqlite_connection.cursor.return_value.__enter__.return_value
+    mock_cursor.description = [("id",), ("name",)]
+    mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
+
+    statement = SQL("SELECT id, name FROM users")
+    result = sqlite_driver.fetch_arrow_table(statement)
+    assert isinstance(result, ArrowResult)
+    assert isinstance(result.data, pa.Table)
+    assert result.data.num_rows == 2
+    assert result.data.column_names == ["id", "name"]
+    assert result.data.column("id").to_pylist() == [1, 2]
+    assert result.data.column("name").to_pylist() == ["Alice", "Bob"]
+
+
+def test_sqlite_driver_to_parquet(
+    sqlite_driver: SqliteDriver,
+    mock_sqlite_connection: Mock,
+    monkeypatch: "pytest.MonkeyPatch",
+) -> None:
+    """Test to_parquet writes correct data to a Parquet file."""
+    mock_cursor = mock_sqlite_connection.cursor.return_value.__enter__.return_value
+    mock_cursor.description = [("id",), ("name",)]
+    mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
+
+    statement = SQL("SELECT id, name FROM users")
+    with tempfile.NamedTemporaryFile(suffix=".parquet") as tmpfile:
+        # Patch pyarrow.parquet.write_table to actually write
+        orig_write_table = pq.write_table
+
+        def patched_write_table(
+            table: pa.Table,
+            where: str,
+            **kwargs: "Any",
+        ) -> None:
+            # Actually write using the real function
+            return orig_write_table(table, where, **kwargs)
+
+        monkeypatch.setattr(pq, "write_table", patched_write_table)
+        sqlite_driver.export_to_storage(statement, path=tmpfile.name)  # type: ignore[attr-defined]
+        table = pq.read_table(tmpfile.name)
+        assert table.num_rows == 2
+        assert table.column_names == ["id", "name"]
+        assert table.column("id").to_pylist() == [1, 2]
+        assert table.column("name").to_pylist() == ["Alice", "Bob"]

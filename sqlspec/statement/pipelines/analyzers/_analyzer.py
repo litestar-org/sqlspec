@@ -1,6 +1,6 @@
 """SQL statement analyzer for extracting metadata and complexity metrics."""
 
-import logging
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -8,6 +8,8 @@ from sqlglot import exp
 from sqlglot.errors import ParseError as SQLGlotParseError
 
 from sqlspec.statement.pipelines.base import ProcessorProtocol, ValidationResult
+from sqlspec.utils.correlation import CorrelationContext
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -33,7 +35,7 @@ EXPENSIVE_FUNCTION_THRESHOLD = 5
 NESTED_FUNCTION_THRESHOLD = 3
 """Threshold for flagging multiple nested function calls."""
 
-logger = logging.getLogger("sqlspec.statement.analyzers")
+logger = get_logger("pipelines.analyzers")
 
 
 @dataclass
@@ -83,6 +85,18 @@ class StatementAnalysis:
     complexity_issues: "list[str]" = field(default_factory=list)
     """Issues with query complexity"""
 
+    # Additional attributes for aggregator compatibility
+    subquery_count: int = 0
+    """Total number of subqueries"""
+    operations: "list[str]" = field(default_factory=list)
+    """SQL operations performed (SELECT, JOIN, etc.)"""
+    has_aggregation: bool = False
+    """Whether query uses aggregation functions"""
+    has_window_functions: bool = False
+    """Whether query uses window functions"""
+    cte_count: int = 0
+    """Number of CTEs (Common Table Expressions)"""
+
 
 class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
     """SQL statement analyzer that extracts metadata and insights from SQL statements.
@@ -119,6 +133,8 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
 
     def process(self, context: "SQLProcessingContext") -> "tuple[exp.Expression, Optional[ValidationResult]]":
         """Process the SQL expression to extract analysis metadata and store it in the context."""
+        correlation_id = CorrelationContext.get()
+        start_time = time.perf_counter()
 
         if not context.config.enable_analysis:
             if context.current_expression is None:
@@ -127,14 +143,41 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
 
         if context.current_expression is None:
             logger.warning(
-                "StatementAnalyzer.process called with no current_expression in context when analysis is enabled."
+                "StatementAnalyzer.process called with no current_expression in context when analysis is enabled.",
+                extra={"correlation_id": correlation_id},
             )
             return exp.Placeholder(), None
+
+        if context.config.debug_mode:
+            logger.debug(
+                "Starting SQL analysis",
+                extra={
+                    "sql_type": type(context.current_expression).__name__,
+                    "correlation_id": correlation_id,
+                },
+            )
 
         analysis_result_obj = self.analyze_expression(
             context.current_expression, context.dialect, context.config, context.validation_result
         )
         context.analysis_result = analysis_result_obj
+
+        duration = time.perf_counter() - start_time
+
+        if context.config.debug_mode:
+            logger.debug(
+                "Completed SQL analysis in %.3fms",
+                duration * 1000,
+                extra={
+                    "duration_ms": duration * 1000,
+                    "statement_type": analysis_result_obj.statement_type,
+                    "table_count": len(analysis_result_obj.tables),
+                    "has_subqueries": analysis_result_obj.uses_subqueries,
+                    "join_count": analysis_result_obj.join_count,
+                    "correlation_id": correlation_id,
+                },
+            )
+
         return context.current_expression, None
 
     def analyze_statement(self, sql_string: str, dialect: "Optional[DialectType]" = None) -> StatementAnalysis:
@@ -159,13 +202,13 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
             expr = self._parse_cache[parse_cache_key]
         else:
             try:
-                # Use maybe_parse for graceful fallback
+                # Use maybe_parse for graceful parsing
                 expr = exp.maybe_parse(sql_string, dialect=dialect)
                 if expr is None:
-                    # Fallback to parse_one for better error messages
+                    # Use parse_one for better error messages
                     import sqlglot
 
-                    expr = sqlglot.parse_one(sql_string, read=dialect)
+                    expr = sqlglot.parse_one(sql_string, dialect=dialect)
 
                 # Cache the parsed expression
                 if len(self._parse_cache) < self.cache_size:
@@ -215,6 +258,13 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         # Enhanced complexity analysis, potentially using validation_result for context
         self._analyze_complexity(expression, analysis, validation_result)
         analysis.complexity_score = self._calculate_comprehensive_complexity_score(analysis)
+
+        # Populate additional fields for aggregator compatibility
+        analysis.subquery_count = len(list(expression.find_all(exp.Subquery)))
+        analysis.operations = self._extract_operations(expression)
+        analysis.has_aggregation = len(analysis.aggregate_functions) > 0
+        analysis.has_window_functions = self._has_window_functions(expression)
+        analysis.cte_count = len(list(expression.find_all(exp.CTE)))
 
         if len(self._analysis_cache) < self.cache_size:
             self._analysis_cache[cache_key] = analysis
@@ -298,7 +348,22 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
 
     def _analyze_subqueries(self, expression: exp.Expression) -> "dict[str, Any]":
         """Analyze subquery complexity and nesting depth."""
-        subqueries = list(expression.find_all(exp.Subquery))
+        # Standard subquery detection
+        subqueries: list[exp.Expression] = list(expression.find_all(exp.Subquery))
+
+        # sqlglot compatibility: IN clauses with SELECT need explicit handling
+        for in_clause in expression.find_all(exp.In):
+            query_node = in_clause.args.get("query")
+            if query_node and isinstance(query_node, exp.Select):
+                subqueries.append(query_node)
+
+        # sqlglot compatibility: EXISTS clauses with SELECT need explicit handling
+        subqueries.extend(
+            exists_clause.this
+            for exists_clause in expression.find_all(exp.Exists)
+            if exists_clause.this and isinstance(exists_clause.this, exp.Select)
+        )
+
         subquery_count = len(subqueries)
         max_depth = 0
         correlated_count = 0
@@ -316,8 +381,7 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
 
         # Check for correlated subqueries (more expensive)
         for subquery in subqueries:
-            # Simple heuristic: if subquery references outer columns
-            # This is a simplified check - a full implementation would need more sophisticated analysis
+            # Heuristic for correlated subquery detection - checks for EXISTS pattern
             subquery_sql = subquery.sql().lower()
             if any(keyword in subquery_sql for keyword in ["exists", "not exists"]):
                 correlated_count += 1
@@ -493,8 +557,29 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
 
     @staticmethod
     def _has_subqueries(expr: exp.Expression) -> bool:
-        """Check if the expression contains subqueries."""
-        return bool(expr.find(exp.Subquery))
+        """Check if the expression contains subqueries.
+
+        Note: Due to sqlglot parser inconsistency, subqueries in IN clauses
+        are not wrapped in Subquery nodes, so we need additional detection.
+        """
+        # Standard subquery detection
+        if expr.find(exp.Subquery):
+            return True
+
+        # sqlglot compatibility: IN clauses with SELECT need explicit handling
+        for in_clause in expr.find_all(exp.In):
+            query_node = in_clause.args.get("query")
+            if query_node and isinstance(query_node, exp.Select):
+                return True
+
+        # sqlglot compatibility: EXISTS clauses with SELECT need explicit handling
+        for exists_clause in expr.find_all(exp.Exists):
+            if exists_clause.this and isinstance(exists_clause.this, exp.Select):
+                return True
+
+        # Check for multiple SELECT statements (indicates subqueries)
+        select_statements = list(expr.find_all(exp.Select))
+        return len(select_statements) > 1
 
     @staticmethod
     def _count_joins(expr: exp.Expression) -> int:
@@ -521,3 +606,47 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         """Clear both parse and analysis caches."""
         self._parse_cache.clear()
         self._analysis_cache.clear()
+
+    @staticmethod
+    def _extract_operations(expr: exp.Expression) -> "list[str]":
+        """Extract SQL operations performed."""
+        operations = []
+
+        # Main operation
+        if isinstance(expr, exp.Select):
+            operations.append("SELECT")
+        elif isinstance(expr, exp.Insert):
+            operations.append("INSERT")
+        elif isinstance(expr, exp.Update):
+            operations.append("UPDATE")
+        elif isinstance(expr, exp.Delete):
+            operations.append("DELETE")
+        elif isinstance(expr, exp.Create):
+            operations.append("CREATE")
+        elif isinstance(expr, exp.Drop):
+            operations.append("DROP")
+        elif isinstance(expr, exp.Alter):
+            operations.append("ALTER")
+
+        # Additional operations
+        if expr.find(exp.Join):
+            operations.append("JOIN")
+        if expr.find(exp.Group):
+            operations.append("GROUP BY")
+        if expr.find(exp.Order):
+            operations.append("ORDER BY")
+        if expr.find(exp.Having):
+            operations.append("HAVING")
+        if expr.find(exp.Union):
+            operations.append("UNION")
+        if expr.find(exp.Intersect):
+            operations.append("INTERSECT")
+        if expr.find(exp.Except):
+            operations.append("EXCEPT")
+
+        return operations
+
+    @staticmethod
+    def _has_window_functions(expr: exp.Expression) -> bool:
+        """Check if expression uses window functions."""
+        return bool(expr.find(exp.Window))

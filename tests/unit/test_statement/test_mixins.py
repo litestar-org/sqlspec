@@ -8,7 +8,7 @@ import datetime
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional
 from unittest.mock import MagicMock, Mock, patch
 from uuid import UUID
 
@@ -18,17 +18,15 @@ from sqlglot import exp
 from sqlspec.exceptions import SQLConversionError, SQLSpecError
 from sqlspec.statement.mixins import (
     AsyncArrowMixin,
-    AsyncParquetMixin,
+    AsyncExportMixin,
     ResultConverter,
     SQLTranslatorMixin,
     SyncArrowMixin,
-    SyncParquetMixin,
-    _default_msgspec_deserializer,
+    SyncExportMixin,
 )
-from sqlspec.statement.mixins._copy_sync import SyncCopyOperationsMixin
+from sqlspec.statement.mixins._result_converter import _default_msgspec_deserializer
 from sqlspec.statement.result import ArrowResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.storage.registry import BackendNotRegisteredError
 from sqlspec.typing import ArrowTable
 
 
@@ -369,7 +367,7 @@ def arrow_mixin() -> SyncArrowMixin[Any]:
                 hasattr(expression, "returning") and expression.returning is not None
             )
 
-        def _select_to_arrow_impl(self, stmt_obj: SQL, connection: Any, **kwargs: Any) -> "ArrowResult":
+        def _fetch_arrow_table(self, stmt_obj: SQL, connection: Any, **kwargs: Any) -> "ArrowResult":
             # Minimal implementation for testing
             mock_arrow_table = MagicMock(spec=ArrowTable)
             mock_arrow_table.num_rows = 0
@@ -380,17 +378,17 @@ def arrow_mixin() -> SyncArrowMixin[Any]:
     return TestArrowMixin()  # type: ignore
 
 
-def test_select_to_arrow_not_implemented(arrow_mixin: SyncArrowMixin[Any]) -> None:
-    """Test that select_to_arrow raises NotImplementedError by default."""
+def test_fetch_arrow_table_not_implemented(arrow_mixin: SyncArrowMixin[Any]) -> None:
+    """Test that fetch_arrow_table raises NotImplementedError by default."""
     with pytest.raises(NotImplementedError, match="Arrow support not implemented"):
-        arrow_mixin.select_to_arrow("SELECT * FROM users")
+        arrow_mixin.fetch_arrow_table("SELECT * FROM users")
 
 
-def test_select_to_arrow_signature(arrow_mixin: SyncArrowMixin[Any]) -> None:
-    """Test select_to_arrow method signature accepts expected parameters."""
+def test_fetch_arrow_table_signature(arrow_mixin: SyncArrowMixin[Any]) -> None:
+    """Test fetch_arrow_table method signature accepts expected parameters."""
     # This test verifies the method exists and accepts the expected parameters
     try:
-        arrow_mixin.select_to_arrow(
+        arrow_mixin.fetch_arrow_table(
             statement="SELECT * FROM users",
             parameters={"id": 1},
             connection=None,
@@ -433,7 +431,7 @@ def async_arrow_mixin() -> AsyncArrowMixin[Any]:
                 hasattr(expression, "returning") and expression.returning is not None
             )
 
-        async def _select_to_arrow_impl(self, stmt_obj: SQL, connection: Any, **kwargs: Any) -> "ArrowResult":
+        async def _fetch_arrow_table(self, stmt_obj: SQL, connection: Any, **kwargs: Any) -> "ArrowResult":
             # Minimal implementation for testing
             mock_arrow_table = MagicMock(spec=ArrowTable)
             mock_arrow_table.num_rows = 0
@@ -444,17 +442,17 @@ def async_arrow_mixin() -> AsyncArrowMixin[Any]:
     return TestAsyncArrowMixin()  # type: ignore
 
 
-async def test_async_select_to_arrow_not_implemented(async_arrow_mixin: AsyncArrowMixin[Any]) -> None:
-    """Test that select_to_arrow raises NotImplementedError by default."""
+async def test_async_fetch_arrow_table_not_implemented(async_arrow_mixin: AsyncArrowMixin[Any]) -> None:
+    """Test that fetch_arrow_table raises NotImplementedError by default."""
     with pytest.raises(NotImplementedError, match="Arrow support not implemented"):
-        await async_arrow_mixin.select_to_arrow("SELECT * FROM users")
+        await async_arrow_mixin.fetch_arrow_table("SELECT * FROM users")
 
 
-async def test_async_select_to_arrow_signature(async_arrow_mixin: AsyncArrowMixin[Any]) -> None:
-    """Test select_to_arrow method signature accepts expected parameters."""
+async def test_async_fetch_arrow_table_signature(async_arrow_mixin: AsyncArrowMixin[Any]) -> None:
+    """Test fetch_arrow_table method signature accepts expected parameters."""
     # This test verifies the method exists and accepts the expected parameters
     try:
-        await async_arrow_mixin.select_to_arrow(
+        await async_arrow_mixin.fetch_arrow_table(
             statement="SELECT * FROM users",
             parameters={"id": 1},
             connection=None,
@@ -468,11 +466,11 @@ async def test_async_select_to_arrow_signature(async_arrow_mixin: AsyncArrowMixi
 
 
 @pytest.fixture
-def parquet_mixin() -> SyncParquetMixin[Any]:
-    """Create a SyncParquetMixin instance for testing."""
+def export_mixin() -> SyncExportMixin[Any]:
+    """Create a SyncExportMixin instance for testing."""
 
-    class TestParquetMixin(SyncParquetMixin[Any]):
-        # Mock required attributes from ExporterMixinProtocol
+    class TestExportMixin(SyncExportMixin[Any]):
+        # Mock required attributes
         dialect = "sqlite"
         config = SQLConfig()
         instrumentation_config = None  # type: ignore
@@ -497,98 +495,19 @@ def parquet_mixin() -> SyncParquetMixin[Any]:
                 hasattr(expression, "returning") and expression.returning is not None
             )
 
-        def _to_parquet_impl(self, stmt_obj: SQL, connection: Any, **kwargs: Any) -> Union[bytes, None]:
-            # Minimal implementation for testing
-            if "file_path" in kwargs:
-                return None
-            return b"dummy parquet data"
+        def _execute(self, sql: str, parameters: Any, statement: SQL, connection: Any, **kwargs: Any) -> Any:
+            return MagicMock()
 
-    return TestParquetMixin()  # type: ignore
+        def _wrap_select_result(self, statement: SQL, result: Any, schema_type: Any = None) -> Any:
+            mock_result = MagicMock()
+            mock_result.data = [{"id": 1, "name": "Test", "email": "test@example.com"}]
+            return mock_result
 
-
-def test_to_parquet_not_implemented(parquet_mixin: SyncParquetMixin[Any]) -> None:
-    """Test that to_parquet raises NotImplementedError by default."""
-    with pytest.raises(NotImplementedError, match="Parquet support not implemented"):
-        parquet_mixin.to_parquet("SELECT * FROM users")
+    return TestExportMixin()  # type: ignore
 
 
-def test_to_parquet_signature(parquet_mixin: SyncParquetMixin[Any]) -> None:
-    """Test to_parquet method signature accepts expected parameters."""
-    # This test verifies the method exists and accepts the expected parameters
-    try:
-        parquet_mixin.to_parquet(
-            statement="SELECT * FROM users",
-            parameters={"id": 1},
-            connection=None,
-            config=None,
-            file_path="/tmp/test.parquet",
-        )
-    except NotImplementedError:
-        pass  # Expected
-    except Exception as e:
-        pytest.fail(f"Unexpected exception: {e}")
-
-
-@pytest.fixture
-def async_parquet_mixin() -> AsyncParquetMixin[Any]:
-    """Create an AsyncParquetMixin instance for testing."""
-
-    class TestAsyncParquetMixin(AsyncParquetMixin[Any]):
-        # Mock required attributes from ExporterMixinProtocol
-        dialect = "sqlite"
-        config = SQLConfig()
-        instrumentation_config = None  # type: ignore
-        _tracer = None
-        _query_counter = None
-        _error_counter = None
-        _latency_histogram = None
-
-        def _build_statement(
-            self, statement: Any, parameters: Any = None, filters: Any = None, config: Any = None
-        ) -> SQL:
-            if isinstance(statement, SQL):
-                return statement
-            return SQL(statement, parameters=parameters, filters=filters, config=config)  # type: ignore
-
-        def _connection(self, connection: Any = None) -> Any:
-            return connection or MagicMock()
-
-        @staticmethod
-        def returns_rows(expression: Any) -> bool:
-            return isinstance(expression, exp.Select) or (
-                hasattr(expression, "returning") and expression.returning is not None
-            )
-
-        async def _to_parquet_impl(self, stmt_obj: SQL, connection: Any, **kwargs: Any) -> Union[bytes, None]:
-            # Minimal implementation for testing
-            if "file_path" in kwargs:
-                return None
-            return b"dummy parquet data"
-
-    return TestAsyncParquetMixin()  # type: ignore
-
-
-async def test_async_to_parquet_not_implemented(async_parquet_mixin: AsyncParquetMixin[Any]) -> None:
-    """Test that to_parquet raises NotImplementedError by default."""
-    with pytest.raises(NotImplementedError, match="Parquet support not implemented"):
-        await async_parquet_mixin.to_parquet("SELECT * FROM users")
-
-
-async def test_async_to_parquet_signature(async_parquet_mixin: AsyncParquetMixin[Any]) -> None:
-    """Test to_parquet method signature accepts expected parameters."""
-    # This test verifies the method exists and accepts the expected parameters
-    try:
-        await async_parquet_mixin.to_parquet(
-            statement="SELECT * FROM users",
-            parameters={"id": 1},
-            connection=None,
-            config=None,
-            file_path="/tmp/test.parquet",
-        )
-    except NotImplementedError:
-        pass  # Expected
-    except Exception as e:
-        pytest.fail(f"Unexpected exception: {e}")
+# Parquet functionality has been consolidated into unified export mixins
+# These tests are covered by the unified export mixin tests
 
 
 def test_sql_translator_mixin_inheritance() -> None:
@@ -601,7 +520,7 @@ def test_sql_translator_mixin_inheritance() -> None:
 
     # Should have both translator and arrow capabilities
     assert hasattr(instance, "convert_to_dialect")
-    assert hasattr(instance, "select_to_arrow")
+    assert hasattr(instance, "fetch_arrow_table")
     assert instance.dialect == "postgres"
 
 
@@ -624,18 +543,18 @@ def test_result_converter_static_methods() -> None:
 @pytest.mark.parametrize(
     ("mixin_class", "method_name", "is_async"),
     [
-        (SyncArrowMixin, "select_to_arrow", False),
-        (AsyncArrowMixin, "select_to_arrow", True),
-        (SyncParquetMixin, "to_parquet", False),
-        (AsyncParquetMixin, "to_parquet", True),
+        (SyncArrowMixin, "fetch_arrow_table", False),
+        (AsyncArrowMixin, "fetch_arrow_table", True),
+        (SyncExportMixin, "to_parquet", False),
+        (AsyncExportMixin, "to_parquet", True),
     ],
-    ids=["sync_arrow", "async_arrow", "sync_parquet", "async_parquet"],
+    ids=["sync_arrow", "async_arrow", "sync_export", "async_export"],
 )
 def test_mixin_method_consistency(mixin_class: type, method_name: str, is_async: bool) -> None:
     """Test that mixin methods have consistent signatures and behavior."""
 
     class TestMixin(mixin_class):  # type: ignore[misc]
-        # Mock required attributes from ExporterMixinProtocol
+        # Mock required attributes
         dialect = "sqlite"
         config = SQLConfig()  # type: ignore
         instrumentation_config = None  # type: ignore
@@ -659,84 +578,35 @@ def test_mixin_method_consistency(mixin_class: type, method_name: str, is_async:
             return True  # Simplified for this test
 
         # Provide concrete implementations for abstract methods
-        def _select_to_arrow_impl(self, stmt_obj: SQL, connection: Any, **kwargs: Any) -> "ArrowResult":
+        def _fetch_arrow_table(self, stmt_obj: SQL, connection: Any, **kwargs: Any) -> "ArrowResult":
             mock_arrow_table = MagicMock(spec=ArrowTable)
             mock_arrow_table.num_rows = 0
             return ArrowResult(statement=stmt_obj, data=mock_arrow_table)  # type: ignore
 
-        async def _async_select_to_arrow_impl(self, stmt_obj: SQL, connection: Any, **kwargs: Any) -> "ArrowResult":
+        async def _fetch_arrow_table(self, stmt_obj: SQL, connection: Any, **kwargs: Any) -> "ArrowResult":  # type: ignore
             mock_arrow_table = MagicMock(spec=ArrowTable)
             mock_arrow_table.num_rows = 0
             return ArrowResult(statement=stmt_obj, data=mock_arrow_table)  # type: ignore
 
-        def _to_parquet_impl(self, stmt_obj: SQL, connection: Any, **kwargs: Any) -> Union[bytes, None]:
-            return b"dummy"
+        # For export mixins
+        def _execute(self, sql: str, parameters: Any, statement: SQL, connection: Any, **kwargs: Any) -> Any:
+            return MagicMock()
 
-        async def _async_to_parquet_impl(self, stmt_obj: SQL, connection: Any, **kwargs: Any) -> Union[bytes, None]:
-            return b"dummy"
+        async def _execute(self, sql: str, parameters: Any, statement: SQL, connection: Any, **kwargs: Any) -> Any:  # type: ignore
+            return MagicMock()
 
-        # Ensure AsyncArrowMixin also has the async version if that's what's missing
-        async def _select_to_arrow_impl(self, stmt_obj: SQL, connection: Any, **kwargs: Any) -> "ArrowResult":  # type: ignore
-            # Required for AsyncArrowMixin if the other signature isn't picked up
-            return await self._async_select_to_arrow_impl(stmt_obj, connection, **kwargs)
+        def _wrap_select_result(self, statement: SQL, result: Any, schema_type: Any = None) -> Any:
+            mock_result = MagicMock()
+            mock_result.data = [{"id": 1, "name": "Test"}]
+            return mock_result
 
-        # Ensure AsyncParquetMixin also has the async version
-        async def _to_parquet_impl(self, stmt_obj: SQL, connection: Any, **kwargs: Any) -> Union[bytes, None]:  # type: ignore
-            return await self._async_to_parquet_impl(stmt_obj, connection, **kwargs)
+        async def _wrap_select_result(self, statement: SQL, result: Any, schema_type: Any = None) -> Any:  # type: ignore
+            mock_result = MagicMock()
+            mock_result.data = [{"id": 1, "name": "Test"}]
+            return mock_result
 
     TestMixin()
 
 
-class DummyCopyMixin(SyncCopyOperationsMixin):
-    def copy_from_uri(self, table_name, uri, **kwargs) -> str:
-        self._copy_from_uri_called = (table_name, uri, kwargs)
-        return "copy_from_uri_result"
-
-    def export_to_uri(self, source, uri, **kwargs) -> str:
-        self._export_to_uri_called = (source, uri, kwargs)
-        return "export_to_uri_result"
-
-    def _detect_format(self, file_path) -> str:
-        return "parquet"
-
-
-def test_copy_from_storage_success() -> None:
-    mixin = DummyCopyMixin()
-    backend = MagicMock()
-    backend.base_uri = "s3://bucket"
-    with patch("sqlspec.storage.registry.storage_registry.get_backend", return_value=backend):
-        result = mixin.copy_from_storage("mytable", "mykey", "folder/data.parquet")
-        assert result == "copy_from_uri_result"
-        assert mixin._copy_from_uri_called[0] == "mytable"
-        assert mixin._copy_from_uri_called[1] == "s3://bucket/folder/data.parquet"
-        assert mixin._copy_from_uri_called[2]["strategy"] == "append"
-        assert mixin._copy_from_uri_called[2]["format"] == "parquet"
-
-
-def test_export_to_storage_success() -> None:
-    mixin = DummyCopyMixin()
-    backend = MagicMock()
-    backend.base_uri = "gs://bucket"
-    with patch("sqlspec.storage.registry.storage_registry.get_backend", return_value=backend):
-        result = mixin.export_to_storage(
-            "SELECT * FROM t", "mykey", "folder/out.csv", format="csv", export_options={"foo": 1}
-        )
-        assert result == "export_to_uri_result"
-        assert mixin._export_to_uri_called[0] == "SELECT * FROM t"
-        assert mixin._export_to_uri_called[1] == "gs://bucket/folder/out.csv"
-        assert mixin._export_to_uri_called[2]["format"] == "csv"
-        assert mixin._export_to_uri_called[2]["storage_options"] == {"foo": 1}
-
-
-def test_copy_from_storage_missing_key() -> None:
-    mixin = DummyCopyMixin()
-    with patch("sqlspec.storage.registry.storage_registry.get_backend", side_effect=BackendNotRegisteredError("nope")):
-        with pytest.raises(BackendNotRegisteredError):
-            mixin.copy_from_storage("t", "missing", "file.csv")
-
-
-def test_export_to_storage_missing_key() -> None:
-    mixin = DummyCopyMixin()
-    with patch("sqlspec.storage.registry.storage_registry.get_backend", side_effect=BackendNotRegisteredError("nope")):
-        with pytest.raises(BackendNotRegisteredError):
-            mixin.export_to_storage("t", "missing", "file.csv")
+# Copy mixin functionality has been consolidated into unified export mixins
+# These tests are covered by the unified export mixin tests

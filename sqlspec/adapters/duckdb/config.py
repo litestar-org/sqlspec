@@ -1,6 +1,5 @@
 """DuckDB database configuration using TypedDict for better maintainability."""
 
-import inspect
 import logging
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict
@@ -16,6 +15,7 @@ from sqlspec.typing import DictRow, Empty
 if TYPE_CHECKING:
     from collections.abc import Generator
     from contextlib import AbstractContextManager
+
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +64,6 @@ class DuckDBConnectionConfig(TypedDict, total=False):
 
     All parameters for duckdb.connect() and configuration settings.
     """
-
-    # TODO: Remove this TypedDict after a few releases if runtime signature validation is stable.
 
     # Core connection parameters
     database: NotRequired[str]
@@ -194,15 +192,24 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
     __is_async__: ClassVar[bool] = False
     __supports_connection_pooling__: ClassVar[bool] = False
 
+    # Driver class reference for dialect resolution
+    driver_class: ClassVar[type[DuckDBDriver]] = DuckDBDriver
+
+    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "numeric")
+    """DuckDB supports ? (qmark) and $1, $2 (numeric) parameter styles."""
+
+    preferred_parameter_style: ClassVar[str] = "qmark"
+    """DuckDB's native parameter style is ? (qmark)."""
+
     def __init__(
         self,
-        connection_config: Optional[DuckDBConnectionConfig] = None,
-        statement_config: Optional[SQLConfig] = None,
-        instrumentation: Optional[InstrumentationConfig] = None,
+        connection_config: "Optional[DuckDBConnectionConfig]" = None,
+        statement_config: "Optional[SQLConfig]" = None,
+        instrumentation: "Optional[InstrumentationConfig]" = None,
         default_row_type: type[DictRow] = DictRow,
-        extensions: Optional[list[DuckDBExtensionConfig]] = None,
-        secrets: Optional[list[DuckDBSecretConfig]] = None,
-        on_connection_create: Optional[Callable[[DuckDBConnection], None]] = None,
+        extensions: "Optional[list[DuckDBExtensionConfig]]" = None,
+        secrets: "Optional[list[DuckDBSecretConfig]]" = None,
+        on_connection_create: "Optional[Callable[[DuckDBConnection], Optional[DuckDBConnection]]]" = None,
     ) -> None:
         """Initialize DuckDB configuration with intelligent features.
 
@@ -261,22 +268,10 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
-        config = {k: v for k, v in (self.connection_config or {}).items() if v is not Empty}
-        try:
-            valid_params = set(inspect.signature(duckdb.connect).parameters)
-        except Exception:
-            valid_params = set()
-        extra_keys = set(config) - valid_params
-        if extra_keys:
-            logger.debug(
-                "DuckDB config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
-                list(extra_keys),
-            )
-        return {k: v for k, v in config.items() if k in valid_params}
+        return {k: v for k, v in (self.connection_config or {}).items() if v is not Empty}
 
     def create_connection(self) -> DuckDBConnection:
         """Create and return a DuckDB connection with intelligent configuration applied."""
-        import duckdb
 
         if self.instrumentation.log_pool_operations:
             logger.info("Creating DuckDB connection", extra={"adapter": "duckdb"})
@@ -408,9 +403,20 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         @contextmanager
         def session_manager() -> "Generator[DuckDBDriver, None, None]":
             with self.provide_connection(*args, **kwargs) as connection:
+                # Create statement config with parameter style info if not already set
+                statement_config = self.statement_config
+                if statement_config.allowed_parameter_styles is None:
+                    from dataclasses import replace
+
+                    statement_config = replace(
+                        statement_config,
+                        allowed_parameter_styles=self.supported_parameter_styles,
+                        target_parameter_style=self.preferred_parameter_style,
+                    )
+
                 driver = self.driver_type(
                     connection=connection,
-                    config=self.statement_config,
+                    config=statement_config,
                 )
                 yield driver
 

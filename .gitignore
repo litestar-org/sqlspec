@@ -17,6 +17,10 @@ site/
 target/
 .idea/
 .vscode/
+.claude/
+.cursor/
+.zed/
+TODO.md
 
 # files
 **/*.so
@@ -32,3 +36,5 @@ coverage.*
 setup.py
 tmp/
 *.log
+.bugs
+.tmp

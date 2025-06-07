@@ -44,7 +44,7 @@ class CapacityLimiter:
 
     @property
     def total_tokens(self) -> int:
-        return self._semaphore._value  # noqa: SLF001
+        return self._semaphore._value
 
     @total_tokens.setter
     def total_tokens(self, value: int) -> None:

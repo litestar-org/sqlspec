@@ -213,7 +213,13 @@ async def test_aiosqlite_config_provide_session(mock_connect: Mock) -> None:
     async with config.provide_session() as session:
         assert isinstance(session, AiosqliteDriver)
         assert session.connection is mock_connection
-        assert session.config is config.statement_config
+        # The config might be modified to include parameter styles
+        assert session.config.strict_mode == config.statement_config.strict_mode
+        assert session.config.enable_parsing == config.statement_config.enable_parsing
+        assert session.config.enable_validation == config.statement_config.enable_validation
+        # Check that parameter styles were set
+        assert session.config.allowed_parameter_styles == ("qmark", "named_colon")
+        assert session.config.target_parameter_style == "qmark"
         assert session.instrumentation_config is config.instrumentation
         # Verify connection is not closed yet
         mock_connection.close.assert_not_called()

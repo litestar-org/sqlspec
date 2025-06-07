@@ -1,6 +1,5 @@
 """ADBC database configuration using TypedDict for better maintainability."""
 
-import inspect
 import logging
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict
@@ -18,6 +17,8 @@ if TYPE_CHECKING:
     from collections.abc import Generator
     from contextlib import AbstractContextManager
 
+    from sqlglot.dialects.dialect import DialectType
+
 logger = logging.getLogger("sqlspec.adapters.adbc")
 
 __all__ = (
@@ -32,8 +33,6 @@ class AdbcConnectionConfig(TypedDict, total=False):
     Universal configuration for ADBC connections supporting multiple database drivers
     including PostgreSQL, SQLite, DuckDB, BigQuery, Snowflake, and Flight SQL.
     """
-
-    # TODO: Remove this TypedDict after a few releases if runtime signature validation is stable.
 
     # Core connection parameters
     uri: NotRequired[str]
@@ -141,6 +140,17 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     __is_async__: ClassVar[bool] = False
     __supports_connection_pooling__: ClassVar[bool] = False
 
+    # Driver class reference for dialect resolution
+    driver_class: ClassVar[type[AdbcDriver]] = AdbcDriver
+
+    # Parameter style support information - dynamic based on driver
+    # These are used as defaults when driver cannot be determined
+    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark",)
+    """ADBC parameter styles depend on the underlying driver."""
+
+    preferred_parameter_style: ClassVar[str] = "qmark"
+    """ADBC default parameter style is ? (qmark)."""
+
     def __init__(
         self,
         connection_config: Optional[AdbcConnectionConfig] = None,
@@ -189,9 +199,9 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
         self.on_connection_create = on_connection_create
-
+        self._dialect: DialectType = None
         super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig(),
+            instrumentation=instrumentation or InstrumentationConfig(),  # pyright: ignore
         )
 
     @property
@@ -312,6 +322,57 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
         return connect_func  # type: ignore[no-any-return]
 
+    def _get_dialect(self) -> "DialectType":
+        """Get the SQL dialect type based on the ADBC driver.
+
+        Returns:
+            The SQL dialect type for the ADBC driver.
+        """
+        try:
+            driver_path = self._resolve_driver_name()
+        except ImproperConfigurationError:
+            return None
+
+        if "postgres" in driver_path:
+            return "postgres"
+        if "sqlite" in driver_path:
+            return "sqlite"
+        if "duckdb" in driver_path:
+            return "duckdb"
+        if "bigquery" in driver_path:
+            return "bigquery"
+        if "snowflake" in driver_path:
+            return "snowflake"
+        if "flightsql" in driver_path or "grpc" in driver_path:
+            return "sqlite"
+        return None
+
+    def _get_parameter_styles(self) -> tuple[tuple[str, ...], str]:
+        """Get parameter styles based on the underlying driver.
+
+        Returns:
+            Tuple of (supported_parameter_styles, preferred_parameter_style)
+        """
+        try:
+            driver_path = self._resolve_driver_name()
+
+            # Map driver paths to parameter styles
+            if "postgresql" in driver_path:
+                return (("numeric",), "numeric")  # $1, $2, ...
+            if "sqlite" in driver_path:
+                return (("qmark", "named_colon"), "qmark")  # ? or :name
+            if "duckdb" in driver_path:
+                return (("qmark", "numeric"), "qmark")  # ? or $1
+            if "bigquery" in driver_path:
+                return (("named_at",), "named_at")  # @name
+            if "snowflake" in driver_path:
+                return (("qmark", "numeric"), "qmark")  # ? or :1
+
+        except Exception:
+            # If we can't determine driver, use defaults
+            return (self.supported_parameter_styles, self.preferred_parameter_style)
+        return (("qmark",), "qmark")
+
     def create_connection(self) -> AdbcConnection:
         """Create and return a new ADBC connection using the specified driver.
 
@@ -384,9 +445,23 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         @contextmanager
         def session_manager() -> "Generator[AdbcDriver, None, None]":
             with self.provide_connection(*args, **kwargs) as connection:
+                # Get parameter styles based on the actual driver
+                supported_styles, preferred_style = self._get_parameter_styles()
+
+                # Create statement config with parameter style info if not already set
+                statement_config = self.statement_config
+                if statement_config.allowed_parameter_styles is None:
+                    from dataclasses import replace
+
+                    statement_config = replace(
+                        statement_config,
+                        allowed_parameter_styles=supported_styles,
+                        target_parameter_style=preferred_style,
+                    )
+
                 driver = self.driver_type(
                     connection=connection,
-                    config=self.statement_config,
+                    config=statement_config,
                 )
                 yield driver
 
@@ -400,15 +475,42 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             The connection configuration dictionary.
         """
         config = {k: v for k, v in self.connection_config.items() if v is not Empty}
-        try:
-            connect_func = self._get_connect_func()
-            valid_params = set(inspect.signature(connect_func).parameters)
-        except Exception:
-            valid_params = set()
-        extra_keys = set(config) - valid_params
-        if extra_keys:
-            logger.debug(
-                "ADBC config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
-                list(extra_keys),
-            )
-        return {k: v for k, v in config.items() if k in valid_params}
+
+        # Process URI based on driver type
+        if "driver_name" in config:
+            driver_name = config["driver_name"]
+
+            if "uri" in config:
+                uri = config["uri"]
+
+                # SQLite: strip sqlite:// prefix
+                if driver_name in {"sqlite", "sqlite3", "adbc_driver_sqlite"} and uri.startswith("sqlite://"):  # pyright: ignore
+                    config["uri"] = uri[9:]  # Remove "sqlite://" # pyright: ignore
+
+                # DuckDB: convert uri to path
+                elif driver_name in {"duckdb", "adbc_driver_duckdb"} and uri.startswith("duckdb://"):  # pyright: ignore
+                    config["path"] = uri[9:]  # Remove "duckdb://" # pyright: ignore
+                    config.pop("uri", None)
+
+            # BigQuery: wrap certain parameters in db_kwargs
+            if driver_name in {"bigquery", "bq", "adbc_driver_bigquery"}:
+                bigquery_params = ["project_id", "dataset_id", "token"]
+                db_kwargs = config.get("db_kwargs", {})
+
+                for param in bigquery_params:
+                    if param in config and param != "db_kwargs":
+                        db_kwargs[param] = config.pop(param)  # pyright: ignore
+
+                if db_kwargs:
+                    config["db_kwargs"] = db_kwargs
+
+            # For other drivers (like PostgreSQL), merge db_kwargs into top level
+            elif "db_kwargs" in config and driver_name not in {"bigquery", "bq", "adbc_driver_bigquery"}:
+                db_kwargs = config.pop("db_kwargs")
+                if isinstance(db_kwargs, dict):
+                    config.update(db_kwargs)
+
+            # Remove driver_name from config as it's not a connection parameter
+            config.pop("driver_name", None)
+
+        return config

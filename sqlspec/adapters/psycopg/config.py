@@ -1,12 +1,10 @@
 """Psycopg database configuration using TypedDict for better maintainability."""
 
 import contextlib
-import inspect
 import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict
 
-import psycopg
 from psycopg import AsyncConnection, Connection, connect
 from psycopg.rows import DictRow as PsycopgDictRow
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
@@ -29,6 +27,7 @@ logger = logging.getLogger("sqlspec.adapters.psycopg")
 
 __all__ = (
     "PsycopgAsyncConfig",
+    "PsycopgConfig",
     "PsycopgConnectionConfig",
     "PsycopgPoolConfig",
     "PsycopgSyncConfig",
@@ -175,6 +174,16 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     __is_async__: ClassVar[bool] = False
     __supports_connection_pooling__: ClassVar[bool] = True
 
+    # Driver class reference for dialect resolution
+    driver_class: ClassVar[type[PsycopgSyncDriver]] = PsycopgSyncDriver
+
+    # Parameter style support information
+    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional", "pyformat_named")
+    """Psycopg supports %s (positional) and %(name)s (named) parameter styles."""
+
+    preferred_parameter_style: ClassVar[str] = "pyformat_positional"
+    """Psycopg's native parameter style is %s (pyformat positional)."""
+
     def __init__(
         self,
         pool_config: "PsycopgPoolConfig",
@@ -214,20 +223,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     @property
     def connection_config_dict(self) -> dict[str, Any]:
         merged_config = {**self.connection_config, **self.pool_config}
-        config = {k: v for k, v in merged_config.items() if v is not Empty}
-        try:
-            valid_params = set(inspect.signature(psycopg.connect).parameters)
-        except Exception:
-            valid_params = set()
-        extra_keys = set(config) - valid_params
-        if extra_keys:
-            logger.debug(
-                "Psycopg config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
-                list(extra_keys),
-            )
-        return {k: v for k, v in config.items() if k in valid_params}
+        return {k: v for k, v in merged_config.items() if v is not Empty}
 
-    def _create_pool_impl(self) -> "ConnectionPool":
+    def _create_pool(self) -> "ConnectionPool":
         """Create the actual connection pool."""
         if self.instrumentation.log_pool_operations:
             logger.info("Creating Psycopg connection pool", extra={"adapter": "psycopg"})
@@ -241,7 +239,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             raise
         return pool
 
-    def _close_pool_impl(self) -> None:
+    def _close_pool(self) -> None:
         """Close the actual connection pool."""
         if not self.pool_instance:
             return
@@ -300,9 +298,20 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             A PsycopgSyncDriver instance.
         """
         with self.provide_connection(*args, **kwargs) as conn:
+            # Create statement config with parameter style info if not already set
+            statement_config = self.statement_config
+            if statement_config.allowed_parameter_styles is None:
+                from dataclasses import replace
+
+                statement_config = replace(
+                    statement_config,
+                    allowed_parameter_styles=self.supported_parameter_styles,
+                    target_parameter_style=self.preferred_parameter_style,
+                )
+
             driver = self.driver_type(
                 connection=conn,
-                config=self.statement_config,
+                config=statement_config,
                 instrumentation_config=self.instrumentation,
             )
             yield driver
@@ -323,6 +332,16 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
     __is_async__: ClassVar[bool] = True
     __supports_connection_pooling__: ClassVar[bool] = True
+
+    # Driver class reference for dialect resolution
+    driver_class: ClassVar[type[PsycopgAsyncDriver]] = PsycopgAsyncDriver
+
+    # Parameter style support information
+    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional", "pyformat_named")
+    """Psycopg supports %s (pyformat_positional) and %(name)s (pyformat_named) parameter styles."""
+
+    preferred_parameter_style: ClassVar[str] = "pyformat_positional"
+    """Psycopg's preferred parameter style is %s (pyformat_positional)."""
 
     def __init__(
         self,
@@ -365,20 +384,9 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     @property
     def connection_config_dict(self) -> dict[str, Any]:
         merged_config = {**self.connection_config, **self.pool_config}
-        config = {k: v for k, v in merged_config.items() if v is not Empty}
-        try:
-            valid_params = set(inspect.signature(psycopg.connect).parameters)
-        except Exception:
-            valid_params = set()
-        extra_keys = set(config) - valid_params
-        if extra_keys:
-            logger.debug(
-                "Psycopg config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
-                list(extra_keys),
-            )
-        return {k: v for k, v in config.items() if k in valid_params}
+        return {k: v for k, v in merged_config.items() if v is not Empty}
 
-    async def _create_pool_impl(self) -> "AsyncConnectionPool":
+    async def _create_pool(self) -> "AsyncConnectionPool":
         """Create the actual async connection pool."""
         if self.instrumentation.log_pool_operations:
             logger.info("Creating async Psycopg connection pool", extra={"adapter": "psycopg"})
@@ -395,7 +403,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             raise
         return pool
 
-    async def _close_pool_impl(self) -> None:
+    async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
         if not self.pool_instance:
             return
@@ -457,9 +465,20 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             A PsycopgAsyncDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as conn:
+            # Create statement config with parameter style info if not already set
+            statement_config = self.statement_config
+            if statement_config.allowed_parameter_styles is None:
+                from dataclasses import replace
+
+                statement_config = replace(
+                    statement_config,
+                    allowed_parameter_styles=self.supported_parameter_styles,
+                    target_parameter_style=self.preferred_parameter_style,
+                )
+
             driver = self.driver_type(
                 connection=conn,
-                config=self.statement_config,
+                config=statement_config,
                 instrumentation_config=self.instrumentation,
             )
             yield driver
@@ -473,3 +492,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if not self.pool_instance:
             self.pool_instance = await self.create_pool()
         return self.pool_instance
+
+
+# Legacy alias for backwards compatibility (uses sync version by default)
+PsycopgConfig = PsycopgSyncConfig

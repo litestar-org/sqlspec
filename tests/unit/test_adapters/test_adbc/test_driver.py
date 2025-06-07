@@ -1,7 +1,11 @@
 """Unit tests for ADBC driver."""
 
+import tempfile
+from typing import Any
 from unittest.mock import Mock, patch
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from adbc_driver_manager.dbapi import Connection, Cursor
 
@@ -515,8 +519,8 @@ def test_adbc_driver_wrap_execute_result_no_rowcount(adbc_driver: AdbcDriver) ->
     assert result.rows_affected == -1
 
 
-def test_adbc_driver_select_to_arrow_success(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
-    """Test AdbcDriver.select_to_arrow for successful Arrow table creation."""
+def test_adbc_driver_fetch_arrow_table_success(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
+    """Test AdbcDriver.fetch_arrow_table for successful Arrow table creation."""
     mock_connection = adbc_driver.connection
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
@@ -525,7 +529,7 @@ def test_adbc_driver_select_to_arrow_success(adbc_driver: AdbcDriver, mock_curso
 
     statement = SQL("SELECT * FROM users")
 
-    result = adbc_driver.select_to_arrow(statement)
+    result = adbc_driver.fetch_arrow_table(statement)
 
     assert isinstance(result, ArrowResult)
     assert not isinstance(result.statement, str)
@@ -535,8 +539,8 @@ def test_adbc_driver_select_to_arrow_success(adbc_driver: AdbcDriver, mock_curso
     mock_cursor.fetch_arrow_table.assert_called_once()
 
 
-def test_adbc_driver_select_to_arrow_with_parameters(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
-    """Test AdbcDriver.select_to_arrow with query parameters."""
+def test_adbc_driver_fetch_arrow_table_with_parameters(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
+    """Test AdbcDriver.fetch_arrow_table with query parameters."""
     mock_connection = adbc_driver.connection
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
@@ -546,7 +550,7 @@ def test_adbc_driver_select_to_arrow_with_parameters(adbc_driver: AdbcDriver, mo
     # Create SQL statement with parameters included
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[123])
 
-    result = adbc_driver.select_to_arrow(statement)
+    result = adbc_driver.fetch_arrow_table(statement)
 
     assert isinstance(result, ArrowResult)
     assert result.data == mock_arrow_table
@@ -556,16 +560,16 @@ def test_adbc_driver_select_to_arrow_with_parameters(adbc_driver: AdbcDriver, mo
     assert call_args[0][1] == [123]
 
 
-def test_adbc_driver_select_to_arrow_non_query_statement(adbc_driver: AdbcDriver) -> None:
-    """Test AdbcDriver.select_to_arrow raises TypeError for non-query statements."""
+def test_adbc_driver_fetch_arrow_table_non_query_statement(adbc_driver: AdbcDriver) -> None:
+    """Test AdbcDriver.fetch_arrow_table raises TypeError for non-query statements."""
     statement = SQL("INSERT INTO users (name) VALUES ('John')")
 
     with pytest.raises(TypeError, match="Cannot fetch Arrow table for a non-query statement"):
-        adbc_driver.select_to_arrow(statement)
+        adbc_driver.fetch_arrow_table(statement)
 
 
-def test_adbc_driver_select_to_arrow_fetch_error(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
-    """Test AdbcDriver.select_to_arrow handles fetch_arrow_table errors."""
+def test_adbc_driver_fetch_arrow_table_fetch_error(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
+    """Test AdbcDriver.fetch_arrow_table handles fetch_arrow_table errors."""
     mock_connection = adbc_driver.connection
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
@@ -574,11 +578,11 @@ def test_adbc_driver_select_to_arrow_fetch_error(adbc_driver: AdbcDriver, mock_c
     statement = SQL("SELECT * FROM users")
 
     with pytest.raises(SQLConversionError, match="Failed to convert ADBC result to Arrow table"):
-        adbc_driver.select_to_arrow(statement)
+        adbc_driver.fetch_arrow_table(statement)
 
 
-def test_adbc_driver_select_to_arrow_list_parameters(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
-    """Test AdbcDriver.select_to_arrow with list parameters."""
+def test_adbc_driver_fetch_arrow_table_list_parameters(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
+    """Test AdbcDriver.fetch_arrow_table with list parameters."""
     mock_connection = adbc_driver.connection
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
@@ -588,14 +592,14 @@ def test_adbc_driver_select_to_arrow_list_parameters(adbc_driver: AdbcDriver, mo
     statement = SQL("SELECT * FROM users WHERE id IN ($1, $2)")
     parameters = [1, 2]
 
-    result = adbc_driver.select_to_arrow(statement, parameters)
+    result = adbc_driver.fetch_arrow_table(statement, parameters)
 
     assert isinstance(result, ArrowResult)
     assert result.data == mock_arrow_table
 
 
-def test_adbc_driver_select_to_arrow_single_parameter(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
-    """Test AdbcDriver.select_to_arrow with single parameter."""
+def test_adbc_driver_fetch_arrow_table_single_parameter(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
+    """Test AdbcDriver.fetch_arrow_table with single parameter."""
     mock_connection = adbc_driver.connection
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
@@ -605,14 +609,14 @@ def test_adbc_driver_select_to_arrow_single_parameter(adbc_driver: AdbcDriver, m
     statement = SQL("SELECT * FROM users WHERE id = $1")
     parameters = 123
 
-    result = adbc_driver.select_to_arrow(statement, parameters)
+    result = adbc_driver.fetch_arrow_table(statement, parameters)
 
     assert isinstance(result, ArrowResult)
     assert result.data == mock_arrow_table
 
 
-def test_adbc_driver_select_to_arrow_with_connection_override(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
-    """Test AdbcDriver.select_to_arrow with connection override."""
+def test_adbc_driver_fetch_arrow_table_with_connection_override(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
+    """Test AdbcDriver.fetch_arrow_table with connection override."""
     override_connection = Mock(spec=Connection)
     override_connection.cursor.return_value = mock_cursor
 
@@ -621,7 +625,7 @@ def test_adbc_driver_select_to_arrow_with_connection_override(adbc_driver: AdbcD
 
     statement = SQL("SELECT * FROM users")
 
-    result = adbc_driver.select_to_arrow(statement, connection=override_connection)
+    result = adbc_driver.fetch_arrow_table(statement, connection=override_connection)
 
     assert isinstance(result, ArrowResult)
     assert result.data == mock_arrow_table
@@ -723,3 +727,23 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
     assert isinstance(built_stmt_with_params, SQL)
     assert built_stmt_with_params.sql == string_sql_with_params
     assert built_stmt_with_params.parameters == params_for_string
+
+
+def test_adbc_driver_to_parquet(adbc_driver: AdbcDriver, mock_cursor: Mock, monkeypatch: "pytest.MonkeyPatch") -> None:
+    """Test to_parquet writes correct data to a Parquet file using Arrow Table and pyarrow."""
+    # Patch fetch_arrow_table to return a mock ArrowResult with a pyarrow.Table
+    mock_table = pa.table({"id": [1, 2], "name": ["Alice", "Bob"]})
+    monkeypatch.setattr(adbc_driver, "fetch_arrow_table", lambda stmt, **kwargs: ArrowResult(table=mock_table))  # pyright: ignore
+    # Patch pyarrow.parquet.write_table
+    called = {}
+
+    def fake_write_table(table: pa.Table, path: str, **kwargs: Any) -> None:
+        called["table"] = table
+        called["path"] = path
+
+    monkeypatch.setattr(pq, "write_table", fake_write_table)
+    statement = SQL("SELECT id, name FROM users")
+    with tempfile.NamedTemporaryFile() as tmp:
+        adbc_driver.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
+        assert called["table"] is mock_table
+        assert called["path"] == tmp.name

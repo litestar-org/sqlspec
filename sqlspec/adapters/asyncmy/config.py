@@ -1,6 +1,5 @@
 """Asyncmy database configuration using TypedDict for better maintainability."""
 
-import inspect
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -82,61 +81,12 @@ class AsyncmyConnectionConfig(TypedDict, total=False):
     """Custom cursor class to use."""
 
 
-class AsyncmyPoolConfig(TypedDict, total=False):
+class AsyncmyPoolConfig(AsyncmyConnectionConfig, total=False):
     """Asyncmy pool configuration as TypedDict.
 
     All parameters for asyncmy.create_pool() including connection parameters.
     Based on asyncmy documentation.
     """
-
-    # Connection parameters (inherit from connection config)
-    host: NotRequired[str]
-    """Host where the database server is located."""
-
-    user: NotRequired[str]
-    """The username used to authenticate with the database."""
-
-    password: NotRequired[str]
-    """The password used to authenticate with the database."""
-
-    database: NotRequired[str]
-    """The database name to use."""
-
-    port: NotRequired[int]
-    """The TCP/IP port of the MySQL server."""
-
-    unix_socket: NotRequired[str]
-    """The location of the Unix socket file."""
-
-    charset: NotRequired[str]
-    """The character set to use for the connection."""
-
-    connect_timeout: NotRequired[float]
-    """Timeout before throwing an error when connecting."""
-
-    read_default_file: NotRequired[str]
-    """MySQL configuration file to read."""
-
-    read_default_group: NotRequired[str]
-    """Group to read from the configuration file."""
-
-    autocommit: NotRequired[bool]
-    """If True, autocommit mode will be enabled."""
-
-    local_infile: NotRequired[bool]
-    """If True, enables LOAD LOCAL INFILE."""
-
-    ssl: NotRequired[Any]
-    """SSL connection parameters or boolean."""
-
-    sql_mode: NotRequired[str]
-    """Default SQL_MODE to use."""
-
-    init_command: NotRequired[str]
-    """Initial SQL statement to execute once connected."""
-
-    cursor_class: NotRequired["type[Union[Cursor, DictCursor]]"]
-    """Custom cursor class to use."""
 
     # Pool-specific parameters
     minsize: NotRequired[int]
@@ -157,6 +107,16 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
 
     __is_async__: ClassVar[bool] = True
     __supports_connection_pooling__: ClassVar[bool] = True
+
+    # Driver class reference for dialect resolution
+    driver_class: ClassVar[type[AsyncmyDriver]] = AsyncmyDriver
+
+    # Parameter style support information
+    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional",)
+    """AsyncMy only supports %s (pyformat_positional) parameter style."""
+
+    preferred_parameter_style: ClassVar[str] = "pyformat_positional"
+    """AsyncMy's native parameter style is %s (pyformat_positional)."""
 
     def __init__(
         self,
@@ -181,7 +141,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         self.default_row_type = default_row_type
 
         super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig(),
+            instrumentation=instrumentation or InstrumentationConfig(),  # pyright: ignore
         )
 
     @property
@@ -198,36 +158,28 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
     def connection_config_dict(self) -> dict[str, Any]:
         """Return the connection configuration as a dict.
 
-        This method merges the connection_config and pool_config dictionaries,
-        ensuring that the pool_config takes precedence over the connection_config.
-        It also removes any keys with value Empty from the merged configuration.
-
-        Raises:
-            ImproperConfigurationError: If the configuration is invalid.
 
         Returns:
-            A dictionary containing the merged connection configuration.
+            A dictionary containing the connection configuration.
         """
-        merged_config = {**self.connection_config, **self.pool_config}
-        config = {k: v for k, v in merged_config.items() if v is not Empty}
-        try:
-            valid_params = set(inspect.signature(asyncmy.connect).parameters)
-        except Exception:
-            valid_params = set()
-        extra_keys = set(config) - valid_params
-        if extra_keys:
-            logger.debug(
-                "Asyncmy config received extra/unrecognized parameters: %s. These will be ignored and not passed to the driver.",
-                list(extra_keys),
-            )
-        return {k: v for k, v in config.items() if k in valid_params}
+        return {k: v for k, v in self.connection_config.items() if v is not Empty}
 
-    async def _create_pool_impl(self) -> "Pool":  # pyright: ignore
+    @property
+    def pool_config_dict(self) -> dict[str, Any]:
+        """Return the pool configuration as a dict.
+
+
+
+        Returns:
+            A dictionary containing the pool configuration.
+        """
+        return {k: v for k, v in self.pool_config.items() if v is not Empty}
+
+    async def _create_pool(self) -> "Pool":  # pyright: ignore
         """Create the actual async connection pool."""
-        pool_args = self.connection_config_dict
-        return await asyncmy.create_pool(**pool_args)
+        return await asyncmy.create_pool(**self.pool_config_dict)
 
-    async def _close_pool_impl(self) -> None:
+    async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
         if self.pool_instance:
             await self.pool_instance.close()
@@ -275,9 +227,20 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             An AsyncmyDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as connection:
+            # Create statement config with parameter style info if not already set
+            statement_config = self.statement_config
+            if statement_config.allowed_parameter_styles is None:
+                from dataclasses import replace
+
+                statement_config = replace(
+                    statement_config,
+                    allowed_parameter_styles=self.supported_parameter_styles,
+                    target_parameter_style=self.preferred_parameter_style,
+                )
+
             yield self.driver_type(
                 connection=connection,
-                config=self.statement_config,
+                config=statement_config,
                 instrumentation_config=self.instrumentation,
             )
 

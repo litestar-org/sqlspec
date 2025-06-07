@@ -1,33 +1,87 @@
-from typing import TYPE_CHECKING, Any
+import logging
+from typing import TYPE_CHECKING, Any, Union
 
-from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError
-from sqlspec.storage.protocol import StorageBackendProtocol
-from sqlspec.storage.registry import default_storage_registry
+from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError, wrap_exceptions
+from sqlspec.storage.protocol import ObjectStoreProtocol
 from sqlspec.typing import FSSPEC_INSTALLED
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    import pyarrow as pa
+    from collections.abc import AsyncIterator, Iterator
+
+    from fsspec import AbstractFileSystem
+
+    from sqlspec.typing import ArrowRecordBatch, ArrowTable
+
+__all__ = ("FSSpecBackend",)
+
+logger = logging.getLogger(__name__)
+
+# Constants for URI validation
+URI_PARTS_MIN_COUNT = 2
+"""Minimum number of parts in a valid cloud storage URI (bucket/path)."""
+
+AZURE_URI_PARTS_MIN_COUNT = 2
+"""Minimum number of parts in an Azure URI (account/container)."""
+
+AZURE_URI_BLOB_INDEX = 2
+"""Index of blob name in Azure URI parts."""
 
 
-class FsspecBackend(StorageBackendProtocol):
-    """Backend for cloud/remote filesystems using fsspec."""
+def _join_path(prefix: str, path: str) -> str:
+    if not prefix:
+        return path
+    prefix = prefix.rstrip("/")
+    path = path.lstrip("/")
+    return f"{prefix}/{path}"
+
+
+class FSSpecBackend(ObjectStoreProtocol):
+    """Extended protocol support via fsspec.
+
+    This backend implements the ObjectStoreProtocol using fsspec,
+    providing support for extended protocols not covered by obstore
+    and offering fallback capabilities.
+    """
 
     @classmethod
-    def from_config(cls, config: "dict[str, Any]") -> "FsspecBackend":
+    def from_config(cls, config: "dict[str, Any]") -> "FSSpecBackend":
         protocol = config["protocol"]
         fs_config = config.get("fs_config", {})
         base_path = config.get("base_path", "")
         return cls(protocol=protocol, base_path=base_path, **fs_config)
 
-    def __init__(self, protocol: str = "", base_path: str = "", **fs_config: "Any") -> None:
+    def __init__(self, fs: "Union[str, AbstractFileSystem]", base_path: str = "") -> None:
+        """Initialize with filesystem URL or instance.
+
+        Args:
+            fs: Either a URL string or an fsspec AbstractFileSystem instance
+            base_path: Base path to prepend to all operations
+        """
         if not FSSPEC_INSTALLED:
             msg = "fsspec"
             raise MissingDependencyError(msg)
-        self._protocol = protocol
-        self._base_path = base_path.rstrip("/")
-        self._fs_config = fs_config
-        self.fs = None
-        self.fs_kwargs = fs_config
+
+        import fsspec
+
+        self.base_path = base_path.rstrip("/") if base_path else ""
+
+        if isinstance(fs, str):
+            self.fs = fsspec.filesystem(fs.split("://")[0])
+            self.protocol = fs.split("://")[0]
+            self._fs_uri = fs
+        else:
+            self.fs = fs
+            self.protocol = "unknown"
+            with wrap_exceptions(suppress=AttributeError):
+                self.protocol = fs.protocol
+            self._fs_uri = f"{self.protocol}://"
+
+    def _resolve_path(self, path: str) -> str:
+        """Resolve path relative to base_path."""
+        if self.base_path:
+            return f"{self.base_path}/{path.lstrip('/')}"
+        return path
 
     @property
     def backend_type(self) -> str:
@@ -35,134 +89,306 @@ class FsspecBackend(StorageBackendProtocol):
 
     @property
     def base_uri(self) -> str:
-        bucket = self._fs_config.get("bucket", self._fs_config.get("bucket_name", "unknown"))
-        return f"{self._protocol}://{bucket}"
+        return self._fs_uri
 
-    def _get_fs(self, uri: str):
-        if self.fs is not None:
-            return self.fs
+    # Core Operations (sync)
+    def read_bytes(self, path: str) -> bytes:
+        """Read bytes from an object."""
         try:
-            import fsspec
-
-            self.fs = fsspec.open(uri, **self.fs_kwargs).fs
-            return self.fs
+            resolved_path = self._resolve_path(path)
+            return self.fs.cat(resolved_path)
         except Exception as exc:
-            msg = f"Failed to get fsspec filesystem for {uri}"
+            msg = f"Failed to read bytes from {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    def read_bytes(self, uri: str, **kwargs: Any) -> bytes:
-        if not FSSPEC_INSTALLED:
-            msg = "fsspec"
-            raise MissingDependencyError(msg)
+    def write_bytes(self, path: str, data: bytes) -> None:
+        """Write bytes to an object."""
         try:
-            import fsspec
-
-            with fsspec.open(uri, mode="rb", **self.fs_kwargs) as f:
-                return f.read()
-        except Exception as exc:
-            msg = f"Failed to read bytes from {uri}"
-            raise StorageOperationFailedError(msg) from exc
-
-    def write_bytes(self, uri: str, data: bytes, **kwargs: Any) -> None:
-        if not FSSPEC_INSTALLED:
-            msg = "fsspec"
-            raise MissingDependencyError(msg)
-        try:
-            import fsspec
-
-            with fsspec.open(uri, mode="wb", **self.fs_kwargs) as f:
+            resolved_path = self._resolve_path(path)
+            with self.fs.open(resolved_path, mode="wb") as f:
                 f.write(data)
         except Exception as exc:
-            msg = f"Failed to write bytes to {uri}"
+            msg = f"Failed to write bytes to {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    def read_text(self, uri: str, encoding: str = "utf-8", **kwargs: Any) -> str:
-        if not FSSPEC_INSTALLED:
-            msg = "fsspec"
-            raise MissingDependencyError(msg)
+    def read_text(self, path: str, encoding: str = "utf-8") -> str:
+        """Read text from an object."""
         try:
-            import fsspec
-
-            with fsspec.open(uri, mode="rt", encoding=encoding, **self.fs_kwargs) as f:
-                return f.read()
+            data = self.read_bytes(path)
+            return data.decode(encoding)
         except Exception as exc:
-            msg = f"Failed to read text from {uri}"
+            msg = f"Failed to read text from {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    def write_text(self, uri: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
-        if not FSSPEC_INSTALLED:
-            msg = "fsspec"
-            raise MissingDependencyError(msg)
+    def write_text(self, path: str, data: str, encoding: str = "utf-8") -> None:
+        """Write text to an object."""
         try:
-            import fsspec
-
-            with fsspec.open(uri, mode="wt", encoding=encoding, **self.fs_kwargs) as f:
-                f.write(data)
+            self.write_bytes(path, data.encode(encoding))
         except Exception as exc:
-            msg = f"Failed to write text to {uri}"
+            msg = f"Failed to write text to {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    def read_arrow(self, uri: str, **kwargs: Any) -> "pa.Table":
-        if not FSSPEC_INSTALLED:
-            msg = "fsspec"
-            raise MissingDependencyError(msg)
+    # Object Operations
+    def exists(self, path: str) -> bool:
+        """Check if an object exists."""
         try:
-            import fsspec
+            resolved_path = self._resolve_path(path)
+            return self.fs.exists(resolved_path)
+        except Exception as exc:
+            msg = f"Failed to check existence of {path}"
+            raise StorageOperationFailedError(msg) from exc
+
+    def delete(self, path: str) -> None:
+        """Delete an object."""
+        try:
+            resolved_path = self._resolve_path(path)
+            self.fs.rm(resolved_path)
+        except Exception as exc:
+            msg = f"Failed to delete {path}"
+            raise StorageOperationFailedError(msg) from exc
+
+    def copy(self, source: str, destination: str) -> None:
+        """Copy an object."""
+        try:
+            source_path = self._resolve_path(source)
+            dest_path = self._resolve_path(destination)
+            # fsspec has native copy support
+            self.fs.copy(source_path, dest_path)
+        except Exception as exc:
+            msg = f"Failed to copy {source} to {destination}"
+            raise StorageOperationFailedError(msg) from exc
+
+    def move(self, source: str, destination: str) -> None:
+        """Move an object."""
+        try:
+            source_path = self._resolve_path(source)
+            dest_path = self._resolve_path(destination)
+            # fsspec has native move support
+            self.fs.mv(source_path, dest_path)
+        except Exception as exc:
+            msg = f"Failed to move {source} to {destination}"
+            raise StorageOperationFailedError(msg) from exc
+
+    # Arrow Operations
+    def read_arrow(self, path: str, **kwargs: Any) -> "ArrowTable":
+        """Read an Arrow table from storage."""
+        try:
             import pyarrow.parquet as pq
 
-            with fsspec.open(uri, mode="rb", **self.fs_kwargs) as f:
+            resolved_path = self._resolve_path(path)
+            with self.fs.open(resolved_path, mode="rb") as f:
                 return pq.read_table(f, **kwargs)
         except ImportError:
             msg = "pyarrow"
             raise MissingDependencyError(msg)
         except Exception as exc:
-            msg = f"Failed to read Arrow table from {uri}"
+            msg = f"Failed to read Arrow table from {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    def write_arrow(self, uri: str, table: "pa.Table", **kwargs: Any) -> None:
-        if not FSSPEC_INSTALLED:
-            msg = "fsspec"
-            raise MissingDependencyError(msg)
+    def write_arrow(self, path: str, table: "ArrowTable", **kwargs: Any) -> None:
+        """Write an Arrow table to storage."""
         try:
-            import fsspec
             import pyarrow.parquet as pq
 
-            with fsspec.open(uri, mode="wb", **self.fs_kwargs) as f:
+            resolved_path = self._resolve_path(path)
+            with self.fs.open(resolved_path, mode="wb") as f:
                 pq.write_table(table, f, **kwargs)
         except ImportError:
             msg = "pyarrow"
             raise MissingDependencyError(msg)
         except Exception as exc:
-            msg = f"Failed to write Arrow table to {uri}"
+            msg = f"Failed to write Arrow table to {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    def exists(self, uri: str, **kwargs: Any) -> bool:
-        if not FSSPEC_INSTALLED:
-            msg = "fsspec"
-            raise MissingDependencyError(msg)
+    # Listing Operations
+    def list_objects(self, prefix: str = "", recursive: bool = True) -> list[str]:
+        """List objects with optional prefix."""
         try:
-            fs = self._get_fs(uri)
-            return fs.exists(uri)
+            resolved_prefix = self._resolve_path(prefix) if prefix else self.base_path
+
+            # Use fs.find for listing files
+            if recursive:
+                pattern = f"{resolved_prefix}/**" if resolved_prefix else "**"
+            else:
+                pattern = f"{resolved_prefix}/*" if resolved_prefix else "*"
+
+            # Get all files (not directories)
+            objects = [path for path in self.fs.glob(pattern) if not self.fs.isdir(path)]
+
+            return sorted(objects)
         except Exception as exc:
-            msg = f"Failed to check existence of {uri}"
+            msg = f"Failed to list objects with prefix {prefix}"
             raise StorageOperationFailedError(msg) from exc
 
-    def delete(self, uri: str, **kwargs: Any) -> None:
-        if not FSSPEC_INSTALLED:
-            msg = "fsspec"
-            raise MissingDependencyError(msg)
+    def glob(self, pattern: str) -> list[str]:
+        """Find objects matching a glob pattern."""
         try:
-            fs = self._get_fs(uri)
-            fs.rm(uri)
+            resolved_pattern = self._resolve_path(pattern)
+            # Use fsspec's native glob
+            objects = [path for path in self.fs.glob(resolved_pattern) if not self.fs.isdir(path)]
+            return sorted(objects)
         except Exception as exc:
-            msg = f"Failed to delete {uri}"
+            msg = f"Failed to glob pattern {pattern}"
             raise StorageOperationFailedError(msg) from exc
 
-    def get_signed_url(self, uri: str, operation: str = "read", expires_in: int = 3600, **kwargs: Any) -> str:
-        msg = "Signed URLs are not supported by the fsspec backend (use cloud SDKs directly)"
-        raise NotImplementedError(msg)
+    # Path Operations
+    def is_object(self, path: str) -> bool:
+        """Check if path points to an object."""
+        try:
+            resolved_path = self._resolve_path(path)
+            return self.fs.exists(resolved_path) and not self.fs.isdir(resolved_path)
+        except Exception as exc:
+            msg = f"Failed to check if {path} is an object"
+            raise StorageOperationFailedError(msg) from exc
 
+    def is_path(self, path: str) -> bool:
+        """Check if path points to a prefix (directory-like)."""
+        try:
+            resolved_path = self._resolve_path(path)
+            return self.fs.isdir(resolved_path)
+        except Exception as exc:
+            msg = f"Failed to check if {path} is a prefix"
+            raise StorageOperationFailedError(msg) from exc
 
-# Register FsspecBackend for common cloud/remote schemes
-for scheme in ("s3", "gs", "gcs", "https", "http"):
-    default_storage_registry.register_backend(scheme, FsspecBackend)
+    def get_metadata(self, path: str) -> dict[str, Any]:
+        """Get object metadata."""
+        try:
+            resolved_path = self._resolve_path(path)
+            info = self.fs.info(resolved_path)
+
+            # Convert fsspec info to dict
+            if isinstance(info, dict):
+                return info
+
+            # Try to get dict representation
+            with wrap_exceptions(suppress=AttributeError):
+                return vars(info)
+
+            # Fallback to basic metadata with safe attribute access
+            metadata = {
+                "path": resolved_path,
+                "exists": self.fs.exists(resolved_path),
+            }
+
+            with wrap_exceptions(suppress=AttributeError):
+                metadata["size"] = info.size
+            with wrap_exceptions(suppress=AttributeError):
+                metadata["type"] = info.type
+
+            # Set defaults if attributes weren't found
+            metadata.setdefault("size", None)
+            metadata.setdefault("type", "file")
+            return metadata
+        except Exception as exc:
+            msg = f"Failed to get metadata for {path}"
+            raise StorageOperationFailedError(msg) from exc
+
+    def stream_arrow(self, pattern: str) -> "Iterator[ArrowRecordBatch]":
+        """Stream Arrow record batches from matching objects."""
+        try:
+            import pyarrow.parquet as pq
+
+            # Find all matching objects
+            matching_objects = self.glob(pattern)
+
+            # Stream each file as record batches
+            for obj_path in matching_objects:
+                try:
+                    with self.fs.open(obj_path, mode="rb") as f:
+                        parquet_file = pq.ParquetFile(f)
+                        # Yield batches from this file
+                        yield from parquet_file.iter_batches()
+                except Exception as e:
+                    # Log but continue with other files
+                    logger.warning("Failed to read %s: %s", obj_path, e)
+                    continue
+
+        except ImportError:
+            msg = "pyarrow"
+            raise MissingDependencyError(msg)
+        except Exception as exc:
+            msg = f"Failed to stream Arrow data for pattern {pattern}"
+            raise StorageOperationFailedError(msg) from exc
+
+    # Async versions using the sync wrapper
+    async def read_bytes_async(self, path: str) -> bytes:
+        """Async read bytes from an object."""
+        # Check if fsspec supports async natively
+        with wrap_exceptions(suppress=(AttributeError, TypeError)):
+            resolved_path = self._resolve_path(path)
+            return await self.fs._cat(resolved_path)
+
+        # Fall back to sync in thread pool
+        return await async_(self.read_bytes)(path)
+
+    async def write_bytes_async(self, path: str, data: bytes) -> None:
+        """Async write bytes to an object."""
+        # Check if fsspec supports async natively
+        with wrap_exceptions(suppress=(AttributeError, TypeError)):
+            resolved_path = self._resolve_path(path)
+            await self.fs._pipe(resolved_path, data)
+            return
+
+        # Fall back to sync in thread pool
+        await async_(self.write_bytes)(path, data)
+
+    async def read_text_async(self, path: str, encoding: str = "utf-8") -> str:
+        """Async read text from an object."""
+        data = await self.read_bytes_async(path)
+        return data.decode(encoding)
+
+    async def write_text_async(self, path: str, data: str, encoding: str = "utf-8") -> None:
+        """Async write text to an object."""
+        await self.write_bytes_async(path, data.encode(encoding))
+
+    async def exists_async(self, path: str) -> bool:
+        """Async check if an object exists."""
+        # fsspec exists is usually fast, so just run in thread pool
+        return await async_(self.exists)(path)
+
+    async def delete_async(self, path: str) -> None:
+        """Async delete an object."""
+        await async_(self.delete)(path)
+
+    async def list_objects_async(self, prefix: str = "", recursive: bool = True) -> list[str]:
+        """Async list objects with optional prefix."""
+        return await async_(self.list_objects)(prefix, recursive)
+
+    async def stream_arrow_async(self, pattern: str) -> "AsyncIterator[ArrowRecordBatch]":
+        """Async stream Arrow record batches from matching objects."""
+        try:
+            import pyarrow.parquet as pq
+
+            # Find all matching objects
+            matching_objects = await self.list_objects_async()
+            filtered_objects = [obj for obj in matching_objects if self._matches_pattern(obj, pattern)]
+
+            # Stream each file as record batches
+            for obj_path in filtered_objects:
+                try:
+                    data = await self.read_bytes_async(obj_path)
+                    from io import BytesIO
+
+                    parquet_file = pq.ParquetFile(BytesIO(data))
+
+                    # Yield batches from this file
+                    for batch in parquet_file.iter_batches():
+                        yield batch
+                except Exception as e:
+                    # Log but continue with other files
+                    logger.warning("Failed to read %s: %s", obj_path, e)
+                    continue
+
+        except ImportError:
+            msg = "pyarrow"
+            raise MissingDependencyError(msg)
+        except Exception as exc:
+            msg = f"Failed to stream Arrow data for pattern {pattern}"
+            raise StorageOperationFailedError(msg) from exc
+
+    def _matches_pattern(self, path: str, pattern: str) -> bool:
+        """Check if path matches glob pattern."""
+        import fnmatch
+
+        resolved_pattern = self._resolve_path(pattern)
+        return fnmatch.fnmatch(path, resolved_pattern)

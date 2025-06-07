@@ -560,9 +560,18 @@ def test_adbc_config_provide_session(mock_import_string: Mock) -> None:
     mock_connection.close.assert_called_once()
 
     # Driver should be created with correct arguments
+    # The config should now include parameter style information
+    # For SQLite driver, ADBC returns ("qmark", "named_colon") as supported styles
+    from dataclasses import replace
+
+    expected_config = replace(
+        config.statement_config,
+        allowed_parameter_styles=("qmark", "named_colon"),  # SQLite specific from _get_parameter_styles()
+        target_parameter_style="qmark",
+    )
     mock_driver_class.assert_called_once_with(
         connection=mock_connection,
-        config=config.statement_config,
+        config=expected_config,
     )
 
 
