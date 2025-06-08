@@ -59,13 +59,13 @@ def test_oracledb_fetch_arrow_table(oracledb_arrow_session: OracleDbDriver) -> N
     result = oracledb_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow ORDER BY id")
 
     assert isinstance(result, ArrowResult)
-    assert isinstance(result.data, pa.Table)
-    assert result.data.num_rows == 5
+    assert isinstance(result, ArrowResult)
+    assert result.num_rows() == 5
     assert result.data.num_columns >= 5  # id, name, value, price, is_active, created_at
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
-    actual_columns = set(result.data.column_names)
+    actual_columns = set(result.column_names())
     assert expected_columns.issubset(actual_columns)
 
     # Check values
@@ -106,7 +106,7 @@ def test_oracledb_arrow_with_parameters(oracledb_arrow_session: OracleDbDriver) 
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3
+    assert result.num_rows() == 3
     values = result.data["value"].to_pylist()
     assert values == [200, 300, 400]
 
@@ -120,7 +120,7 @@ def test_oracledb_arrow_empty_result(oracledb_arrow_session: OracleDbDriver) -> 
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 0
+    assert result.num_rows() == 0
     assert result.data.num_columns >= 5  # Schema should still be present
 
 
@@ -154,7 +154,7 @@ def test_oracledb_to_arrow_with_sql_object(oracledb_arrow_session: OracleDbDrive
     result = oracledb_arrow_session.fetch_arrow_table(sql_obj)
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3
+    assert result.num_rows() == 3
     assert result.data.num_columns == 2  # Only name and value columns
 
     names = result.data["name"].to_pylist()
@@ -183,11 +183,11 @@ def test_oracledb_arrow_with_oracle_functions(oracledb_arrow_session: OracleDbDr
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3  # Products B, C, D
-    assert "name_upper" in result.data.column_names
-    assert "price_with_tax" in result.data.column_names
-    assert "row_num" in result.data.column_names
-    assert "query_time" in result.data.column_names
+    assert result.num_rows() == 3  # Products B, C, D
+    assert "name_upper" in result.column_names()
+    assert "price_with_tax" in result.column_names()
+    assert "row_num" in result.column_names()
+    assert "query_time" in result.column_names()
 
     # Verify Oracle function results
     upper_names = result.data["name_upper"].to_pylist()
@@ -236,10 +236,10 @@ def test_oracledb_arrow_with_hierarchical_queries(oracledb_arrow_session: Oracle
     """)
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 5
-    assert "hierarchy_level" in result.data.column_names
-    assert "path" in result.data.column_names
-    assert "is_leaf" in result.data.column_names
+    assert result.num_rows() == 5
+    assert "hierarchy_level" in result.column_names()
+    assert "path" in result.column_names()
+    assert "is_leaf" in result.column_names()
 
     # Verify hierarchical query results
     levels = result.data["hierarchy_level"].to_pylist()
@@ -270,12 +270,12 @@ def test_oracledb_arrow_with_analytical_functions(oracledb_arrow_session: Oracle
     """)
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 5
-    assert "value_rank" in result.data.column_names
-    assert "price_rank" in result.data.column_names
-    assert "value_tercile" in result.data.column_names
-    assert "prev_value" in result.data.column_names
-    assert "next_value" in result.data.column_names
+    assert result.num_rows() == 5
+    assert "value_rank" in result.column_names()
+    assert "price_rank" in result.column_names()
+    assert "value_tercile" in result.column_names()
+    assert "prev_value" in result.column_names()
+    assert "next_value" in result.column_names()
 
     # Verify analytical function results
     ranks = result.data["value_rank"].to_pylist()
@@ -307,10 +307,10 @@ def test_oracledb_arrow_with_pivot_operations(oracledb_arrow_session: OracleDbDr
     """)
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows >= 1  # At least one category
+    assert result.num_rows() >= 1  # At least one category
 
     # Check for pivot columns
-    column_names = result.data.column_names
+    column_names = result.column_names()
     assert "value_category" in column_names
 
     # Verify pivot result structure

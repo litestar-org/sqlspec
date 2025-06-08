@@ -334,7 +334,7 @@ def test_adbc_duckdb_complex_queries(adbc_duckdb_session: AdbcDriver) -> None:
     result = adbc_duckdb_session.execute(complex_query)
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 3
+    assert result.num_rows() == 3
 
     # Engineering should have highest average salary
     engineering_row = next(row for row in result.data if row["dept_name"] == "Engineering")
@@ -376,8 +376,8 @@ def test_adbc_duckdb_arrow_integration(adbc_duckdb_session: AdbcDriver) -> None:
 
         arrow_table = arrow_result.data
         assert isinstance(arrow_table, pa.Table)
-        assert arrow_table.num_rows == 3
-        assert arrow_table.num_columns == 2
+        assert arrow_table.num_rows() == 3
+        assert arrow_table.num_columns() == 2
         assert arrow_table.column_names == ["name", "value"]
 
         # Verify data
@@ -527,7 +527,7 @@ def test_adbc_postgresql_parameter_styles(adbc_postgresql_session: AdbcDriver, p
     result = adbc_postgresql_session.execute(sql, params)
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
     assert result.data[0]["name"] == "test_value"
 
 
@@ -690,8 +690,8 @@ def test_adbc_arrow_result_format(adbc_postgresql_session: AdbcDriver) -> None:
 
         arrow_table = arrow_result.data
         assert isinstance(arrow_table, pa.Table)
-        assert arrow_table.num_rows == 3
-        assert arrow_table.num_columns == 2
+        assert arrow_table.num_rows() == 3
+        assert arrow_table.num_columns() == 2
         assert arrow_table.column_names == ["name", "value"]
 
         # Verify data
@@ -808,9 +808,9 @@ def test_adbc_postgresql_column_names_and_metadata(adbc_postgresql_session: Adbc
         "SELECT id, name, value, created_at FROM test_table WHERE name = $1", ("metadata_test",)
     )
     assert isinstance(result, SQLResult)
-    assert result.column_names == ["id", "name", "value", "created_at"]
+    assert result.column_names() == ["id", "name", "value", "created_at"]
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
 
     # Test that we can access data by column name
     row = result.data[0]
@@ -841,10 +841,10 @@ def test_adbc_postgresql_with_schema_type(adbc_postgresql_session: AdbcDriver) -
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
 
     # The data should be converted to the schema type by the ResultConverter
-    assert result.column_names == ["id", "name", "value"]
+    assert result.column_names() == ["id", "name", "value"]
 
 
 @pytest.mark.xdist_group("postgres")
@@ -887,7 +887,7 @@ def test_adbc_multiple_backends_consistency(adbc_sqlite_session: AdbcDriver) -> 
     result = adbc_sqlite_session.execute("SELECT name, value FROM test_table ORDER BY name")
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 2
+    assert result.num_rows() == 2
     assert result.data[0]["name"] == "backend_test1"
     assert result.data[0]["value"] == 100
 
@@ -908,8 +908,8 @@ def test_adbc_postgresql_to_parquet(adbc_postgresql_session: AdbcDriver) -> None
     with tempfile.NamedTemporaryFile() as tmp:
         adbc_postgresql_session.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
         table = pq.read_table(tmp.name)
-        assert table.num_rows == 2
-        assert set(table.column_names) >= {"id", "name", "value"}
+        assert table.num_rows() == 2
+        assert set(table.column_names()) >= {"id", "name", "value"}
         data = table.to_pylist()
         assert any(row["name"] == "arrow1" and row["value"] == 111 for row in data)
         assert any(row["name"] == "arrow2" and row["value"] == 222 for row in data)

@@ -24,23 +24,16 @@ class TestCorrelationMiddleware:
         """Create a mock HTTP scope."""
         return {
             "type": "http",
-            "headers": [
-                (b"host", b"example.com"),
-                (b"user-agent", b"test-agent")
-            ],
+            "headers": [(b"host", b"example.com"), (b"user-agent", b"test-agent")],
             "path": "/test",
             "method": "GET",
-            "state": {}  # Litestar puts state in scope
+            "state": {},  # Litestar puts state in scope
         }
 
     @pytest.fixture
     def websocket_scope(self):
         """Create a mock WebSocket scope."""
-        return {
-            "type": "websocket",
-            "headers": [],
-            "path": "/ws"
-        }
+        return {"type": "websocket", "headers": [], "path": "/ws"}
 
     @pytest.mark.asyncio
     async def test_non_http_passthrough(self, middleware, websocket_scope) -> None:
@@ -75,9 +68,10 @@ class TestCorrelationMiddleware:
         receive = AsyncMock()
         send = AsyncMock()
 
-        with patch("sqlspec.utils.correlation.CorrelationContext.set") as mock_set, \
-             patch("sqlspec.extensions.litestar.middleware.uuid4") as mock_uuid:
-
+        with (
+            patch("sqlspec.utils.correlation.CorrelationContext.set") as mock_set,
+            patch("sqlspec.extensions.litestar.middleware.uuid4") as mock_uuid,
+        ):
             mock_uuid.return_value = UUID("12345678-1234-5678-1234-567812345678")
 
             await middleware(http_scope, receive, send)
@@ -94,6 +88,7 @@ class TestCorrelationMiddleware:
 
         # Capture the modified send function
         actual_send = None
+
         async def capture_send(scope, receive, send) -> None:
             nonlocal actual_send
             actual_send = send
@@ -109,11 +104,9 @@ class TestCorrelationMiddleware:
             await middleware(http_scope, receive, original_send)
 
             # Simulate sending response start
-            await actual_send({
-                "type": "http.response.start",
-                "status": 200,
-                "headers": [(b"content-type", b"application/json")]
-            })
+            await actual_send(
+                {"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json")]}
+            )
 
             # Check that correlation ID was added to headers
             original_send.assert_called_once()
@@ -138,6 +131,7 @@ class TestCorrelationMiddleware:
 
         # Capture the modified send function
         actual_send = None
+
         async def capture_send(scope, receive, send) -> None:
             nonlocal actual_send
             actual_send = send
@@ -148,10 +142,7 @@ class TestCorrelationMiddleware:
         await middleware(http_scope, receive, original_send)
 
         # Send a body message
-        body_message = {
-            "type": "http.response.body",
-            "body": b"test body"
-        }
+        body_message = {"type": "http.response.body", "body": b"test body"}
         await actual_send(body_message)
 
         # Should pass through unchanged
@@ -210,10 +201,7 @@ class TestCorrelationMiddleware:
         """Test that MutableScopeHeaders is used correctly."""
         scope = {
             "type": "http",
-            "headers": [
-                (b"x-correlation-id", b"test-123"),
-                (b"content-type", b"application/json")
-            ]
+            "headers": [(b"x-correlation-id", b"test-123"), (b"content-type", b"application/json")],
         }
 
         headers = MutableScopeHeaders(scope)

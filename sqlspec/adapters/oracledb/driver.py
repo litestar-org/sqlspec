@@ -1,5 +1,5 @@
 # ruff: noqa: PLR6301
-from collections.abc import AsyncGenerator, Generator, Sequence
+from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
@@ -82,9 +82,10 @@ class OracleSyncDriver(
                 connection=connection,
                 **kwargs,
             )
+
         return self._execute(
             statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.parameters,
+            statement.get_parameters(style=self._get_placeholder_style()),
             statement,
             connection=connection,
             **kwargs,
@@ -100,20 +101,15 @@ class OracleSyncDriver(
     ) -> Any:
         with instrument_operation(self, "oracle_execute", "database"):
             conn = self._connection(connection)
-            final_driver_params = parameters
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            if self.instrumentation_config.log_parameters and final_driver_params:
-                logger.debug("Query parameters: %s", final_driver_params)
+            if self.instrumentation_config.log_parameters and parameters:
+                logger.debug("Query parameters: %s", parameters)
             with self._get_cursor(conn) as cursor:
-                if final_driver_params is None:
+                if parameters is None:
                     cursor.execute(sql)
-                elif isinstance(final_driver_params, dict):
-                    cursor.execute(sql, final_driver_params)
-                elif isinstance(final_driver_params, (list, tuple)):
-                    cursor.execute(sql, list(final_driver_params))
                 else:
-                    cursor.execute(sql, [final_driver_params])
+                    cursor.execute(sql, parameters)
                 return cursor
 
     def _execute_many(
@@ -125,21 +121,12 @@ class OracleSyncDriver(
     ) -> Any:
         with instrument_operation(self, "oracle_execute_many", "database"):
             conn = self._connection(connection)
-            # Convert param_list to list[Any] if it's not already
-            if isinstance(param_list, list):
-                final_param_list = param_list
-            elif isinstance(param_list, (tuple, Sequence)):
-                final_param_list = list(param_list)
-            else:
-                # Single parameter set, wrap in list
-                final_param_list = [param_list] if param_list is not None else []
-
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL (executemany): %s", sql)
-            if self.instrumentation_config.log_parameters and final_param_list:
-                logger.debug("Query parameters (batch): %s", final_param_list)
+            if self.instrumentation_config.log_parameters and param_list:
+                logger.debug("Query parameters (batch): %s", param_list)
             with self._get_cursor(conn) as cursor:
-                cursor.executemany(sql, final_param_list)
+                cursor.executemany(sql, param_list or [])
                 return cursor
 
     def _execute_script(
@@ -290,9 +277,10 @@ class OracleAsyncDriver(
                 connection=connection,
                 **kwargs,
             )
+
         return await self._execute(
             statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.parameters,
+            statement.get_parameters(style=self._get_placeholder_style()),
             statement,
             connection=connection,
             **kwargs,
@@ -308,20 +296,15 @@ class OracleAsyncDriver(
     ) -> Any:
         async with instrument_operation_async(self, "oracle_async_execute", "database"):
             conn = self._connection(connection)
-            final_driver_params = parameters
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            if self.instrumentation_config.log_parameters and final_driver_params:
-                logger.debug("Query parameters: %s", final_driver_params)
+            if self.instrumentation_config.log_parameters and parameters:
+                logger.debug("Query parameters: %s", parameters)
             async with self._get_cursor(conn) as cursor:
-                if final_driver_params is None:
+                if parameters is None:
                     await cursor.execute(sql)
-                elif isinstance(final_driver_params, dict):
-                    await cursor.execute(sql, final_driver_params)
-                elif isinstance(final_driver_params, (list, tuple)):
-                    await cursor.execute(sql, list(final_driver_params))
                 else:
-                    await cursor.execute(sql, [final_driver_params])
+                    await cursor.execute(sql, parameters)
                 return cursor
 
     async def _execute_many(
@@ -333,21 +316,12 @@ class OracleAsyncDriver(
     ) -> Any:
         async with instrument_operation_async(self, "oracle_async_execute_many", "database"):
             conn = self._connection(connection)
-            # Convert param_list to list[Any] if it's not already
-            if isinstance(param_list, list):
-                final_param_list = param_list
-            elif isinstance(param_list, (tuple, Sequence)):
-                final_param_list = list(param_list)
-            else:
-                # Single parameter set, wrap in list
-                final_param_list = [param_list] if param_list is not None else []
-
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL (executemany): %s", sql)
-            if self.instrumentation_config.log_parameters and final_param_list:
-                logger.debug("Query parameters (batch): %s", final_param_list)
+            if self.instrumentation_config.log_parameters and param_list:
+                logger.debug("Query parameters (batch): %s", param_list)
             async with self._get_cursor(conn) as cursor:
-                await cursor.executemany(sql, final_param_list)
+                await cursor.executemany(sql, param_list or [])
                 return cursor
 
     async def _execute_script(

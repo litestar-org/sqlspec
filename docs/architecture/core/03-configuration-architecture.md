@@ -74,34 +74,40 @@ class BaseDatabaseConfig(Protocol[ConnectionT, DriverT]):
 
 ### Connection Pool Configuration
 
-For databases supporting connection pooling:
+For databases supporting connection pooling, all pool parameters are now direct fields on the configuration class:
 
 ```python
-@dataclass
-class PoolConfig:
-    """Connection pool configuration."""
+# Direct field-based configuration (NEW)
+from sqlspec.adapters.asyncpg import AsyncpgConfig
 
-    # Pool sizing
-    min_size: int = 0
-    max_size: int = 10
+config = AsyncpgConfig(
+    # Connection parameters
+    dsn="postgresql://localhost/mydb",
+    host="localhost",
+    port=5432,
+    database="mydb",
+    user="postgres",
+    password="secret",
 
-    # Connection lifecycle
-    max_lifetime: float = 3600.0  # 1 hour
-    idle_timeout: float = 600.0   # 10 minutes
+    # Pool parameters (direct fields)
+    min_size=10,
+    max_size=20,
+    max_queries=50000,
+    max_inactive_connection_lifetime=300.0,
 
-    # Pool behavior
-    acquire_timeout: float = 30.0
-    retry_attempts: int = 3
-    retry_delay: float = 0.1
+    # Connection settings
+    connect_timeout=10.0,
+    command_timeout=60.0,
+    statement_cache_size=100,
 
-    # Health checks
-    pre_ping: bool = True
-    ping_interval: float = 60.0
+    # SSL settings
+    ssl=True,
+    direct_tls=False,
+)
 
-    # Advanced
-    overflow: int = 10
-    recycle: float = -1.0
-    echo_pool: bool = False
+# All configuration fields are now direct attributes
+print(config.min_size)  # 10
+print(config.max_size)  # 20
 ```
 
 ### SQL Processing Configuration
@@ -188,108 +194,205 @@ class InstrumentationConfig:
 
 ## Database-Specific Configurations
 
-### PostgreSQL Configuration
+### PostgreSQL Configuration (AsyncPG)
 
 ```python
-@dataclass
-class PostgreSQLConfig(AsyncDatabaseConfig[AsyncpgConnection, AsyncpgDriver]):
-    """PostgreSQL-specific configuration."""
+from sqlspec.adapters.asyncpg import AsyncpgConfig
 
-    # Connection
-    host: Optional[str] = None
-    port: Optional[int] = None
-    database: Optional[str] = None
-    user: Optional[str] = None
-    password: Optional[str] = None
+config = AsyncpgConfig(
+    # Connection parameters (all direct fields)
+    dsn="postgresql://localhost/mydb",
+    host="localhost",
+    port=5432,
+    database="mydb",
+    user="postgres",
+    password="secret",
 
     # PostgreSQL specific
-    ssl_mode: str = "prefer"
-    ssl_cert: Optional[str] = None
-    ssl_key: Optional[str] = None
-    ssl_rootcert: Optional[str] = None
+    ssl=True,
+    direct_tls=False,
+    server_settings={"jit": "off"},
 
     # Performance
-    statement_cache_size: int = 100
-    prepared_statement_cache_size: int = 0
+    statement_cache_size=100,
+    max_cached_statement_lifetime=300,
+    max_cacheable_statement_size=16384,
 
-    # Server settings
-    server_settings: dict[str, str] = field(default_factory=dict)
+    # Pool settings
+    min_size=10,
+    max_size=20,
+    max_queries=50000,
+    max_inactive_connection_lifetime=300.0,
 
-    # Parameter styles
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("numeric",)
-    preferred_parameter_style: ClassVar[str] = "numeric"
+    # Parameter styles (class attributes)
+    # supported_parameter_styles = ("numeric",)
+    # preferred_parameter_style = "numeric"
+)
+```
 
-    def __post_init__(self):
-        # Build URL from components if not provided
-        if not self.url and self.host:
-            self.url = self._build_url()
+### PostgreSQL Configuration (Psycopg)
 
-        # Validate SSL settings
-        if self.ssl_mode == "require":
-            self._validate_ssl_settings()
+```python
+from sqlspec.adapters.psycopg import PsycopgAsyncConfig
+
+config = PsycopgAsyncConfig(
+    # Connection parameters (all direct fields)
+    conninfo="postgresql://localhost/mydb",
+    host="localhost",
+    port=5432,
+    dbname="mydb",
+    user="postgres",
+    password="secret",
+
+    # PostgreSQL specific
+    sslmode="require",
+    sslcert="/path/to/cert",
+    sslkey="/path/to/key",
+
+    # Pool settings
+    min_size=10,
+    max_size=20,
+    timeout=30.0,
+    max_lifetime=3600.0,
+
+    # Parameter styles (class attributes)
+    # supported_parameter_styles = ("pyformat_positional", "pyformat_named")
+    # preferred_parameter_style = "pyformat_positional"
+)
 ```
 
 ### MySQL Configuration
 
 ```python
-@dataclass
-class MySQLConfig(AsyncDatabaseConfig[AsyncmyConnection, AsyncmyDriver]):
-    """MySQL-specific configuration."""
+from sqlspec.adapters.asyncmy import AsyncmyConfig
+
+config = AsyncmyConfig(
+    # Connection parameters (all direct fields)
+    host="localhost",
+    port=3306,
+    database="mydb",
+    user="mysql",
+    password="secret",
 
     # MySQL specific
-    charset: str = "utf8mb4"
-    collation: str = "utf8mb4_unicode_ci"
-    use_unicode: bool = True
+    charset="utf8mb4",
+    collation="utf8mb4_unicode_ci",
+    use_unicode=True,
 
     # Performance
-    autocommit: bool = False
-    cache_sha2_password: bool = True
+    autocommit=False,
+    pool_size=20,
 
-    # Parameter styles
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat",)
-    preferred_parameter_style: ClassVar[str] = "pyformat"
+    # Parameter styles (class attributes)
+    # supported_parameter_styles = ("pyformat",)
+    # preferred_parameter_style = "pyformat"
+)
 ```
 
 ## Configuration Composition
 
-### Merging Configurations
+### Creating Configurations
 
-Configurations can be merged to create specialized variants:
+Configurations are created by passing all parameters directly:
 
 ```python
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+from sqlspec.config import InstrumentationConfig
+from sqlspec.statement.sql import SQLConfig
+
 # Base configuration with common settings
-base_config = PostgreSQLConfig(
-    pool_size=20,
-    instrumentation=InstrumentationConfig(
-        enable_opentelemetry=True,
-        enable_prometheus=True,
-        slow_query_threshold=0.5
-    ),
-    statement_config=SQLConfig(
-        strict_mode=True,
-        enable_validation=True
-    )
+base_instrumentation = InstrumentationConfig(
+    enable_opentelemetry=True,
+    enable_prometheus=True,
+    slow_query_threshold=0.5
+)
+
+base_statement_config = SQLConfig(
+    strict_mode=True,
+    enable_validation=True
 )
 
 # Development configuration
-dev_config = base_config.merge({
-    "url": "postgresql://localhost/dev_db",
-    "instrumentation": {
-        "log_queries": True,
-        "log_parameters": True,
-        "log_results": True
-    }
-})
+dev_config = AsyncpgConfig(
+    # Connection settings
+    dsn="postgresql://localhost/dev_db",
+    min_size=2,
+    max_size=5,
+
+    # Instrumentation
+    instrumentation=InstrumentationConfig(
+        enable_opentelemetry=True,
+        enable_prometheus=True,
+        slow_query_threshold=0.5,
+        log_queries=True,
+        log_parameters=True,
+        log_results=True
+    ),
+
+    # Statement config
+    statement_config=base_statement_config
+)
 
 # Production configuration
-prod_config = base_config.merge({
-    "url": "postgresql://prod.db.company.com/app",
-    "pool_size": 100,
-    "ssl_mode": "require",
-    "statement_config": {
-        "explain_analyze_threshold": 1.0
-    }
-})
+prod_config = AsyncpgConfig(
+    # Connection settings
+    dsn="postgresql://prod.db.company.com/app",
+    min_size=20,
+    max_size=100,
+    ssl=True,
+
+    # Instrumentation
+    instrumentation=base_instrumentation,
+
+    # Statement config with additional settings
+    statement_config=SQLConfig(
+        strict_mode=True,
+        enable_validation=True,
+        explain_analyze_threshold=1.0
+    )
+)
+```
+
+### Migration from Old Configurations
+
+SQLSpec now uses direct field-based configuration instead of TypedDict patterns:
+
+```python
+# Old style (no longer supported)
+# pool_config = {
+#     "dsn": "postgresql://localhost/mydb",
+#     "min_size": 10,
+#     "max_size": 20
+# }
+
+# New style - direct field configuration
+config = AsyncpgConfig(
+    dsn="postgresql://localhost/mydb",
+    min_size=10,
+    max_size=20,
+    statement_config=SQLConfig(),
+    instrumentation=InstrumentationConfig()
+)
+```
+
+### Available Configuration Fields
+
+Each adapter exports constants showing available configuration fields:
+
+```python
+from sqlspec.adapters.asyncpg import CONNECTION_FIELDS, POOL_FIELDS
+
+# CONNECTION_FIELDS - Fields valid for direct connections
+print(CONNECTION_FIELDS)
+# {'dsn', 'host', 'port', 'user', 'password', 'database', 'ssl', ...}
+
+# POOL_FIELDS - All fields valid for pooled connections (superset of CONNECTION_FIELDS)
+print(POOL_FIELDS)
+# {'dsn', 'host', 'port', ..., 'min_size', 'max_size', 'max_queries', ...}
+
+# Use these to validate configuration
+config_dict = {"dsn": "...", "min_size": 10, "invalid_field": "oops"}
+valid_config = {k: v for k, v in config_dict.items() if k in POOL_FIELDS}
 ```
 
 ### Configuration Validation

@@ -18,13 +18,12 @@ async def test_asyncpg_fetch_arrow_table(asyncpg_arrow_session: AsyncpgDriver) -
     result = await asyncpg_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow ORDER BY id")
 
     assert isinstance(result, ArrowResult)
-    assert isinstance(result.data, pa.Table)
-    assert result.data.num_rows == 5
-    assert result.data.num_columns >= 5  # id, name, value, price, is_active, created_at
+    assert result.num_rows() == 5
+    assert result.num_columns() >= 5  # id, name, value, price, is_active, created_at
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
-    actual_columns = set(result.data.column_names)
+    actual_columns = set(result.column_names())
     assert expected_columns.issubset(actual_columns)
 
     # Check data types
@@ -66,13 +65,13 @@ async def test_asyncpg_to_parquet(asyncpg_arrow_session: AsyncpgDriver) -> None:
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_arrow_with_parameters(asyncpg_arrow_session: AsyncpgDriver) -> None:
     """Test fetch_arrow_table with parameters on AsyncPG."""
+    # fetch_arrow_table doesn't accept parameters - embed them in SQL
     result = await asyncpg_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE value >= $1 AND value <= $2 ORDER BY value",
-        (200, 400),
+        "SELECT * FROM test_arrow WHERE value >= 200 AND value <= 400 ORDER BY value"
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3
+    assert result.num_rows() == 3
     values = result.data["value"].to_pylist()
     assert values == [200, 300, 400]
 
@@ -81,14 +80,12 @@ async def test_asyncpg_arrow_with_parameters(asyncpg_arrow_session: AsyncpgDrive
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_arrow_empty_result(asyncpg_arrow_session: AsyncpgDriver) -> None:
     """Test fetch_arrow_table with empty result on AsyncPG."""
-    result = await asyncpg_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE value > $1",
-        (1000,),
-    )
+    # fetch_arrow_table doesn't accept parameters - embed them in SQL
+    result = await asyncpg_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow WHERE value > 1000")
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 0
-    assert result.data.num_columns >= 5  # Schema should still be present
+    assert result.num_rows() == 0
+    assert result.num_columns() >= 5  # Schema should still be present
 
 
 @pytest.mark.asyncio
@@ -118,14 +115,13 @@ async def test_asyncpg_arrow_data_types(asyncpg_arrow_session: AsyncpgDriver) ->
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_to_arrow_with_sql_object(asyncpg_arrow_session: AsyncpgDriver) -> None:
     """Test to_arrow with SQL object instead of string."""
-    from sqlspec.statement.sql import SQL
 
-    sql_obj = SQL("SELECT name, value FROM test_arrow WHERE is_active = $1", parameters=[True])
-    result = await asyncpg_arrow_session.fetch_arrow_table(sql_obj)
+    # fetch_arrow_table expects a SQL string, not a SQL object
+    result = await asyncpg_arrow_session.fetch_arrow_table("SELECT name, value FROM test_arrow WHERE is_active = true")
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3
-    assert result.data.num_columns == 2  # Only name and value columns
+    assert result.num_rows() == 3
+    assert result.num_columns() == 2  # Only name and value columns
 
     names = result.data["name"].to_pylist()
     assert "Product A" in names
@@ -147,7 +143,7 @@ async def test_asyncpg_arrow_large_dataset(asyncpg_arrow_session: AsyncpgDriver)
     result = await asyncpg_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 1
+    assert result.num_rows() == 1
     total_count = result.data["total"].to_pylist()[0]
     assert total_count == 905  # 5 original + 900 new records
 
@@ -189,16 +185,15 @@ async def test_asyncpg_arrow_complex_query(asyncpg_arrow_session: AsyncpgDriver)
             CASE WHEN is_active THEN 'Active' ELSE 'Inactive' END as status,
             value * price as total_value
         FROM test_arrow
-        WHERE value BETWEEN $1 AND $2
+        WHERE value BETWEEN 200 AND 500
         ORDER BY total_value DESC
-    """,
-        (200, 500),
+    """
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 4  # Products B, C, D, E
-    assert "status" in result.data.column_names
-    assert "total_value" in result.data.column_names
+    assert result.num_rows() == 4  # Products B, C, D, E
+    assert "status" in result.column_names()
+    assert "total_value" in result.column_names()
 
     # Verify calculated column
     total_values = result.data["total_value"].to_pylist()

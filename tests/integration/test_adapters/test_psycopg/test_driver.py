@@ -6,13 +6,11 @@ import tempfile
 from collections.abc import Generator
 from typing import Any, Literal
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
-from sqlspec.adapters.psycopg.config import PsycopgPoolConfig
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL
 
@@ -23,13 +21,11 @@ ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 def psycopg_session(postgres_service: PostgresService) -> Generator[PsycopgSyncDriver, None, None]:
     """Create a psycopg session with test table."""
     config = PsycopgSyncConfig(
-        pool_config=PsycopgPoolConfig(
-            host=postgres_service.host,
-            port=postgres_service.port,
-            user=postgres_service.user,
-            password=postgres_service.password,
-            dbname=postgres_service.database,
-        ),
+        host=postgres_service.host,
+        port=postgres_service.port,
+        user=postgres_service.user,
+        password=postgres_service.password,
+        dbname=postgres_service.database,
     )
 
     with config.provide_session() as session:
@@ -108,7 +104,7 @@ def test_psycopg_parameter_styles(psycopg_session: PsycopgSyncDriver, params: An
     result = psycopg_session.execute(sql, params)
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
     assert result.data[0]["name"] == "test_value"
 
 
@@ -379,9 +375,9 @@ def test_psycopg_column_names_and_metadata(psycopg_session: PsycopgSyncDriver) -
         "SELECT id, name, value, created_at FROM test_table WHERE name = %s", ("metadata_test",)
     )
     assert isinstance(result, SQLResult)
-    assert result.column_names == ["id", "name", "value", "created_at"]
+    assert result.column_names() == ["id", "name", "value", "created_at"]
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
 
     # Test that we can access data by column name
     row = result.data[0]
@@ -412,10 +408,10 @@ def test_psycopg_with_schema_type(psycopg_session: PsycopgSyncDriver) -> None:
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
 
     # The data should be converted to the schema type by the ResultConverter
-    assert result.column_names == ["id", "name", "value"]
+    assert result.column_names() == ["id", "name", "value"]
 
 
 @pytest.mark.xdist_group("postgres")
@@ -552,9 +548,9 @@ def test_psycopg_fetch_arrow_table(psycopg_session: PsycopgSyncDriver) -> None:
     result = psycopg_session.fetch_arrow_table(statement)
     assert isinstance(result, ArrowResult)
     table = result.data
-    assert isinstance(table, pa.Table)
-    assert table.num_rows == 2
-    assert set(table.column_names) == {"name", "value"}
+    assert isinstance(table, ArrowResult)
+    assert table.num_rows() == 2
+    assert set(table.column_names()) == {"name", "value"}
     names = table.column("name").to_pylist()
     assert "arrow1" in names and "arrow2" in names
 
@@ -568,7 +564,7 @@ def test_psycopg_to_parquet(psycopg_session: PsycopgSyncDriver) -> None:
     with tempfile.NamedTemporaryFile() as tmp:
         psycopg_session.export_to_storage(statement, tmp.name)
         table = pq.read_table(tmp.name)
-        assert table.num_rows == 2
-        assert set(table.column_names) == {"name", "value"}
+        assert table.num_rows() == 2
+        assert set(table.column_names()) == {"name", "value"}
         names = table.column("name").to_pylist()
         assert "pq1" in names and "pq2" in names

@@ -1,13 +1,12 @@
 # ruff: noqa: PLR6301
-"""Aiosqlite database configuration using TypedDict for better maintainability."""
+"""Aiosqlite database configuration with direct field-based configuration."""
 
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 import aiosqlite
-from typing_extensions import NotRequired
 
 from sqlspec.adapters.aiosqlite.driver import AiosqliteConnection, AiosqliteDriver
 from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig
@@ -20,42 +19,25 @@ if TYPE_CHECKING:
     from typing import Literal
 
 
-__all__ = ("AiosqliteConfig", "AiosqliteConnectionConfig")
+__all__ = ("CONNECTION_FIELDS", "AiosqliteConfig")
 
 logger = logging.getLogger(__name__)
 
-
-class AiosqliteConnectionConfig(TypedDict, total=False):
-    """Aiosqlite connection configuration as TypedDict.
-
-    Basic connection parameters for aiosqlite.connect().
-    Based on aiosqlite documentation.
-    """
-
-    database: NotRequired[str]
-    """The path to the database file to be opened. Pass ":memory:" to open a connection to a database that resides in RAM instead of on disk."""
-
-    timeout: NotRequired[float]
-    """How many seconds the connection should wait before raising an OperationalError when a table is locked."""
-
-    detect_types: NotRequired[int]
-    """Control whether and how data types are detected. It can be 0 (default) or a combination of PARSE_DECLTYPES and PARSE_COLNAMES."""
-
-    isolation_level: NotRequired["Optional[Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE']]"]
-    """The isolation_level of the connection. This can be None for autocommit mode or one of "DEFERRED", "IMMEDIATE" or "EXCLUSIVE"."""
-
-    check_same_thread: NotRequired[bool]
-    """If True (default), ProgrammingError is raised if the database connection is used by a thread other than the one that created it."""
-
-    cached_statements: NotRequired[int]
-    """The number of statements that SQLite will cache for this connection. The default is 128."""
-
-    uri: NotRequired[bool]
-    """If set to True, database is interpreted as a URI with supported options."""
+CONNECTION_FIELDS = frozenset(
+    {
+        "database",
+        "timeout",
+        "detect_types",
+        "isolation_level",
+        "check_same_thread",
+        "cached_statements",
+        "uri",
+    }
+)
 
 
 class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDriver]):
-    """Configuration for Aiosqlite database connections using TypedDict.
+    """Configuration for Aiosqlite database connections with direct field-based configuration.
 
     Note: Aiosqlite doesn't support connection pooling, so pool_instance is always None.
     """
@@ -75,20 +57,51 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
 
     def __init__(
         self,
-        connection_config: Optional[AiosqliteConnectionConfig] = None,
+        database: str,
         statement_config: Optional[SQLConfig] = None,
         instrumentation: Optional[InstrumentationConfig] = None,
         default_row_type: type[DictRow] = DictRow,
+        # Connection parameters
+        timeout: Optional[float] = None,
+        detect_types: Optional[int] = None,
+        isolation_level: Optional["Optional[Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE']]"] = None,
+        check_same_thread: Optional[bool] = None,
+        cached_statements: Optional[int] = None,
+        uri: Optional[bool] = None,
+        # User-defined extras
+        extras: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize Aiosqlite configuration.
 
         Args:
-            connection_config: Aiosqlite connection parameters
+            database: The path to the database file to be opened. Pass ":memory:" for in-memory database
             statement_config: Default SQL statement configuration
             instrumentation: Instrumentation configuration
             default_row_type: Default row type for results
+            timeout: How many seconds the connection should wait before raising an OperationalError when a table is locked
+            detect_types: Control whether and how data types are detected. It can be 0 (default) or a combination of PARSE_DECLTYPES and PARSE_COLNAMES
+            isolation_level: The isolation_level of the connection. This can be None for autocommit mode or one of "DEFERRED", "IMMEDIATE" or "EXCLUSIVE"
+            check_same_thread: If True (default), ProgrammingError is raised if the database connection is used by a thread other than the one that created it
+            cached_statements: The number of statements that SQLite will cache for this connection. The default is 128
+            uri: If set to True, database is interpreted as a URI with supported options
+            extras: Additional connection parameters not explicitly defined
+            **kwargs: Additional parameters (stored in extras)
         """
-        self.connection_config = connection_config or {}
+        # Store connection parameters as instance attributes
+        self.database = database
+        self.timeout = timeout
+        self.detect_types = detect_types
+        self.isolation_level = isolation_level
+        self.check_same_thread = check_same_thread
+        self.cached_statements = cached_statements
+        self.uri = uri
+
+        # Handle extras and additional kwargs
+        self.extras = extras or {}
+        self.extras.update(kwargs)
+
+        # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
@@ -106,10 +119,56 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
         """Return the driver type."""
         return AiosqliteDriver
 
+    @classmethod
+    def from_connection_config(
+        cls,
+        connection_config: dict[str, Any],
+        statement_config: Optional[SQLConfig] = None,
+        instrumentation: Optional[InstrumentationConfig] = None,
+        default_row_type: type[DictRow] = DictRow,
+    ) -> "AiosqliteConfig":
+        """Create config from old-style connection_config dict for backward compatibility.
+
+        Args:
+            connection_config: Dictionary with connection parameters
+            statement_config: Default SQL statement configuration
+            instrumentation: Instrumentation configuration
+            default_row_type: Default row type for results
+
+        Returns:
+            AiosqliteConfig instance
+        """
+        # Extract required database parameter
+        database = connection_config.get("database")
+        if database is None:
+            msg = "'database' parameter is required"
+            raise ImproperConfigurationError(msg)
+
+        # Create config with all parameters
+        return cls(
+            database=database,
+            statement_config=statement_config,
+            instrumentation=instrumentation,
+            default_row_type=default_row_type,
+            **{
+                k: v for k, v in connection_config.items() if k != "database"
+            },  # Other connection parameters go to direct fields or extras
+        )
+
     @property
     def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict."""
-        return {k: v for k, v in self.connection_config.items() if v is not Empty}
+        """Return the connection configuration as a dict for aiosqlite.connect()."""
+        # Gather non-None connection parameters
+        config = {
+            field: getattr(self, field)
+            for field in CONNECTION_FIELDS
+            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
+        }
+
+        # Merge extras parameters
+        config.update(self.extras)
+
+        return config
 
     async def _create_pool(self) -> None:
         """Aiosqlite doesn't support pooling."""

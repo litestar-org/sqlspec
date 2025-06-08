@@ -54,13 +54,12 @@ def test_duckdb_fetch_arrow_table(duckdb_arrow_session: DuckDbDriver) -> None:
     result = duckdb_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow ORDER BY id")
 
     assert isinstance(result, ArrowResult)
-    assert isinstance(result.data, pa.Table)
-    assert result.data.num_rows == 5
-    assert result.data.num_columns >= 5  # id, name, value, price, is_active, created_at
+    assert result.num_rows() == 5
+    assert result.num_columns() >= 5  # id, name, value, price, is_active, created_at
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
-    actual_columns = set(result.data.column_names)
+    actual_columns = set(result.column_names())
     assert expected_columns.issubset(actual_columns)
 
     # Check values
@@ -103,7 +102,7 @@ def test_duckdb_arrow_with_parameters(duckdb_arrow_session: DuckDbDriver) -> Non
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3
+    assert result.num_rows() == 3
     values = result.data["value"].to_pylist()
     assert values == [200, 300, 400]
 
@@ -116,8 +115,8 @@ def test_duckdb_arrow_empty_result(duckdb_arrow_session: DuckDbDriver) -> None:
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 0
-    assert result.data.num_columns >= 5  # Schema should still be present
+    assert result.num_rows() == 0
+    assert result.num_columns() >= 5  # Schema should still be present
 
 
 def test_duckdb_arrow_data_types(duckdb_arrow_session: DuckDbDriver) -> None:
@@ -149,8 +148,8 @@ def test_duckdb_to_arrow_with_sql_object(duckdb_arrow_session: DuckDbDriver) -> 
     result = duckdb_arrow_session.fetch_arrow_table(sql_obj)
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3
-    assert result.data.num_columns == 2  # Only name and value columns
+    assert result.num_rows() == 3
+    assert result.num_columns() == 2  # Only name and value columns
 
     names = result.data["name"].to_pylist()
     assert "Product A" in names
@@ -170,7 +169,7 @@ def test_duckdb_arrow_large_dataset(duckdb_arrow_session: DuckDbDriver) -> None:
     result = duckdb_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 1
+    assert result.num_rows() == 1
     total_count = result.data["total"].to_pylist()[0]
     assert total_count == 905  # 5 original + 900 new records
 
@@ -211,9 +210,9 @@ def test_duckdb_arrow_analytics_functions(duckdb_arrow_session: DuckDbDriver) ->
     """)
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 5
-    assert "prev_value" in result.data.column_names
-    assert "rank_by_value" in result.data.column_names
+    assert result.num_rows() == 5
+    assert "prev_value" in result.column_names()
+    assert "rank_by_value" in result.column_names()
 
     # Check window function results
     ranks = result.data["rank_by_value"].to_pylist()
@@ -251,9 +250,9 @@ def test_duckdb_arrow_with_json_data(duckdb_arrow_session: DuckDbDriver) -> None
     """)
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3
-    assert "name" in result.data.column_names
-    assert "age" in result.data.column_names
+    assert result.num_rows() == 3
+    assert "name" in result.column_names()
+    assert "age" in result.column_names()
 
     names = result.data["name"].to_pylist()
     assert "Alice" in names
@@ -276,10 +275,10 @@ def test_duckdb_arrow_with_aggregation(duckdb_arrow_session: DuckDbDriver) -> No
     """)
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 2  # True and False groups
-    assert "count" in result.data.column_names
-    assert "avg_value" in result.data.column_names
-    assert "total_price" in result.data.column_names
+    assert result.num_rows() == 2  # True and False groups
+    assert "count" in result.column_names()
+    assert "avg_value" in result.column_names()
+    assert "total_price" in result.column_names()
 
     # Verify aggregation results
     counts = result.data["count"].to_pylist()
@@ -308,8 +307,8 @@ def test_duckdb_arrow_with_parquet_integration(duckdb_arrow_session: DuckDbDrive
         """)
 
         assert isinstance(result, ArrowResult)
-        assert result.data.num_rows == 3  # Only active products
-        assert "doubled_value" in result.data.column_names
+        assert result.num_rows() == 3  # Only active products
+        assert "doubled_value" in result.column_names()
 
         # Verify the doubling calculation
         doubled_values = result.data["doubled_value"].to_pylist()

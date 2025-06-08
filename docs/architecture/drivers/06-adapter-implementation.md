@@ -99,7 +99,7 @@ from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
     SyncStorageMixin,    # Unified storage operations
-    ToSchemaMixin,       # Schema conversion
+    ToSchemaMixin,       # Schema conversion (if needed)
 )
 from sqlspec.statement.sql import SQL
 from sqlspec.statement.parameters import SQLParameterType, ParameterStyle
@@ -108,7 +108,6 @@ class MyDBDriver(
     SyncDriverAdapterProtocol[MyDBConnection, RowT],
     SQLTranslatorMixin,      # SQL dialect translation
     SyncStorageMixin,        # All storage operations (Arrow, Export, Copy)
-    ToSchemaMixin,           # Pydantic/msgspec conversion
 ):
     """MyDB driver implementation."""
 
@@ -287,48 +286,52 @@ def _wrap_execute_result(self, result: Any, **kwargs: Any) -> ExecuteResult:
 
 ### Arrow Support Implementation
 
-For Arrow support, implement the `_fetch_arrow_table` method:
+Arrow support is provided by the unified storage mixins (`SyncStorageMixin`/`AsyncStorageMixin`). The `fetch_arrow_table` method accepts only a SQL string:
 
 ```python
+# The SyncStorageMixin provides this method signature:
+def fetch_arrow_table(self, query: str) -> "pa.Table":
+    """Execute query and return Arrow table directly.
+
+    Args:
+        query: SQL query string (no parameters allowed)
+
+    Returns:
+        pyarrow.Table: The query results as an Arrow table
+    """
+    pass  # Implementation provided by mixin
+
+# For custom Arrow support, override _fetch_arrow_table:
 def _fetch_arrow_table(
     self,
     sql: "str",
-    parameters: "SQLParameterType",
     connection: "MyDBConnection",
-    batch_size: "Optional[int]" = None,
     **kwargs: "Any"
-) -> "ArrowResult":
+) -> "pa.Table":
     """Execute query and return Arrow table."""
     import pyarrow as pa
 
-    # Execute query
+    # Execute query (no parameters)
     cursor = connection.cursor()
-    cursor.execute(sql, parameters)  # Parameters already in correct format
+    cursor.execute(sql)
 
     # Get column info
     columns = [desc[0] for desc in cursor.description]
 
-    # Fetch data in batches if specified
-    if batch_size:
-        batches = []
-        while True:
-            rows = cursor.fetchmany(batch_size)
-            if not rows:
-                break
-            batch = pa.record_batch(
-                {col: [row[i] for row in rows] for i, col in enumerate(columns)}
-            )
-            batches.append(batch)
-        table = pa.Table.from_batches(batches)
-    else:
-        # Fetch all at once
-        rows = cursor.fetchall()
+    # Fetch all data
+    rows = cursor.fetchall()
+
+    # Convert to Arrow table
+    if rows:
         table = pa.table(
             {col: [row[i] for row in rows] for i, col in enumerate(columns)}
         )
+    else:
+        # Empty result - create table with schema only
+        table = pa.table({col: [] for col in columns})
 
     cursor.close()
-    return ArrowResult(table=table)
+    return table  # Return table directly, not wrapped
 ```
 
 ## Connection Management
@@ -452,14 +455,12 @@ class TestMyDBDriver:
         """Test unified storage mixin provides all methods."""
         # Verify all storage operations are available
         storage_methods = [
-            'fetch_arrow_table',
-            'export_to_storage',
-            'import_from_storage',
-            'copy_from',
-            'copy_to',
-            'to_parquet',
-            'to_csv',
-            'to_json',
+            'fetch_arrow_table',     # Returns pa.Table directly
+            'ingest_arrow_table',    # Ingests pa.Table into database
+            'export_to_storage',     # Export query to storage backend
+            'import_from_storage',   # Import from storage backend
+            'read_parquet_direct',   # Native parquet read if supported
+            'write_parquet_direct',  # Native parquet write if supported
         ]
         for method in storage_methods:
             assert hasattr(driver, method), f"Missing {method} from SyncStorageMixin"
@@ -606,12 +607,12 @@ class MyDBDriver(
     ToSchemaMixin,        # Schema conversion
 ):
     """The SyncStorageMixin provides:
-    - fetch_arrow_table() - Arrow table export
-    - export_to_storage() - Export to any format/location
-    - import_from_storage() - Import from any format/location
-    - copy_from() - High-performance bulk import
-    - copy_to() - High-performance bulk export
-    - to_parquet(), to_csv(), to_json() - Format-specific exports
+    - fetch_arrow_table(query: str) -> pa.Table - Arrow table export
+    - ingest_arrow_table(table: pa.Table, table_name: str, mode: str) -> int
+    - export_to_storage(query: str, destination_uri: str, **kwargs) -> int
+    - import_from_storage(source_uri: str, table_name: str, **kwargs) -> int
+    - read_parquet_direct(source_uri: str) -> Any - Native parquet read
+    - write_parquet_direct(query: str, destination_uri: str) -> int
     """
 ```
 

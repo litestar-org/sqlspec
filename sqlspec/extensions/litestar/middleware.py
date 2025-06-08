@@ -1,4 +1,5 @@
 """Litestar middleware for SQLSpec integration."""
+
 from typing import TYPE_CHECKING, Any, Optional
 from uuid import uuid4
 
@@ -60,15 +61,9 @@ class CorrelationMiddleware(AbstractMiddleware):
 
         if not correlation_id:
             correlation_id = str(uuid4())
-            logger.debug(
-                "Generated new correlation ID",
-                extra={"correlation_id": correlation_id}
-            )
+            logger.debug("Generated new correlation ID", extra={"correlation_id": correlation_id})
         else:
-            logger.debug(
-                "Using existing correlation ID from request",
-                extra={"correlation_id": correlation_id}
-            )
+            logger.debug("Using existing correlation ID from request", extra={"correlation_id": correlation_id})
 
         # Store correlation ID in scope for other middleware/handlers
         scope["state"]["correlation_id"] = correlation_id
@@ -82,10 +77,7 @@ class CorrelationMiddleware(AbstractMiddleware):
                     headers = list(message.get("headers", []))
 
                     # Check if header already exists
-                    has_correlation_header = any(
-                        header[0].lower() == self.header_name
-                        for header in headers
-                    )
+                    has_correlation_header = any(header[0].lower() == self.header_name for header in headers)
 
                     if not has_correlation_header:
                         headers.append((self.header_name, correlation_id.encode()))
@@ -97,10 +89,7 @@ class CorrelationMiddleware(AbstractMiddleware):
             try:
                 await self.app(scope, receive, send_wrapper)
             except Exception:
-                logger.exception(
-                    "Error processing request",
-                    extra={"correlation_id": correlation_id}
-                )
+                logger.exception("Error processing request", extra={"correlation_id": correlation_id})
                 raise
 
 

@@ -205,7 +205,7 @@ def test_complex_queries(adbc_duckdb_session: AdbcDriver) -> None:
     result = adbc_duckdb_session.execute(complex_query)
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 3
+    assert result.num_rows() == 3
 
     # Engineering should have highest average salary
     engineering_row = next(row for row in result.data if row["dept_name"] == "Engineering")
@@ -245,8 +245,8 @@ def test_arrow_integration(adbc_duckdb_session: AdbcDriver) -> None:
         assert isinstance(arrow_result, ArrowResult)
         arrow_table = arrow_result.data
         assert isinstance(arrow_table, pa.Table)
-        assert arrow_table.num_rows == 3
-        assert arrow_table.num_columns == 2
+        assert arrow_table.num_rows() == 3
+        assert arrow_table.num_columns() == 2
         assert arrow_table.column_names == ["name", "value"]
 
         # Verify data

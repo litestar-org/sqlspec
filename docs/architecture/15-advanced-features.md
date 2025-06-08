@@ -252,23 +252,24 @@ class BusinessMetricsInstrumentor(InstrumentorProtocol):
 SQLSpec provides native Apache Arrow support for efficient data processing:
 
 ```python
-# Direct Arrow table creation
-arrow_result = session.fetch_arrow_table(
-    "SELECT * FROM large_table WHERE category = ?",
-    ("electronics",)
+from sqlspec.statement.sql import SQL
+from sqlspec.statement.result import ArrowResult
+
+# Arrow table creation supports SQL strings, SQL objects, and query builders
+result = session.fetch_arrow_table(
+    SQL("SELECT * FROM large_table WHERE category = ?", parameters=["electronics"])
 )
 
-# Access Arrow table
-table = arrow_result.table
-print(f"Rows: {table.num_rows}")
-print(f"Schema: {table.schema}")
+# Arrow table is wrapped in ArrowResult for type safety
+print(f"Rows: {result.num_rows()}")
+print(f"Schema: {result.schema}")
 
-# Zero-copy conversion to pandas
-df = table.to_pandas(zero_copy_only=True)
+# Access underlying Arrow table for zero-copy conversion
+df = result.data.to_pandas(zero_copy_only=True)
 
 # Zero-copy conversion to Polars
 import polars as pl
-df_polars = pl.from_arrow(table)
+df_polars = pl.from_arrow(result.data)
 ```
 
 ### Streaming Arrow Results
@@ -276,16 +277,26 @@ df_polars = pl.from_arrow(table)
 ```python
 # Stream large datasets efficiently
 def process_large_dataset(session):
-    # Stream in batches
-    arrow_stream = session.fetch_arrow_table_stream(
-        "SELECT * FROM events WHERE timestamp > ?",
-        (datetime.now() - timedelta(days=30),),
-        batch_size=10000
-    )
+    # Note: fetch_arrow_table returns full table, not a stream
+    # For streaming, process in chunks using LIMIT/OFFSET or date ranges
+    from datetime import datetime, timedelta
 
-    for batch in arrow_stream:
-        # Process each batch
-        df_batch = batch.to_pandas()
+    cutoff_date = datetime.now() - timedelta(days=30)
+
+    # Process in daily chunks
+    for day_offset in range(30):
+        start_date = cutoff_date + timedelta(days=day_offset)
+        end_date = start_date + timedelta(days=1)
+
+        # Fetch one day's data as Arrow table with proper parameter binding
+        result = session.fetch_arrow_table(
+            SQL("""SELECT * FROM events
+                   WHERE timestamp >= ? AND timestamp < ?""",
+                parameters=[start_date, end_date])
+        )
+
+        # Process the batch
+        df_batch = result.data.to_pandas()
 
         # Perform calculations
         aggregated = df_batch.groupby('user_id').agg({
@@ -294,9 +305,10 @@ def process_large_dataset(session):
         })
 
         # Write results back
-        session.insert_from_arrow(
+        session.ingest_arrow_table(
+            pa.Table.from_pandas(aggregated),
             "user_aggregates",
-            pa.Table.from_pandas(aggregated)
+            mode="append"
         )
 ```
 
@@ -316,7 +328,7 @@ class ArrowETLPipeline:
         target_table: str,
         transform_fn=None
     ):
-        # Read entire table as Arrow
+        # Read entire table as Arrow (no parameters allowed)
         arrow_table = self.source.fetch_arrow_table(
             f"SELECT * FROM {source_table}"
         )
@@ -325,11 +337,11 @@ class ArrowETLPipeline:
         if transform_fn:
             arrow_table = transform_fn(arrow_table)
 
-        # Write to target database
-        self.target.create_table_from_arrow(
-            target_table,
+        # Write to target database using ingest_arrow_table
+        self.target.ingest_arrow_table(
             arrow_table,
-            if_exists="replace"
+            target_table,
+            mode="replace"  # or "create", "append"
         )
 ```
 
@@ -339,14 +351,17 @@ class ArrowETLPipeline:
 
 ```python
 # Export query results to Parquet
+# Note: export_to_storage takes query and destination_uri as positional args
 session.export_to_storage(
     "SELECT * FROM sales_2024",
     "s3://data-lake/sales/2024/data.parquet",
+    storage_key="default",  # Optional storage backend key
     compression="snappy",
     row_group_size=100000
 )
 
 # Export with partitioning
+# Note: export_to_storage takes query string directly
 session.export_to_storage(
     """
     SELECT
@@ -358,6 +373,7 @@ session.export_to_storage(
     GROUP BY 1, 2
     """,
     "s3://data-lake/sales/monthly/",
+    storage_key="default",
     partition_cols=["month", "category"]
 )
 ```
@@ -743,53 +759,6 @@ class CDCProcessor:
                 for table, callback in self.listeners:
                     if data["table"] == table:
                         await callback(data)
-```
-
-### Stream Processing Integration
-
-```python
-# Kafka integration
-from sqlspec.extensions.streaming import KafkaSource, KafkaSink
-
-# Read from Kafka into database
-kafka_source = KafkaSource(
-    bootstrap_servers="localhost:9092",
-    topic="events",
-    value_deserializer=json.loads
-)
-
-async def process_kafka_events():
-    async for batch in kafka_source.consume_batches(max_size=1000):
-        # Convert to Arrow for efficiency
-        arrow_table = pa.Table.from_pylist(batch)
-
-        # Insert into database
-        await session.insert_from_arrow_async(
-            "events",
-            arrow_table
-        )
-
-# Write query results to Kafka
-kafka_sink = KafkaSink(
-    bootstrap_servers="localhost:9092",
-    topic="aggregated_metrics"
-)
-
-# Stream query results to Kafka
-async def stream_metrics():
-    stream = await session.stream("""
-        SELECT
-            date_trunc('minute', timestamp) as minute,
-            COUNT(*) as event_count,
-            AVG(duration) as avg_duration
-        FROM events
-        WHERE timestamp > NOW() - INTERVAL '1 hour'
-        GROUP BY 1
-        ORDER BY 1
-    """)
-
-    async for row in stream:
-        await kafka_sink.send(row.to_dict())
 ```
 
 ## Machine Learning Integration

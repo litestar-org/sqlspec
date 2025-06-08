@@ -69,22 +69,39 @@ class SyncDatabaseConfig(NoPoolSyncConfig):
 ### Pool Configuration Options
 
 ```python
-from sqlspec.adapters.postgresql import PostgreSQLConfig
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+from sqlspec.adapters.psycopg import PsycopgAsyncConfig
 
-config = PostgreSQLConfig(
-    url="postgresql://localhost/mydb",
+# AsyncPG configuration with direct fields
+asyncpg_config = AsyncpgConfig(
+    dsn="postgresql://localhost/mydb",
 
-    # Connection pool settings
-    pool_size=20,           # Core pool size
-    max_overflow=10,        # Additional connections under load
-    pool_timeout=30.0,      # Max wait for connection
-    pool_recycle=1800,      # Recycle after 30 minutes
-    pool_pre_ping=True,     # Validate before use
+    # Connection pool settings (direct fields)
+    min_size=10,                    # Minimum pool size
+    max_size=20,                    # Maximum pool size
+    max_queries=50000,              # Queries before connection recycling
+    max_inactive_connection_lifetime=300.0,  # 5 minutes
 
     # Connection behavior
-    autocommit=False,       # Manual transaction control
-    connect_timeout=5.0,    # Connection establishment timeout
-    command_timeout=30.0,   # Query execution timeout
+    connect_timeout=5.0,            # Connection establishment timeout
+    command_timeout=30.0,           # Query execution timeout
+    statement_cache_size=100,       # Prepared statement cache
+)
+
+# Psycopg configuration with direct fields
+psycopg_config = PsycopgAsyncConfig(
+    conninfo="postgresql://localhost/mydb",
+
+    # Connection pool settings (direct fields)
+    min_size=10,                    # Minimum pool size
+    max_size=20,                    # Maximum pool size
+    timeout=30.0,                   # Pool acquisition timeout
+    max_lifetime=3600.0,            # 1 hour connection lifetime
+    max_idle=600.0,                 # 10 minutes idle timeout
+
+    # Connection behavior
+    autocommit=False,               # Manual transaction control
+    connect_timeout=5.0,            # Connection establishment timeout
 )
 ```
 
@@ -366,53 +383,84 @@ class RecyclingStrategy:
 
 ## Database-Specific Considerations
 
-### PostgreSQL
+### PostgreSQL (AsyncPG)
 
 ```python
-class PostgreSQLPoolConfig:
-    """PostgreSQL-specific pool configuration."""
+from sqlspec.adapters.asyncpg import AsyncpgConfig
 
+config = AsyncpgConfig(
     # Connection parameters
-    application_name: str = "sqlspec"
-    client_encoding: str = "utf8"
+    dsn="postgresql://localhost/mydb",
+    host="localhost",
+    port=5432,
+    database="mydb",
 
-    # Performance settings
-    prepare_threshold: int = 5  # Prepare statements after N uses
-    jit: bool = True           # Enable JIT compilation
+    # PostgreSQL-specific
+    server_settings={"application_name": "sqlspec", "jit": "off"},
+    statement_cache_size=100,
 
     # Pool behavior
-    pool_reset_on_return: str = "rollback"  # rollback, commit, or none
+    min_size=10,
+    max_size=20,
+    max_queries=50000,
+    max_inactive_connection_lifetime=300.0,
+)
+```
+
+### PostgreSQL (Psycopg)
+
+```python
+from sqlspec.adapters.psycopg import PsycopgAsyncConfig
+
+config = PsycopgAsyncConfig(
+    # Connection parameters
+    conninfo="postgresql://localhost/mydb",
+    application_name="sqlspec",
+
+    # Pool behavior
+    min_size=10,
+    max_size=20,
+    timeout=30.0,
+    max_lifetime=3600.0,
+)
 ```
 
 ### MySQL
 
 ```python
-class MySQLPoolConfig:
-    """MySQL-specific pool configuration."""
+from sqlspec.adapters.asyncmy import AsyncmyConfig
 
-    # Connection parameters
-    charset: str = "utf8mb4"
-    sql_mode: str = "TRADITIONAL"
+config = AsyncmyConfig(
+    # Connection parameters (direct fields)
+    host="localhost",
+    port=3306,
+    database="mydb",
+    charset="utf8mb4",
 
-    # Pool behavior
-    ping_on_checkout: bool = True  # MySQL connections timeout
-    pool_recycle: int = 3600       # Shorter due to wait_timeout
+    # Pool behavior (if supported by adapter)
+    pool_size=20,
+    autocommit=False,
+)
 ```
 
 ### SQLite
 
 ```python
-class SQLiteConnectionConfig:
-    """SQLite connection configuration (no pooling)."""
+from sqlspec.adapters.sqlite import SqliteConfig
 
-    # Connection parameters
-    check_same_thread: bool = False
-    isolation_level: Optional[str] = None
+config = SqliteConfig(
+    # Connection parameters (no pooling for SQLite)
+    database=":memory:",  # or "/path/to/db.sqlite"
+    check_same_thread=False,
+    isolation_level=None,
 
-    # Performance
-    journal_mode: str = "WAL"
-    synchronous: str = "NORMAL"
-    cache_size: int = -64000  # 64MB cache
+    # Performance settings can be applied via pragmas
+    pragmas={
+        "journal_mode": "WAL",
+        "synchronous": "NORMAL",
+        "cache_size": -64000,  # 64MB cache
+    }
+)
 ```
 
 ## Connection String Security
@@ -598,28 +646,34 @@ class CircuitBreaker:
 ### 1. Use Connection Pools for Production
 
 ```python
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+
 # Development
-dev_config = PostgreSQLConfig(
-    url="postgresql://localhost/dev",
-    pool_size=2,  # Small pool for dev
+dev_config = AsyncpgConfig(
+    dsn="postgresql://localhost/dev",
+    min_size=1,
+    max_size=2,  # Small pool for dev
 )
 
 # Production
-prod_config = PostgreSQLConfig(
-    url="postgresql://prod-server/app",
-    pool_size=20,
-    max_overflow=10,
-    pool_pre_ping=True,  # Essential for production
+prod_config = AsyncpgConfig(
+    dsn="postgresql://prod-server/app",
+    min_size=10,
+    max_size=20,
+    max_queries=50000,
+    max_inactive_connection_lifetime=300.0,
+    ssl=True,  # Essential for production
 )
 ```
 
 ### 2. Configure Timeouts Appropriately
 
 ```python
-config = PostgreSQLConfig(
+config = AsyncpgConfig(
+    dsn="postgresql://localhost/mydb",
     connect_timeout=5.0,      # Fast fail on connection
     command_timeout=30.0,     # Reasonable query timeout
-    pool_timeout=10.0,        # Don't wait too long for pool
+    # Pool-specific timeouts configured per adapter
 )
 ```
 

@@ -6,7 +6,6 @@ import tempfile
 from collections.abc import AsyncGenerator
 from typing import Any, Literal
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -101,7 +100,7 @@ async def test_aiosqlite_parameter_styles(aiosqlite_session: AiosqliteDriver, pa
     result = await aiosqlite_session.execute(sql, params)
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
     assert result.data[0]["name"] == "test_value"
 
 
@@ -362,9 +361,9 @@ async def test_aiosqlite_column_names_and_metadata(aiosqlite_session: AiosqliteD
         "SELECT id, name, value, created_at FROM test_table WHERE name = ?", ("metadata_test",)
     )
     assert isinstance(result, SQLResult)
-    assert result.column_names == ["id", "name", "value", "created_at"]
+    assert result.column_names() == ["id", "name", "value", "created_at"]
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
 
     # Test that we can access data by column name
     row = result.data[0]
@@ -395,10 +394,10 @@ async def test_aiosqlite_with_schema_type(aiosqlite_session: AiosqliteDriver) ->
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
 
     # The data should be converted to the schema type by the ResultConverter
-    assert result.column_names == ["id", "name", "value"]
+    assert result.column_names() == ["id", "name", "value"]
 
 
 @pytest.mark.xdist_group("aiosqlite")
@@ -479,9 +478,9 @@ async def test_aiosqlite_fetch_arrow_table(aiosqlite_session: AiosqliteDriver) -
     result = await aiosqlite_session.fetch_arrow_table(statement)
     assert isinstance(result, ArrowResult)
     table = result.data
-    assert isinstance(table, pa.Table)
-    assert table.num_rows == 2
-    assert set(table.column_names) == {"name", "value"}
+    assert isinstance(table, ArrowResult)
+    assert table.num_rows() == 2
+    assert set(table.column_names()) == {"name", "value"}
     names = table.column("name").to_pylist()
     assert "arrow1" in names and "arrow2" in names
 
@@ -495,7 +494,7 @@ async def test_aiosqlite_to_parquet(aiosqlite_session: AiosqliteDriver) -> None:
     with tempfile.NamedTemporaryFile() as tmp:
         await aiosqlite_session.export_to_storage(statement, tmp.name)
         table = pq.read_table(tmp.name)
-        assert table.num_rows == 2
-        assert set(table.column_names) == {"name", "value"}
+        assert table.num_rows() == 2
+        assert set(table.column_names()) == {"name", "value"}
         names = table.column("name").to_pylist()
         assert "pq1" in names and "pq2" in names

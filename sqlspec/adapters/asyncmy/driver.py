@@ -85,9 +85,10 @@ class AsyncmyDriver(
                 connection=connection,
                 **kwargs,
             )
+
         return await self._execute(
             statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.parameters,
+            statement.get_parameters(style=self._get_placeholder_style()),
             statement,
             connection=connection,
             **kwargs,
@@ -105,15 +106,11 @@ class AsyncmyDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            processed_parameters: Optional[Union[list[Any], tuple[Any, ...]]] = None
-            if parameters is not None:
-                processed_parameters = parameters if isinstance(parameters, (list, tuple)) else [parameters]
-            if self.instrumentation_config.log_parameters and processed_parameters:
-                logger.debug("Query parameters: %s", processed_parameters)
+            if self.instrumentation_config.log_parameters and parameters:
+                logger.debug("Query parameters: %s", parameters)
             async with self._get_cursor(conn) as cursor:
-                await cursor.execute(sql, processed_parameters)
-                if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
-                    return cursor
+                # AsyncMy expects list/tuple parameters or None
+                await cursor.execute(sql, parameters)
                 return cursor
 
     async def _execute_many(
@@ -125,6 +122,12 @@ class AsyncmyDriver(
     ) -> int:
         async with instrument_operation_async(self, "asyncmy_execute_many", "database"):
             conn = self._connection(connection)
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing SQL (executemany): %s", sql)
+            if self.instrumentation_config.log_parameters and param_list:
+                logger.debug("Query parameters (batch): %s", param_list)
+
+            # Convert parameter list to proper format for executemany
             params_list: list[Union[list[Any], tuple[Any, ...]]] = []
             if param_list and isinstance(param_list, Sequence):
                 for param_set in param_list:
@@ -134,10 +137,7 @@ class AsyncmyDriver(
                         params_list.append([])
                     else:
                         params_list.append([param_set])
-            if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQL (executemany): %s", sql)
-            if self.instrumentation_config.log_parameters and params_list:
-                logger.debug("Query parameters (batch): %s", params_list)
+
             async with self._get_cursor(conn) as cursor:
                 await cursor.executemany(sql, params_list)
                 return cursor.rowcount if cursor.rowcount != -1 else len(params_list)

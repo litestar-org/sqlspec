@@ -5,11 +5,10 @@ import tempfile
 from collections.abc import Generator
 from typing import Any, Literal
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from sqlspec.adapters.sqlite import SqliteConfig, SqliteConnectionConfig, SqliteDriver
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL
 
@@ -19,7 +18,7 @@ ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 @pytest.fixture
 def sqlite_session() -> Generator[SqliteDriver, None, None]:
     """Create a SQLite session with test table."""
-    config = SqliteConfig(connection_config=SqliteConnectionConfig(database=":memory:"))
+    config = SqliteConfig(database=":memory:")
 
     with config.provide_session() as session:
         # Create test table
@@ -358,7 +357,7 @@ def test_sqlite_column_names_and_metadata(sqlite_session: SqliteDriver) -> None:
         "SELECT id, name, value, created_at FROM test_table WHERE name = ?", ("metadata_test",)
     )
     assert isinstance(result, SQLResult)
-    assert result.column_names == ["id", "name", "value", "created_at"]
+    assert result.column_names() == ["id", "name", "value", "created_at"]
     assert result.data is not None
     assert len(result.data) == 1
 
@@ -396,7 +395,7 @@ def test_sqlite_with_schema_type(sqlite_session: SqliteDriver) -> None:
 
     # The data should be converted to the schema type by the ResultConverter
     # The exact behavior depends on the ResultConverter implementation
-    assert result.column_names == ["id", "name", "value"]
+    assert result.column_names() == ["id", "name", "value"]
 
 
 @pytest.mark.xdist_group("sqlite")
@@ -428,17 +427,16 @@ def test_sqlite_performance_bulk_operations(sqlite_session: SqliteDriver) -> Non
 
 @pytest.mark.xdist_group("sqlite")
 def test_sqlite_fetch_arrow_table(sqlite_session: SqliteDriver) -> None:
-    """Integration test: fetch_arrow_table returns ArrowResult with correct pyarrow.Table."""
+    """Integration test: fetch_arrow_table returns pyarrow.Table directly."""
     sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("arrow1", 111))
     sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("arrow2", 222))
-    statement = SQL("SELECT name, value FROM test_table ORDER BY name")
-    result = sqlite_session.fetch_arrow_table(statement)
+    # fetch_arrow_table expects a SQL string, not a SQL object
+    result = sqlite_session.fetch_arrow_table("SELECT name, value FROM test_table ORDER BY name")
     assert isinstance(result, ArrowResult)
-    assert isinstance(result.data, pa.Table)
-    assert result.data.num_rows == 2
-    assert result.data.column_names == ["name", "value"]
-    assert result.data.column("name").to_pylist() == ["arrow1", "arrow2"]
-    assert result.data.column("value").to_pylist() == [111, 222]
+    assert result.num_rows() == 2
+    assert result.column_names() == ["name", "value"]
+    assert result.column("name").to_pylist() == ["arrow1", "arrow2"]
+    assert result.column("value").to_pylist() == [111, 222]
 
 
 @pytest.mark.xdist_group("sqlite")
@@ -446,9 +444,10 @@ def test_sqlite_to_parquet(sqlite_session: SqliteDriver) -> None:
     """Integration test: to_parquet writes correct data to a Parquet file."""
     sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("pq1", 10))
     sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("pq2", 20))
-    statement = SQL("SELECT name, value FROM test_table ORDER BY name")
+    SQL("SELECT name, value FROM test_table ORDER BY name")
     with tempfile.NamedTemporaryFile(suffix=".parquet") as tmpfile:
-        sqlite_session.export_to_storage(statement, path=tmpfile.name)  # type: ignore[attr-defined]
+        # export_to_storage expects query string and destination_uri
+        sqlite_session.export_to_storage("SELECT name, value FROM test_table ORDER BY name", tmpfile.name)
         table = pq.read_table(tmpfile.name)
         assert table.num_rows == 2
         assert table.column_names == ["name", "value"]

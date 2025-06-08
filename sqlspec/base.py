@@ -267,7 +267,7 @@ class SQLSpec:
                 resolved_connection = await connection_obj
                 default_row_type = DictRow
                 with wrap_exceptions(suppress=AttributeError):
-                    default_row_type = config.default_row_type  # pyright: ignore # TODO: readd this?
+                    default_row_type = config.default_row_type  # pyright: ignore # TODO: re-add this?
                 driver = cast(  # pyright: ignore
                     "DriverT",
                     config.driver_type(

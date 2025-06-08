@@ -6,7 +6,7 @@ patterns for flexible, lazy-loaded storage backend management.
 
 from sqlspec.config import StorageConfig
 from sqlspec.storage import storage_registry
-from sqlspec.storage.backends.file import LocalBackend
+from sqlspec.storage.backends.fsspec import FSSpecBackend
 
 __all__ = (
     "demo_advanced_usage",
@@ -23,7 +23,7 @@ def demo_basic_registration() -> None:
     """Basic registration patterns."""
 
     # 1. Register with direct instance
-    local_backend = LocalBackend("/tmp/sqlspec")
+    local_backend = FSSpecBackend("/tmp/sqlspec")
     storage_registry.register("temp-files", local_backend)
 
     # 2. Register with configuration (lazy loading)

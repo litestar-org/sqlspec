@@ -20,11 +20,7 @@ class TestParameterStyleValidator:
     @pytest.fixture
     def context(self):
         """Create a processing context."""
-        return SQLProcessingContext(
-            initial_sql_string="SELECT 1",
-            dialect=None,
-            config=SQLConfig()
-        )
+        return SQLProcessingContext(initial_sql_string="SELECT 1", dialect=None, config=SQLConfig())
 
     def test_allowed_parameter_style(self, validator, context) -> None:
         """Test that allowed parameter styles pass validation."""

@@ -24,10 +24,7 @@ from google.cloud.bigquery.table import Row as BigQueryRow
 from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
-from sqlspec.exceptions import (
-    SQLSpecError,
-    wrap_exceptions,
-)
+from sqlspec.exceptions import SQLSpecError, wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -286,9 +283,10 @@ class BigQueryDriver(
                 connection=connection,
                 **kwargs,
             )
+
         return self._execute(
             statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.parameters,
+            statement.get_parameters(style=self._get_placeholder_style()),
             statement,
             connection=connection,
             **kwargs,

@@ -3,7 +3,7 @@
 from typing import Any
 from unittest.mock import MagicMock, Mock
 
-from sqlspec.statement.mixins._unified_storage import SyncStorageMixin
+from sqlspec.driver.mixins._unified_storage import SyncStorageMixin
 
 
 class MockDriver(SyncStorageMixin):
@@ -11,8 +11,8 @@ class MockDriver(SyncStorageMixin):
 
     def __init__(self) -> None:
         self._connection = MagicMock()
-        self._config = MagicMock()
-        self._config.storage = None
+        self.config = MagicMock()
+        self.config.storage = None
 
     def execute(self, sql: Any) -> Any:
         """Mock execute method."""
@@ -36,11 +36,11 @@ class TestSyncStorageMixin:
         driver = MockDriver()
         driver.__class__.__name__ = "DuckDBDriver"
 
-        # DuckDB should have native capabilities
-        assert driver._has_native_capability("parquet", "s3://bucket/file.parquet", "parquet")
-        assert driver._has_native_capability("export", "https://example.com/data.csv", "csv")
+        # Native capabilities now require explicit implementation
+        assert not driver._has_native_capability("parquet", "s3://bucket/file.parquet", "parquet")
+        assert not driver._has_native_capability("export", "https://example.com/data.csv", "csv")
 
-        # Non-DuckDB driver should not
+        # Non-DuckDB driver should not have native capabilities either
         driver.__class__.__name__ = "SqliteDriver"
         assert not driver._has_native_capability("parquet", "s3://bucket/file.parquet", "parquet")
 
@@ -108,7 +108,7 @@ class TestSyncStorageMixin:
 
         # With storage config
         mock_storage = MagicMock()
-        driver._config.storage = mock_storage
+        driver.config.storage = mock_storage
         assert driver._get_storage_config() is mock_storage
 
     def test_export_to_storage_format_detection(self) -> None:

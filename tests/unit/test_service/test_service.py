@@ -40,11 +40,8 @@ class TestDatabaseService:
         """Create a database service with mock driver."""
         return DatabaseService(
             driver=mock_driver,
-            instrumentation_config=InstrumentationConfig(
-                log_service_operations=True,
-                log_queries=True
-            ),
-            service_name="TestService"
+            instrumentation_config=InstrumentationConfig(log_service_operations=True, log_queries=True),
+            service_name="TestService",
         )
 
     def test_init(self, mock_driver) -> None:
@@ -70,12 +67,7 @@ class TestDatabaseService:
         result = service.execute(statement, params)
 
         assert result is mock_result
-        mock_driver.execute.assert_called_once_with(
-            statement, params,
-            connection=None,
-            config=None,
-            schema_type=None
-        )
+        mock_driver.execute.assert_called_once_with(statement, params, connection=None, config=None, schema_type=None)
 
     def test_execute_with_schema_type(self, service, mock_driver, mock_result) -> None:
         """Test execute with schema type."""
@@ -88,12 +80,7 @@ class TestDatabaseService:
         result = service.execute(statement, schema_type=UserDTO)
 
         assert result is mock_result
-        mock_driver.execute.assert_called_once_with(
-            statement, None,
-            connection=None,
-            config=None,
-            schema_type=UserDTO
-        )
+        mock_driver.execute.assert_called_once_with(statement, None, connection=None, config=None, schema_type=UserDTO)
 
     def test_execute_many(self, service, mock_driver, mock_result) -> None:
         """Test execute_many method."""
@@ -104,11 +91,7 @@ class TestDatabaseService:
         result = service.execute_many(statement, params)
 
         assert result is mock_result
-        mock_driver.execute_many.assert_called_once_with(
-            statement, params,
-            connection=None,
-            config=None
-        )
+        mock_driver.execute_many.assert_called_once_with(statement, params, connection=None, config=None)
 
     def test_select(self, service, mock_driver, mock_result) -> None:
         """Test select method."""
@@ -232,8 +215,7 @@ class TestDatabaseService:
 
         # Create service which will use the mocked logger
         service = DatabaseService(
-            mock_driver,
-            instrumentation_config=InstrumentationConfig(log_service_operations=True)
+            mock_driver, instrumentation_config=InstrumentationConfig(log_service_operations=True)
         )
 
         # Execute operation
@@ -251,9 +233,10 @@ class TestDatabaseService:
         mock_driver.execute.return_value = mock_result
         mock_result.rowcount = 10
 
-        with patch.object(service, "_log_operation_start") as mock_start, \
-             patch.object(service, "_log_operation_complete") as mock_complete:
-
+        with (
+            patch.object(service, "_log_operation_start") as mock_start,
+            patch.object(service, "_log_operation_complete") as mock_complete,
+        ):
             service.execute(SQL("SELECT * FROM users"))
 
             mock_start.assert_called_once()
@@ -293,11 +276,8 @@ class TestAsyncDatabaseService:
         """Create an async database service with mock driver."""
         return AsyncDatabaseService(
             driver=mock_driver,
-            instrumentation_config=InstrumentationConfig(
-                log_service_operations=True,
-                log_queries=True
-            ),
-            service_name="TestAsyncService"
+            instrumentation_config=InstrumentationConfig(log_service_operations=True, log_queries=True),
+            service_name="TestAsyncService",
         )
 
     def test_init(self, mock_driver) -> None:
@@ -317,12 +297,7 @@ class TestAsyncDatabaseService:
         result = await service.execute(statement, params)
 
         assert result is mock_result
-        mock_driver.execute.assert_called_once_with(
-            statement, params,
-            connection=None,
-            config=None,
-            schema_type=None
-        )
+        mock_driver.execute.assert_called_once_with(statement, params, connection=None, config=None, schema_type=None)
 
     @pytest.mark.asyncio
     async def test_execute_many(self, service, mock_driver, mock_result) -> None:
@@ -334,11 +309,7 @@ class TestAsyncDatabaseService:
         result = await service.execute_many(statement, params)
 
         assert result is mock_result
-        mock_driver.execute_many.assert_called_once_with(
-            statement, params,
-            connection=None,
-            config=None
-        )
+        mock_driver.execute_many.assert_called_once_with(statement, params, connection=None, config=None)
 
     @pytest.mark.asyncio
     async def test_select(self, service, mock_driver, mock_result) -> None:
@@ -462,8 +433,7 @@ class TestAsyncDatabaseService:
 
         # Create service which will use the mocked logger
         service = AsyncDatabaseService(
-            mock_driver,
-            instrumentation_config=InstrumentationConfig(log_service_operations=True)
+            mock_driver, instrumentation_config=InstrumentationConfig(log_service_operations=True)
         )
 
         # Execute operation
@@ -491,6 +461,7 @@ class TestAsyncDatabaseService:
     @pytest.mark.asyncio
     async def test_with_schema_type(self, service, mock_driver, mock_result) -> None:
         """Test async operations with schema type."""
+
         class UserDTO:
             id: int
             name: str
@@ -503,9 +474,5 @@ class TestAsyncDatabaseService:
 
         assert isinstance(result, list)
         mock_driver.execute.assert_called_with(
-            SQL("SELECT * FROM users"),
-            None,
-            connection=None,
-            config=None,
-            schema_type=UserDTO
+            SQL("SELECT * FROM users"), None, connection=None, config=None, schema_type=UserDTO
         )

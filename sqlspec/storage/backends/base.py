@@ -84,7 +84,7 @@ class InstrumentedStorageBackend(ABC):
             try:
                 data = self._read_bytes(uri, **kwargs)
 
-                if self.instrumentation_config.log_storage_operations:
+                if self.instrumentation_config.log_service_operations:
                     self.logger.info(
                         "Read %d bytes from %s",
                         len(data),
@@ -146,7 +146,7 @@ class InstrumentedStorageBackend(ABC):
             try:
                 self._write_bytes(uri, data, **kwargs)
 
-                if self.instrumentation_config.log_storage_operations:
+                if self.instrumentation_config.log_service_operations:
                     self.logger.info(
                         "Wrote %d bytes to %s",
                         len(data),
@@ -197,7 +197,7 @@ class InstrumentedStorageBackend(ABC):
             try:
                 text = self._read_text(uri, encoding, **kwargs)
 
-                if self.instrumentation_config.log_storage_operations:
+                if self.instrumentation_config.log_service_operations:
                     self.logger.info(
                         "Read text from %s (%d chars)",
                         uri,
@@ -250,7 +250,7 @@ class InstrumentedStorageBackend(ABC):
             try:
                 self._write_text(uri, data, encoding, **kwargs)
 
-                if self.instrumentation_config.log_storage_operations:
+                if self.instrumentation_config.log_service_operations:
                     self.logger.info(
                         "Wrote text to %s (%d chars)",
                         uri,
@@ -303,7 +303,7 @@ class InstrumentedStorageBackend(ABC):
             try:
                 objects = self._list_objects(uri, recursive, **kwargs)
 
-                if self.instrumentation_config.log_storage_operations:
+                if self.instrumentation_config.log_service_operations:
                     self.logger.info(
                         "Listed %d objects in %s",
                         len(objects),
@@ -402,7 +402,7 @@ class InstrumentedStorageBackend(ABC):
             try:
                 self._delete(uri, **kwargs)
 
-                if self.instrumentation_config.log_storage_operations:
+                if self.instrumentation_config.log_service_operations:
                     self.logger.info(
                         "Deleted %s",
                         uri,
@@ -448,7 +448,7 @@ class InstrumentedStorageBackend(ABC):
             try:
                 table = self._read_arrow(uri, **kwargs)
 
-                if self.instrumentation_config.log_storage_operations:
+                if self.instrumentation_config.log_service_operations:
                     self.logger.info(
                         "Read Arrow table from %s (%d rows)",
                         uri,
@@ -498,7 +498,7 @@ class InstrumentedStorageBackend(ABC):
             try:
                 self._write_arrow(uri, table, **kwargs)
 
-                if self.instrumentation_config.log_storage_operations:
+                if self.instrumentation_config.log_service_operations:
                     self.logger.info(
                         "Wrote Arrow table to %s (%d rows)",
                         uri,

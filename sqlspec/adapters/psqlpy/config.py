@@ -1,12 +1,11 @@
-"""Psqlpy database configuration using TypedDict for better maintainability."""
+"""Psqlpy database configuration with direct field-based configuration."""
 
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from psqlpy import Connection, ConnectionPool
-from typing_extensions import NotRequired
 
 from sqlspec.adapters.psqlpy.driver import PsqlpyConnection, PsqlpyDriver
 from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig
@@ -18,266 +17,67 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("sqlspec.adapters.psqlpy")
 
+CONNECTION_FIELDS = frozenset(
+    {
+        "dsn",
+        "username",
+        "password",
+        "db_name",
+        "host",
+        "port",
+        "connect_timeout_sec",
+        "connect_timeout_nanosec",
+        "tcp_user_timeout_sec",
+        "tcp_user_timeout_nanosec",
+        "keepalives",
+        "keepalives_idle_sec",
+        "keepalives_idle_nanosec",
+        "keepalives_interval_sec",
+        "keepalives_interval_nanosec",
+        "keepalives_retries",
+        "ssl_mode",
+        "ca_file",
+        "target_session_attrs",
+        "options",
+        "application_name",
+        "client_encoding",
+        "gssencmode",
+        "sslnegotiation",
+        "sslcompression",
+        "sslcert",
+        "sslkey",
+        "sslpassword",
+        "sslrootcert",
+        "sslcrl",
+        "require_auth",
+        "channel_binding",
+        "krbsrvname",
+        "gsslib",
+        "gssdelegation",
+        "service",
+        "load_balance_hosts",
+    }
+)
+
+POOL_FIELDS = CONNECTION_FIELDS.union(
+    {
+        "hosts",
+        "ports",
+        "conn_recycling_method",
+        "max_db_pool_size",
+        "configure",
+    }
+)
+
 __all__ = (
+    "CONNECTION_FIELDS",
+    "POOL_FIELDS",
     "PsqlpyConfig",
-    "PsqlpyConnectionConfig",
-    "PsqlpyPoolConfig",
 )
 
 
-class PsqlpyConnectionConfig(TypedDict, total=False):
-    """Psqlpy connection configuration as TypedDict.
-
-    Basic connection parameters for psqlpy Connection.
-    """
-
-    dsn: NotRequired[str]
-    """DSN of the PostgreSQL database."""
-
-    username: NotRequired[str]
-    """Username of the user in the PostgreSQL."""
-
-    password: NotRequired[str]
-    """Password of the user in the PostgreSQL."""
-
-    db_name: NotRequired[str]
-    """Name of the database in PostgreSQL."""
-
-    host: NotRequired[str]
-    """Host of the PostgreSQL (use for single host)."""
-
-    port: NotRequired[int]
-    """Port of the PostgreSQL (use for single host)."""
-
-    connect_timeout_sec: NotRequired[int]
-    """The time limit in seconds applied to each socket-level connection attempt."""
-
-    connect_timeout_nanosec: NotRequired[int]
-    """Nanoseconds for connection timeout, can be used only with connect_timeout_sec."""
-
-    tcp_user_timeout_sec: NotRequired[int]
-    """The time limit that transmitted data may remain unacknowledged before a connection is forcibly closed."""
-
-    tcp_user_timeout_nanosec: NotRequired[int]
-    """Nanoseconds for tcp_user_timeout, can be used only with tcp_user_timeout_sec."""
-
-    keepalives: NotRequired[bool]
-    """Controls the use of TCP keepalive. Defaults to True (on)."""
-
-    keepalives_idle_sec: NotRequired[int]
-    """The number of seconds of inactivity after which a keepalive message is sent to the server."""
-
-    keepalives_idle_nanosec: NotRequired[int]
-    """Nanoseconds for keepalives_idle_sec."""
-
-    keepalives_interval_sec: NotRequired[int]
-    """The time interval between TCP keepalive probes."""
-
-    keepalives_interval_nanosec: NotRequired[int]
-    """Nanoseconds for keepalives_interval_sec."""
-
-    keepalives_retries: NotRequired[int]
-    """The maximum number of TCP keepalive probes that will be sent before dropping a connection."""
-
-    ssl_mode: NotRequired[str]
-    """SSL mode (disable, prefer, require, verify-ca, verify-full)."""
-
-    ca_file: NotRequired[str]
-    """Path to ca_file for SSL."""
-
-    target_session_attrs: NotRequired[str]
-    """Specifies requirements of the session (e.g., 'read-write', 'read-only', 'primary', 'standby')."""
-
-    options: NotRequired[str]
-    """Command line options used to configure the server."""
-
-    application_name: NotRequired[str]
-    """Sets the application_name parameter on the server."""
-
-    client_encoding: NotRequired[str]
-    """Sets the client_encoding parameter."""
-
-    gssencmode: NotRequired[str]
-    """GSS encryption mode (disable, prefer, require)."""
-
-    sslnegotiation: NotRequired[str]
-    """SSL negotiation mode (postgres, direct)."""
-
-    sslcompression: NotRequired[bool]
-    """Whether to use SSL compression."""
-
-    sslcert: NotRequired[str]
-    """Client SSL certificate file."""
-
-    sslkey: NotRequired[str]
-    """Client SSL private key file."""
-
-    sslpassword: NotRequired[str]
-    """Password for the SSL private key."""
-
-    sslrootcert: NotRequired[str]
-    """SSL root certificate file."""
-
-    sslcrl: NotRequired[str]
-    """SSL certificate revocation list file."""
-
-    require_auth: NotRequired[str]
-    """Authentication method requirements."""
-
-    channel_binding: NotRequired[str]
-    """Channel binding preference (disable, prefer, require)."""
-
-    krbsrvname: NotRequired[str]
-    """Kerberos service name."""
-
-    gsslib: NotRequired[str]
-    """GSS library to use."""
-
-    gssdelegation: NotRequired[bool]
-    """Forward GSS credentials to server."""
-
-    service: NotRequired[str]
-    """Service name for additional parameters."""
-
-
-class PsqlpyPoolConfig(TypedDict, total=False):
-    """Psqlpy pool configuration as TypedDict.
-
-    All parameters for psqlpy ConnectionPool.
-    Inherits connection parameters and adds pool-specific settings.
-    """
-
-    # Connection parameters (inherit from connection config)
-    dsn: NotRequired[str]
-    """DSN of the PostgreSQL database."""
-
-    username: NotRequired[str]
-    """Username of the user in the PostgreSQL."""
-
-    password: NotRequired[str]
-    """Password of the user in the PostgreSQL."""
-
-    db_name: NotRequired[str]
-    """Name of the database in PostgreSQL."""
-
-    host: NotRequired[str]
-    """Host of the PostgreSQL (use for single host)."""
-
-    port: NotRequired[int]
-    """Port of the PostgreSQL (use for single host)."""
-
-    hosts: NotRequired[list[str]]
-    """List of hosts of the PostgreSQL (use for multiple hosts)."""
-
-    ports: NotRequired[list[int]]
-    """List of ports of the PostgreSQL (use for multiple hosts)."""
-
-    connect_timeout_sec: NotRequired[int]
-    """The time limit in seconds applied to each socket-level connection attempt."""
-
-    connect_timeout_nanosec: NotRequired[int]
-    """Nanoseconds for connection timeout, can be used only with connect_timeout_sec."""
-
-    tcp_user_timeout_sec: NotRequired[int]
-    """The time limit that transmitted data may remain unacknowledged before a connection is forcibly closed."""
-
-    tcp_user_timeout_nanosec: NotRequired[int]
-    """Nanoseconds for tcp_user_timeout, can be used only with tcp_user_timeout_sec."""
-
-    keepalives: NotRequired[bool]
-    """Controls the use of TCP keepalive. Defaults to True (on)."""
-
-    keepalives_idle_sec: NotRequired[int]
-    """The number of seconds of inactivity after which a keepalive message is sent to the server."""
-
-    keepalives_idle_nanosec: NotRequired[int]
-    """Nanoseconds for keepalives_idle_sec."""
-
-    keepalives_interval_sec: NotRequired[int]
-    """The time interval between TCP keepalive probes."""
-
-    keepalives_interval_nanosec: NotRequired[int]
-    """Nanoseconds for keepalives_interval_sec."""
-
-    keepalives_retries: NotRequired[int]
-    """The maximum number of TCP keepalive probes that will be sent before dropping a connection."""
-
-    ssl_mode: NotRequired[str]
-    """SSL mode (disable, prefer, require, verify-ca, verify-full)."""
-
-    ca_file: NotRequired[str]
-    """Path to ca_file for SSL."""
-
-    target_session_attrs: NotRequired[str]
-    """Specifies requirements of the session (e.g., 'read-write', 'read-only', 'primary', 'standby')."""
-
-    options: NotRequired[str]
-    """Command line options used to configure the server."""
-
-    application_name: NotRequired[str]
-    """Sets the application_name parameter on the server."""
-
-    client_encoding: NotRequired[str]
-    """Sets the client_encoding parameter."""
-
-    gssencmode: NotRequired[str]
-    """GSS encryption mode (disable, prefer, require)."""
-
-    sslnegotiation: NotRequired[str]
-    """SSL negotiation mode (postgres, direct)."""
-
-    sslcompression: NotRequired[bool]
-    """Whether to use SSL compression."""
-
-    sslcert: NotRequired[str]
-    """Client SSL certificate file."""
-
-    sslkey: NotRequired[str]
-    """Client SSL private key file."""
-
-    sslpassword: NotRequired[str]
-    """Password for the SSL private key."""
-
-    sslrootcert: NotRequired[str]
-    """SSL root certificate file."""
-
-    sslcrl: NotRequired[str]
-    """SSL certificate revocation list file."""
-
-    require_auth: NotRequired[str]
-    """Authentication method requirements."""
-
-    channel_binding: NotRequired[str]
-    """Channel binding preference (disable, prefer, require)."""
-
-    krbsrvname: NotRequired[str]
-    """Kerberos service name."""
-
-    gsslib: NotRequired[str]
-    """GSS library to use."""
-
-    gssdelegation: NotRequired[bool]
-    """Forward GSS credentials to server."""
-
-    service: NotRequired[str]
-    """Service name for additional parameters."""
-
-    load_balance_hosts: NotRequired[str]
-    """Controls the order in which the client tries to connect to the available hosts and addresses ('disable' or 'random')."""
-
-    conn_recycling_method: NotRequired[str]
-    """How a connection is recycled."""
-
-    # Pool-specific parameters
-    max_db_pool_size: NotRequired[int]
-    """Maximum size of the connection pool. Defaults to 10."""
-
-    configure: NotRequired["Callable[[Connection], None]"]
-    """Callback to configure new connections."""
-
-
 class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
-    """Configuration for Psqlpy asynchronous database connections using TypedDict."""
+    """Configuration for Psqlpy asynchronous database connections with direct field-based configuration."""
 
     __is_async__: ClassVar[bool] = True
     __supports_connection_pooling__: ClassVar[bool] = True
@@ -294,23 +94,159 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
     def __init__(
         self,
-        pool_config: PsqlpyPoolConfig,
-        connection_config: Optional[PsqlpyConnectionConfig] = None,
         statement_config: Optional[SQLConfig] = None,
         instrumentation: Optional[InstrumentationConfig] = None,
         default_row_type: type[DictRow] = DictRow,
+        # Connection parameters
+        dsn: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        db_name: Optional[str] = None,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        hosts: Optional[list[str]] = None,
+        ports: Optional[list[int]] = None,
+        connect_timeout_sec: Optional[int] = None,
+        connect_timeout_nanosec: Optional[int] = None,
+        tcp_user_timeout_sec: Optional[int] = None,
+        tcp_user_timeout_nanosec: Optional[int] = None,
+        keepalives: Optional[bool] = None,
+        keepalives_idle_sec: Optional[int] = None,
+        keepalives_idle_nanosec: Optional[int] = None,
+        keepalives_interval_sec: Optional[int] = None,
+        keepalives_interval_nanosec: Optional[int] = None,
+        keepalives_retries: Optional[int] = None,
+        ssl_mode: Optional[str] = None,
+        ca_file: Optional[str] = None,
+        target_session_attrs: Optional[str] = None,
+        options: Optional[str] = None,
+        application_name: Optional[str] = None,
+        client_encoding: Optional[str] = None,
+        gssencmode: Optional[str] = None,
+        sslnegotiation: Optional[str] = None,
+        sslcompression: Optional[bool] = None,
+        sslcert: Optional[str] = None,
+        sslkey: Optional[str] = None,
+        sslpassword: Optional[str] = None,
+        sslrootcert: Optional[str] = None,
+        sslcrl: Optional[str] = None,
+        require_auth: Optional[str] = None,
+        channel_binding: Optional[str] = None,
+        krbsrvname: Optional[str] = None,
+        gsslib: Optional[str] = None,
+        gssdelegation: Optional[bool] = None,
+        service: Optional[str] = None,
+        load_balance_hosts: Optional[str] = None,
+        # Pool parameters
+        conn_recycling_method: Optional[str] = None,
+        max_db_pool_size: Optional[int] = None,
+        configure: Optional["Callable[[Connection], None]"] = None,
+        # User-defined extras
+        extras: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize Psqlpy asynchronous configuration.
 
         Args:
-            pool_config: Psqlpy pool parameters
-            connection_config: Basic connection parameters (optional, can be included in pool_config)
             statement_config: Default SQL statement configuration
             instrumentation: Instrumentation configuration
             default_row_type: Default row type for results
+            dsn: DSN of the PostgreSQL database
+            username: Username of the user in the PostgreSQL
+            password: Password of the user in the PostgreSQL
+            db_name: Name of the database in PostgreSQL
+            host: Host of the PostgreSQL (use for single host)
+            port: Port of the PostgreSQL (use for single host)
+            hosts: List of hosts of the PostgreSQL (use for multiple hosts)
+            ports: List of ports of the PostgreSQL (use for multiple hosts)
+            connect_timeout_sec: The time limit in seconds applied to each socket-level connection attempt
+            connect_timeout_nanosec: Nanoseconds for connection timeout, can be used only with connect_timeout_sec
+            tcp_user_timeout_sec: The time limit that transmitted data may remain unacknowledged before a connection is forcibly closed
+            tcp_user_timeout_nanosec: Nanoseconds for tcp_user_timeout, can be used only with tcp_user_timeout_sec
+            keepalives: Controls the use of TCP keepalive. Defaults to True (on)
+            keepalives_idle_sec: The number of seconds of inactivity after which a keepalive message is sent to the server
+            keepalives_idle_nanosec: Nanoseconds for keepalives_idle_sec
+            keepalives_interval_sec: The time interval between TCP keepalive probes
+            keepalives_interval_nanosec: Nanoseconds for keepalives_interval_sec
+            keepalives_retries: The maximum number of TCP keepalive probes that will be sent before dropping a connection
+            ssl_mode: SSL mode (disable, prefer, require, verify-ca, verify-full)
+            ca_file: Path to ca_file for SSL
+            target_session_attrs: Specifies requirements of the session (e.g., 'read-write', 'read-only', 'primary', 'standby')
+            options: Command line options used to configure the server
+            application_name: Sets the application_name parameter on the server
+            client_encoding: Sets the client_encoding parameter
+            gssencmode: GSS encryption mode (disable, prefer, require)
+            sslnegotiation: SSL negotiation mode (postgres, direct)
+            sslcompression: Whether to use SSL compression
+            sslcert: Client SSL certificate file
+            sslkey: Client SSL private key file
+            sslpassword: Password for the SSL private key
+            sslrootcert: SSL root certificate file
+            sslcrl: SSL certificate revocation list file
+            require_auth: Authentication method requirements
+            channel_binding: Channel binding preference (disable, prefer, require)
+            krbsrvname: Kerberos service name
+            gsslib: GSS library to use
+            gssdelegation: Forward GSS credentials to server
+            service: Service name for additional parameters
+            load_balance_hosts: Controls the order in which the client tries to connect to the available hosts and addresses ('disable' or 'random')
+            conn_recycling_method: How a connection is recycled
+            max_db_pool_size: Maximum size of the connection pool. Defaults to 10
+            configure: Callback to configure new connections
+            extras: Additional connection parameters not explicitly defined
+            **kwargs: Additional parameters (stored in extras)
         """
-        self.pool_config = pool_config
-        self.connection_config = connection_config or {}
+        # Store connection parameters as instance attributes
+        self.dsn = dsn
+        self.username = username
+        self.password = password
+        self.db_name = db_name
+        self.host = host
+        self.port = port
+        self.hosts = hosts
+        self.ports = ports
+        self.connect_timeout_sec = connect_timeout_sec
+        self.connect_timeout_nanosec = connect_timeout_nanosec
+        self.tcp_user_timeout_sec = tcp_user_timeout_sec
+        self.tcp_user_timeout_nanosec = tcp_user_timeout_nanosec
+        self.keepalives = keepalives
+        self.keepalives_idle_sec = keepalives_idle_sec
+        self.keepalives_idle_nanosec = keepalives_idle_nanosec
+        self.keepalives_interval_sec = keepalives_interval_sec
+        self.keepalives_interval_nanosec = keepalives_interval_nanosec
+        self.keepalives_retries = keepalives_retries
+        self.ssl_mode = ssl_mode
+        self.ca_file = ca_file
+        self.target_session_attrs = target_session_attrs
+        self.options = options
+        self.application_name = application_name
+        self.client_encoding = client_encoding
+        self.gssencmode = gssencmode
+        self.sslnegotiation = sslnegotiation
+        self.sslcompression = sslcompression
+        self.sslcert = sslcert
+        self.sslkey = sslkey
+        self.sslpassword = sslpassword
+        self.sslrootcert = sslrootcert
+        self.sslcrl = sslcrl
+        self.require_auth = require_auth
+        self.channel_binding = channel_binding
+        self.krbsrvname = krbsrvname
+        self.gsslib = gsslib
+        self.gssdelegation = gssdelegation
+        self.service = service
+        self.load_balance_hosts = load_balance_hosts
+
+        # Store pool parameters as instance attributes
+        self.conn_recycling_method = conn_recycling_method
+        self.max_db_pool_size = max_db_pool_size
+        self.configure = configure
+
+        # Handle extras and additional kwargs
+        self.extras = extras or {}
+        self.extras.update(kwargs)
+
+        # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
@@ -328,10 +264,77 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         """Return the driver type."""
         return PsqlpyDriver
 
+    @classmethod
+    def from_pool_config(
+        cls,
+        pool_config: dict[str, Any],
+        connection_config: Optional[dict[str, Any]] = None,
+        statement_config: Optional[SQLConfig] = None,
+        instrumentation: Optional[InstrumentationConfig] = None,
+        default_row_type: type[DictRow] = DictRow,
+    ) -> "PsqlpyConfig":
+        """Create config from old-style pool_config and connection_config dicts for backward compatibility.
+
+        Args:
+            pool_config: Dictionary with pool and connection parameters
+            connection_config: Dictionary with additional connection parameters
+            statement_config: Default SQL statement configuration
+            instrumentation: Instrumentation configuration
+            default_row_type: Default row type for results
+
+        Returns:
+            PsqlpyConfig instance
+        """
+        # Merge connection_config into pool_config (pool_config takes precedence)
+        merged_config = {}
+        if connection_config:
+            merged_config.update(connection_config)
+        merged_config.update(pool_config)
+
+        # Create config with all parameters
+        return cls(
+            statement_config=statement_config,
+            instrumentation=instrumentation,
+            default_row_type=default_row_type,
+            **merged_config,  # All connection and pool parameters go to direct fields or extras
+        )
+
     @property
     def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict, with validation for required parameters."""
-        return {k: v for k, v in self.connection_config.items() if v is not Empty}
+        """Return the connection configuration as a dict for psqlpy.Connection.
+
+        This method filters out pool-specific parameters that are not valid for psqlpy.Connection.
+        """
+        # Gather non-None connection parameters
+        config = {
+            field: getattr(self, field)
+            for field in CONNECTION_FIELDS
+            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
+        }
+
+        # Add connection-specific extras (not pool-specific ones)
+        config.update(self.extras)
+
+        return config
+
+    @property
+    def pool_config_dict(self) -> dict[str, Any]:
+        """Return the full pool configuration as a dict for psqlpy.ConnectionPool.
+
+        Returns:
+            A dictionary containing all pool configuration parameters.
+        """
+        # Gather non-None parameters from all fields (connection + pool)
+        config = {
+            field: getattr(self, field)
+            for field in POOL_FIELDS
+            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
+        }
+
+        # Merge extras parameters
+        config.update(self.extras)
+
+        return config
 
     async def _create_pool(self) -> ConnectionPool:
         """Create the actual async connection pool."""
@@ -339,8 +342,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             logger.info("Creating psqlpy connection pool", extra={"adapter": "psqlpy"})
 
         try:
-            merged_config = {**self.connection_config, **self.pool_config}
-            config = {k: v for k, v in merged_config.items() if v is not Empty}
+            config = self.pool_config_dict
             pool = ConnectionPool(**config)  # pyright: ignore
             if self.instrumentation.log_pool_operations:
                 logger.info("Psqlpy connection pool created successfully", extra={"adapter": "psqlpy"})
@@ -371,7 +373,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         Returns:
             A psqlpy Connection instance.
         """
-        conn_dict = {k: v for k, v in self.connection_config.items() if v is not Empty}
+        conn_dict = self.connection_config_dict
         # psqlpy Connection constructor is synchronous, not async
         return Connection(**conn_dict)
 

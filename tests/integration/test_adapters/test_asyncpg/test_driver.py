@@ -8,7 +8,7 @@ from typing import Any, Literal
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgPoolConfig
+from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.statement.result import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
@@ -18,11 +18,9 @@ ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 async def asyncpg_session(postgres_service: PostgresService) -> AsyncGenerator[AsyncpgDriver, None]:
     """Create an asyncpg session with test table."""
     config = AsyncpgConfig(
-        pool_config=AsyncpgPoolConfig(
-            dsn=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            min_size=1,
-            max_size=5,
-        ),
+        dsn=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+        min_size=1,
+        max_size=5,
     )
 
     async with config.provide_session() as session:
@@ -53,10 +51,10 @@ async def test_asyncpg_basic_crud(asyncpg_session: AsyncpgDriver) -> None:
     # SELECT
     select_result = await asyncpg_session.execute("SELECT name, value FROM test_table WHERE name = $1", ("test_name",))
     assert isinstance(select_result, SQLResult)
-    assert select_result.data is not None
-    assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "test_name"
-    assert select_result.data[0]["value"] == 42
+    assert select_result is not None
+    assert len(select_result) == 1
+    assert select_result[0]["name"] == "test_name"
+    assert select_result[0]["value"] == 42
 
     # UPDATE
     update_result = await asyncpg_session.execute(
@@ -68,8 +66,8 @@ async def test_asyncpg_basic_crud(asyncpg_session: AsyncpgDriver) -> None:
     # Verify UPDATE
     verify_result = await asyncpg_session.execute("SELECT value FROM test_table WHERE name = $1", ("test_name",))
     assert isinstance(verify_result, SQLResult)
-    assert verify_result.data is not None
-    assert verify_result.data[0]["value"] == 100
+    assert verify_result is not None
+    assert verify_result[0]["value"] == 100
 
     # DELETE
     delete_result = await asyncpg_session.execute("DELETE FROM test_table WHERE name = $1", ("test_name",))
@@ -79,8 +77,8 @@ async def test_asyncpg_basic_crud(asyncpg_session: AsyncpgDriver) -> None:
     # Verify DELETE
     empty_result = await asyncpg_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(empty_result, SQLResult)
-    assert empty_result.data is not None
-    assert empty_result.data[0]["count"] == 0
+    assert empty_result is not None
+    assert empty_result[0]["count"] == 0
 
 
 @pytest.mark.parametrize(
@@ -104,9 +102,9 @@ async def test_asyncpg_parameter_styles(asyncpg_session: AsyncpgDriver, params: 
 
     result = await asyncpg_session.execute(sql, params)
     assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 1
-    assert result.data[0]["name"] == "test_value"
+    assert result is not None
+    assert len(result) == 1
+    assert result[0]["name"] == "test_value"
 
 
 @pytest.mark.xdist_group("postgres")
@@ -121,16 +119,16 @@ async def test_asyncpg_execute_many(asyncpg_session: AsyncpgDriver) -> None:
     # Verify all records were inserted
     select_result = await asyncpg_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
-    assert select_result.data is not None
-    assert select_result.data[0]["count"] == len(params_list)
+    assert select_result is not None
+    assert select_result[0]["count"] == len(params_list)
 
     # Verify data integrity
     ordered_result = await asyncpg_session.execute("SELECT name, value FROM test_table ORDER BY name")
     assert isinstance(ordered_result, SQLResult)
-    assert ordered_result.data is not None
-    assert len(ordered_result.data) == 3
-    assert ordered_result.data[0]["name"] == "name1"
-    assert ordered_result.data[0]["value"] == 1
+    assert ordered_result is not None
+    assert len(ordered_result) == 3
+    assert ordered_result[0]["name"] == "name1"
+    assert ordered_result[0]["value"] == 1
 
 
 @pytest.mark.xdist_group("postgres")
@@ -151,12 +149,12 @@ async def test_asyncpg_execute_script(asyncpg_session: AsyncpgDriver) -> None:
         "SELECT name, value FROM test_table WHERE name LIKE 'script_test%' ORDER BY name"
     )
     assert isinstance(select_result, SQLResult)
-    assert select_result.data is not None
-    assert len(select_result.data) == 2
-    assert select_result.data[0]["name"] == "script_test1"
-    assert select_result.data[0]["value"] == 1000
-    assert select_result.data[1]["name"] == "script_test2"
-    assert select_result.data[1]["value"] == 888
+    assert select_result is not None
+    assert len(select_result) == 2
+    assert select_result[0]["name"] == "script_test1"
+    assert select_result[0]["value"] == 1000
+    assert select_result[1]["name"] == "script_test2"
+    assert select_result[1]["value"] == 888
 
 
 @pytest.mark.xdist_group("postgres")
@@ -251,10 +249,10 @@ async def test_asyncpg_data_types(asyncpg_session: AsyncpgDriver) -> None:
         "SELECT text_col, integer_col, numeric_col, boolean_col, json_col, array_col FROM data_types_test"
     )
     assert isinstance(select_result, SQLResult)
-    assert select_result.data is not None
-    assert len(select_result.data) == 1
+    assert select_result is not None
+    assert len(select_result) == 1
 
-    row = select_result.data[0]
+    row = select_result[0]
     assert row["text_col"] == "text_value"
     assert row["integer_col"] == 42
     assert row["boolean_col"] is True
@@ -275,8 +273,8 @@ async def test_asyncpg_transactions(asyncpg_session: AsyncpgDriver) -> None:
         "SELECT COUNT(*) as count FROM test_table WHERE name = $1", ("transaction_test",)
     )
     assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert result.data[0]["count"] == 1
+    assert result is not None
+    assert result[0]["count"] == 1
 
 
 @pytest.mark.xdist_group("postgres")
@@ -302,8 +300,8 @@ async def test_asyncpg_complex_queries(asyncpg_session: AsyncpgDriver) -> None:
         LIMIT 3
     """)
     assert isinstance(join_result, SQLResult)
-    assert join_result.data is not None
-    assert len(join_result.data) == 3
+    assert join_result is not None
+    assert len(join_result) == 3
 
     # Test aggregation
     agg_result = await asyncpg_session.execute("""
@@ -315,11 +313,11 @@ async def test_asyncpg_complex_queries(asyncpg_session: AsyncpgDriver) -> None:
         FROM test_table
     """)
     assert isinstance(agg_result, SQLResult)
-    assert agg_result.data is not None
-    assert agg_result.data[0]["total_count"] == 4
-    assert agg_result.data[0]["avg_value"] == 29.5
-    assert agg_result.data[0]["min_value"] == 25
-    assert agg_result.data[0]["max_value"] == 35
+    assert agg_result is not None
+    assert agg_result[0]["total_count"] == 4
+    assert agg_result[0]["avg_value"] == 29.5
+    assert agg_result[0]["min_value"] == 25
+    assert agg_result[0]["max_value"] == 35
 
     # Test subquery
     subquery_result = await asyncpg_session.execute("""
@@ -329,10 +327,10 @@ async def test_asyncpg_complex_queries(asyncpg_session: AsyncpgDriver) -> None:
         ORDER BY value
     """)
     assert isinstance(subquery_result, SQLResult)
-    assert subquery_result.data is not None
-    assert len(subquery_result.data) == 2  # Bob and Charlie
-    assert subquery_result.data[0]["name"] == "Bob"
-    assert subquery_result.data[1]["name"] == "Charlie"
+    assert subquery_result is not None
+    assert len(subquery_result) == 2  # Bob and Charlie
+    assert subquery_result[0]["name"] == "Bob"
+    assert subquery_result[1]["name"] == "Charlie"
 
 
 @pytest.mark.xdist_group("postgres")
@@ -362,8 +360,8 @@ async def test_asyncpg_schema_operations(asyncpg_session: AsyncpgDriver) -> None
         ORDER BY ordinal_position
     """)
     assert isinstance(info_result, SQLResult)
-    assert info_result.data is not None
-    assert len(info_result.data) == 3  # id, description, created_at
+    assert info_result is not None
+    assert len(info_result) == 3  # id, description, created_at
 
     # Drop table
     await asyncpg_session.execute_script("DROP TABLE schema_test")
@@ -381,11 +379,11 @@ async def test_asyncpg_column_names_and_metadata(asyncpg_session: AsyncpgDriver)
     )
     assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
-    assert result.data is not None
-    assert len(result.data) == 1
+    assert result is not None
+    assert len(result) == 1
 
     # Test that we can access data by column name
-    row = result.data[0]
+    row = result[0]
     assert row["name"] == "metadata_test"
     assert row["value"] == 123
     assert row["id"] is not None
@@ -412,8 +410,8 @@ async def test_asyncpg_with_schema_type(asyncpg_session: AsyncpgDriver) -> None:
     )
 
     assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 1
+    assert result is not None
+    assert len(result) == 1
 
     # The data should be converted to the schema type by the ResultConverter
     assert result.column_names == ["id", "name", "value"]
@@ -435,17 +433,17 @@ async def test_asyncpg_performance_bulk_operations(asyncpg_session: AsyncpgDrive
         "SELECT COUNT(*) as count FROM test_table WHERE name LIKE 'bulk_user_%'"
     )
     assert isinstance(select_result, SQLResult)
-    assert select_result.data is not None
-    assert select_result.data[0]["count"] == 100
+    assert select_result is not None
+    assert select_result[0]["count"] == 100
 
     # Test pagination-like query
     page_result = await asyncpg_session.execute(
         "SELECT name, value FROM test_table WHERE name LIKE 'bulk_user_%' ORDER BY value LIMIT 10 OFFSET 20"
     )
     assert isinstance(page_result, SQLResult)
-    assert page_result.data is not None
-    assert len(page_result.data) == 10
-    assert page_result.data[0]["name"] == "bulk_user_20"
+    assert page_result is not None
+    assert len(page_result) == 10
+    assert page_result[0]["name"] == "bulk_user_20"
 
 
 @pytest.mark.xdist_group("postgres")
@@ -456,9 +454,9 @@ async def test_asyncpg_postgresql_specific_features(asyncpg_session: AsyncpgDriv
         "INSERT INTO test_table (name, value) VALUES ($1, $2) RETURNING id, name", ("returning_test", 999)
     )
     assert isinstance(returning_result, SQLResult)  # asyncpg returns SQLResult for RETURNING
-    assert returning_result.data is not None
-    assert len(returning_result.data) == 1
-    assert returning_result.data[0]["name"] == "returning_test"
+    assert returning_result is not None
+    assert len(returning_result) == 1
+    assert returning_result[0]["name"] == "returning_test"
 
     # Test window functions
     await asyncpg_session.execute_many(
@@ -476,10 +474,10 @@ async def test_asyncpg_postgresql_specific_features(asyncpg_session: AsyncpgDriv
         ORDER BY value
     """)
     assert isinstance(window_result, SQLResult)
-    assert window_result.data is not None
-    assert len(window_result.data) == 3
-    assert window_result.data[0]["row_num"] == 1
-    assert window_result.data[0]["prev_value"] is None
+    assert window_result is not None
+    assert len(window_result) == 3
+    assert window_result[0]["row_num"] == 1
+    assert window_result[0]["prev_value"] is None
 
 
 @pytest.mark.xdist_group("postgres")
@@ -500,9 +498,9 @@ async def test_asyncpg_json_operations(asyncpg_session: AsyncpgDriver) -> None:
     # Test JSON queries
     json_result = await asyncpg_session.execute("SELECT data->>'name' as name, data->>'age' as age FROM json_test")
     assert isinstance(json_result, SQLResult)
-    assert json_result.data is not None
-    assert json_result.data[0]["name"] == "test"
-    assert json_result.data[0]["age"] == "30"
+    assert json_result is not None
+    assert json_result[0]["name"] == "test"
+    assert json_result[0]["age"] == "30"
 
     # Clean up
     await asyncpg_session.execute_script("DROP TABLE json_test")

@@ -65,7 +65,7 @@ async def test_asyncpg_execute_many_basic(asyncpg_batch_session: AsyncpgDriver) 
 
     # Verify data was inserted
     count_result = await asyncpg_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")
-    assert count_result.data[0]["count"] == 5
+    assert count_result[0]["count"] == 5
 
 
 @pytest.mark.asyncio
@@ -98,8 +98,8 @@ async def test_asyncpg_execute_many_update(asyncpg_batch_session: AsyncpgDriver)
 
     # Verify updates
     check_result = await asyncpg_batch_session.execute("SELECT name, value FROM test_batch ORDER BY name")
-    assert len(check_result.data) == 3
-    assert all(row["value"] in (100, 200, 300) for row in check_result.data)
+    assert len(check_result) == 3
+    assert all(row["value"] in (100, 200, 300) for row in check_result)
 
 
 @pytest.mark.asyncio
@@ -116,7 +116,7 @@ async def test_asyncpg_execute_many_empty(asyncpg_batch_session: AsyncpgDriver) 
 
     # Verify no data was inserted
     count_result = await asyncpg_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")
-    assert count_result.data[0]["count"] == 0
+    assert count_result[0]["count"] == 0
 
 
 @pytest.mark.asyncio
@@ -139,13 +139,13 @@ async def test_asyncpg_execute_many_mixed_types(asyncpg_batch_session: AsyncpgDr
 
     # Verify data including NULL
     null_result = await asyncpg_batch_session.execute("SELECT * FROM test_batch WHERE category IS NULL")
-    assert len(null_result.data) == 1
-    assert null_result.data[0]["name"] == "Another Item"
+    assert len(null_result) == 1
+    assert null_result[0]["name"] == "Another Item"
 
     # Verify negative value
     negative_result = await asyncpg_batch_session.execute("SELECT * FROM test_batch WHERE value < 0")
-    assert len(negative_result.data) == 1
-    assert negative_result.data[0]["value"] == -50
+    assert len(negative_result) == 1
+    assert negative_result[0]["value"] == -50
 
 
 @pytest.mark.asyncio
@@ -180,11 +180,11 @@ async def test_asyncpg_execute_many_delete(asyncpg_batch_session: AsyncpgDriver)
 
     # Verify remaining data
     remaining_result = await asyncpg_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")
-    assert remaining_result.data[0]["count"] == 2
+    assert remaining_result[0]["count"] == 2
 
     # Verify specific remaining items
     names_result = await asyncpg_batch_session.execute("SELECT name FROM test_batch ORDER BY name")
-    remaining_names = [row["name"] for row in names_result.data]
+    remaining_names = [row["name"] for row in names_result]
     assert remaining_names == ["Delete 3", "Keep 1"]
 
 
@@ -204,17 +204,17 @@ async def test_asyncpg_execute_many_large_batch(asyncpg_batch_session: AsyncpgDr
 
     # Verify count
     count_result = await asyncpg_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")
-    assert count_result.data[0]["count"] == 1000
+    assert count_result[0]["count"] == 1000
 
     # Verify some specific values
     sample_result = await asyncpg_batch_session.execute(
         "SELECT * FROM test_batch WHERE name = ANY($1) ORDER BY value",
         (["Item 100", "Item 500", "Item 999"],),
     )
-    assert len(sample_result.data) == 3
-    assert sample_result.data[0]["value"] == 1000  # Item 100
-    assert sample_result.data[1]["value"] == 5000  # Item 500
-    assert sample_result.data[2]["value"] == 9990  # Item 999
+    assert len(sample_result) == 3
+    assert sample_result[0]["value"] == 1000  # Item 100
+    assert sample_result[1]["value"] == 5000  # Item 500
+    assert sample_result[2]["value"] == 9990  # Item 999
 
 
 @pytest.mark.asyncio
@@ -240,7 +240,7 @@ async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: Async
         "SELECT COUNT(*) as count FROM test_batch WHERE category = $1",
         ("SOB",),
     )
-    assert check_result.data[0]["count"] == 3
+    assert check_result[0]["count"] == 3
 
 
 @pytest.mark.asyncio
@@ -264,8 +264,8 @@ async def test_asyncpg_execute_many_with_returning(asyncpg_batch_session: Asyncp
         assert isinstance(result, SQLResult)
 
         # If RETURNING works with executemany, verify the data
-        if hasattr(result, "data") and result.data:
-            assert len(result.data) >= 3
+        if hasattr(result, "data") and result:
+            assert len(result) >= 3
 
     except Exception:
         # executemany with RETURNING might not be supported
@@ -279,7 +279,7 @@ async def test_asyncpg_execute_many_with_returning(asyncpg_batch_session: Asyncp
             "SELECT COUNT(*) as count FROM test_batch WHERE category = $1",
             ("RET",),
         )
-        assert check_result.data[0]["count"] == 3
+        assert check_result[0]["count"] == 3
 
 
 @pytest.mark.asyncio
@@ -313,10 +313,10 @@ async def test_asyncpg_execute_many_with_arrays(asyncpg_batch_session: AsyncpgDr
     check_result = await asyncpg_batch_session.execute(
         "SELECT name, array_length(tags, 1) as tag_count, array_length(scores, 1) as score_count FROM test_arrays ORDER BY name"
     )
-    assert len(check_result.data) == 3
-    assert check_result.data[0]["tag_count"] == 2  # Array 1
-    assert check_result.data[1]["tag_count"] == 1  # Array 2
-    assert check_result.data[2]["tag_count"] == 3  # Array 3
+    assert len(check_result) == 3
+    assert check_result[0]["tag_count"] == 2  # Array 1
+    assert check_result[1]["tag_count"] == 1  # Array 2
+    assert check_result[2]["tag_count"] == 3  # Array 3
 
 
 @pytest.mark.asyncio
@@ -349,8 +349,8 @@ async def test_asyncpg_execute_many_with_json(asyncpg_batch_session: AsyncpgDriv
     check_result = await asyncpg_batch_session.execute(
         "SELECT name, metadata->>'type' as type, (metadata->>'value')::INTEGER as value FROM test_json ORDER BY name"
     )
-    assert len(check_result.data) == 3
-    assert check_result.data[0]["type"] == "test"  # JSON 1
-    assert check_result.data[0]["value"] == 100
-    assert check_result.data[1]["type"] == "prod"  # JSON 2
-    assert check_result.data[1]["value"] == 200
+    assert len(check_result) == 3
+    assert check_result[0]["type"] == "test"  # JSON 1
+    assert check_result[0]["value"] == 100
+    assert check_result[1]["type"] == "prod"  # JSON 2
+    assert check_result[1]["value"] == 200

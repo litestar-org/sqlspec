@@ -1,6 +1,6 @@
 import contextlib
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
@@ -133,9 +133,10 @@ class AdbcDriver(
                 connection=connection,
                 **kwargs,
             )
+
         return self._execute(
             statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.parameters,
+            statement.get_parameters(style=self._get_placeholder_style()),
             statement,
             connection=connection,
             **kwargs,
@@ -150,28 +151,13 @@ class AdbcDriver(
         **kwargs: Any,
     ) -> Any:
         conn = self._connection(connection)
-        final_exec_params: Optional[list[Any]] = None
-        if parameters is not None:
-            if isinstance(parameters, dict):
-                # For dict parameters, extract values for positional placeholders
-                final_exec_params = list(parameters.values())
-            elif isinstance(parameters, list):
-                final_exec_params = parameters
-            else:
-                try:
-                    if not isinstance(parameters, (str, bytes)):
-                        iter(parameters)  # Test if iterable
-                        final_exec_params = list(parameters)
-                    else:
-                        final_exec_params = [parameters]
-                except (AttributeError, TypeError):
-                    final_exec_params = [parameters]
         with self._get_cursor(conn) as cursor:
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            if self.instrumentation_config.log_parameters and final_exec_params:
-                logger.debug("Query parameters: %s", final_exec_params)
-            cursor.execute(sql, final_exec_params or [])
+            if self.instrumentation_config.log_parameters and parameters:
+                logger.debug("Query parameters: %s", parameters)
+            # ADBC accepts various parameter formats based on backend
+            cursor.execute(sql, parameters or [])
             return cursor
 
     def _execute_many(
@@ -182,17 +168,13 @@ class AdbcDriver(
         **kwargs: Any,
     ) -> Any:
         conn = self._connection(connection)
-        final_exec_params = (
-            [list(p) if isinstance(p, (list, tuple)) else [p] for p in param_list]
-            if param_list and isinstance(param_list, Sequence)
-            else []
-        )
         with self._get_cursor(conn) as cursor:
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL (executemany): %s", sql)
-            if self.instrumentation_config.log_parameters and final_exec_params:
-                logger.debug("Query parameters (batch): %s", final_exec_params)
-            cursor.executemany(sql, final_exec_params)
+            if self.instrumentation_config.log_parameters and param_list:
+                logger.debug("Query parameters (batch): %s", param_list)
+            # ADBC expects list of parameter sets
+            cursor.executemany(sql, param_list or [])
             return cursor
 
     def _execute_script(

@@ -1,13 +1,12 @@
-"""Asyncmy database configuration using TypedDict for better maintainability."""
+"""Asyncmy database configuration with direct field-based configuration."""
 
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 import asyncmy
 from asyncmy.connection import Connection
-from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncmy.driver import AsyncmyConnection, AsyncmyDriver
 from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig
@@ -20,90 +19,43 @@ if TYPE_CHECKING:
     from asyncmy.pool import Pool
 
 
-__all__ = ("AsyncmyConfig", "AsyncmyConnectionConfig", "AsyncmyPoolConfig")
+__all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "AsyncmyConfig")
 
 logger = logging.getLogger(__name__)
 
+CONNECTION_FIELDS = frozenset(
+    {
+        "host",
+        "user",
+        "password",
+        "database",
+        "port",
+        "unix_socket",
+        "charset",
+        "connect_timeout",
+        "read_default_file",
+        "read_default_group",
+        "autocommit",
+        "local_infile",
+        "ssl",
+        "sql_mode",
+        "init_command",
+        "cursor_class",
+    }
+)
 
-class AsyncmyConnectionConfig(TypedDict, total=False):
-    """Asyncmy connection configuration as TypedDict.
-
-    Basic connection parameters for asyncmy.connect().
-    Based on asyncmy and PyMySQL documentation.
-    """
-
-    host: NotRequired[str]
-    """Host where the database server is located."""
-
-    user: NotRequired[str]
-    """The username used to authenticate with the database."""
-
-    password: NotRequired[str]
-    """The password used to authenticate with the database."""
-
-    database: NotRequired[str]
-    """The database name to use."""
-
-    port: NotRequired[int]
-    """The TCP/IP port of the MySQL server."""
-
-    unix_socket: NotRequired[str]
-    """The location of the Unix socket file."""
-
-    charset: NotRequired[str]
-    """The character set to use for the connection."""
-
-    connect_timeout: NotRequired[float]
-    """Timeout before throwing an error when connecting."""
-
-    read_default_file: NotRequired[str]
-    """MySQL configuration file to read."""
-
-    read_default_group: NotRequired[str]
-    """Group to read from the configuration file."""
-
-    autocommit: NotRequired[bool]
-    """If True, autocommit mode will be enabled."""
-
-    local_infile: NotRequired[bool]
-    """If True, enables LOAD LOCAL INFILE."""
-
-    ssl: NotRequired[Any]
-    """SSL connection parameters or boolean."""
-
-    sql_mode: NotRequired[str]
-    """Default SQL_MODE to use."""
-
-    init_command: NotRequired[str]
-    """Initial SQL statement to execute once connected."""
-
-    cursor_class: NotRequired["type[Union[Cursor, DictCursor]]"]
-    """Custom cursor class to use."""
-
-
-class AsyncmyPoolConfig(AsyncmyConnectionConfig, total=False):
-    """Asyncmy pool configuration as TypedDict.
-
-    All parameters for asyncmy.create_pool() including connection parameters.
-    Based on asyncmy documentation.
-    """
-
-    # Pool-specific parameters
-    minsize: NotRequired[int]
-    """Minimum number of connections to keep in the pool."""
-
-    maxsize: NotRequired[int]
-    """Maximum number of connections allowed in the pool."""
-
-    echo: NotRequired[bool]
-    """If True, logging will be enabled for all SQL statements."""
-
-    pool_recycle: NotRequired[int]
-    """Number of seconds after which a connection is recycled."""
+POOL_FIELDS = CONNECTION_FIELDS.union(
+    {
+        "minsize",
+        "maxsize",
+        "echo",
+        "pool_recycle",
+    }
+)
 
 
 class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver]):  # pyright: ignore
-    """Configuration for Asyncmy database connections using TypedDict."""
+    """Configuration for Asyncmy database connections with direct field-based configuration."""
 
     __is_async__: ClassVar[bool] = True
     __supports_connection_pooling__: ClassVar[bool] = True
@@ -120,23 +72,93 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
 
     def __init__(
         self,
-        pool_config: AsyncmyPoolConfig,
-        connection_config: Optional[AsyncmyConnectionConfig] = None,
         statement_config: Optional[SQLConfig] = None,
         instrumentation: Optional[InstrumentationConfig] = None,
         default_row_type: type[DictRow] = DictRow,
+        # Connection parameters
+        host: Optional[str] = None,
+        user: Optional[str] = None,
+        password: Optional[str] = None,
+        database: Optional[str] = None,
+        port: Optional[int] = None,
+        unix_socket: Optional[str] = None,
+        charset: Optional[str] = None,
+        connect_timeout: Optional[float] = None,
+        read_default_file: Optional[str] = None,
+        read_default_group: Optional[str] = None,
+        autocommit: Optional[bool] = None,
+        local_infile: Optional[bool] = None,
+        ssl: Optional[Any] = None,
+        sql_mode: Optional[str] = None,
+        init_command: Optional[str] = None,
+        cursor_class: Optional["type[Union[Cursor, DictCursor]]"] = None,
+        # Pool parameters
+        minsize: Optional[int] = None,
+        maxsize: Optional[int] = None,
+        echo: Optional[bool] = None,
+        pool_recycle: Optional[int] = None,
+        # User-defined extras
+        extras: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize Asyncmy configuration.
 
         Args:
-            pool_config: Asyncmy pool parameters
-            connection_config: Basic connection parameters (optional, can be included in pool_config)
             statement_config: Default SQL statement configuration
             instrumentation: Instrumentation configuration
             default_row_type: Default row type for results
+            host: Host where the database server is located
+            user: The username used to authenticate with the database
+            password: The password used to authenticate with the database
+            database: The database name to use
+            port: The TCP/IP port of the MySQL server
+            unix_socket: The location of the Unix socket file
+            charset: The character set to use for the connection
+            connect_timeout: Timeout before throwing an error when connecting
+            read_default_file: MySQL configuration file to read
+            read_default_group: Group to read from the configuration file
+            autocommit: If True, autocommit mode will be enabled
+            local_infile: If True, enables LOAD LOCAL INFILE
+            ssl: SSL connection parameters or boolean
+            sql_mode: Default SQL_MODE to use
+            init_command: Initial SQL statement to execute once connected
+            cursor_class: Custom cursor class to use
+            minsize: Minimum number of connections to keep in the pool
+            maxsize: Maximum number of connections allowed in the pool
+            echo: If True, logging will be enabled for all SQL statements
+            pool_recycle: Number of seconds after which a connection is recycled
+            extras: Additional connection parameters not explicitly defined
+            **kwargs: Additional parameters (stored in extras)
         """
-        self.pool_config = pool_config
-        self.connection_config = connection_config or {}
+        # Store connection parameters as instance attributes
+        self.host = host
+        self.user = user
+        self.password = password
+        self.database = database
+        self.port = port
+        self.unix_socket = unix_socket
+        self.charset = charset
+        self.connect_timeout = connect_timeout
+        self.read_default_file = read_default_file
+        self.read_default_group = read_default_group
+        self.autocommit = autocommit
+        self.local_infile = local_infile
+        self.ssl = ssl
+        self.sql_mode = sql_mode
+        self.init_command = init_command
+        self.cursor_class = cursor_class
+
+        # Store pool parameters as instance attributes
+        self.minsize = minsize
+        self.maxsize = maxsize
+        self.echo = echo
+        self.pool_recycle = pool_recycle
+
+        # Handle extras and additional kwargs
+        self.extras = extras or {}
+        self.extras.update(kwargs)
+
+        # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
@@ -154,26 +176,77 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         """Return the driver type."""
         return AsyncmyDriver
 
-    @property
-    def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict.
+    @classmethod
+    def from_pool_config(
+        cls,
+        pool_config: dict[str, Any],
+        connection_config: Optional[dict[str, Any]] = None,
+        statement_config: Optional[SQLConfig] = None,
+        instrumentation: Optional[InstrumentationConfig] = None,
+        default_row_type: type[DictRow] = DictRow,
+    ) -> "AsyncmyConfig":
+        """Create config from old-style pool_config and connection_config dicts for backward compatibility.
 
+        Args:
+            pool_config: Dictionary with pool and connection parameters
+            connection_config: Dictionary with additional connection parameters
+            statement_config: Default SQL statement configuration
+            instrumentation: Instrumentation configuration
+            default_row_type: Default row type for results
 
         Returns:
-            A dictionary containing the connection configuration.
+            AsyncmyConfig instance
         """
-        return {k: v for k, v in self.connection_config.items() if v is not Empty}
+        # Merge connection_config into pool_config (pool_config takes precedence)
+        merged_config = {}
+        if connection_config:
+            merged_config.update(connection_config)
+        merged_config.update(pool_config)
+
+        # Create config with all parameters
+        return cls(
+            statement_config=statement_config,
+            instrumentation=instrumentation,
+            default_row_type=default_row_type,
+            **merged_config,  # All connection and pool parameters go to direct fields or extras
+        )
+
+    @property
+    def connection_config_dict(self) -> dict[str, Any]:
+        """Return the connection configuration as a dict for asyncmy.connect().
+
+        This method filters out pool-specific parameters that are not valid for asyncmy.connect().
+        """
+        # Gather non-None connection parameters
+        config = {
+            field: getattr(self, field)
+            for field in CONNECTION_FIELDS
+            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
+        }
+
+        # Add connection-specific extras (not pool-specific ones)
+        config.update(self.extras)
+
+        return config
 
     @property
     def pool_config_dict(self) -> dict[str, Any]:
-        """Return the pool configuration as a dict.
-
-
+        """Return the full pool configuration as a dict for asyncmy.create_pool().
 
         Returns:
-            A dictionary containing the pool configuration.
+            A dictionary containing all pool configuration parameters.
         """
-        return {k: v for k, v in self.pool_config.items() if v is not Empty}
+        # Gather non-None parameters from all fields (connection + pool)
+        config = {
+            field: getattr(self, field)
+            for field in POOL_FIELDS
+            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
+        }
+
+        # Merge extras parameters
+        config.update(self.extras)
+
+        return config
 
     async def _create_pool(self) -> "Pool":  # pyright: ignore
         """Create the actual async connection pool."""
@@ -191,7 +264,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             An Asyncmy connection instance.
         """
         async with instrument_operation_async(self, "asyncmy_create_connection", "database"):
-            config = {k: v for k, v in self.connection_config.items() if v is not Empty}
+            config = self.connection_config_dict
             return await asyncmy.connect(**config)
 
     @asynccontextmanager

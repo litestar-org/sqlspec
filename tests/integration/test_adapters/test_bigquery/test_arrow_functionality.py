@@ -50,13 +50,13 @@ def test_bigquery_fetch_arrow_table(bigquery_arrow_session: BigQueryDriver) -> N
     result = bigquery_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow ORDER BY id")
 
     assert isinstance(result, ArrowResult)
-    assert isinstance(result.data, pa.Table)
-    assert result.data.num_rows == 5
+    assert isinstance(result, ArrowResult)
+    assert result.num_rows() == 5
     assert result.data.num_columns >= 5  # id, name, value, price, is_active
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
-    actual_columns = set(result.data.column_names)
+    actual_columns = set(result.column_names())
     assert expected_columns.issubset(actual_columns)
 
     # Check values
@@ -97,7 +97,7 @@ def test_bigquery_arrow_with_parameters(bigquery_arrow_session: BigQueryDriver) 
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3
+    assert result.num_rows() == 3
     values = result.data["value"].to_pylist()
     assert values == [200, 300, 400]
 
@@ -111,7 +111,7 @@ def test_bigquery_arrow_empty_result(bigquery_arrow_session: BigQueryDriver) -> 
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 0
+    assert result.num_rows() == 0
     assert result.data.num_columns >= 5  # Schema should still be present
 
 
@@ -146,7 +146,7 @@ def test_bigquery_to_arrow_with_sql_object(bigquery_arrow_session: BigQueryDrive
     result = bigquery_arrow_session.fetch_arrow_table(sql_obj)
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3
+    assert result.num_rows() == 3
     assert result.data.num_columns == 2  # Only name and value columns
 
     names = result.data["name"].to_pylist()
@@ -174,10 +174,10 @@ def test_bigquery_arrow_with_bigquery_functions(bigquery_arrow_session: BigQuery
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3  # Products B, C, D
-    assert "formatted_name" in result.data.column_names
-    assert "price_with_tax" in result.data.column_names
-    assert "query_time" in result.data.column_names
+    assert result.num_rows() == 3  # Products B, C, D
+    assert "formatted_name" in result.column_names()
+    assert "price_with_tax" in result.column_names()
+    assert "query_time" in result.column_names()
 
     # Verify BigQuery function results
     formatted_names = result.data["formatted_name"].to_pylist()
@@ -202,9 +202,9 @@ def test_bigquery_arrow_with_arrays_and_structs(bigquery_arrow_session: BigQuery
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3  # Only active products
-    assert "name_value_array" in result.data.column_names
-    assert "product_struct" in result.data.column_names
+    assert result.num_rows() == 3  # Only active products
+    assert "name_value_array" in result.column_names()
+    assert "product_struct" in result.column_names()
 
     # Verify array and struct columns exist (exact validation depends on Arrow schema mapping)
     schema = result.data.schema
@@ -228,10 +228,10 @@ def test_bigquery_arrow_with_window_functions(bigquery_arrow_session: BigQueryDr
     """)
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 5
-    assert "rank_by_value" in result.data.column_names
-    assert "prev_value" in result.data.column_names
-    assert "running_total" in result.data.column_names
+    assert result.num_rows() == 5
+    assert "rank_by_value" in result.column_names()
+    assert "prev_value" in result.column_names()
+    assert "running_total" in result.column_names()
 
     # Verify window function results
     ranks = result.data["rank_by_value"].to_pylist()
@@ -261,9 +261,9 @@ def test_bigquery_arrow_with_ml_functions(bigquery_arrow_session: BigQueryDriver
     """)
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 5
-    assert "feature_interaction" in result.data.column_names
-    assert "value_category" in result.data.column_names
+    assert result.num_rows() == 5
+    assert "feature_interaction" in result.column_names()
+    assert "value_category" in result.column_names()
 
     # Verify feature engineering
     categories = result.data["value_category"].to_pylist()

@@ -1,7 +1,7 @@
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgPoolConfig
+from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 
 @pytest.mark.xdist_group("postgres")
@@ -9,11 +9,9 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
     """Test asyncpg connection components."""
     # Test direct connection
     async_config = AsyncpgConfig(
-        pool_config=AsyncpgPoolConfig(
-            dsn=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            min_size=1,
-            max_size=2,
-        ),
+        dsn=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+        min_size=1,
+        max_size=2,
     )
 
     conn = await async_config.create_connection()
@@ -26,12 +24,11 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
         await conn.close()
 
     # Test connection pool
-    pool_config = AsyncpgPoolConfig(
+    another_config = AsyncpgConfig(
         dsn=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
         min_size=1,
         max_size=5,
     )
-    another_config = AsyncpgConfig(pool_config=pool_config)
     # Ensure the pool is created before use if not explicitly managed elsewhere
     await another_config.create_pool()
     try:

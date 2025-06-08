@@ -18,10 +18,10 @@ from typing import Annotated, Any
 from litestar import Litestar, get
 from litestar.params import Dependency
 
-from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgPoolConfig
-from sqlspec.driver import SQLResult
+from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec, providers
-from sqlspec.filters import FilterTypes
+from sqlspec.statement import SQLResult
+from sqlspec.statement.filters import FilterTypes
 
 
 @get(
@@ -38,7 +38,9 @@ sqlspec = SQLSpec(
     config=[
         DatabaseConfig(
             config=AsyncpgConfig(
-                pool_config=AsyncpgPoolConfig(dsn="postgres://app:app@localhost:15432/app", min_size=1, max_size=3),
+                dsn="postgres://app:app@localhost:15432/app",
+                min_size=1,
+                max_size=3,
             ),
             commit_mode="autocommit",
         )

@@ -41,9 +41,7 @@ class TestSQLHelperMethods:
         context = sql_instance._prepare_processing_context()
 
         with patch.object(sql_instance._config.parameter_validator, "extract_parameters") as mock_extract:
-            mock_extract.return_value = [
-                ParameterInfo(name="param_0", style=ParameterStyle.QMARK, position=0)
-            ]
+            mock_extract.return_value = [ParameterInfo(name="param_0", style=ParameterStyle.QMARK, position=0)]
 
             sql_instance._detect_placeholders(context, "SELECT * FROM users WHERE id = ?")
 
@@ -112,11 +110,7 @@ class TestSQLHelperMethods:
         context.current_expression = Mock()
 
         mock_pipeline = Mock()
-        mock_result = ProcessingResult(
-            sql="SELECT * FROM users WHERE id = ?",
-            merged_parameters=[1],
-            dialect="duckdb"
-        )
+        mock_result = ProcessingResult(sql="SELECT * FROM users WHERE id = ?", merged_parameters=[1], dialect="duckdb")
         mock_pipeline.process.return_value = mock_result
 
         with patch.object(sql_instance._config, "get_statement_pipeline", return_value=mock_pipeline):
@@ -133,12 +127,7 @@ class TestSQLHelperMethods:
 
         merged = sql_dict._merge_extracted_parameters({"existing": "value"}, context)
 
-        assert merged == {
-            "existing": "value",
-            "param_0": 1,
-            "param_1": 2,
-            "param_2": 3
-        }
+        assert merged == {"existing": "value", "param_0": 1, "param_1": 2, "param_2": 3}
 
     def test_merge_extracted_parameters_list(self, sql_instance) -> None:
         """Test _merge_extracted_parameters with list parameters."""
@@ -167,7 +156,7 @@ class TestSQLHelperMethods:
         mock_validation_result = ValidationResult(
             processor_name="TestValidator",
             risk_level=RiskLevel.LOW,
-            issues=[ValidationIssue(RiskLevel.LOW, "Test issue", 1, 0, "TEST001")]
+            issues=[ValidationIssue(RiskLevel.LOW, "Test issue", 1, 0, "TEST001")],
         )
         mock_validator.validate.return_value = mock_validation_result
 
@@ -191,16 +180,10 @@ class TestSQLHelperMethods:
     def test_build_processed_state_safe(self, sql_instance) -> None:
         """Test _build_processed_state with safe SQL."""
         pipeline_result = ProcessingResult(
-            sql="SELECT * FROM users WHERE id = ?",
-            merged_parameters=[1],
-            dialect="postgres",
-            validation_results=[]
+            sql="SELECT * FROM users WHERE id = ?", merged_parameters=[1], dialect="postgres", validation_results=[]
         )
 
-        state = sql_instance._build_processed_state(
-            pipeline_result,
-            SQLConfig(strict_mode=True)
-        )
+        state = sql_instance._build_processed_state(pipeline_result, SQLConfig(strict_mode=True))
 
         assert state["_is_safe"] is True
         assert state["_processed_sql"] == "SELECT * FROM users WHERE id = ?"
@@ -212,21 +195,18 @@ class TestSQLHelperMethods:
         validation_result = ValidationResult(
             processor_name="SecurityValidator",
             risk_level=RiskLevel.HIGH,
-            issues=[ValidationIssue(RiskLevel.HIGH, "SQL injection detected", 1, 0, "SEC001")]
+            issues=[ValidationIssue(RiskLevel.HIGH, "SQL injection detected", 1, 0, "SEC001")],
         )
 
         pipeline_result = ProcessingResult(
             sql="SELECT * FROM users WHERE id = ?",
             merged_parameters=[1],
             dialect="postgres",
-            validation_results=[validation_result]
+            validation_results=[validation_result],
         )
 
         with pytest.raises(SQLValidationError) as exc_info:
-            sql_instance._build_processed_state(
-                pipeline_result,
-                SQLConfig(strict_mode=True)
-            )
+            sql_instance._build_processed_state(pipeline_result, SQLConfig(strict_mode=True))
 
         assert "SQL validation failed" in str(exc_info.value)
 
@@ -235,20 +215,17 @@ class TestSQLHelperMethods:
         validation_result = ValidationResult(
             processor_name="SecurityValidator",
             risk_level=RiskLevel.HIGH,
-            issues=[ValidationIssue(RiskLevel.HIGH, "SQL injection detected", 1, 0, "SEC001")]
+            issues=[ValidationIssue(RiskLevel.HIGH, "SQL injection detected", 1, 0, "SEC001")],
         )
 
         pipeline_result = ProcessingResult(
             sql="SELECT * FROM users WHERE id = ?",
             merged_parameters=[1],
             dialect="postgres",
-            validation_results=[validation_result]
+            validation_results=[validation_result],
         )
 
-        state = sql_instance._build_processed_state(
-            pipeline_result,
-            SQLConfig(strict_mode=False)
-        )
+        state = sql_instance._build_processed_state(pipeline_result, SQLConfig(strict_mode=False))
 
         assert state["_is_safe"] is False
         assert state["_processed_sql"] == "SELECT * FROM users WHERE id = ?"
@@ -262,9 +239,7 @@ class TestSQLHelperMethods:
         # Mock the pipeline
         mock_pipeline = Mock()
         mock_result = ProcessingResult(
-            sql="SELECT * FROM users WHERE name = ?",
-            merged_parameters=["test"],
-            dialect="duckdb"
+            sql="SELECT * FROM users WHERE name = ?", merged_parameters=["test"], dialect="duckdb"
         )
         mock_pipeline.process.return_value = mock_result
 

@@ -76,10 +76,8 @@ class SyncDriverProtocol(Protocol[ConnectionT, RowT]):
 
     def fetch_arrow_table(
         self,
-        sql: Union[str, SQL],
-        parameters: Optional[Any] = None,
-        **kwargs: Any
-    ) -> ArrowResult: ...
+        query: str
+    ) -> pa.Table: ...
 ```
 
 ### Configuration Protocol
@@ -87,18 +85,25 @@ class SyncDriverProtocol(Protocol[ConnectionT, RowT]):
 Configuration protocols ensure type-safe config handling:
 
 ```python
-class DatabaseConfig(Protocol[ConnectionT, DriverT]):
+class DatabaseConfig(Protocol[ConnectionT, PoolT, DriverT]):
     """Protocol for database configurations."""
 
-    @property
-    def url(self) -> str: ...
+    # Direct field access for all configuration
+    dsn: str
+    min_size: int
+    max_size: int
 
     @property
-    def pool_config(self) -> PoolConfig: ...
+    def connection_config_dict(self) -> dict[str, Any]: ...
 
     def provide_connection(self) -> ContextManager[ConnectionT]: ...
 
     def provide_session(self) -> ContextManager[DriverT]: ...
+
+    @property
+    def pool_config_dict(self) -> dict[str, Any]: ...
+
+    def provide_pool(self) -> ContextManager[PoolT]: ...
 ```
 
 ## Result Type System

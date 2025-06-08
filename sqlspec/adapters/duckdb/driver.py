@@ -111,9 +111,10 @@ class DuckDBDriver(
                 connection=connection,
                 **kwargs,
             )
+
         return self._execute(
             statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.parameters,
+            statement.get_parameters(style=self._get_placeholder_style()),
             statement,
             connection=connection,
             **kwargs,
@@ -128,32 +129,13 @@ class DuckDBDriver(
         **kwargs: Any,
     ) -> Any:
         conn = self._connection(connection)
-        final_exec_params: Optional[list[Any]] = None
-        if parameters is not None:
-            if isinstance(parameters, list):
-                final_exec_params = parameters
-            elif isinstance(parameters, dict):
-                # For dict parameters from literal extraction (param_0, param_1, etc.)
-                if parameters and all(key.startswith("param_") for key in parameters):
-                    final_exec_params = [parameters[f"param_{i}"] for i in range(len(parameters))]
-                else:
-                    # For other dict parameters, convert values to list
-                    final_exec_params = list(parameters.values())
-            else:
-                try:
-                    if not isinstance(parameters, (str, bytes)):
-                        iter(parameters)  # Test if iterable
-                        final_exec_params = list(parameters)
-                    else:
-                        final_exec_params = [parameters]
-                except (AttributeError, TypeError):
-                    final_exec_params = [parameters]
         with self._get_cursor(conn) as cursor:
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            if self.instrumentation_config.log_parameters and final_exec_params:
-                logger.debug("Query parameters: %s", final_exec_params)
-            cursor.execute(sql, final_exec_params or [])
+            if self.instrumentation_config.log_parameters and parameters:
+                logger.debug("Query parameters: %s", parameters)
+            # DuckDB accepts list parameters or None
+            cursor.execute(sql, parameters or [])
             if self.returns_rows(statement.expression):
                 fetched_data = cursor.fetchall()
                 column_names = [col[0] for col in cursor.description or []]
@@ -168,18 +150,20 @@ class DuckDBDriver(
         **kwargs: Any,
     ) -> Any:
         conn = self._connection(connection)
-        final_exec_params = (
-            [list(p) if isinstance(p, (list, tuple)) else [p] for p in param_list]
-            if param_list and isinstance(param_list, Sequence)
-            else []
-        )
         with self._get_cursor(conn) as cursor:
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL (executemany): %s", sql)
-            if self.instrumentation_config.log_parameters and final_exec_params:
-                logger.debug("Query parameters (batch): %s", final_exec_params)
-            for params in final_exec_params:
-                cursor.execute(sql, params)
+            if self.instrumentation_config.log_parameters and param_list:
+                logger.debug("Query parameters (batch): %s", param_list)
+
+            # Convert parameter list to proper format for executemany
+            if param_list and isinstance(param_list, Sequence):
+                for param_set in param_list:
+                    if isinstance(param_set, (list, tuple)):
+                        cursor.execute(sql, list(param_set))
+                    else:
+                        cursor.execute(sql, [param_set])
+
             return {"rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1}
 
     def _execute_script(

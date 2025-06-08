@@ -2,14 +2,14 @@
 
 import pytest
 
-from sqlspec.adapters.sqlite import SqliteConfig, SqliteConnectionConfig
+from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.statement.result import SQLResult
 
 
 @pytest.mark.xdist_group("sqlite")
 def test_sqlite_basic_connection() -> None:
     """Test basic SQLite connection functionality."""
-    config = SqliteConfig(connection_config=SqliteConnectionConfig(database=":memory:"))
+    config = SqliteConfig(database=":memory:")
 
     # Test direct connection
     with config.provide_connection() as conn:
@@ -44,7 +44,7 @@ def test_sqlite_file_database_connection() -> None:
         db_path = tmp_file.name
 
     try:
-        config = SqliteConfig(connection_config=SqliteConnectionConfig(database=db_path))
+        config = SqliteConfig(database=db_path)
 
         with config.provide_session() as session:
             # Create a table and insert data
@@ -77,11 +77,9 @@ def test_sqlite_connection_configuration() -> None:
     """Test SQLite connection with various configuration options."""
     # Test with timeout
     config = SqliteConfig(
-        connection_config=SqliteConnectionConfig(
-            database=":memory:",
-            timeout=30.0,
-            check_same_thread=False,
-        )
+        database=":memory:",
+        timeout=30.0,
+        check_same_thread=False,
     )
 
     with config.provide_session() as session:
@@ -96,10 +94,8 @@ def test_sqlite_isolation_levels() -> None:
     """Test SQLite with different isolation levels."""
     for isolation_level in [None, "DEFERRED", "IMMEDIATE", "EXCLUSIVE"]:
         config = SqliteConfig(
-            connection_config=SqliteConnectionConfig(
-                database=":memory:",
-                isolation_level=isolation_level,
-            )
+            database=":memory:",
+            isolation_level=isolation_level,
         )
 
         with config.provide_session() as session:

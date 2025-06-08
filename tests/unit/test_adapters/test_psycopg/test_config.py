@@ -5,20 +5,79 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
 from sqlspec.adapters.psycopg import (
+    CONNECTION_FIELDS,
+    POOL_FIELDS,
     PsycopgAsyncConfig,
     PsycopgAsyncDriver,
     PsycopgSyncConfig,
     PsycopgSyncDriver,
 )
-from sqlspec.adapters.psycopg.config import PsycopgConnectionConfig, PsycopgPoolConfig
 from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.sql import SQLConfig
 
 
-def test_psycopg_connection_config_creation() -> None:
-    """Test Psycopg connection config creation with valid parameters."""
-    # Test basic config creation
-    config = PsycopgConnectionConfig(
+def test_psycopg_field_constants() -> None:
+    """Test Psycopg CONNECTION_FIELDS and POOL_FIELDS constants."""
+    expected_connection_fields = frozenset(
+        {
+            "conninfo",
+            "host",
+            "port",
+            "user",
+            "password",
+            "dbname",
+            "connect_timeout",
+            "options",
+            "application_name",
+            "sslmode",
+            "sslcert",
+            "sslkey",
+            "sslrootcert",
+            "autocommit",
+        }
+    )
+    assert CONNECTION_FIELDS == expected_connection_fields
+
+    # POOL_FIELDS should be a superset of CONNECTION_FIELDS
+    assert CONNECTION_FIELDS.issubset(POOL_FIELDS)
+
+    # Check pool-specific fields
+    pool_specific = POOL_FIELDS - CONNECTION_FIELDS
+    expected_pool_specific = {
+        "min_size",
+        "max_size",
+        "name",
+        "timeout",
+        "max_waiting",
+        "max_lifetime",
+        "max_idle",
+        "reconnect_timeout",
+        "num_workers",
+        "configure",
+        "kwargs",
+    }
+    assert pool_specific == expected_pool_specific
+
+
+def test_psycopg_sync_config_basic_creation() -> None:
+    """Test Psycopg sync config creation with basic parameters."""
+    # Test minimal config creation
+    config = PsycopgSyncConfig(
+        host="localhost",
+        port=5432,
+        user="test_user",
+        password="test_password",
+        dbname="test_db",
+    )
+    assert config.host == "localhost"
+    assert config.port == 5432
+    assert config.user == "test_user"
+    assert config.password == "test_password"
+    assert config.dbname == "test_db"
+    assert config.extras == {}
+
+    # Test with all parameters
+    config_full = PsycopgSyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
@@ -27,52 +86,11 @@ def test_psycopg_connection_config_creation() -> None:
         connect_timeout=30.0,
         options="-c search_path=public",
         application_name="test_app",
-        sslmode="prefer",
+        sslmode="require",
         sslcert="/path/to/cert.pem",
         sslkey="/path/to/key.pem",
         sslrootcert="/path/to/ca.pem",
         autocommit=True,
-    )
-    assert config.get("host") == "localhost"
-    assert config.get("port") == 5432
-    assert config.get("user") == "test_user"
-    assert config.get("password") == "test_password"
-    assert config.get("dbname") == "test_db"
-    assert config.get("connect_timeout") == 30.0
-    assert config.get("options") == "-c search_path=public"
-    assert config.get("application_name") == "test_app"
-    assert config.get("sslmode") == "prefer"
-    assert config.get("sslcert") == "/path/to/cert.pem"
-    assert config.get("sslkey") == "/path/to/key.pem"
-    assert config.get("sslrootcert") == "/path/to/ca.pem"
-    assert config.get("autocommit") is True
-
-    # Test with minimal parameters
-    config_minimal = PsycopgConnectionConfig(
-        host="localhost",
-        user="user",
-        password="pass",
-        dbname="db",
-    )
-    assert config_minimal.get("host") == "localhost"
-    assert config_minimal.get("user") == "user"
-    assert config_minimal.get("password") == "pass"
-    assert config_minimal.get("dbname") == "db"
-
-    # Test with conninfo string
-    config_conninfo = PsycopgConnectionConfig(conninfo="postgresql://user:pass@localhost:5432/testdb")
-    assert config_conninfo.get("conninfo") == "postgresql://user:pass@localhost:5432/testdb"
-
-
-def test_psycopg_pool_config_creation() -> None:
-    """Test Psycopg pool config creation with valid parameters."""
-    # Test basic pool config creation
-    config = PsycopgPoolConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
         min_size=1,
         max_size=10,
         name="test_pool",
@@ -83,83 +101,81 @@ def test_psycopg_pool_config_creation() -> None:
         reconnect_timeout=30.0,
         num_workers=2,
     )
-    assert config.get("host") == "localhost"
-    assert config.get("port") == 5432
-    assert config.get("user") == "test_user"
-    assert config.get("password") == "test_password"
-    assert config.get("dbname") == "test_db"
-    assert config.get("min_size") == 1
-    assert config.get("max_size") == 10
-    assert config.get("name") == "test_pool"
-    assert config.get("timeout") == 5.0
-    assert config.get("max_waiting") == 20
-    assert config.get("max_lifetime") == 3600.0
-    assert config.get("max_idle") == 600.0
-    assert config.get("reconnect_timeout") == 30.0
-    assert config.get("num_workers") == 2
+    assert config_full.host == "localhost"
+    assert config_full.connect_timeout == 30.0
+    assert config_full.options == "-c search_path=public"
+    assert config_full.application_name == "test_app"
+    assert config_full.sslmode == "require"
+    assert config_full.min_size == 1
+    assert config_full.max_size == 10
+    assert config_full.name == "test_pool"
 
-    # Test with all pool-specific parameters
-    config_full = PsycopgPoolConfig(
+
+def test_psycopg_async_config_basic_creation() -> None:
+    """Test Psycopg async config creation with basic parameters."""
+    # Test minimal config creation
+    config = PsycopgAsyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
         password="test_password",
         dbname="test_db",
-        min_size=2,
-        max_size=20,
-        name="full_pool",
-        timeout=10.0,
-        max_waiting=50,
-        max_lifetime=7200.0,
-        max_idle=1200.0,
-        reconnect_timeout=60.0,
-        num_workers=4,
-        sslmode="require",
-        application_name="pool_app",
-        connect_timeout=45.0,
     )
-    assert config_full.get("min_size") == 2
-    assert config_full.get("max_size") == 20
-    assert config_full.get("name") == "full_pool"
-    assert config_full.get("timeout") == 10.0
-    assert config_full.get("max_waiting") == 50
-    assert config_full.get("max_lifetime") == 7200.0
-    assert config_full.get("max_idle") == 1200.0
-    assert config_full.get("reconnect_timeout") == 60.0
-    assert config_full.get("num_workers") == 4
-    assert config_full.get("sslmode") == "require"
-    assert config_full.get("application_name") == "pool_app"
-    assert config_full.get("connect_timeout") == 45.0
+    assert config.host == "localhost"
+    assert config.port == 5432
+    assert config.user == "test_user"
+    assert config.password == "test_password"
+    assert config.dbname == "test_db"
+    assert config.extras == {}
+
+
+def test_psycopg_config_extras_handling() -> None:
+    """Test Psycopg config extras parameter handling."""
+    # Test with explicit extras
+    config = PsycopgSyncConfig(
+        host="localhost",
+        port=5432,
+        user="test_user",
+        password="test_password",
+        dbname="test_db",
+        extras={"custom_param": "value", "debug": True},
+    )
+    assert config.extras["custom_param"] == "value"
+    assert config.extras["debug"] is True
+
+    # Test with kwargs going to extras
+    config2 = PsycopgSyncConfig(
+        host="localhost",
+        port=5432,
+        user="test_user",
+        password="test_password",
+        dbname="test_db",
+        unknown_param="test",
+        another_param=42,
+    )
+    assert config2.extras["unknown_param"] == "test"
+    assert config2.extras["another_param"] == 42
 
 
 def test_psycopg_sync_config_initialization() -> None:
     """Test Psycopg sync config initialization."""
-    # Test with pool config only
-    pool_config = PsycopgPoolConfig(
+    # Test with default parameters
+    config = PsycopgSyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
         password="test_password",
         dbname="test_db",
-        min_size=1,
-        max_size=10,
     )
-    config = PsycopgSyncConfig(pool_config=pool_config)
-    assert config.pool_config.get("host") == "localhost"
-    assert config.pool_config.get("port") == 5432
-    assert config.pool_config.get("min_size") == 1
-    assert config.pool_config.get("max_size") == 10
+    assert config.host == "localhost"
     assert isinstance(config.statement_config, SQLConfig)
     assert isinstance(config.instrumentation, InstrumentationConfig)
-    assert config.connection_config == {}
 
     # Test with custom parameters
-    custom_connection_config = PsycopgConnectionConfig(
-        sslmode="require",
-        connect_timeout=60.0,
-        application_name="custom_app",
-    )
-    custom_pool_config = PsycopgPoolConfig(
+    custom_statement_config = SQLConfig(strict_mode=False)
+    custom_instrumentation = InstrumentationConfig(log_queries=True)
+
+    config = PsycopgSyncConfig(
         host="custom_host",
         port=5433,
         user="custom_user",
@@ -167,183 +183,96 @@ def test_psycopg_sync_config_initialization() -> None:
         dbname="custom_db",
         min_size=2,
         max_size=15,
-    )
-    custom_statement_config = SQLConfig(strict_mode=False)
-    custom_instrumentation = InstrumentationConfig(log_queries=True)
-
-    config = PsycopgSyncConfig(
-        pool_config=custom_pool_config,
-        connection_config=custom_connection_config,
         statement_config=custom_statement_config,
         instrumentation=custom_instrumentation,
     )
-    assert config.pool_config.get("host") == "custom_host"
-    assert config.pool_config.get("port") == 5433
-    assert config.pool_config.get("min_size") == 2
-    assert config.pool_config.get("max_size") == 15
-    assert config.connection_config.get("sslmode") == "require"
-    assert config.connection_config.get("connect_timeout") == 60.0
-    assert config.connection_config.get("application_name") == "custom_app"
+    assert config.host == "custom_host"
+    assert config.port == 5433
+    assert config.min_size == 2
+    assert config.max_size == 15
     assert config.statement_config is custom_statement_config
     assert config.instrumentation.log_queries is True
 
 
 def test_psycopg_async_config_initialization() -> None:
     """Test Psycopg async config initialization."""
-    # Test with pool config only
-    pool_config = PsycopgPoolConfig(
+    # Test with default parameters
+    config = PsycopgAsyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
         password="test_password",
         dbname="test_db",
-        min_size=1,
-        max_size=10,
     )
-    config = PsycopgAsyncConfig(pool_config=pool_config)
-    assert config.pool_config.get("host") == "localhost"
-    assert config.pool_config.get("port") == 5432
-    assert config.pool_config.get("min_size") == 1
-    assert config.pool_config.get("max_size") == 10
+    assert config.host == "localhost"
     assert isinstance(config.statement_config, SQLConfig)
     assert isinstance(config.instrumentation, InstrumentationConfig)
-    assert config.connection_config == {}
-
-    # Test with custom parameters
-    custom_connection_config = PsycopgConnectionConfig(
-        sslmode="require",
-        connect_timeout=60.0,
-        application_name="custom_app",
-    )
-    custom_pool_config = PsycopgPoolConfig(
-        host="custom_host",
-        port=5433,
-        user="custom_user",
-        password="custom_password",
-        dbname="custom_db",
-        min_size=2,
-        max_size=15,
-    )
-    custom_statement_config = SQLConfig(strict_mode=False)
-    custom_instrumentation = InstrumentationConfig(log_queries=True)
-
-    config = PsycopgAsyncConfig(
-        pool_config=custom_pool_config,
-        connection_config=custom_connection_config,
-        statement_config=custom_statement_config,
-        instrumentation=custom_instrumentation,
-    )
-    assert config.pool_config.get("host") == "custom_host"
-    assert config.pool_config.get("port") == 5433
-    assert config.pool_config.get("min_size") == 2
-    assert config.pool_config.get("max_size") == 15
-    assert config.connection_config.get("sslmode") == "require"
-    assert config.connection_config.get("connect_timeout") == 60.0
-    assert config.connection_config.get("application_name") == "custom_app"
-    assert config.statement_config is custom_statement_config
-    assert config.instrumentation.log_queries is True
 
 
-def test_psycopg_sync_config_connection_config_dict() -> None:
-    """Test Psycopg sync config connection_config_dict property."""
-    connection_config = PsycopgConnectionConfig(
-        sslmode="require",
-        connect_timeout=30.0,
-        application_name="test_app",
-    )
-    pool_config = PsycopgPoolConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
-        min_size=1,
-        max_size=10,
-        # Overlapping parameter to test precedence
-        sslmode="prefer",  # Should override connection_config sslmode
-    )
+def test_psycopg_config_connection_config_dict() -> None:
+    """Test Psycopg config connection_config_dict and pool_config_dict properties."""
     config = PsycopgSyncConfig(
-        pool_config=pool_config,
-        connection_config=connection_config,
-    )
-
-    config_dict = config.connection_config_dict
-    expected_keys = {
-        "host": "localhost",
-        "port": 5432,
-        "user": "test_user",
-        "password": "test_password",
-        "dbname": "test_db",
-        "min_size": 1,
-        "max_size": 10,
-        "sslmode": "prefer",  # Pool config takes precedence
-        "connect_timeout": 30.0,  # From connection config
-        "application_name": "test_app",  # From connection config
-    }
-
-    # Check that all expected keys are present
-    for key, value in expected_keys.items():
-        assert config_dict[key] == value
-
-    # Verify DictRow is set
-    from psycopg.rows import DictRow
-
-    assert config_dict["row_factory"] is DictRow
-
-
-def test_psycopg_async_config_connection_config_dict() -> None:
-    """Test Psycopg async config connection_config_dict property."""
-    connection_config = PsycopgConnectionConfig(
-        sslmode="require",
-        connect_timeout=30.0,
-        application_name="test_app",
-    )
-    pool_config = PsycopgPoolConfig(
         host="localhost",
         port=5432,
         user="test_user",
         password="test_password",
         dbname="test_db",
+        connect_timeout=30.0,
+        application_name="test_app",
         min_size=1,
         max_size=10,
-        # Overlapping parameter to test precedence
-        sslmode="prefer",  # Should override connection_config sslmode
-    )
-    config = PsycopgAsyncConfig(
-        pool_config=pool_config,
-        connection_config=connection_config,
+        timeout=5.0,
     )
 
-    config_dict = config.connection_config_dict
-    expected_keys = {
+    # Test connection_config_dict returns only connection parameters
+    conn_dict = config.connection_config_dict
+    expected_conn = {
         "host": "localhost",
         "port": 5432,
         "user": "test_user",
         "password": "test_password",
         "dbname": "test_db",
+        "connect_timeout": 30.0,
+        "application_name": "test_app",
+    }
+    for key, value in expected_conn.items():
+        assert conn_dict[key] == value
+
+    # Connection config should not include pool-specific parameters
+    assert "min_size" not in conn_dict
+    assert "max_size" not in conn_dict
+    assert "timeout" not in conn_dict
+
+    # Test pool_config_dict returns all parameters
+    pool_dict = config.pool_config_dict
+    expected_pool = {
+        "host": "localhost",
+        "port": 5432,
+        "user": "test_user",
+        "password": "test_password",
+        "dbname": "test_db",
+        "connect_timeout": 30.0,
+        "application_name": "test_app",
         "min_size": 1,
         "max_size": 10,
-        "sslmode": "prefer",  # Pool config takes precedence
-        "connect_timeout": 30.0,  # From connection config
-        "application_name": "test_app",  # From connection config
+        "timeout": 5.0,
     }
-
-    # Check that all expected keys are present
-    for key, value in expected_keys.items():
-        assert config_dict[key] == value
+    for key, value in expected_pool.items():
+        assert pool_dict[key] == value
 
     # Verify DictRow is set
     from psycopg.rows import DictRow
 
-    assert config_dict["row_factory"] is DictRow
+    assert conn_dict["row_factory"] is DictRow
+    assert pool_dict["row_factory"] is DictRow
 
 
 @patch("psycopg_pool.ConnectionPool")
 def test_psycopg_sync_config_create_pool(mock_pool_class: Mock) -> None:
-    """Test Psycopg sync config _create_pool_impl method (mocked)."""
+    """Test Psycopg sync config _create_pool method (mocked)."""
     mock_pool = Mock()
     mock_pool_class.side_effect = lambda *args: mock_pool  # type: ignore
-    pool_config = PsycopgPoolConfig(
+    config = PsycopgSyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
@@ -352,7 +281,6 @@ def test_psycopg_sync_config_create_pool(mock_pool_class: Mock) -> None:
         min_size=1,
         max_size=10,
     )
-    config = PsycopgSyncConfig(pool_config=pool_config)
     pool = config._create_pool()
     assert pool is mock_pool
 
@@ -360,10 +288,10 @@ def test_psycopg_sync_config_create_pool(mock_pool_class: Mock) -> None:
 @patch("psycopg_pool.AsyncConnectionPool")
 @pytest.mark.asyncio
 async def test_psycopg_async_config_create_pool(mock_pool_class: Mock) -> None:
-    """Test Psycopg async config _create_pool_impl method (mocked)."""
+    """Test Psycopg async config _create_pool method (mocked)."""
     mock_pool = AsyncMock()
     mock_pool_class.side_effect = lambda *args: mock_pool  # type: ignore
-    pool_config = PsycopgPoolConfig(
+    config = PsycopgAsyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
@@ -372,7 +300,6 @@ async def test_psycopg_async_config_create_pool(mock_pool_class: Mock) -> None:
         min_size=1,
         max_size=10,
     )
-    config = PsycopgAsyncConfig(pool_config=pool_config)
     pool = await config._create_pool()
     assert pool is mock_pool
 
@@ -382,7 +309,7 @@ def test_psycopg_sync_config_create_connection(mock_connect: Mock) -> None:
     """Test Psycopg sync config create_connection method (mocked)."""
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
-    connection_config = PsycopgConnectionConfig(
+    config = PsycopgSyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
@@ -390,11 +317,6 @@ def test_psycopg_sync_config_create_connection(mock_connect: Mock) -> None:
         dbname="test_db",
         sslmode="require",
         connect_timeout=30.0,
-    )
-    pool_config = PsycopgPoolConfig(host="localhost")
-    config = PsycopgSyncConfig(
-        pool_config=pool_config,
-        connection_config=connection_config,
     )
     connection = config.create_connection()
     assert connection is mock_connection
@@ -407,7 +329,7 @@ async def test_psycopg_async_config_create_connection(mock_connect: Mock) -> Non
     mock_connection = AsyncMock()
     mock_connect.return_value = mock_connection
 
-    connection_config = PsycopgConnectionConfig(
+    config = PsycopgAsyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
@@ -416,15 +338,10 @@ async def test_psycopg_async_config_create_connection(mock_connect: Mock) -> Non
         sslmode="require",
         connect_timeout=30.0,
     )
-    pool_config = PsycopgPoolConfig(host="localhost")  # Basic pool config
-    config = PsycopgAsyncConfig(
-        pool_config=pool_config,
-        connection_config=connection_config,
-    )
 
     connection = await config.create_connection()
 
-    # Verify connect was called with connection config parameters only
+    # Verify connect was called with correct parameters
     mock_connect.assert_called_once()
     call_args = mock_connect.call_args[1]
     assert call_args["host"] == "localhost"
@@ -438,21 +355,74 @@ async def test_psycopg_async_config_create_connection(mock_connect: Mock) -> Non
 
 
 @patch("psycopg.connect")
-def test_psycopg_sync_config_provide_connection_error_handling(mock_connect: Mock) -> None:
-    """Test Psycopg sync config provide_connection error handling."""
-    MagicMock()
-    mock_connect.side_effect = ValueError("mock error")
-    pool_config = PsycopgPoolConfig(
+def test_psycopg_sync_config_provide_connection(mock_connect: Mock) -> None:
+    """Test Psycopg sync config provide_connection context manager."""
+    mock_connection = MagicMock()
+    mock_connect.return_value = mock_connection
+    config = PsycopgSyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
         password="test_password",
         dbname="test_db",
     )
-    config = PsycopgSyncConfig(pool_config=pool_config)
-    with pytest.raises(ValueError, match="mock error"):
-        with config.provide_connection():
-            pass
+
+    # Test context manager behavior (without pool)
+    with config.provide_connection() as conn:
+        assert conn is mock_connection
+        # Verify connection is not closed yet
+        mock_connection.close.assert_not_called()
+
+    # Verify connection was closed after context exit
+    mock_connection.close.assert_called_once()
+
+
+@patch("psycopg.AsyncConnection.connect")
+@pytest.mark.asyncio
+async def test_psycopg_async_config_provide_connection(mock_connect: Mock) -> None:
+    """Test Psycopg async config provide_connection context manager."""
+    mock_connection = AsyncMock()
+    mock_connect.return_value = mock_connection
+
+    config = PsycopgAsyncConfig(
+        host="localhost",
+        port=5432,
+        user="test_user",
+        password="test_password",
+        dbname="test_db",
+    )
+
+    # Test context manager behavior (without pool)
+    async with config.provide_connection() as conn:
+        assert conn is mock_connection
+        # Verify connection is not closed yet
+        mock_connection.close.assert_not_called()
+
+    # Verify connection was closed after context exit
+    mock_connection.close.assert_called_once()
+
+
+@patch("psycopg.connect")
+def test_psycopg_sync_config_provide_connection_error_handling(mock_connect: Mock) -> None:
+    """Test Psycopg sync config provide_connection error handling."""
+    mock_connection = MagicMock()
+    mock_connect.return_value = mock_connection
+    config = PsycopgSyncConfig(
+        host="localhost",
+        port=5432,
+        user="test_user",
+        password="test_password",
+        dbname="test_db",
+    )
+
+    # Test error handling and cleanup
+    with pytest.raises(ValueError):
+        with config.provide_connection() as conn:
+            assert conn is mock_connection
+            raise ValueError("Test error")
+
+    # Verify connection was still closed despite error
+    mock_connection.close.assert_called_once()
 
 
 @patch("psycopg.AsyncConnection.connect")
@@ -462,14 +432,13 @@ async def test_psycopg_async_config_provide_connection_error_handling(mock_conne
     mock_connection = AsyncMock()
     mock_connect.return_value = mock_connection
 
-    pool_config = PsycopgPoolConfig(
+    config = PsycopgAsyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
         password="test_password",
         dbname="test_db",
     )
-    config = PsycopgAsyncConfig(pool_config=pool_config)
 
     # Test error handling and cleanup
     with pytest.raises(ValueError):
@@ -486,16 +455,27 @@ def test_psycopg_sync_config_provide_session(mock_connect: Mock) -> None:
     """Test Psycopg sync config provide_session context manager."""
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
-    pool_config = PsycopgPoolConfig(
+    config = PsycopgSyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
         password="test_password",
         dbname="test_db",
     )
-    config = PsycopgSyncConfig(pool_config=pool_config)
+
+    # Test session context manager behavior
     with config.provide_session() as session:
-        assert session is mock_connection
+        assert isinstance(session, PsycopgSyncDriver)
+        assert session.connection is mock_connection
+        # Check that parameter styles were set
+        assert session.config.allowed_parameter_styles == ("pyformat_positional", "pyformat_named")
+        assert session.config.target_parameter_style == "pyformat_positional"
+        assert session.instrumentation_config is config.instrumentation
+        # Verify connection is not closed yet
+        mock_connection.close.assert_not_called()
+
+    # Verify connection was closed after context exit
+    mock_connection.close.assert_called_once()
 
 
 @patch("psycopg.AsyncConnection.connect")
@@ -505,20 +485,21 @@ async def test_psycopg_async_config_provide_session(mock_connect: Mock) -> None:
     mock_connection = AsyncMock()
     mock_connect.return_value = mock_connection
 
-    pool_config = PsycopgPoolConfig(
+    config = PsycopgAsyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
         password="test_password",
         dbname="test_db",
     )
-    config = PsycopgAsyncConfig(pool_config=pool_config)
 
     # Test session context manager behavior
     async with config.provide_session() as session:
         assert isinstance(session, PsycopgAsyncDriver)
         assert session.connection is mock_connection
-        assert session.config is config.statement_config
+        # Check that parameter styles were set
+        assert session.config.allowed_parameter_styles == ("pyformat_positional", "pyformat_named")
+        assert session.config.target_parameter_style == "pyformat_positional"
         assert session.instrumentation_config is config.instrumentation
         # Verify connection is not closed yet
         mock_connection.close.assert_not_called()
@@ -529,27 +510,25 @@ async def test_psycopg_async_config_provide_session(mock_connect: Mock) -> None:
 
 def test_psycopg_sync_config_driver_type() -> None:
     """Test Psycopg sync config driver_type property."""
-    pool_config = PsycopgPoolConfig(
+    config = PsycopgSyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
         password="test_password",
         dbname="test_db",
     )
-    config = PsycopgSyncConfig(pool_config=pool_config)
     assert config.driver_type is PsycopgSyncDriver
 
 
 def test_psycopg_async_config_driver_type() -> None:
     """Test Psycopg async config driver_type property."""
-    pool_config = PsycopgPoolConfig(
+    config = PsycopgAsyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
         password="test_password",
         dbname="test_db",
     )
-    config = PsycopgAsyncConfig(pool_config=pool_config)
     assert config.driver_type is PsycopgAsyncDriver
 
 
@@ -557,14 +536,13 @@ def test_psycopg_sync_config_connection_type() -> None:
     """Test Psycopg sync config connection_type property."""
     from psycopg import Connection
 
-    pool_config = PsycopgPoolConfig(
+    config = PsycopgSyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
         password="test_password",
         dbname="test_db",
     )
-    config = PsycopgSyncConfig(pool_config=pool_config)
     assert config.connection_type is Connection
 
 
@@ -572,76 +550,71 @@ def test_psycopg_async_config_connection_type() -> None:
     """Test Psycopg async config connection_type property."""
     from psycopg import AsyncConnection
 
-    pool_config = PsycopgPoolConfig(
+    config = PsycopgAsyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
         password="test_password",
         dbname="test_db",
     )
-    config = PsycopgAsyncConfig(pool_config=pool_config)
     assert config.connection_type is AsyncConnection
 
 
 def test_psycopg_sync_config_is_async() -> None:
     """Test Psycopg sync config __is_async__ attribute."""
-    pool_config = PsycopgPoolConfig(
+    config = PsycopgSyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
         password="test_password",
         dbname="test_db",
     )
-    config = PsycopgSyncConfig(pool_config=pool_config)
     assert config.__is_async__ is False
     assert PsycopgSyncConfig.__is_async__ is False
 
 
 def test_psycopg_async_config_is_async() -> None:
     """Test Psycopg async config __is_async__ attribute."""
-    pool_config = PsycopgPoolConfig(
+    config = PsycopgAsyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
         password="test_password",
         dbname="test_db",
     )
-    config = PsycopgAsyncConfig(pool_config=pool_config)
     assert config.__is_async__ is True
     assert PsycopgAsyncConfig.__is_async__ is True
 
 
 def test_psycopg_sync_config_supports_connection_pooling() -> None:
     """Test Psycopg sync config __supports_connection_pooling__ attribute."""
-    pool_config = PsycopgPoolConfig(
+    config = PsycopgSyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
         password="test_password",
         dbname="test_db",
     )
-    config = PsycopgSyncConfig(pool_config=pool_config)
     assert config.__supports_connection_pooling__ is True
     assert PsycopgSyncConfig.__supports_connection_pooling__ is True
 
 
 def test_psycopg_async_config_supports_connection_pooling() -> None:
     """Test Psycopg async config __supports_connection_pooling__ attribute."""
-    pool_config = PsycopgPoolConfig(
+    config = PsycopgAsyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
         password="test_password",
         dbname="test_db",
     )
-    config = PsycopgAsyncConfig(pool_config=pool_config)
     assert config.__supports_connection_pooling__ is True
     assert PsycopgAsyncConfig.__supports_connection_pooling__ is True
 
 
 def test_psycopg_config_ssl_configuration() -> None:
     """Test Psycopg config with SSL configuration."""
-    pool_config = PsycopgPoolConfig(
+    config = PsycopgSyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
@@ -652,16 +625,80 @@ def test_psycopg_config_ssl_configuration() -> None:
         sslkey="/path/to/key.pem",
         sslrootcert="/path/to/ca.pem",
     )
-    config = PsycopgSyncConfig(pool_config=pool_config)
-    assert config.pool_config.get("sslmode") == "require"
-    assert config.pool_config.get("sslcert") == "/path/to/cert.pem"
-    assert config.pool_config.get("sslkey") == "/path/to/key.pem"
-    assert config.pool_config.get("sslrootcert") == "/path/to/ca.pem"
+    assert config.sslmode == "require"
+    assert config.sslcert == "/path/to/cert.pem"
+    assert config.sslkey == "/path/to/key.pem"
+    assert config.sslrootcert == "/path/to/ca.pem"
+
+
+def test_psycopg_config_from_pool_config() -> None:
+    """Test Psycopg config from_pool_config backward compatibility."""
+    # Test basic backward compatibility
+    pool_config = {
+        "host": "localhost",
+        "port": 5432,
+        "user": "test_user",
+        "password": "test_password",
+        "dbname": "test_db",
+        "min_size": 1,
+        "max_size": 10,
+    }
+    config = PsycopgSyncConfig.from_pool_config(pool_config)
+    assert config.host == "localhost"
+    assert config.port == 5432
+    assert config.user == "test_user"
+    assert config.min_size == 1
+    assert config.max_size == 10
+    assert config.extras == {}
+
+    # Test with connection config
+    connection_config = {
+        "sslmode": "require",
+        "connect_timeout": 30.0,
+    }
+    pool_config_override = {
+        "host": "pool_host",
+        "port": 5432,
+        "user": "test_user",
+        "password": "test_password",
+        "dbname": "test_db",
+        "min_size": 2,
+        "max_size": 20,
+        "sslmode": "prefer",  # Should override connection_config
+    }
+    config2 = PsycopgSyncConfig.from_pool_config(pool_config_override, connection_config=connection_config)
+    assert config2.host == "pool_host"
+    assert config2.port == 5432
+    assert config2.connect_timeout == 30.0  # From connection_config
+    assert config2.sslmode == "prefer"  # Pool config takes precedence
+    assert config2.min_size == 2
+    assert config2.max_size == 20
+
+    # Test with extra parameters
+    pool_config_with_extras = {
+        "host": "localhost",
+        "port": 5432,
+        "user": "test_user",
+        "password": "test_password",
+        "dbname": "test_db",
+        "unknown_param": "test_value",
+        "another_param": 42,
+    }
+    config_extras = PsycopgSyncConfig.from_pool_config(pool_config_with_extras)
+    assert config_extras.host == "localhost"
+    assert config_extras.extras["unknown_param"] == "test_value"
+    assert config_extras.extras["another_param"] == 42
+
+
+def test_psycopg_config_conninfo() -> None:
+    """Test Psycopg config with conninfo string."""
+    config = PsycopgSyncConfig(conninfo="postgresql://user:pass@localhost:5432/testdb")
+    assert config.conninfo == "postgresql://user:pass@localhost:5432/testdb"
 
 
 def test_psycopg_config_application_name() -> None:
     """Test Psycopg config with application name settings."""
-    pool_config = PsycopgPoolConfig(
+    config = PsycopgSyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
@@ -669,13 +706,12 @@ def test_psycopg_config_application_name() -> None:
         dbname="test_db",
         application_name="my_app",
     )
-    config = PsycopgSyncConfig(pool_config=pool_config)
-    assert config.pool_config.get("application_name") == "my_app"
+    assert config.application_name == "my_app"
 
 
 def test_psycopg_config_timeouts() -> None:
     """Test Psycopg config with timeout settings."""
-    pool_config = PsycopgPoolConfig(
+    config = PsycopgSyncConfig(
         host="localhost",
         port=5432,
         user="test_user",
@@ -687,159 +723,8 @@ def test_psycopg_config_timeouts() -> None:
         max_idle=600.0,
         reconnect_timeout=30.0,
     )
-    config = PsycopgSyncConfig(pool_config=pool_config)
-    assert config.pool_config.get("connect_timeout") == 45.0
-    assert config.pool_config.get("timeout") == 10.0
-    assert config.pool_config.get("max_lifetime") == 3600.0
-    assert config.pool_config.get("max_idle") == 600.0
-    assert config.pool_config.get("reconnect_timeout") == 30.0
-
-
-def test_psycopg_config_pool_settings() -> None:
-    """Test Psycopg config with pool-specific settings."""
-    pool_config = PsycopgPoolConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
-        min_size=5,
-        max_size=50,
-        name="my_pool",
-        max_waiting=100,
-        num_workers=8,
-    )
-    config = PsycopgSyncConfig(pool_config=pool_config)
-    assert config.pool_config.get("min_size") == 5
-    assert config.pool_config.get("max_size") == 50
-    assert config.pool_config.get("name") == "my_pool"
-    assert config.pool_config.get("max_waiting") == 100
-    assert config.pool_config.get("num_workers") == 8
-
-
-def test_psycopg_config_autocommit() -> None:
-    """Test Psycopg config with autocommit settings."""
-    pool_config = PsycopgPoolConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
-        autocommit=True,
-    )
-    config = PsycopgSyncConfig(pool_config=pool_config)
-    assert config.pool_config.get("autocommit") is True
-
-
-def test_psycopg_config_options() -> None:
-    """Test Psycopg config with PostgreSQL options."""
-    pool_config = PsycopgPoolConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
-        options="-c search_path=public,private -c statement_timeout=30s",
-    )
-    config = PsycopgSyncConfig(pool_config=pool_config)
-    assert config.pool_config.get("options") == "-c search_path=public,private -c statement_timeout=30s"
-
-
-def test_psycopg_sync_config_close_pool() -> None:
-    """Test Psycopg sync config _close_pool_impl method."""
-    mock_pool = Mock()
-
-    pool_config = PsycopgPoolConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
-    )
-    config = PsycopgSyncConfig(pool_config=pool_config)
-    config.pool_instance = mock_pool
-
-    config._close_pool()
-
-    # Verify pool close was called
-    mock_pool.close.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_psycopg_async_config_close_pool() -> None:
-    """Test Psycopg async config _close_pool_impl method."""
-    mock_pool = AsyncMock()
-
-    pool_config = PsycopgPoolConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
-    )
-    config = PsycopgAsyncConfig(pool_config=pool_config)
-    config.pool_instance = mock_pool
-
-    await config._close_pool()
-
-    # Verify pool close was called
-    mock_pool.close.assert_called_once()
-
-
-def test_psycopg_sync_config_provide_pool() -> None:
-    """Test Psycopg sync config provide_pool method."""
-    mock_pool = Mock()
-
-    pool_config = PsycopgPoolConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
-    )
-    config = PsycopgSyncConfig(pool_config=pool_config)
-
-    # Mock the create_pool method
-    config.create_pool = Mock(return_value=mock_pool)
-
-    # First call should create pool
-    pool = config.provide_pool()
-    assert pool is mock_pool
-    assert config.pool_instance is mock_pool
-    config.create_pool.assert_called_once()
-
-    # Second call should return existing pool
-    config.create_pool.reset_mock()
-    pool2 = config.provide_pool()
-    assert pool2 is mock_pool
-    config.create_pool.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_psycopg_async_config_provide_pool() -> None:
-    """Test Psycopg async config provide_pool method."""
-    mock_pool = AsyncMock()
-
-    pool_config = PsycopgPoolConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
-    )
-    config = PsycopgAsyncConfig(pool_config=pool_config)
-
-    # Mock the create_pool method
-    config.create_pool = AsyncMock(return_value=mock_pool)
-
-    # First call should create pool
-    pool = await config.provide_pool()
-    assert pool is mock_pool
-    assert config.pool_instance is mock_pool
-    config.create_pool.assert_called_once()
-
-    # Second call should return existing pool
-    config.create_pool.reset_mock()
-    pool2 = await config.provide_pool()
-    assert pool2 is mock_pool
-    config.create_pool.assert_not_called()
+    assert config.connect_timeout == 45.0
+    assert config.timeout == 10.0
+    assert config.max_lifetime == 3600.0
+    assert config.max_idle == 600.0
+    assert config.reconnect_timeout == 30.0

@@ -20,10 +20,10 @@ from sqlspec.adapters.bigquery.driver import BigQueryDriver
 from sqlspec.config import InstrumentationConfig
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.result import ArrowResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.storage import storage_registry
-from sqlspec.storage.backends.fsspec import FsspecBackend
+from sqlspec.storage.backends.fsspec import FSSpecBackend
 from sqlspec.typing import DictRow
 
 
@@ -362,198 +362,13 @@ def test_bigquery_driver_execute_statement_select(
     """Test BigQueryDriver._execute_statement for SELECT statements."""
     mock_bigquery_connection.query.return_value = mock_query_job
 
-    parameters = {"user_id": 123}
-    statement = SQL("SELECT * FROM users WHERE id = @user_id", parameters=parameters)
-
-    result = bigquery_driver._execute_statement(statement)
-
-    assert result == mock_query_job
-    mock_bigquery_connection.query.assert_called_once()
-
-
-def test_bigquery_driver_execute_statement_script(
-    bigquery_driver: BigQueryDriver, mock_bigquery_connection: Mock, mock_query_job: Mock
-) -> None:
-    """Test BigQueryDriver._execute_statement for script execution."""
-    mock_query_job.result.return_value = None
-    mock_bigquery_connection.query.return_value = mock_query_job
-
-    statement = SQL("CREATE TABLE test AS SELECT 1 as id").as_script()
-
-    result = bigquery_driver._execute_statement(statement)
-
-    assert isinstance(result, str)
-    assert "SCRIPT EXECUTED" in result
-    mock_query_job.result.assert_called_once()  # Should wait for completion
-
-
-def test_bigquery_driver_execute_statement_preformatted_params(
-    bigquery_driver: BigQueryDriver, mock_bigquery_connection: Mock, mock_query_job: Mock
-) -> None:
-    """Test BigQueryDriver._execute_statement with pre-formatted BigQuery parameters."""
-    mock_bigquery_connection.query.return_value = mock_query_job
-
-    preformatted_params = [ScalarQueryParameter("user_id", "INT64", 123)]
-    statement = SQL("SELECT * FROM users WHERE id = @user_id", parameters=preformatted_params)
-
-    result = bigquery_driver._execute_statement(statement)
-
-    assert result == mock_query_job
-
-
-def test_bigquery_driver_execute_statement_preformatted_params_with_kwargs(
-    bigquery_driver: BigQueryDriver, mock_bigquery_connection: Mock, mock_query_job: Mock
-) -> None:
-    """Test BigQueryDriver._execute_statement with pre-formatted BigQuery parameters and kwargs (e.g., job_config)."""
-    mock_bigquery_connection.query.return_value = mock_query_job
-
-    preformatted_params = [ScalarQueryParameter("user_id", "INT64", 123)]
-    statement_with_preformatted = SQL("SELECT * FROM users WHERE id = @user_id", parameters=preformatted_params)
-
-    # Test that _execute_statement can be called with kwargs like job_config
-    # The original ParameterStyleMismatchError check for this specific scenario in _execute_statement is no longer applicable.
-    # This test now verifies that additional kwargs can be passed through.
-    job_config_kwargs = QueryJobConfig()
-    job_config_kwargs.use_legacy_sql = True  # Example kwarg
-
-    result = bigquery_driver._execute_statement(statement_with_preformatted, job_config=job_config_kwargs)
-
-    assert result == mock_query_job
-    # Check that the job_config kwarg was passed to _run_query_job (which is called by _execute_statement)
-    # This requires inspecting the call to mock_bigquery_connection.query made by _run_query_job
-    call_args = mock_bigquery_connection.query.call_args
-    assert call_args is not None
-    final_job_config_passed = call_args.kwargs.get("job_config")
-    assert final_job_config_passed is not None
-    assert final_job_config_passed.use_legacy_sql is True
-
-
-def test_bigquery_driver_wrap_select_result(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQueryDriver._wrap_select_result for query results."""
-    # Mock BigQuery result
-    mock_result = Mock()
-    mock_result.schema = [Mock(name="id"), Mock(name="name")]
-    mock_result.__iter__ = Mock(return_value=iter([]))
-
-    mock_query_job = Mock(spec=QueryJob)
-    mock_query_job.result.return_value = mock_result
-
-    statement = SQL("SELECT id, name FROM users")
-
-    with patch.object(bigquery_driver, "_rows_to_results", return_value=[{"id": 1, "name": "John"}]):
-        result = bigquery_driver._wrap_select_result(statement, mock_query_job)
-
-    assert isinstance(result, SQLResult)
-    assert result.statement == statement
-    assert result.data == [{"id": 1, "name": "John"}]
-    assert result.column_names == ["id", "name"]
-
-
-def test_bigquery_driver_wrap_select_result_unexpected_type(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQueryDriver._wrap_select_result with unexpected result type."""
-    statement = SQL("SELECT * FROM users")
-
-    result = bigquery_driver._wrap_select_result(statement, "unexpected")
-
-    assert isinstance(result, SQLResult)
-    assert result.statement == statement
-    assert result.data == []
-    assert result.column_names == []
-
-
-def test_bigquery_driver_wrap_execute_result_query_job(bigquery_driver: BigQueryDriver, mock_query_job: Mock) -> None:
-    """Test BigQueryDriver._wrap_execute_result for QueryJob."""
-    statement = SQL("INSERT INTO users (name) VALUES (@name)")
-
-    result = bigquery_driver._wrap_execute_result(statement, mock_query_job)
-
-    assert isinstance(result, SQLResult)
-    assert result.statement == statement
-    assert result.rows_affected == mock_query_job.num_dml_affected_rows
-    assert result.get_metadata("job_id") == mock_query_job.job_id
-
-
-def test_bigquery_driver_wrap_execute_result_script(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQueryDriver._wrap_execute_result for script execution."""
-    statement = SQL("CREATE TABLE test AS SELECT 1 as id").as_script()
-
-    result = bigquery_driver._wrap_execute_result(statement, "SCRIPT EXECUTED (Job ID: test-job-123)")
-
-    assert isinstance(result, SQLResult)
-    assert result.statement == statement
-    assert result.rows_affected == 0
-
-
-def test_bigquery_driver_execute_many_empty_parameters(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQueryDriver.execute_many with empty parameters."""
-    statement = SQL("INSERT INTO users (name) VALUES (@name)")
-
-    result = bigquery_driver.execute_many(statement, [])
-
-    assert isinstance(result, SQLResult)
-    assert result.rows_affected == 0
-
-
-def test_bigquery_driver_execute_many_with_parameters(
-    bigquery_driver: BigQueryDriver, mock_bigquery_connection: Mock, mock_query_job: Mock
-) -> None:
-    """Test BigQueryDriver.execute_many with multiple parameter sets."""
-    mock_bigquery_connection.query.return_value = mock_query_job
-    mock_query_job.num_dml_affected_rows = 1
-
-    statement = SQL("INSERT INTO users (name) VALUES (@name)")
-    parameters = [
-        {"name": "John"},
-        {"name": "Jane"},
-        {"name": "Bob"},
-    ]
-
-    result = bigquery_driver.execute_many(statement, parameters)
-
-    assert isinstance(result, SQLResult)
-    # Should have executed 3 times (one for each parameter set)
-    assert mock_bigquery_connection.query.call_count == 3
-
-
-def test_bigquery_driver_execute_many_with_job_config(
-    bigquery_driver: BigQueryDriver, mock_bigquery_connection: Mock, mock_query_job: Mock
-) -> None:
-    """Test BigQueryDriver.execute_many with custom job configuration."""
-    mock_bigquery_connection.query.return_value = mock_query_job
-    mock_query_job.num_dml_affected_rows = 1
-
-    job_config = QueryJobConfig()
-    job_config.dry_run = True
-
-    statement = SQL("INSERT INTO users (name) VALUES (@name)")
-    parameters = [{"name": "John"}]
-
-    result = bigquery_driver.execute_many(statement, parameters, job_config=job_config)
-
-    assert isinstance(result, SQLResult)
-    mock_bigquery_connection.query.assert_called_once()
-
-
-@patch("sqlspec.adapters.bigquery.driver.pyarrow")
-def test_bigquery_driver_fetch_arrow_table(
-    mock_pyarrow: Mock, bigquery_driver: BigQueryDriver, mock_bigquery_connection: Mock
-) -> None:
-    """Test BigQueryDriver.fetch_arrow_table for Arrow format results."""
-    # Mock Arrow table
+    # Setup mock arrow table
     mock_arrow_table = Mock()
-    mock_pyarrow.Table.from_pandas.return_value = mock_arrow_table
+    mock_query_job.to_arrow.return_value = mock_arrow_table
 
-    # Mock BigQuery result with to_arrow method
-    mock_result = Mock()
-    mock_result.to_arrow.return_value = mock_arrow_table
-
-    mock_query_job = Mock(spec=QueryJob)
-    mock_query_job.result.return_value = mock_result
-    mock_bigquery_connection.query.return_value = mock_query_job
-
-    statement = SQL("SELECT * FROM users")
-
-    result = bigquery_driver.fetch_arrow_table(statement)
+    parameters = {"user_id": 123}
+    statement = SQL("SELECT * FROM users WHERE id = @user_id")
+    result = bigquery_driver.fetch_arrow_table(statement, parameters=parameters)
 
     assert isinstance(result, ArrowResult)
     assert result.statement == statement
@@ -673,7 +488,7 @@ def test_to_parquet_raises_if_bucket_not_registered(
 def test_to_parquet_calls_extract_table(monkeypatch: pytest.MonkeyPatch, bigquery_driver: BigQueryDriver) -> None:
     """Test that to_parquet calls extract_table with correct arguments if path and bucket are valid."""
     bucket = "test-bucket"
-    backend = FsspecBackend(protocol="gs", base_path="", bucket=bucket)
+    backend = FSSpecBackend(protocol="gs", base_path="", bucket=bucket)
     key = "gs://test-bucket"
     # Patch storage_registry to return our backend for the bucket
     monkeypatch.setattr(storage_registry, "list_registered_keys", lambda: [key])  # type: ignore

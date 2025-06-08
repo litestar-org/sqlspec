@@ -77,7 +77,7 @@ def test_register_from_config_fsspec(registry: "StorageRegistry") -> None:
 
 def test_register_from_config_local(registry: "StorageRegistry") -> None:
     config = {"backend_type": "local", "base_path": "/tmp"}
-    with patch("sqlspec.storage.backends.file.LocalBackend.from_config") as mock_from_config:
+    with patch("sqlspec.storage.backends.file.FSSpecBackend.from_config") as mock_from_config:
         backend = MagicMock(spec=StorageBackendProtocol)
         mock_from_config.return_value = backend
         registry.register("local", config)
@@ -109,11 +109,11 @@ def test_backend_type_and_base_uri_properties() -> None:
         fs._fs_config = {"bucket": "bkt"}
         assert fs.backend_type == "fsspec"
         assert fs.base_uri == "s3://bkt"
-    # LocalBackend
-    with patch("sqlspec.storage.backends.file.LocalBackend.__init__", return_value=None):
-        from sqlspec.storage.backends.file import LocalBackend
+    # FSSpecBackend
+    with patch("sqlspec.storage.backends.file.FSSpecBackend.__init__", return_value=None):
+        from sqlspec.storage.backends.fsspec import FSSpecBackend
 
-        lf = LocalBackend.__new__(LocalBackend)
+        lf = FSSpecBackend.__new__(FSSpecBackend)
         lf._base_path = "/tmp"
         assert lf.backend_type == "local"
         assert lf.base_uri.startswith("file://")
@@ -209,9 +209,9 @@ def test_fsspec_backend_methods(monkeypatch: "pytest.MonkeyPatch") -> None:
 
 
 def test_localfile_backend_methods(tmp_path: "Path") -> None:
-    from sqlspec.storage.backends.file import LocalBackend
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
 
-    backend = LocalBackend(str(tmp_path))
+    backend = FSSpecBackend(str(tmp_path))
     # write_bytes/read_bytes
     backend.write_bytes("foo.bin", b"abc")
     assert backend.read_bytes("foo.bin") == b"abc"

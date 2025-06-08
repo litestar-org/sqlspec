@@ -2,9 +2,7 @@
 
 import logging
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
 
 from sqlspec.adapters.adbc.driver import AdbcConnection, AdbcDriver
 from sqlspec.config import InstrumentationConfig, NoPoolSyncConfig
@@ -21,105 +19,38 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("sqlspec.adapters.adbc")
 
-__all__ = (
-    "AdbcConfig",
-    "AdbcConnectionConfig",
+CONNECTION_FIELDS = frozenset(
+    {
+        "uri",
+        "driver_name",
+        "db_kwargs",
+        "conn_kwargs",
+        "adbc_driver_manager_entrypoint",
+        "autocommit",
+        "isolation_level",
+        "batch_size",
+        "query_timeout",
+        "connection_timeout",
+        "ssl_mode",
+        "ssl_cert",
+        "ssl_key",
+        "ssl_ca",
+        "username",
+        "password",
+        "token",
+        "project_id",
+        "dataset_id",
+        "account",
+        "warehouse",
+        "database",
+        "schema",
+        "role",
+        "authorization_header",
+        "grpc_options",
+    }
 )
 
-
-class AdbcConnectionConfig(TypedDict, total=False):
-    """ADBC connection configuration as TypedDict.
-
-    Universal configuration for ADBC connections supporting multiple database drivers
-    including PostgreSQL, SQLite, DuckDB, BigQuery, Snowflake, and Flight SQL.
-    """
-
-    # Core connection parameters
-    uri: NotRequired[str]
-    """Database URI (e.g., 'postgresql://...', 'sqlite://...', 'bigquery://...')."""
-
-    driver_name: NotRequired[str]
-    """Full dotted path to ADBC driver connect function or driver alias."""
-
-    # Database-specific parameters
-    db_kwargs: NotRequired[dict[str, Any]]
-    """Additional database-specific connection parameters."""
-
-    conn_kwargs: NotRequired[dict[str, Any]]
-    """Additional connection-specific parameters."""
-
-    # Driver-specific configurations
-    adbc_driver_manager_entrypoint: NotRequired[str]
-    """Override for driver manager entrypoint."""
-
-    # Connection options
-    autocommit: NotRequired[bool]
-    """Enable autocommit mode."""
-
-    isolation_level: NotRequired[str]
-    """Transaction isolation level."""
-
-    # Performance options
-    batch_size: NotRequired[int]
-    """Batch size for bulk operations."""
-
-    query_timeout: NotRequired[int]
-    """Query timeout in seconds."""
-
-    connection_timeout: NotRequired[int]
-    """Connection timeout in seconds."""
-
-    # Security options
-    ssl_mode: NotRequired[str]
-    """SSL mode for secure connections."""
-
-    ssl_cert: NotRequired[str]
-    """SSL certificate path."""
-
-    ssl_key: NotRequired[str]
-    """SSL private key path."""
-
-    ssl_ca: NotRequired[str]
-    """SSL certificate authority path."""
-
-    # Authentication
-    username: NotRequired[str]
-    """Database username."""
-
-    password: NotRequired[str]
-    """Database password."""
-
-    token: NotRequired[str]
-    """Authentication token (for cloud services)."""
-
-    # Cloud-specific options (BigQuery, Snowflake, etc.)
-    project_id: NotRequired[str]
-    """Project ID (BigQuery)."""
-
-    dataset_id: NotRequired[str]
-    """Dataset ID (BigQuery)."""
-
-    account: NotRequired[str]
-    """Account identifier (Snowflake)."""
-
-    warehouse: NotRequired[str]
-    """Warehouse name (Snowflake)."""
-
-    database: NotRequired[str]
-    """Database name."""
-
-    schema: NotRequired[str]
-    """Schema name."""
-
-    role: NotRequired[str]
-    """Role name (Snowflake)."""
-
-    # Flight SQL specific
-    authorization_header: NotRequired[str]
-    """Authorization header for Flight SQL."""
-
-    grpc_options: NotRequired[dict[str, Any]]
-    """gRPC specific options for Flight SQL."""
+__all__ = ("CONNECTION_FIELDS", "AdbcConfig")
 
 
 class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
@@ -153,55 +84,175 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
     def __init__(
         self,
-        connection_config: Optional[AdbcConnectionConfig] = None,
         statement_config: Optional[SQLConfig] = None,
         instrumentation: Optional[InstrumentationConfig] = None,
         default_row_type: type[DictRow] = DictRow,
         on_connection_create: Optional[Callable[[AdbcConnection], None]] = None,
+        # Core connection parameters
+        uri: Optional[str] = None,
+        driver_name: Optional[str] = None,
+        # Database-specific parameters
+        db_kwargs: Optional[dict[str, Any]] = None,
+        conn_kwargs: Optional[dict[str, Any]] = None,
+        # Driver-specific configurations
+        adbc_driver_manager_entrypoint: Optional[str] = None,
+        # Connection options
+        autocommit: Optional[bool] = None,
+        isolation_level: Optional[str] = None,
+        # Performance options
+        batch_size: Optional[int] = None,
+        query_timeout: Optional[int] = None,
+        connection_timeout: Optional[int] = None,
+        # Security options
+        ssl_mode: Optional[str] = None,
+        ssl_cert: Optional[str] = None,
+        ssl_key: Optional[str] = None,
+        ssl_ca: Optional[str] = None,
+        # Authentication
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        token: Optional[str] = None,
+        # Cloud-specific options
+        project_id: Optional[str] = None,
+        dataset_id: Optional[str] = None,
+        account: Optional[str] = None,
+        warehouse: Optional[str] = None,
+        database: Optional[str] = None,
+        schema: Optional[str] = None,
+        role: Optional[str] = None,
+        # Flight SQL specific
+        authorization_header: Optional[str] = None,
+        grpc_options: Optional[dict[str, Any]] = None,
+        # User-defined extras
+        extras: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize ADBC configuration with universal connectivity features.
 
         Args:
-            connection_config: ADBC connection and driver parameters
             statement_config: Default SQL statement configuration
             instrumentation: Instrumentation configuration
             default_row_type: Default row type for results
             on_connection_create: Callback executed when connection is created
+            uri: Database URI (e.g., 'postgresql://...', 'sqlite://...', 'bigquery://...')
+            driver_name: Full dotted path to ADBC driver connect function or driver alias
+            db_kwargs: Additional database-specific connection parameters
+            conn_kwargs: Additional connection-specific parameters
+            adbc_driver_manager_entrypoint: Override for driver manager entrypoint
+            autocommit: Enable autocommit mode
+            isolation_level: Transaction isolation level
+            batch_size: Batch size for bulk operations
+            query_timeout: Query timeout in seconds
+            connection_timeout: Connection timeout in seconds
+            ssl_mode: SSL mode for secure connections
+            ssl_cert: SSL certificate path
+            ssl_key: SSL private key path
+            ssl_ca: SSL certificate authority path
+            username: Database username
+            password: Database password
+            token: Authentication token (for cloud services)
+            project_id: Project ID (BigQuery)
+            dataset_id: Dataset ID (BigQuery)
+            account: Account identifier (Snowflake)
+            warehouse: Warehouse name (Snowflake)
+            database: Database name
+            schema: Schema name
+            role: Role name (Snowflake)
+            authorization_header: Authorization header for Flight SQL
+            grpc_options: gRPC specific options for Flight SQL
+            extras: Additional connection parameters not explicitly defined
+            **kwargs: Additional parameters (stored in extras)
 
         Example:
             >>> # PostgreSQL via ADBC
             >>> config = AdbcConfig(
-            ...     connection_config={
-            ...         "uri": "postgresql://user:pass@localhost/db",
-            ...         "driver_name": "adbc_driver_postgresql",
-            ...     }
+            ...     uri="postgresql://user:pass@localhost/db",
+            ...     driver_name="adbc_driver_postgresql",
             ... )
 
             >>> # DuckDB via ADBC
             >>> config = AdbcConfig(
-            ...     connection_config={
-            ...         "uri": "duckdb://mydata.db",
-            ...         "driver_name": "duckdb",
-            ...         "db_kwargs": {"read_only": False},
-            ...     }
+            ...     uri="duckdb://mydata.db",
+            ...     driver_name="duckdb",
+            ...     db_kwargs={"read_only": False},
             ... )
 
             >>> # BigQuery via ADBC
             >>> config = AdbcConfig(
-            ...     connection_config={
-            ...         "driver_name": "bigquery",
-            ...         "project_id": "my-project",
-            ...         "dataset_id": "my_dataset",
-            ...     }
+            ...     driver_name="bigquery",
+            ...     project_id="my-project",
+            ...     dataset_id="my_dataset",
             ... )
         """
-        self.connection_config = connection_config or {}
+        # Store connection parameters as instance attributes
+        self.uri = uri
+        self.driver_name = driver_name
+        self.db_kwargs = db_kwargs
+        self.conn_kwargs = conn_kwargs
+        self.adbc_driver_manager_entrypoint = adbc_driver_manager_entrypoint
+        self.autocommit = autocommit
+        self.isolation_level = isolation_level
+        self.batch_size = batch_size
+        self.query_timeout = query_timeout
+        self.connection_timeout = connection_timeout
+        self.ssl_mode = ssl_mode
+        self.ssl_cert = ssl_cert
+        self.ssl_key = ssl_key
+        self.ssl_ca = ssl_ca
+        self.username = username
+        self.password = password
+        self.token = token
+        self.project_id = project_id
+        self.dataset_id = dataset_id
+        self.account = account
+        self.warehouse = warehouse
+        self.database = database
+        self.schema = schema
+        self.role = role
+        self.authorization_header = authorization_header
+        self.grpc_options = grpc_options
+
+        # Handle extras and additional kwargs
+        self.extras = extras or {}
+        self.extras.update(kwargs)
+
+        # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
         self.on_connection_create = on_connection_create
         self._dialect: DialectType = None
         super().__init__(
             instrumentation=instrumentation or InstrumentationConfig(),  # pyright: ignore
+        )
+
+    @classmethod
+    def from_connection_config(
+        cls,
+        connection_config: dict[str, Any],
+        statement_config: Optional[SQLConfig] = None,
+        instrumentation: Optional[InstrumentationConfig] = None,
+        default_row_type: type[DictRow] = DictRow,
+        on_connection_create: Optional[Callable[[AdbcConnection], None]] = None,
+    ) -> "AdbcConfig":
+        """Create config from old-style connection_config dict for backward compatibility.
+
+        Args:
+            connection_config: Dictionary with connection parameters
+            statement_config: Default SQL statement configuration
+            instrumentation: Instrumentation configuration
+            default_row_type: Default row type for results
+            on_connection_create: Callback executed when connection is created
+
+        Returns:
+            AdbcConfig instance
+        """
+        # Create config with all parameters
+        return cls(
+            statement_config=statement_config,
+            instrumentation=instrumentation,
+            default_row_type=default_row_type,
+            on_connection_create=on_connection_create,
+            **connection_config,  # All connection parameters go to direct fields or extras
         )
 
     @property
@@ -225,8 +276,8 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         Raises:
             ImproperConfigurationError: If driver cannot be determined.
         """
-        driver_name = self.connection_config.get("driver_name")
-        uri = self.connection_config.get("uri")
+        driver_name = self.driver_name
+        uri = self.uri
 
         # If explicit driver path is provided, normalize it
         if isinstance(driver_name, str):
@@ -408,7 +459,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                         logger.warning("Connection creation hook failed", extra={"adapter": "adbc", "error": str(e)})
 
         except Exception as e:
-            driver_name = self.connection_config.get("driver_name", "Unknown")
+            driver_name = self.driver_name or "Unknown"
             msg = f"Could not configure ADBC connection using driver '{driver_name}'. Error: {e}"
             logger.exception(msg, extra={"adapter": "adbc", "error": str(e)})
             raise ImproperConfigurationError(msg) from e
@@ -474,7 +525,15 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         Returns:
             The connection configuration dictionary.
         """
-        config = {k: v for k, v in self.connection_config.items() if v is not Empty}
+        # Gather non-None connection parameters
+        config = {
+            field: getattr(self, field)
+            for field in CONNECTION_FIELDS
+            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
+        }
+
+        # Merge extras parameters
+        config.update(self.extras)
 
         # Process URI based on driver type
         if "driver_name" in config:

@@ -74,10 +74,10 @@ async def test_asyncpg_numeric_parameter_types(
     )
 
     assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == expected_count
+    assert result is not None
+    assert len(result) == expected_count
     if expected_count > 0:
-        assert result.data[0]["name"] == "test1"
+        assert result[0]["name"] == "test1"
 
 
 @pytest.mark.asyncio
@@ -90,9 +90,9 @@ async def test_asyncpg_numeric_parameter_style(asyncpg_params_session: AsyncpgDr
     )
 
     assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 1
-    assert result.data[0]["name"] == "test1"
+    assert result is not None
+    assert len(result) == 1
+    assert result[0]["name"] == "test1"
 
 
 @pytest.mark.asyncio
@@ -105,9 +105,9 @@ async def test_asyncpg_multiple_parameters_numeric(asyncpg_params_session: Async
     )
 
     assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 1
-    assert result.data[0]["value"] == 100
+    assert result is not None
+    assert len(result) == 1
+    assert result[0]["value"] == 100
 
 
 @pytest.mark.asyncio
@@ -120,10 +120,10 @@ async def test_asyncpg_null_parameters(asyncpg_params_session: AsyncpgDriver) ->
     )
 
     assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 1
-    assert result.data[0]["name"] == "test3"
-    assert result.data[0]["description"] is None
+    assert result is not None
+    assert len(result) == 1
+    assert result[0]["name"] == "test3"
+    assert result[0]["description"] is None
 
     # Test inserting NULL with parameters
     await asyncpg_params_session.execute(
@@ -135,8 +135,8 @@ async def test_asyncpg_null_parameters(asyncpg_params_session: AsyncpgDriver) ->
         "SELECT * FROM test_params WHERE name = $1",
         ("null_param_test",),
     )
-    assert len(null_result.data) == 1
-    assert null_result.data[0]["description"] is None
+    assert len(null_result) == 1
+    assert null_result[0]["description"] is None
 
 
 @pytest.mark.asyncio
@@ -152,12 +152,12 @@ async def test_asyncpg_parameter_escaping(asyncpg_params_session: AsyncpgDriver)
     )
 
     assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 0  # No matches, but table should still exist
+    assert result is not None
+    assert len(result) == 0  # No matches, but table should still exist
 
     # Verify table still exists by counting all records
     count_result = await asyncpg_params_session.execute("SELECT COUNT(*) as count FROM test_params")
-    assert count_result.data[0]["count"] >= 3  # Our test data should still be there
+    assert count_result[0]["count"] >= 3  # Our test data should still be there
 
 
 @pytest.mark.asyncio
@@ -170,16 +170,16 @@ async def test_asyncpg_parameter_with_like(asyncpg_params_session: AsyncpgDriver
     )
 
     assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) >= 3  # test1, test2, test3
+    assert result is not None
+    assert len(result) >= 3  # test1, test2, test3
 
     # Test with more specific pattern
     specific_result = await asyncpg_params_session.execute(
         "SELECT * FROM test_params WHERE name LIKE $1",
         ("test1%",),
     )
-    assert len(specific_result.data) == 1
-    assert specific_result.data[0]["name"] == "test1"
+    assert len(specific_result) == 1
+    assert specific_result[0]["name"] == "test1"
 
 
 @pytest.mark.asyncio
@@ -203,11 +203,11 @@ async def test_asyncpg_parameter_with_any_array(asyncpg_params_session: AsyncpgD
     )
 
     assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 3
-    assert result.data[0]["name"] == "alpha"
-    assert result.data[1]["name"] == "beta"
-    assert result.data[2]["name"] == "test1"
+    assert result is not None
+    assert len(result) == 3
+    assert result[0]["name"] == "alpha"
+    assert result[1]["name"] == "beta"
+    assert result[2]["name"] == "test1"
 
 
 @pytest.mark.asyncio
@@ -221,9 +221,9 @@ async def test_asyncpg_parameter_with_sql_object(asyncpg_params_session: Asyncpg
     result = await asyncpg_params_session.execute_statement(sql_obj)
 
     assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) >= 1
-    assert all(row["value"] > 150 for row in result.data)
+    assert result is not None
+    assert len(result) >= 1
+    assert all(row["value"] > 150 for row in result)
 
 
 @pytest.mark.asyncio
@@ -261,10 +261,10 @@ async def test_asyncpg_parameter_data_types(asyncpg_params_session: AsyncpgDrive
         (42, 3.14),
     )
 
-    assert len(result.data) == 1
-    assert result.data[0]["text_val"] == "hello"
-    assert result.data[0]["bool_val"] is True
-    assert result.data[0]["array_val"] == [1, 2, 3]
+    assert len(result) == 1
+    assert result[0]["text_val"] == "hello"
+    assert result[0]["bool_val"] is True
+    assert result[0]["array_val"] == [1, 2, 3]
 
 
 @pytest.mark.asyncio
@@ -281,8 +281,8 @@ async def test_asyncpg_parameter_edge_cases(asyncpg_params_session: AsyncpgDrive
         "SELECT * FROM test_params WHERE name = $1",
         ("",),
     )
-    assert len(empty_result.data) == 1
-    assert empty_result.data[0]["value"] == 999
+    assert len(empty_result) == 1
+    assert empty_result[0]["value"] == 999
 
     # Very long string parameter
     long_string = "x" * 1000
@@ -295,8 +295,8 @@ async def test_asyncpg_parameter_edge_cases(asyncpg_params_session: AsyncpgDrive
         "SELECT * FROM test_params WHERE description = $1",
         (long_string,),
     )
-    assert len(long_result.data) == 1
-    assert len(long_result.data[0]["description"]) == 1000
+    assert len(long_result) == 1
+    assert len(long_result[0]["description"]) == 1000
 
 
 @pytest.mark.asyncio
@@ -310,17 +310,17 @@ async def test_asyncpg_parameter_with_postgresql_functions(asyncpg_params_sessio
     )
 
     assert isinstance(result, SQLResult)
-    assert result.data is not None
+    assert result is not None
     # Should find test1, test2, test3 (all have length > 4 and start with "test")
-    assert len(result.data) >= 3
+    assert len(result) >= 3
 
     # Test with math functions
     math_result = await asyncpg_params_session.execute(
         "SELECT name, value, ROUND(value * $1, 2) as multiplied FROM test_params WHERE value >= $2",
         (1.5, 100),
     )
-    assert len(math_result.data) >= 3
-    for row in math_result.data:
+    assert len(math_result) >= 3
+    for row in math_result:
         expected = round(row["value"] * 1.5, 2)
         assert row["multiplied"] == expected
 
@@ -359,8 +359,8 @@ async def test_asyncpg_parameter_with_json(asyncpg_params_session: AsyncpgDriver
         ("test",),
     )
 
-    assert len(result.data) == 2  # JSON 1 and JSON 3
-    assert all(row["type"] == "test" for row in result.data)
+    assert len(result) == 2  # JSON 1 and JSON 3
+    assert all(row["type"] == "test" for row in result)
 
 
 @pytest.mark.asyncio
@@ -396,15 +396,15 @@ async def test_asyncpg_parameter_with_arrays(asyncpg_params_session: AsyncpgDriv
         ("tag2",),
     )
 
-    assert len(result.data) == 1
-    assert result.data[0]["name"] == "Array 1"
+    assert len(result) == 1
+    assert result[0]["name"] == "Array 1"
 
     # Test array length with parameters
     length_result = await asyncpg_params_session.execute(
         "SELECT name FROM test_arrays WHERE array_length(scores, 1) > $1",
         (1,),
     )
-    assert len(length_result.data) == 2  # Array 1 and Array 2
+    assert len(length_result) == 2  # Array 1 and Array 2
 
 
 @pytest.mark.asyncio
@@ -437,9 +437,9 @@ async def test_asyncpg_parameter_with_window_functions(asyncpg_params_session: A
         (30,),
     )
 
-    assert len(result.data) >= 4
+    assert len(result) >= 4
     # Verify window function worked correctly
-    group_a_rows = [row for row in result.data if row["description"] == "Group A"]
+    group_a_rows = [row for row in result if row["description"] == "Group A"]
     assert len(group_a_rows) == 2
     assert group_a_rows[0]["row_num"] == 1  # First in partition
     assert group_a_rows[1]["row_num"] == 2  # Second in partition

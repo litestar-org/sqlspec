@@ -14,9 +14,7 @@ from sqlspec.statement.sql import SQLConfig
 def sqlite_params_session() -> "Generator[SqliteDriver, None, None]":
     """Create a SQLite session for parameter style testing."""
     config = SqliteConfig(
-        connection_config={
-            "database": ":memory:",
-        },
+        database=":memory:",
         statement_config=SQLConfig(strict_mode=False),
     )
 
@@ -214,7 +212,7 @@ def test_sqlite_parameter_with_sql_object(sqlite_params_session: SqliteDriver) -
 
     # Test with qmark style
     sql_obj = SQL("SELECT * FROM test_params WHERE value > ?", parameters=[150])
-    result = sqlite_params_session.execute_statement(sql_obj)
+    result = sqlite_params_session.execute(sql_obj)
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -223,7 +221,7 @@ def test_sqlite_parameter_with_sql_object(sqlite_params_session: SqliteDriver) -
 
     # Test with named style
     named_sql = SQL("SELECT * FROM test_params WHERE value < :max_value", parameters={"max_value": 150})
-    named_result = sqlite_params_session.execute_statement(named_sql)
+    named_result = sqlite_params_session.execute(named_sql)
 
     assert isinstance(named_result, SQLResult)
     assert named_result.data is not None

@@ -11,13 +11,11 @@ from sqlspec.statement import SQLConfig
 async def asyncpg_arrow_session(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgDriver, None]":
     """Create an AsyncPG session for Arrow testing."""
     config = AsyncpgConfig(
-        pool_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "database": postgres_service.database,
-        },
+        host=postgres_service.host,
+        port=postgres_service.port,
+        user=postgres_service.user,
+        password=postgres_service.password,
+        database=postgres_service.database,
         statement_config=SQLConfig(strict_mode=False),
     )
 

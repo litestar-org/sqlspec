@@ -99,11 +99,22 @@ with sqlspec.get_connection("primary") as conn:
 A hierarchical configuration system that provides type-safe settings for databases, connection pools, instrumentation, and SQL processing.
 
 ```python
+from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.config import SQLConfig, InstrumentationConfig
 
-config = PostgreSQLConfig(
-    url="postgresql://localhost/db",
-    pool_size=20,
+# Direct field-based configuration (NEW)
+config = AsyncpgConfig(
+    # Connection parameters are now direct fields
+    dsn="postgresql://localhost/db",
+    min_size=10,
+    max_size=20,
+    max_queries=50000,
+
+    # PostgreSQL specific settings
+    statement_cache_size=100,
+    server_settings={"jit": "off"},
+
+    # Component configurations
     instrumentation=InstrumentationConfig(
         # Core logging
         log_queries=True,
@@ -132,6 +143,10 @@ config = PostgreSQLConfig(
         enable_validation=True
     )
 )
+
+# All configuration parameters are direct attributes
+print(config.min_size)  # 10
+print(config.max_size)  # 20
 ```
 
 ### 3. SQL Processing Pipeline
@@ -161,7 +176,7 @@ from typing import Protocol
 class SyncDriverProtocol(Protocol[ConnectionT, RowT]):
     def execute(self, sql: SQL, **kwargs) -> SQLResult[RowT]: ...
     def execute_many(self, sql: SQL, **kwargs) -> SQLResult[RowT]: ...
-    def fetch_arrow_table(self, sql: SQL, **kwargs) -> ArrowResult: ...
+    def fetch_arrow_table(self, statement: Statement, **kwargs) -> ArrowResult: ...
 ```
 
 ### 5. Query Builders

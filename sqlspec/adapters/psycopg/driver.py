@@ -1,7 +1,7 @@
 # ruff: noqa: PLR6301
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 from psycopg import AsyncConnection, Connection
 from psycopg.rows import DictRow as PsycopgDictRow
@@ -85,9 +85,10 @@ class PsycopgSyncDriver(
                 connection=connection,
                 **kwargs,
             )
+
         return self._execute(
             statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.parameters,
+            statement.get_parameters(style=self._get_placeholder_style()),
             statement,
             connection=connection,
             **kwargs,
@@ -103,13 +104,13 @@ class PsycopgSyncDriver(
     ) -> Any:
         with instrument_operation(self, "psycopg_execute", "database"):
             conn = self._connection(connection)
-            final_driver_params = parameters if parameters is not None and isinstance(parameters, dict) else {}
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            if self.instrumentation_config.log_parameters and final_driver_params:
-                logger.debug("Query parameters: %s", final_driver_params)
+            if self.instrumentation_config.log_parameters and parameters:
+                logger.debug("Query parameters: %s", parameters)
             with self._get_cursor(conn) as cursor:
-                cursor.execute(sql, cast("Optional[dict[str, Any]]", final_driver_params))
+                # Psycopg accepts dict or None for parameters
+                cursor.execute(sql, parameters)
                 return cursor
 
     def _execute_many(
@@ -121,13 +122,13 @@ class PsycopgSyncDriver(
     ) -> Any:
         with instrument_operation(self, "psycopg_execute_many", "database"):
             conn = self._connection(connection)
-            params_list = param_list if isinstance(param_list, list) else []
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL (executemany): %s", sql)
-            if self.instrumentation_config.log_parameters and params_list:
-                logger.debug("Query parameters (batch): %s", params_list)
+            if self.instrumentation_config.log_parameters and param_list:
+                logger.debug("Query parameters (batch): %s", param_list)
             with self._get_cursor(conn) as cursor:
-                cursor.executemany(sql, cast("list[dict[str, Any]]", params_list))
+                # Psycopg expects a list of parameter dicts for executemany
+                cursor.executemany(sql, param_list or [])
                 return cursor
 
     def _execute_script(
@@ -281,9 +282,10 @@ class PsycopgAsyncDriver(
                 connection=connection,
                 **kwargs,
             )
+
         return await self._execute(
             statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.parameters,
+            statement.get_parameters(style=self._get_placeholder_style()),
             statement,
             connection=connection,
             **kwargs,
@@ -299,13 +301,13 @@ class PsycopgAsyncDriver(
     ) -> Any:
         async with instrument_operation_async(self, "psycopg_async_execute", "database"):
             conn = self._connection(connection)
-            final_driver_params = parameters if parameters is not None and isinstance(parameters, dict) else {}
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            if self.instrumentation_config.log_parameters and final_driver_params:
-                logger.debug("Query parameters: %s", final_driver_params)
+            if self.instrumentation_config.log_parameters and parameters:
+                logger.debug("Query parameters: %s", parameters)
             async with self._get_cursor(conn) as cursor:
-                await cursor.execute(sql, final_driver_params)
+                # Psycopg accepts dict or None for parameters
+                await cursor.execute(sql, parameters)
                 return cursor
 
     async def _execute_many(
@@ -317,13 +319,13 @@ class PsycopgAsyncDriver(
     ) -> Any:
         async with instrument_operation_async(self, "psycopg_async_execute_many", "database"):
             conn = self._connection(connection)
-            params_list = param_list if isinstance(param_list, list) else []
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL (executemany): %s", sql)
-            if self.instrumentation_config.log_parameters and params_list:
-                logger.debug("Query parameters (batch): %s", params_list)
+            if self.instrumentation_config.log_parameters and param_list:
+                logger.debug("Query parameters (batch): %s", param_list)
             async with self._get_cursor(conn) as cursor:
-                await cursor.executemany(sql, params_list)
+                # Psycopg expects a list of parameter dicts for executemany
+                await cursor.executemany(sql, param_list or [])
                 return cursor
 
     async def _execute_script(

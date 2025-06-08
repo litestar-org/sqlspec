@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from sqlspec.adapters.psqlpy.config import PsqlpyConfig, PsqlpyPoolConfig
+from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 from sqlspec.statement.result import SQLResult
 
 if TYPE_CHECKING:
@@ -21,10 +21,8 @@ def psqlpy_config(postgres_service: PostgresService) -> PsqlpyConfig:
     # Construct DSN manually like in asyncpg tests
     dsn = f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
     return PsqlpyConfig(
-        pool_config=PsqlpyPoolConfig(
-            dsn=dsn,
-            max_db_pool_size=2,
-        )
+        dsn=dsn,
+        max_db_pool_size=2,
     )
 
 

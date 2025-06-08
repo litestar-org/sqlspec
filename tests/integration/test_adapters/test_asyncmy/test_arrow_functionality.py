@@ -66,13 +66,12 @@ async def test_asyncmy_fetch_arrow_table(asyncmy_arrow_session: AsyncmyDriver) -
     result = await asyncmy_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow ORDER BY id")
 
     assert isinstance(result, ArrowResult)
-    assert isinstance(result.data, pa.Table)
-    assert result.data.num_rows == 5
-    assert result.data.num_columns >= 5  # id, name, value, price, is_active, created_at
+    assert result.num_rows() == 5
+    assert result.num_columns() >= 5  # id, name, value, price, is_active, created_at
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
-    actual_columns = set(result.data.column_names)
+    actual_columns = set(result.column_names())
     assert expected_columns.issubset(actual_columns)
 
     # Check values
@@ -115,7 +114,7 @@ async def test_asyncmy_arrow_with_parameters(asyncmy_arrow_session: AsyncmyDrive
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3
+    assert result.num_rows() == 3
     values = result.data["value"].to_pylist()
     assert values == [200, 300, 400]
 
@@ -130,8 +129,8 @@ async def test_asyncmy_arrow_empty_result(asyncmy_arrow_session: AsyncmyDriver) 
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 0
-    assert result.data.num_columns >= 5  # Schema should still be present
+    assert result.num_rows() == 0
+    assert result.num_columns() >= 5  # Schema should still be present
 
 
 @pytest.mark.asyncio
@@ -166,8 +165,8 @@ async def test_asyncmy_to_arrow_with_sql_object(asyncmy_arrow_session: AsyncmyDr
     result = await asyncmy_arrow_session.fetch_arrow_table(sql_obj)
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3
-    assert result.data.num_columns == 2  # Only name and value columns
+    assert result.num_rows() == 3
+    assert result.num_columns() == 2  # Only name and value columns
 
     names = result.data["name"].to_pylist()
     assert "Product A" in names
@@ -192,7 +191,7 @@ async def test_asyncmy_arrow_large_dataset(asyncmy_arrow_session: AsyncmyDriver)
     result = await asyncmy_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 1
+    assert result.num_rows() == 1
     total_count = result.data["total"].to_pylist()[0]
     assert total_count == 405  # 5 original + 400 new records
 
@@ -241,9 +240,9 @@ async def test_asyncmy_arrow_mysql_functions(asyncmy_arrow_session: AsyncmyDrive
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3  # Products B, C, D
-    assert "formatted_name" in result.data.column_names
-    assert "price_with_tax" in result.data.column_names
+    assert result.num_rows() == 3  # Products B, C, D
+    assert "formatted_name" in result.column_names()
+    assert "price_with_tax" in result.column_names()
 
     # Verify MySQL function results
     formatted_names = result.data["formatted_name"].to_pylist()
@@ -268,10 +267,10 @@ async def test_asyncmy_arrow_with_datetime_functions(asyncmy_arrow_session: Asyn
     """)
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3
-    assert "date_only" in result.data.column_names
-    assert "year_part" in result.data.column_names
-    assert "month_part" in result.data.column_names
+    assert result.num_rows() == 3
+    assert "date_only" in result.column_names()
+    assert "year_part" in result.column_names()
+    assert "month_part" in result.column_names()
 
     # Verify datetime extraction
     years = result.data["year_part"].to_pylist()
@@ -296,10 +295,10 @@ async def test_asyncmy_arrow_with_aggregation(asyncmy_arrow_session: AsyncmyDriv
     """)
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 2  # True and False groups
-    assert "count" in result.data.column_names
-    assert "avg_value" in result.data.column_names
-    assert "total_price" in result.data.column_names
+    assert result.num_rows() == 2  # True and False groups
+    assert "count" in result.column_names()
+    assert "avg_value" in result.column_names()
+    assert "total_price" in result.column_names()
 
     # Verify aggregation results
     counts = result.data["count"].to_pylist()
@@ -328,9 +327,9 @@ async def test_asyncmy_arrow_with_case_statements(asyncmy_arrow_session: Asyncmy
     """)
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 5
-    assert "value_category" in result.data.column_names
-    assert "status" in result.data.column_names
+    assert result.num_rows() == 5
+    assert "value_category" in result.column_names()
+    assert "status" in result.column_names()
 
     # Verify CASE statement results
     categories = result.data["value_category"].to_pylist()

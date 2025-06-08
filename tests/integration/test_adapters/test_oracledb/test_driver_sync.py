@@ -166,8 +166,8 @@ def test_sync_select_value(oracle_sync_session: OracleSyncConfig, params: Any, s
         assert isinstance(value_result, SQLResult)
         assert value_result.data is not None
         assert len(value_result.data) == 1
-        assert value_result.column_names is not None
-        value = value_result.data[0][value_result.column_names[0]]
+        assert value_result.column_names() is not None
+        value = value_result.data[0][value_result.column_names()[0]]
         assert value == "test_value"
         driver.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -203,8 +203,8 @@ def test_sync_select_arrow(oracle_sync_session: OracleSyncConfig) -> None:
             assert hasattr(arrow_result, "data")
             arrow_table = arrow_result.data
             assert isinstance(arrow_table, pa.Table)
-            assert arrow_table.num_rows == 1
-            assert arrow_table.num_columns == 2
+            assert arrow_table.num_rows() == 1
+            assert arrow_table.num_columns() == 2
             # Oracle returns uppercase column names by default
             assert arrow_table.column_names == ["NAME", "ID"]
             assert arrow_table.column("NAME").to_pylist() == ["arrow_name"]
@@ -245,8 +245,8 @@ def test_sync_to_parquet(oracle_sync_session: OracleSyncConfig) -> None:
         with tempfile.NamedTemporaryFile() as tmp:
             driver.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
             table = pq.read_table(tmp.name)
-            assert table.num_rows == 2
-            assert set(table.column_names) == {"NAME", "ID"}
+            assert table.num_rows() == 2
+            assert set(table.column_names()) == {"NAME", "ID"}
             names = table.column("NAME").to_pylist()
             assert "pq1" in names and "pq2" in names
         driver.execute_script(

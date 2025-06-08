@@ -102,13 +102,12 @@ def test_postgresql_fetch_arrow_table(adbc_postgresql_arrow_session: AdbcDriver)
     result = adbc_postgresql_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow ORDER BY id")
 
     assert isinstance(result, ArrowResult)
-    assert isinstance(result.data, pa.Table)
-    assert result.data.num_rows == 5
-    assert result.data.num_columns >= 5  # id, name, value, price, is_active, created_at
+    assert result.num_rows() == 5
+    assert result.num_columns() >= 5  # id, name, value, price, is_active, created_at
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
-    actual_columns = set(result.data.column_names)
+    actual_columns = set(result.column_names())
     assert expected_columns.issubset(actual_columns)
 
     # Check data types
@@ -129,13 +128,12 @@ def test_sqlite_fetch_arrow_table(adbc_sqlite_arrow_session: AdbcDriver) -> None
     result = adbc_sqlite_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow ORDER BY id")
 
     assert isinstance(result, ArrowResult)
-    assert isinstance(result.data, pa.Table)
-    assert result.data.num_rows == 5
-    assert result.data.num_columns >= 5  # id, name, value, price, is_active, created_at
+    assert result.num_rows() == 5
+    assert result.num_columns() >= 5  # id, name, value, price, is_active, created_at
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
-    actual_columns = set(result.data.column_names)
+    actual_columns = set(result.column_names())
     assert expected_columns.issubset(actual_columns)
 
     # Check values
@@ -196,7 +194,7 @@ def test_postgresql_arrow_with_parameters(adbc_postgresql_arrow_session: AdbcDri
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 3
+    assert result.num_rows() == 3
     values = result.data["value"].to_pylist()
     assert values == [200, 300, 400]
 
@@ -211,5 +209,5 @@ def test_postgresql_arrow_empty_result(adbc_postgresql_arrow_session: AdbcDriver
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 0
-    assert result.data.num_columns >= 5  # Schema should still be present
+    assert result.num_rows() == 0
+    assert result.num_columns() >= 5  # Schema should still be present

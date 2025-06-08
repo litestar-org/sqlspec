@@ -15,10 +15,7 @@ class TestInstrumentedService:
     def config(self):
         """Create instrumentation config."""
         return InstrumentationConfig(
-            log_service_operations=True,
-            log_queries=True,
-            structured_logging=True,
-            generate_correlation_id=True
+            log_service_operations=True, log_queries=True, structured_logging=True, generate_correlation_id=True
         )
 
     @pytest.fixture
@@ -54,12 +51,7 @@ class TestInstrumentedService:
 
         # This should call instrument_operation
         mock_instrument.assert_called_once_with(
-            service,
-            "test_op",
-            "service.testservice",
-            service="TestService",
-            key1="value1",
-            key2="value2"
+            service, "test_op", "service.testservice", service="TestService", key1="value1", key2="value2"
         )
 
     @patch("sqlspec.utils.correlation.CorrelationContext.get")
@@ -78,8 +70,8 @@ class TestInstrumentedService:
                     "service": "TestService",
                     "correlation_id": "test-correlation-123",
                     "user_id": 123,
-                    "action": "read"
-                }
+                    "action": "read",
+                },
             )
 
     def test_log_operation_start_disabled(self) -> None:
@@ -97,12 +89,7 @@ class TestInstrumentedService:
         mock_correlation.return_value = "test-correlation-123"
 
         with patch.object(service.logger, "info") as mock_info:
-            service._log_operation_complete(
-                "test_op",
-                duration_ms=123.45,
-                result_count=10,
-                status="success"
-            )
+            service._log_operation_complete("test_op", duration_ms=123.45, result_count=10, status="success")
 
             mock_info.assert_called_once()
             args, kwargs = mock_info.call_args
@@ -144,8 +131,8 @@ class TestInstrumentedService:
                     "service": "TestService",
                     "error_type": "ValueError",
                     "correlation_id": "error-correlation-123",
-                    "request_id": "req-123"
-                }
+                    "request_id": "req-123",
+                },
             )
 
     def test_inherited_service(self, config) -> None:
@@ -162,8 +149,10 @@ class TestInstrumentedService:
         service = MyCustomService(config, "MyCustom")
         assert service.service_name == "MyCustom"
 
-        with patch.object(service, "_log_operation_start") as mock_start, \
-             patch.object(service, "_log_operation_complete") as mock_complete:
+        with (
+            patch.object(service, "_log_operation_start") as mock_start,
+            patch.object(service, "_log_operation_complete") as mock_complete,
+        ):
             result = service.custom_operation()
 
             assert result == "result"

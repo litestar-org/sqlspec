@@ -164,7 +164,7 @@ async def test_async_select_value(oracle_async_session: OracleAsyncConfig, param
         assert len(value_result.data) == 1
 
         # Extract single value using column name
-        value = value_result.data[0][value_result.column_names[0]]
+        value = value_result.data[0][value_result.column_names()[0]]
         assert value == "test_value"
 
         await driver.execute_script(
@@ -202,8 +202,8 @@ async def test_async_select_arrow(oracle_async_session: OracleAsyncConfig) -> No
             assert hasattr(arrow_result, "arrow_table")
             arrow_table = arrow_result.data
             assert isinstance(arrow_table, pa.Table)
-            assert arrow_table.num_rows == 1
-            assert arrow_table.num_columns == 2
+            assert arrow_table.num_rows() == 1
+            assert arrow_table.num_columns() == 2
             # Oracle returns uppercase column names by default
             assert arrow_table.column_names == ["NAME", "ID"]
             assert arrow_table.column("NAME").to_pylist() == ["arrow_name"]
@@ -376,8 +376,8 @@ async def test_async_to_parquet(oracle_async_session: OracleAsyncConfig) -> None
         with tempfile.NamedTemporaryFile() as tmp:
             await driver.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
             table = pq.read_table(tmp.name)
-            assert table.num_rows == 2
-            assert set(table.column_names) == {"NAME", "ID"}
+            assert table.num_rows() == 2
+            assert set(table.column_names()) == {"NAME", "ID"}
             names = table.column("NAME").to_pylist()
             assert "pq1" in names and "pq2" in names
         await driver.execute_script(

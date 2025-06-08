@@ -83,9 +83,10 @@ class PsqlpyDriver(
                 connection=connection,
                 **kwargs,
             )
+
         return await self._execute(
             statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.parameters,
+            statement.get_parameters(style=self._get_placeholder_style()),
             statement,
             connection=connection,
             **kwargs,
@@ -101,15 +102,10 @@ class PsqlpyDriver(
     ) -> Any:
         async with instrument_operation_async(self, "psqlpy_execute", "database"):
             conn = self._connection(connection)
+            # Psqlpy expects positional parameters as a list
             final_driver_params: Optional[list[Any]] = None
             if parameters is not None:
-                if isinstance(parameters, dict):
-                    # For dict parameters with numeric placeholders, extract values
-                    final_driver_params = list(parameters.values())
-                elif isinstance(parameters, (list, tuple)):
-                    final_driver_params = list(parameters)
-                else:
-                    final_driver_params = [parameters]
+                final_driver_params = list(parameters) if isinstance(parameters, (list, tuple)) else [parameters]
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing psqlpy SQL: %s", sql)
             if self.instrumentation_config.log_parameters and final_driver_params:
@@ -128,19 +124,21 @@ class PsqlpyDriver(
         async with instrument_operation_async(self, "psqlpy_execute_many", "database"):
             conn = self._connection(connection)
             total_affected = 0
-            params_list = param_list if isinstance(param_list, list) else []
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing psqlpy SQL (executemany): %s", sql)
-            if self.instrumentation_config.log_parameters and params_list:
-                logger.debug("Psqlpy query parameters (batch): %s", params_list)
-            for param_set in params_list:
-                current_param_list = list(param_set) if isinstance(param_set, (list, tuple)) else [param_set]
-                result = await conn.execute(sql, parameters=current_param_list)
-                affected = getattr(result, "affected_rows", None) or getattr(result, "rowcount", 0)
-                if affected and affected != -1:
-                    total_affected += affected
-                elif not self.returns_rows(None):
-                    total_affected += 1
+            if self.instrumentation_config.log_parameters and param_list:
+                logger.debug("Psqlpy query parameters (batch): %s", param_list)
+
+            # Convert parameter list to proper format for execute_many
+            if param_list and isinstance(param_list, list):
+                for param_set in param_list:
+                    current_param_list = list(param_set) if isinstance(param_set, (list, tuple)) else [param_set]
+                    result = await conn.execute(sql, parameters=current_param_list)
+                    affected = getattr(result, "affected_rows", None) or getattr(result, "rowcount", 0)
+                    if affected and affected != -1:
+                        total_affected += affected
+                    elif not self.returns_rows(None):
+                        total_affected += 1
             return BatchResult(total_affected)
 
     async def _execute_script(

@@ -13,6 +13,8 @@ from sqlspec.service import AsyncDatabaseService, DatabaseService
 from sqlspec.statement import sql
 from sqlspec.utils.correlation import correlation_context
 
+__all__ = ("async_service_example", "main", "sync_service_example")
+
 
 def sync_service_example() -> None:
     """Demonstrate synchronous database service usage."""

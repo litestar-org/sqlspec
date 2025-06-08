@@ -17,12 +17,15 @@ from urllib.parse import urlparse
 
 from sqlspec.exceptions import MissingDependencyError, wrap_exceptions
 from sqlspec.storage import storage_registry
-from sqlspec.typing import ArrowTable, RowT
+from sqlspec.typing import ArrowTable, RowT, SQLParameterType
 
 if TYPE_CHECKING:
     from sqlspec.config import StorageConfig
-    from sqlspec.statement.result import SQLResult
+    from sqlspec.statement.filters import StatementFilter
+    from sqlspec.statement.result import ArrowResult, SQLResult
+    from sqlspec.statement.sql import SQLConfig, Statement
     from sqlspec.storage.protocol import ObjectStoreProtocol
+    from sqlspec.typing import ConnectionT
 
 __all__ = ("AsyncStorageMixin", "SyncStorageMixin")
 
@@ -36,7 +39,7 @@ class StorageMixinBase:
     """Base class with common storage functionality."""
 
     # These attributes are expected to be provided by the driver class
-    _config: Any  # Driver config
+    config: Any  # Driver config - drivers use 'config' not '_config'
     _connection: Any  # Database connection
 
     @staticmethod
@@ -50,8 +53,8 @@ class StorageMixinBase:
 
     def _get_storage_config(self) -> "Optional[StorageConfig]":
         """Get storage configuration from driver config."""
-        with wrap_exceptions(wrap_exceptions=False):
-            return self._config.storage  # type: ignore[no-any-return]
+        with wrap_exceptions(wrap_exceptions=True, suppress=(AttributeError, TypeError)):
+            return self.config.storage  # type: ignore[no-any-return]
         return None
 
     def _get_storage_backend(self, uri_or_key: str) -> "ObjectStoreProtocol":
@@ -100,25 +103,17 @@ class StorageMixinBase:
             if "BigQuery" in driver_class_name:
                 return uri.startswith("gs://")
 
-            # DuckDB: can handle any URI with extensions
-            if "DuckDB" in driver_class_name:
-                return True
-
-            # ADBC: depends on underlying driver, but generally supports Parquet
-            if "ADBC" in driver_class_name:
-                return True
-
-            return supports_parquet
+            # For now, require explicit native method implementation
+            # Future: drivers can implement _export_native, _import_native etc.
+            return False
 
         # Check for Arrow operations
         if operation == "arrow":
             return supports_arrow
 
-        # Legacy support patterns for backwards compatibility
-        driver_class_name = self.__class__.__name__
-
-        # DuckDB has excellent native capabilities for all formats
-        return "DuckDB" in driver_class_name
+        # For now, only return True if the driver actually implements the methods
+        # Future: drivers can override this method for native capabilities
+        return False
 
     @staticmethod
     def _detect_format(uri: str) -> str:
@@ -148,37 +143,73 @@ class SyncStorageMixin(StorageMixinBase):
     # Core Arrow Operations
     # ============================================================================
 
-    def fetch_arrow_table(self, sql: str, **options: Any) -> ArrowTable:
-        """Fetch query results as Arrow table with intelligent routing."""
+    def fetch_arrow_table(
+        self,
+        statement: "Statement",
+        parameters: "Optional[SQLParameterType]" = None,
+        *filters: "StatementFilter",
+        connection: "Optional[ConnectionT]" = None,
+        config: "Optional[SQLConfig]" = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Fetch query results as Arrow table with intelligent routing.
+
+        Args:
+            statement: SQL statement (string, SQL object, or sqlglot Expression)
+            parameters: Optional query parameters
+            *filters: Statement filters to apply
+            connection: Optional connection override
+            config: Optional SQL config override
+            **kwargs: Additional options
+
+        Returns:
+            ArrowResult wrapping the Arrow table
+        """
         self._ensure_pyarrow_installed()
 
+        from sqlspec.statement.result import ArrowResult
         from sqlspec.statement.sql import SQL
 
-        sql_obj = SQL(sql)
+        # Convert to SQL object for processing
+        if isinstance(statement, str):
+            sql_obj = SQL(statement, parameters=parameters, config=config or self.config)
+        elif hasattr(statement, "to_sql"):  # SQL object
+            sql_obj = statement
+            if parameters is not None:
+                sql_obj = sql_obj.with_parameters(parameters)
+        else:  # sqlglot Expression
+            sql_obj = SQL(statement, parameters=parameters, config=config or self.config)
+
+        # Apply filters
+        for filter_func in filters:
+            sql_obj = filter_func(sql_obj)
+
+        # Use static parameter conversion (like execute_script)
+        final_sql = sql_obj.to_sql()
+
+        # Use provided connection or default
+        conn = connection or self._connection
 
         with wrap_exceptions():
             # Try native Arrow support first (fastest)
             try:
                 # DuckDB-style native Arrow
-                return self._connection.execute(sql).arrow()  # type: ignore[no-any-return]
+                arrow_table = conn.execute(final_sql).arrow()  # type: ignore[no-any-return]
+                return ArrowResult(statement=sql_obj, data=arrow_table)
             except AttributeError:
                 pass
 
             try:
                 # Driver-specific Arrow method
-                return self._connection.fetch_arrow_table(sql)  # type: ignore[no-any-return]
+                arrow_table = conn.fetch_arrow_table(final_sql)  # type: ignore[no-any-return]
+                return ArrowResult(statement=sql_obj, data=arrow_table)
             except AttributeError:
                 pass
 
-            try:
-                # Driver-specific implementation
-                return self._fetch_arrow_table(sql_obj, self._connection, **options).table  # type: ignore[no-any-return]
-            except AttributeError:
-                pass
-
-            # Convert rows to Arrow table
+            # Fallback: execute regular query and convert to Arrow
             result = self.execute(sql_obj)  # type: ignore[attr-defined]
-            return self._rows_to_arrow_table(result.data, result.column_names)
+            arrow_table = self._rows_to_arrow_table(result.data or [], result.column_names or [])
+            return ArrowResult(statement=sql_obj, data=arrow_table)
 
     def ingest_arrow_table(self, table: ArrowTable, target_table: str, mode: str = "create", **options: Any) -> int:
         """Ingest Arrow table into database with intelligent routing."""
@@ -276,13 +307,22 @@ class SyncStorageMixin(StorageMixinBase):
 
     def export_to_storage(
         self,
-        query: str,
+        query: "Union[str, Statement]",
         destination_uri: str,
         format: "Optional[str]" = None,
         storage_key: "Optional[str]" = None,
         **options: Any,
     ) -> int:
         """Export query results to storage with intelligent routing."""
+        # Convert query to string
+
+        if hasattr(query, "to_sql"):  # SQL object
+            query_str = query.to_sql()
+        elif isinstance(query, str):
+            query_str = query
+        else:  # sqlglot Expression
+            query_str = str(query)
+
         # Log storage operation for instrumentation
         logger.info(
             "Exporting query results to storage",
@@ -299,23 +339,21 @@ class SyncStorageMixin(StorageMixinBase):
 
         # Try native database export first
         if self._has_native_capability("export", destination_uri, file_format):
-            return self._export_native(query, destination_uri, file_format, **options)
+            return self._export_native(query_str, destination_uri, file_format, **options)
 
         # Use storage backend
         backend, path = self._resolve_backend_and_path(destination_uri, storage_key)
 
-        with wrap_exceptions():
+        with wrap_exceptions(suppress=(AttributeError,)):
             if file_format == "parquet":
-                try:
-                    # Use Arrow for efficient transfer
-                    arrow_table = self.fetch_arrow_table(query)
-                    backend.write_arrow(path, arrow_table, **options)
-                    return arrow_table.num_rows
-                except AttributeError:
-                    pass
+                # Use Arrow for efficient transfer
+                arrow_result = self.fetch_arrow_table(query_str)
+                arrow_table = arrow_result.data
+                backend.write_arrow(path, arrow_table, **options)
+                return arrow_table.num_rows
 
         # Use traditional export through temporary file
-        return self._export_via_backend(query, backend, path, file_format, **options)
+        return self._export_via_backend(query_str, backend, path, file_format, **options)
 
     def import_from_storage(
         self,
@@ -370,8 +408,19 @@ class SyncStorageMixin(StorageMixinBase):
         self, uri_or_key: str, storage_key: "Optional[str]" = None
     ) -> "tuple[ObjectStoreProtocol, str]":
         """Resolve backend and path from URI or key."""
+        original_path = uri_or_key
+
+        # Convert absolute paths to file:// URIs if needed
+        if self._is_uri(uri_or_key) and "://" not in uri_or_key:
+            # It's an absolute path without scheme
+            uri_or_key = f"file://{uri_or_key}"
+
         backend = self._get_storage_backend(storage_key or uri_or_key)
-        return backend, uri_or_key
+
+        # For file:// URIs, return just the path part for the backend
+        path = uri_or_key[7:] if uri_or_key.startswith("file://") else original_path
+
+        return backend, path
 
     @staticmethod
     def _rows_to_arrow_table(rows: "list[RowT]", columns: "list[str]") -> ArrowTable:
@@ -380,8 +429,9 @@ class SyncStorageMixin(StorageMixinBase):
 
         if not rows:
             # Empty table with column names
-            schema = pa.schema([(col, pa.string()) for col in columns])
-            return pa.table([], schema=schema)
+            # Create empty arrays for each column
+            empty_data = {col: [] for col in columns}
+            return pa.table(empty_data)
 
         # Convert rows to columnar format
         if isinstance(rows[0], dict):
@@ -427,6 +477,12 @@ class SyncStorageMixin(StorageMixinBase):
 
         # Execute query and get results
         result = self.execute(SQL(query))  # type: ignore[attr-defined]
+
+        # For parquet format, convert through Arrow
+        if format == "parquet":
+            arrow_table = self._rows_to_arrow_table(result.data or [], result.column_names or [])
+            backend.write_arrow(path, arrow_table, **options)
+            return len(result.data or [])
 
         # Convert to appropriate format and write to backend
         with tempfile.NamedTemporaryFile(mode="w", suffix=f".{format}", delete=False, encoding="utf-8") as tmp:
@@ -500,37 +556,72 @@ class AsyncStorageMixin(StorageMixinBase):
     # Core Arrow Operations (Async)
     # ============================================================================
 
-    async def fetch_arrow_table(self, sql: str, **options: Any) -> ArrowTable:
-        """Async version of fetch_arrow_table."""
+    async def fetch_arrow_table(
+        self,
+        statement: "Statement",
+        parameters: "Optional[SQLParameterType]" = None,
+        *filters: "StatementFilter",
+        connection: "Optional[ConnectionT]" = None,
+        config: "Optional[SQLConfig]" = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Async fetch query results as Arrow table with intelligent routing.
+
+        Args:
+            statement: SQL statement (string, SQL object, or sqlglot Expression)
+            parameters: Optional query parameters
+            *filters: Statement filters to apply
+            connection: Optional connection override
+            config: Optional SQL config override
+            **kwargs: Additional options
+
+        Returns:
+            ArrowResult wrapping the Arrow table
+        """
         self._ensure_pyarrow_installed()
 
+        from sqlspec.statement.result import ArrowResult
         from sqlspec.statement.sql import SQL
 
-        sql_obj = SQL(sql)
+        # Convert to SQL object for processing
+        if isinstance(statement, str):
+            sql_obj = SQL(statement, parameters=parameters, config=config or self.config)
+        elif hasattr(statement, "to_sql"):  # SQL object
+            sql_obj = statement
+            if parameters is not None:
+                sql_obj = sql_obj.with_parameters(parameters)
+        else:  # sqlglot Expression
+            sql_obj = SQL(statement, parameters=parameters, config=config or self.config)
+
+        # Apply filters
+        for filter_func in filters:
+            sql_obj = filter_func(sql_obj)
+
+        # Use static parameter conversion (like execute_script)
+        final_sql = sql_obj.to_sql()
+
+        # Use provided connection or default
+        conn = connection or self._connection
 
         with wrap_exceptions():
             # Try native Arrow support first
             try:
-                result = await self._connection.execute(sql)
-                return result.arrow()  # type: ignore[no-any-return]
+                result = await conn.execute(final_sql)
+                arrow_table = result.arrow()  # type: ignore[no-any-return]
+                return ArrowResult(statement=sql_obj, data=arrow_table)
             except AttributeError:
                 pass
 
             try:
-                return await self._connection.fetch_arrow_table(sql)  # type: ignore[no-any-return]
+                arrow_table = await conn.fetch_arrow_table(final_sql)  # type: ignore[no-any-return]
+                return ArrowResult(statement=sql_obj, data=arrow_table)
             except AttributeError:
                 pass
 
-            try:
-                result = await self._fetch_arrow_table(sql_obj, self._connection, **options)  # type: ignore[no-any-return]
-
-            except AttributeError:
-                pass
-            else:
-                return result.table
-            # Convert rows to Arrow table
+            # Fallback: execute regular query and convert to Arrow
             result = await self.execute(sql_obj)  # type: ignore[attr-defined]
-            return self._rows_to_arrow_table(result.data, result.column_names)
+            arrow_table = self._rows_to_arrow_table(result.data or [], result.column_names or [])
+            return ArrowResult(statement=sql_obj, data=arrow_table)
 
     async def ingest_arrow_table(
         self, table: ArrowTable, target_table: str, mode: str = "create", **options: Any
@@ -602,33 +693,38 @@ class AsyncStorageMixin(StorageMixinBase):
 
     async def export_to_storage(
         self,
-        query: str,
+        query: "Union[str, Statement]",
         destination_uri: str,
         format: "Optional[str]" = None,
         storage_key: "Optional[str]" = None,
         **options: Any,
     ) -> int:
         """Async version of export_to_storage."""
+        # Convert query to string
+        if hasattr(query, "to_sql"):  # SQL object
+            query_str = query.to_sql()
+        elif isinstance(query, str):
+            query_str = query
+        else:  # sqlglot Expression
+            query_str = str(query)
 
         file_format = format or self._detect_format(destination_uri)
 
         # Try native database export first
         if self._has_native_capability("export", destination_uri, file_format):
-            return await self._export_native(query, destination_uri, file_format, **options)
+            return await self._export_native(query_str, destination_uri, file_format, **options)
 
         # Use storage backend
-        backend, path = await self._resolve_backend_and_path(destination_uri, storage_key)
+        backend, path = self._resolve_backend_and_path(destination_uri, storage_key)
 
-        with wrap_exceptions():
+        with wrap_exceptions(suppress=(AttributeError,)):
             if file_format == "parquet":
-                try:
-                    arrow_table = await self.fetch_arrow_table(query)
-                    await backend.write_arrow(path, arrow_table, **options)  # type: ignore[misc]
-                    return arrow_table.num_rows
-                except AttributeError:
-                    pass
+                arrow_result = await self.fetch_arrow_table(query_str)
+                arrow_table = arrow_result.data
+                await backend.write_arrow(path, arrow_table, **options)  # type: ignore[misc]
+                return arrow_table.num_rows
 
-        return await self._export_via_backend(query, backend, path, file_format, **options)
+        return await self._export_via_backend(query_str, backend, path, file_format, **options)
 
     async def import_from_storage(
         self,
@@ -648,7 +744,7 @@ class AsyncStorageMixin(StorageMixinBase):
             return await self._import_native(source_uri, table_name, file_format, mode, **options)
 
         # Use storage backend
-        backend, path = await self._resolve_backend_and_path(source_uri, storage_key)
+        backend, path = self._resolve_backend_and_path(source_uri, storage_key)
 
         with wrap_exceptions():
             if file_format == "parquet":
@@ -664,22 +760,37 @@ class AsyncStorageMixin(StorageMixinBase):
     # Async Helper Methods
     # ============================================================================
 
-    async def _resolve_backend_and_path(
+    def _resolve_backend_and_path(
         self, uri_or_key: str, storage_key: "Optional[str]" = None
     ) -> "tuple[ObjectStoreProtocol, str]":
-        """Async version of _resolve_backend_and_path."""
+        """Resolve backend and path from URI or key (reuse sync implementation)."""
+        original_path = uri_or_key
+
+        # Convert absolute paths to file:// URIs if needed
+        if self._is_uri(uri_or_key) and "://" not in uri_or_key:
+            # It's an absolute path without scheme
+            uri_or_key = f"file://{uri_or_key}"
+
         storage_config = self._get_storage_config()
 
         if storage_config:
             try:
-                return storage_registry.get(uri_or_key), uri_or_key
+                backend = storage_registry.get(uri_or_key)
+                # For file:// URIs, return just the path part for the backend
+                path = uri_or_key[7:] if uri_or_key.startswith("file://") else original_path
+
             except (KeyError, ValueError):
                 # Key not found, will try as URI below
                 logger.debug("Key %s not found in storage config, trying as URI", uri_or_key)
-
+            else:
+                return backend, path
         # Use global registry resolution
         backend = self._get_storage_backend(storage_key or uri_or_key)
-        return backend, uri_or_key
+
+        # For file:// URIs, return just the path part for the backend
+        path = uri_or_key[7:] if uri_or_key.startswith("file://") else original_path
+
+        return backend, path
 
     @staticmethod
     def _rows_to_arrow_table(rows: "list[RowT]", columns: "list[str]") -> ArrowTable:
@@ -688,8 +799,9 @@ class AsyncStorageMixin(StorageMixinBase):
 
         if not rows:
             # Empty table with column names
-            schema = pa.schema([(col, pa.string()) for col in columns])
-            return pa.table([], schema=schema)
+            # Create empty arrays for each column
+            empty_data = {col: [] for col in columns}
+            return pa.table(empty_data)
 
         # Convert rows to columnar format
         if isinstance(rows[0], dict):
@@ -723,6 +835,16 @@ class AsyncStorageMixin(StorageMixinBase):
 
         # Execute query and get results
         result = await self.execute(SQL(query))  # type: ignore[attr-defined]
+
+        # For parquet format, convert through Arrow
+        if format == "parquet":
+            arrow_table = self._rows_to_arrow_table(result.data or [], result.column_names or [])
+            with wrap_exceptions():
+                try:
+                    await backend.write_arrow_async(path, arrow_table, **options)  # type: ignore[misc]
+                except AttributeError:
+                    backend.write_arrow(path, arrow_table, **options)
+            return len(result.data or [])
 
         # Convert to appropriate format and write to backend
         with tempfile.NamedTemporaryFile(mode="w", suffix=f".{format}", delete=False, encoding="utf-8") as tmp:

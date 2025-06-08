@@ -79,33 +79,31 @@ class SqliteDriver(
     ) -> Any:
         if statement.is_script:
             return self._execute_script(
-                statement.to_sql(placeholder_style=ParameterStyle.STATIC), connection=connection, **kwargs
+                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
+                connection=connection,
+                **kwargs,
             )
-
-        params_to_execute = statement.parameters
-        has_named_params = (
-            params_to_execute is not None and isinstance(params_to_execute, dict) and not statement.is_many
-        )
-
         if statement.is_many:
-            sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-            param_list = (
-                [tuple(p) if isinstance(p, (list, tuple)) else (p,) for p in params_to_execute]
-                if params_to_execute is not None and isinstance(params_to_execute, list)
-                else []
+            return self._execute_many(
+                statement.to_sql(placeholder_style=self._get_placeholder_style()),
+                statement.parameters,
+                connection=connection,
+                **kwargs,
             )
-            return self._execute_many(sql, param_list, connection=connection, **kwargs)
 
-        if has_named_params:
-            sql = statement.to_sql(placeholder_style=ParameterStyle.NAMED_COLON)
-            params = params_to_execute
-        elif params_to_execute is not None:
-            sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-            params = tuple(params_to_execute) if isinstance(params_to_execute, (list, tuple)) else (params_to_execute,)
-        else:
-            sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-            params = ()
-        return self._execute(sql, params, statement, connection=connection, **kwargs)
+        sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
+        params = statement.get_parameters(style=self._get_placeholder_style())
+        # SQLite expects tuples for positional parameters
+        if isinstance(params, list):
+            params = tuple(params)
+
+        return self._execute(
+            sql,
+            params,
+            statement,
+            connection=connection,
+            **kwargs,
+        )
 
     def _execute(
         self,
@@ -120,17 +118,11 @@ class SqliteDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQLite SQL: %s", sql)
-            if (
-                self.instrumentation_config.log_parameters
-                and parameters
-                and not (not statement.is_many and parameters == () and statement.parameters is None)
-            ):
+            if self.instrumentation_config.log_parameters and parameters:
                 logger.debug("SQLite query parameters: %s", parameters)
             with self._get_cursor(conn) as cursor:
-                if isinstance(parameters, dict):
-                    cursor.execute(sql, parameters)
-                else:
-                    cursor.execute(sql, parameters or ())
+                # SQLite handles both dict and tuple parameters
+                cursor.execute(sql, parameters or ())
                 if self.returns_rows(statement.expression):
                     fetched_data: list[sqlite3.Row] = cursor.fetchall()
                     column_names = [col[0] for col in cursor.description or []]
@@ -140,7 +132,7 @@ class SqliteDriver(
     def _execute_many(
         self,
         sql: str,
-        param_list: list[tuple[Any, ...]],
+        param_list: Any,
         connection: Optional[SqliteConnection] = None,
         **kwargs: Any,
     ) -> int:
@@ -149,10 +141,23 @@ class SqliteDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQLite SQL (executemany): %s", sql)
-            if self.instrumentation_config.log_parameters:
-                logger.debug("SQLite query parameters (executemany): %s", param_list)
+
+            # Convert parameter list to proper format for executemany
+            formatted_params: list[tuple[Any, ...]] = []
+            if param_list and isinstance(param_list, list):
+                for param_set in param_list:
+                    if isinstance(param_set, (list, tuple)):
+                        formatted_params.append(tuple(param_set))
+                    elif param_set is None:
+                        formatted_params.append(())
+                    else:
+                        formatted_params.append((param_set,))
+
+            if self.instrumentation_config.log_parameters and formatted_params:
+                logger.debug("SQLite query parameters (executemany): %s", formatted_params)
+
             with self._get_cursor(conn) as cursor:
-                cursor.executemany(sql, param_list)
+                cursor.executemany(sql, formatted_params)
                 return cursor.rowcount
 
     def _execute_script(

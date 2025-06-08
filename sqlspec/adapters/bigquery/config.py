@@ -1,11 +1,10 @@
-"""BigQuery database configuration using TypedDict for better maintainability."""
+"""BigQuery database configuration with direct field-based configuration."""
 
 import contextlib
 import logging
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
-from typing_extensions import NotRequired
 
 from sqlspec.adapters.bigquery.driver import BigQueryConnection, BigQueryDriver
 from sqlspec.config import InstrumentationConfig, NoPoolSyncConfig
@@ -24,113 +23,40 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ("BigQueryConfig", "BigQueryConnectionConfig")
+CONNECTION_FIELDS = frozenset(
+    {
+        "project",
+        "location",
+        "credentials",
+        "dataset_id",
+        "credentials_path",
+        "client_options",
+        "client_info",
+        "default_query_job_config",
+        "default_load_job_config",
+        "use_legacy_sql",
+        "use_query_cache",
+        "maximum_bytes_billed",
+        "enable_bigquery_ml",
+        "enable_gemini_integration",
+        "query_timeout_ms",
+        "job_timeout_ms",
+        "reservation_id",
+        "edition",
+        "enable_cross_cloud",
+        "enable_bigquery_omni",
+        "use_avro_logical_types",
+        "parquet_enable_list_inference",
+        "enable_column_level_security",
+        "enable_row_level_security",
+        "enable_dataframes",
+        "dataframes_backend",
+        "enable_continuous_queries",
+        "enable_vector_search",
+    }
+)
 
-
-class BigQueryConnectionConfig(TypedDict, total=False):
-    """BigQuery connection configuration as TypedDict.
-
-    Comprehensive configuration for Google Cloud BigQuery connections supporting
-    all advanced features including Gemini in BigQuery, BigQuery ML, DataFrames,
-    multi-modal analytics, and cross-cloud capabilities.
-    """
-
-    # Core connection parameters
-    project: NotRequired[str]
-    """Google Cloud project ID."""
-
-    location: NotRequired[str]
-    """Default geographic location for jobs and datasets."""
-
-    credentials: NotRequired["Credentials"]
-    """Credentials to use for authentication."""
-
-    dataset_id: NotRequired[str]
-    """Default dataset ID to use if not specified in queries."""
-
-    credentials_path: NotRequired[str]
-    """Path to Google Cloud service account key file (JSON). If None, attempts default authentication."""
-
-    # Client configuration
-    client_options: NotRequired["ClientOptions"]
-    """Client options used to set user options on the client (e.g., api_endpoint)."""
-
-    client_info: NotRequired["ClientInfo"]
-    """Client info used to send a user-agent string along with API requests."""
-
-    # Job configuration
-    default_query_job_config: NotRequired["QueryJobConfig"]
-    """Default QueryJobConfig settings for query operations."""
-
-    default_load_job_config: NotRequired["LoadJobConfig"]
-    """Default LoadJobConfig settings for data loading operations."""
-
-    # Advanced BigQuery features
-    use_legacy_sql: NotRequired[bool]
-    """Whether to use legacy SQL syntax (default: False for standard SQL)."""
-
-    use_query_cache: NotRequired[bool]
-    """Whether to use query cache for faster repeated queries."""
-
-    maximum_bytes_billed: NotRequired[int]
-    """Maximum bytes that can be billed for queries to prevent runaway costs."""
-
-    # BigQuery ML and AI configuration
-    enable_bigquery_ml: NotRequired[bool]
-    """Enable BigQuery ML capabilities for machine learning workflows."""
-
-    enable_gemini_integration: NotRequired[bool]
-    """Enable Gemini in BigQuery for AI-powered analytics and code assistance."""
-
-    # Performance and scaling options
-    query_timeout_ms: NotRequired[int]
-    """Query timeout in milliseconds."""
-
-    job_timeout_ms: NotRequired[int]
-    """Job timeout in milliseconds."""
-
-    # BigQuery editions and reservations
-    reservation_id: NotRequired[str]
-    """Reservation ID for slot allocation and workload management."""
-
-    edition: NotRequired[str]
-    """BigQuery edition (Standard, Enterprise, Enterprise Plus)."""
-
-    # Cross-cloud and external data options
-    enable_cross_cloud: NotRequired[bool]
-    """Enable cross-cloud data access (AWS S3, Azure Blob Storage)."""
-
-    enable_bigquery_omni: NotRequired[bool]
-    """Enable BigQuery Omni for multi-cloud analytics."""
-
-    # Storage and format options
-    use_avro_logical_types: NotRequired[bool]
-    """Use Avro logical types for better type preservation."""
-
-    parquet_enable_list_inference: NotRequired[bool]
-    """Enable automatic list inference for Parquet data."""
-
-    # Security and governance
-    enable_column_level_security: NotRequired[bool]
-    """Enable column-level access controls and data masking."""
-
-    enable_row_level_security: NotRequired[bool]
-    """Enable row-level security policies."""
-
-    # DataFrames and Python integration
-    enable_dataframes: NotRequired[bool]
-    """Enable BigQuery DataFrames for Python-based analytics."""
-
-    dataframes_backend: NotRequired[str]
-    """Backend for BigQuery DataFrames (e.g., 'bigframes')."""
-
-    # Continuous queries and real-time processing
-    enable_continuous_queries: NotRequired[bool]
-    """Enable continuous queries for real-time data processing."""
-
-    # Vector search and embeddings
-    enable_vector_search: NotRequired[bool]
-    """Enable vector search capabilities for AI/ML workloads."""
+__all__ = ("CONNECTION_FIELDS", "BigQueryConfig")
 
 
 class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
@@ -166,60 +92,161 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
     def __init__(
         self,
-        connection_config: Optional[BigQueryConnectionConfig] = None,
         statement_config: Optional[SQLConfig] = None,
         instrumentation: Optional[InstrumentationConfig] = None,
         default_row_type: type[DictRow] = DictRow,
+        # Core connection parameters
+        project: Optional[str] = None,
+        location: Optional[str] = None,
+        credentials: Optional["Credentials"] = None,
+        dataset_id: Optional[str] = None,
+        credentials_path: Optional[str] = None,
+        # Client configuration
+        client_options: Optional["ClientOptions"] = None,
+        client_info: Optional["ClientInfo"] = None,
+        # Job configuration
+        default_query_job_config: Optional["QueryJobConfig"] = None,
+        default_load_job_config: Optional["LoadJobConfig"] = None,
+        # Advanced BigQuery features
+        use_legacy_sql: Optional[bool] = None,
+        use_query_cache: Optional[bool] = None,
+        maximum_bytes_billed: Optional[int] = None,
+        # BigQuery ML and AI configuration
+        enable_bigquery_ml: Optional[bool] = None,
+        enable_gemini_integration: Optional[bool] = None,
+        # Performance and scaling options
+        query_timeout_ms: Optional[int] = None,
+        job_timeout_ms: Optional[int] = None,
+        # BigQuery editions and reservations
+        reservation_id: Optional[str] = None,
+        edition: Optional[str] = None,
+        # Cross-cloud and external data options
+        enable_cross_cloud: Optional[bool] = None,
+        enable_bigquery_omni: Optional[bool] = None,
+        # Storage and format options
+        use_avro_logical_types: Optional[bool] = None,
+        parquet_enable_list_inference: Optional[bool] = None,
+        # Security and governance
+        enable_column_level_security: Optional[bool] = None,
+        enable_row_level_security: Optional[bool] = None,
+        # DataFrames and Python integration
+        enable_dataframes: Optional[bool] = None,
+        dataframes_backend: Optional[str] = None,
+        # Continuous queries and real-time processing
+        enable_continuous_queries: Optional[bool] = None,
+        # Vector search and embeddings
+        enable_vector_search: Optional[bool] = None,
+        # Callback functions
         on_connection_create: Optional[Callable[[BigQueryConnection], None]] = None,
         on_job_start: Optional[Callable[[str], None]] = None,
         on_job_complete: Optional[Callable[[str, Any], None]] = None,
+        # User-defined extras
+        extras: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize BigQuery configuration with comprehensive feature support.
 
         Args:
-            connection_config: BigQuery connection and client parameters
             statement_config: Default SQL statement configuration
             instrumentation: Instrumentation configuration
             default_row_type: Default row type for results
+            project: Google Cloud project ID
+            location: Default geographic location for jobs and datasets
+            credentials: Credentials to use for authentication
+            dataset_id: Default dataset ID to use if not specified in queries
+            credentials_path: Path to Google Cloud service account key file (JSON)
+            client_options: Client options used to set user options on the client
+            client_info: Client info used to send a user-agent string along with API requests
+            default_query_job_config: Default QueryJobConfig settings for query operations
+            default_load_job_config: Default LoadJobConfig settings for data loading operations
+            use_legacy_sql: Whether to use legacy SQL syntax (default: False for standard SQL)
+            use_query_cache: Whether to use query cache for faster repeated queries
+            maximum_bytes_billed: Maximum bytes that can be billed for queries to prevent runaway costs
+            enable_bigquery_ml: Enable BigQuery ML capabilities for machine learning workflows
+            enable_gemini_integration: Enable Gemini in BigQuery for AI-powered analytics and code assistance
+            query_timeout_ms: Query timeout in milliseconds
+            job_timeout_ms: Job timeout in milliseconds
+            reservation_id: Reservation ID for slot allocation and workload management
+            edition: BigQuery edition (Standard, Enterprise, Enterprise Plus)
+            enable_cross_cloud: Enable cross-cloud data access (AWS S3, Azure Blob Storage)
+            enable_bigquery_omni: Enable BigQuery Omni for multi-cloud analytics
+            use_avro_logical_types: Use Avro logical types for better type preservation
+            parquet_enable_list_inference: Enable automatic list inference for Parquet data
+            enable_column_level_security: Enable column-level access controls and data masking
+            enable_row_level_security: Enable row-level security policies
+            enable_dataframes: Enable BigQuery DataFrames for Python-based analytics
+            dataframes_backend: Backend for BigQuery DataFrames (e.g., 'bigframes')
+            enable_continuous_queries: Enable continuous queries for real-time data processing
+            enable_vector_search: Enable vector search capabilities for AI/ML workloads
             on_connection_create: Callback executed when connection is created
             on_job_start: Callback executed when a BigQuery job starts
             on_job_complete: Callback executed when a BigQuery job completes
+            extras: Additional connection parameters not explicitly defined
+            **kwargs: Additional parameters (stored in extras)
 
         Example:
             >>> # Basic BigQuery connection
             >>> config = BigQueryConfig(
-            ...     connection_config={
-            ...         "project": "my-project",
-            ...         "location": "US",
-            ...     }
+            ...     project="my-project",
+            ...     location="US",
             ... )
 
             >>> # Advanced configuration with ML and AI features
             >>> config = BigQueryConfig(
-            ...     connection_config={
-            ...         "project": "my-project",
-            ...         "location": "US",
-            ...         "enable_bigquery_ml": True,
-            ...         "enable_gemini_integration": True,
-            ...         "enable_dataframes": True,
-            ...         "enable_vector_search": True,
-            ...         "maximum_bytes_billed": 1000000000,  # 1GB limit
-            ...     }
+            ...     project="my-project",
+            ...     location="US",
+            ...     enable_bigquery_ml=True,
+            ...     enable_gemini_integration=True,
+            ...     enable_dataframes=True,
+            ...     enable_vector_search=True,
+            ...     maximum_bytes_billed=1000000000,  # 1GB limit
             ... )
 
             >>> # Enterprise configuration with reservations
             >>> config = BigQueryConfig(
-            ...     connection_config={
-            ...         "project": "my-project",
-            ...         "location": "US",
-            ...         "edition": "Enterprise Plus",
-            ...         "reservation_id": "my-reservation",
-            ...         "enable_continuous_queries": True,
-            ...         "enable_cross_cloud": True,
-            ...     }
+            ...     project="my-project",
+            ...     location="US",
+            ...     edition="Enterprise Plus",
+            ...     reservation_id="my-reservation",
+            ...     enable_continuous_queries=True,
+            ...     enable_cross_cloud=True,
             ... )
         """
-        self.connection_config = connection_config or {}
+        # Store connection parameters as instance attributes
+        self.project = project
+        self.location = location
+        self.credentials = credentials
+        self.dataset_id = dataset_id
+        self.credentials_path = credentials_path
+        self.client_options = client_options
+        self.client_info = client_info
+        self.default_query_job_config = default_query_job_config
+        self.default_load_job_config = default_load_job_config
+        self.use_legacy_sql = use_legacy_sql
+        self.use_query_cache = use_query_cache
+        self.maximum_bytes_billed = maximum_bytes_billed
+        self.enable_bigquery_ml = enable_bigquery_ml
+        self.enable_gemini_integration = enable_gemini_integration
+        self.query_timeout_ms = query_timeout_ms
+        self.job_timeout_ms = job_timeout_ms
+        self.reservation_id = reservation_id
+        self.edition = edition
+        self.enable_cross_cloud = enable_cross_cloud
+        self.enable_bigquery_omni = enable_bigquery_omni
+        self.use_avro_logical_types = use_avro_logical_types
+        self.parquet_enable_list_inference = parquet_enable_list_inference
+        self.enable_column_level_security = enable_column_level_security
+        self.enable_row_level_security = enable_row_level_security
+        self.enable_dataframes = enable_dataframes
+        self.dataframes_backend = dataframes_backend
+        self.enable_continuous_queries = enable_continuous_queries
+        self.enable_vector_search = enable_vector_search
+
+        # Handle extras and additional kwargs
+        self.extras = extras or {}
+        self.extras.update(kwargs)
+
+        # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
         self.on_connection_create = on_connection_create
@@ -227,7 +254,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         self.on_job_complete = on_job_complete
 
         # Set up default query job config if not provided
-        if "default_query_job_config" not in self.connection_config:
+        if self.default_query_job_config is None:
             self._setup_default_job_config()
 
         # Store connection instance for reuse (BigQuery doesn't support traditional pooling)
@@ -252,32 +279,69 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         job_config = QueryJobConfig()
 
         # Set default dataset if specified
-        if "dataset_id" in self.connection_config:
-            dataset_id = self.connection_config["dataset_id"]
+        if self.dataset_id:
+            dataset_id = self.dataset_id
             if isinstance(dataset_id, str):
                 # If project is specified, create fully qualified dataset ID
-                project = self.connection_config.get("project")
-                if project and "." not in dataset_id:
-                    dataset_id = f"{project}.{dataset_id}"
+                if self.project and "." not in dataset_id:
+                    dataset_id = f"{self.project}.{dataset_id}"
                 job_config.default_dataset = dataset_id
 
         # Configure query cache
-        if self.connection_config.get("use_query_cache", True):
-            job_config.use_query_cache = True
+        if self.use_query_cache is not None:
+            job_config.use_query_cache = self.use_query_cache
+        else:
+            job_config.use_query_cache = True  # Default to True
 
         # Configure legacy SQL
-        if self.connection_config.get("use_legacy_sql", False):
+        if self.use_legacy_sql:
             job_config.use_legacy_sql = True
 
         # Configure cost controls
-        if "maximum_bytes_billed" in self.connection_config:
-            job_config.maximum_bytes_billed = self.connection_config["maximum_bytes_billed"]
+        if self.maximum_bytes_billed is not None:
+            job_config.maximum_bytes_billed = self.maximum_bytes_billed
 
         # Configure timeouts
-        if "query_timeout_ms" in self.connection_config:
-            job_config.job_timeout_ms = self.connection_config["query_timeout_ms"]
+        if self.query_timeout_ms is not None:
+            job_config.job_timeout_ms = self.query_timeout_ms
 
-        self.connection_config["default_query_job_config"] = job_config
+        self.default_query_job_config = job_config
+
+    @classmethod
+    def from_connection_config(
+        cls,
+        connection_config: dict[str, Any],
+        statement_config: Optional[SQLConfig] = None,
+        instrumentation: Optional[InstrumentationConfig] = None,
+        default_row_type: type[DictRow] = DictRow,
+        on_connection_create: Optional[Callable[[BigQueryConnection], None]] = None,
+        on_job_start: Optional[Callable[[str], None]] = None,
+        on_job_complete: Optional[Callable[[str, Any], None]] = None,
+    ) -> "BigQueryConfig":
+        """Create config from old-style connection_config dict for backward compatibility.
+
+        Args:
+            connection_config: Dictionary with connection parameters
+            statement_config: Default SQL statement configuration
+            instrumentation: Instrumentation configuration
+            default_row_type: Default row type for results
+            on_connection_create: Callback executed when connection is created
+            on_job_start: Callback executed when a BigQuery job starts
+            on_job_complete: Callback executed when a BigQuery job completes
+
+        Returns:
+            BigQueryConfig instance
+        """
+        # Create config with all parameters
+        return cls(
+            statement_config=statement_config,
+            instrumentation=instrumentation,
+            default_row_type=default_row_type,
+            on_connection_create=on_connection_create,
+            on_job_start=on_job_start,
+            on_job_complete=on_job_complete,
+            **connection_config,  # All connection parameters go to direct fields or extras
+        )
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
@@ -289,7 +353,20 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         Returns:
             Configuration dict for BigQuery Client constructor.
         """
-        return {k: v for k, v in (self.connection_config or {}).items() if v is not Empty}
+        # BigQuery Client parameter names (only the ones the Client constructor accepts)
+        client_fields = {"project", "location", "credentials", "client_options", "client_info"}
+
+        # Gather non-None client parameters that are valid for the Client constructor
+        config = {
+            field: getattr(self, field)
+            for field in client_fields
+            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
+        }
+
+        # Add relevant extras that might be valid for BigQuery Client
+        config.update(self.extras)
+
+        return config
 
     def create_connection(self) -> BigQueryConnection:
         """Create and return a new BigQuery Client instance.
@@ -341,7 +418,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
                 return connection
 
         except Exception as e:
-            project_id = self.connection_config.get("project", "Unknown")
+            project_id = self.project or "Unknown"
             msg = f"Could not configure BigQuery connection for project '{project_id}'. Error: {e}"
             logger.exception(msg, extra={"adapter": "bigquery", "error": str(e)})
             raise ImproperConfigurationError(msg) from e
@@ -393,7 +470,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
                     instrumentation_config=self.instrumentation,
                     default_row_type=self.default_row_type,
                     # Pass BigQuery-specific configurations
-                    default_query_job_config=self.connection_config.get("default_query_job_config"),
+                    default_query_job_config=self.default_query_job_config,
                     on_job_start=self.on_job_start,
                     on_job_complete=self.on_job_complete,
                 )

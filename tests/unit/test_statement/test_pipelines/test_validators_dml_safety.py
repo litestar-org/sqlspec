@@ -20,11 +20,7 @@ class TestDMLSafetyValidator:
     @pytest.fixture
     def context(self):
         """Create a processing context."""
-        return SQLProcessingContext(
-            initial_sql_string="SELECT 1",
-            dialect=None,
-            config=SQLConfig()
-        )
+        return SQLProcessingContext(initial_sql_string="SELECT 1", dialect=None, config=SQLConfig())
 
     @pytest.mark.parametrize(
         "sql,expected_category",
@@ -35,24 +31,23 @@ class TestDMLSafetyValidator:
             ("DROP TABLE users", StatementCategory.DDL),
             ("CREATE INDEX idx_users ON users(id)", StatementCategory.DDL),
             ("DROP INDEX idx_users", StatementCategory.DDL),
-
             # DML statements
             ("INSERT INTO users VALUES (1, 'John')", StatementCategory.DML),
             ("UPDATE users SET name = 'Jane' WHERE id = 1", StatementCategory.DML),
             ("DELETE FROM users WHERE id = 1", StatementCategory.DML),
-            ("MERGE INTO users USING temp_users ON users.id = temp_users.id WHEN MATCHED THEN UPDATE SET name = temp_users.name", StatementCategory.DML),
-
+            (
+                "MERGE INTO users USING temp_users ON users.id = temp_users.id WHEN MATCHED THEN UPDATE SET name = temp_users.name",
+                StatementCategory.DML,
+            ),
             # DQL statements
             ("SELECT * FROM users", StatementCategory.DQL),
             ("SELECT COUNT(*) FROM users", StatementCategory.DQL),
             ("WITH cte AS (SELECT 1) SELECT * FROM cte", StatementCategory.DQL),
-
             # DCL statements
             ("GRANT SELECT ON users TO john", StatementCategory.DCL),
-
             # TCL statements
             ("COMMIT", StatementCategory.TCL),
-            ("ROLLBACK", StatementCategory.TCL)
+            ("ROLLBACK", StatementCategory.TCL),
         ],
     )
     def test_statement_categorization(self, validator, sql, expected_category) -> None:

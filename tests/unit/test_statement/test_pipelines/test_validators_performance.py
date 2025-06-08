@@ -17,11 +17,7 @@ class TestPerformanceValidator:
     @pytest.fixture
     def context(self):
         """Create a processing context."""
-        return SQLProcessingContext(
-            initial_sql_string="SELECT 1",
-            dialect=None,
-            config=SQLConfig()
-        )
+        return SQLProcessingContext(initial_sql_string="SELECT 1", dialect=None, config=SQLConfig())
 
     def test_cartesian_product_detection(self, context) -> None:
         """Test detection of cartesian products (cross joins without conditions)."""
@@ -166,10 +162,7 @@ class TestPerformanceValidator:
         """Test detection of multiple performance issues in one query."""
         from sqlspec.statement.pipelines.validators._performance import PerformanceConfig
 
-        validator = PerformanceValidator(config=PerformanceConfig(
-            warn_on_cartesian=True,
-            max_joins=2
-        ))
+        validator = PerformanceValidator(config=PerformanceConfig(warn_on_cartesian=True, max_joins=2))
 
         # Query with multiple issues
         context.initial_sql_string = """
@@ -267,11 +260,13 @@ class TestPerformanceValidator:
         from sqlspec.statement.pipelines.validators._performance import PerformanceConfig
 
         # Disable all performance checks
-        validator = PerformanceValidator(config=PerformanceConfig(
-            warn_on_cartesian=False,
-            max_joins=0,  # 0 means no limit
-            warn_on_missing_index=False
-        ))
+        validator = PerformanceValidator(
+            config=PerformanceConfig(
+                warn_on_cartesian=False,
+                max_joins=0,  # 0 means no limit
+                warn_on_missing_index=False,
+            )
+        )
 
         # Query with potential issues
         context.initial_sql_string = "SELECT * FROM users, orders"

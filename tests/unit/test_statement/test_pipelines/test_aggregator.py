@@ -23,11 +23,7 @@ class TestResultAggregator:
 
     def test_add_analysis_result(self, aggregator) -> None:
         """Test adding analysis results."""
-        result = ProcessorResult(
-            processor_name="TestAnalyzer",
-            success=True,
-            data={"tables": ["users", "orders"]}
-        )
+        result = ProcessorResult(processor_name="TestAnalyzer", success=True, data={"tables": ["users", "orders"]})
 
         aggregator.add_analysis_result(result)
 
@@ -38,11 +34,7 @@ class TestResultAggregator:
         """Test adding validation result with SKIP risk level."""
         from sqlspec.statement.pipelines import ValidationResult
 
-        result = ValidationResult(
-            processor_name="TestValidator",
-            risk_level=RiskLevel.SKIP,
-            issues=[]
-        )
+        result = ValidationResult(processor_name="TestValidator", risk_level=RiskLevel.SKIP, issues=[])
 
         aggregator.add_validation_result(result)
 
@@ -54,18 +46,10 @@ class TestResultAggregator:
         from sqlspec.statement.pipelines import ValidationResult
 
         issue = ValidationIssue(
-            severity=RiskLevel.LOW,
-            message="Minor performance concern",
-            line_number=1,
-            column_number=0,
-            code="PERF001"
+            severity=RiskLevel.LOW, message="Minor performance concern", line_number=1, column_number=0, code="PERF001"
         )
 
-        result = ValidationResult(
-            processor_name="PerformanceValidator",
-            risk_level=RiskLevel.LOW,
-            issues=[issue]
-        )
+        result = ValidationResult(processor_name="PerformanceValidator", risk_level=RiskLevel.LOW, issues=[issue])
 
         aggregator.add_validation_result(result)
 
@@ -80,7 +64,7 @@ class TestResultAggregator:
         low_result = ValidationResult(
             processor_name="Validator1",
             risk_level=RiskLevel.LOW,
-            issues=[ValidationIssue(RiskLevel.LOW, "Low risk", 1, 0, "LOW001")]
+            issues=[ValidationIssue(RiskLevel.LOW, "Low risk", 1, 0, "LOW001")],
         )
         aggregator.add_validation_result(low_result)
         assert aggregator.overall_risk_level == RiskLevel.LOW
@@ -89,7 +73,7 @@ class TestResultAggregator:
         medium_result = ValidationResult(
             processor_name="Validator2",
             risk_level=RiskLevel.MEDIUM,
-            issues=[ValidationIssue(RiskLevel.MEDIUM, "Medium risk", 2, 0, "MED001")]
+            issues=[ValidationIssue(RiskLevel.MEDIUM, "Medium risk", 2, 0, "MED001")],
         )
         aggregator.add_validation_result(medium_result)
         assert aggregator.overall_risk_level == RiskLevel.MEDIUM
@@ -98,7 +82,7 @@ class TestResultAggregator:
         high_result = ValidationResult(
             processor_name="Validator3",
             risk_level=RiskLevel.HIGH,
-            issues=[ValidationIssue(RiskLevel.HIGH, "High risk", 3, 0, "HIGH001")]
+            issues=[ValidationIssue(RiskLevel.HIGH, "High risk", 3, 0, "HIGH001")],
         )
         aggregator.add_validation_result(high_result)
         assert aggregator.overall_risk_level == RiskLevel.HIGH
@@ -115,8 +99,8 @@ class TestResultAggregator:
             data={
                 "original_sql": "SELECT * FROM users WHERE id = 1",
                 "transformed_sql": "SELECT * FROM users WHERE id = ?",
-                "extracted_params": [1]
-            }
+                "extracted_params": [1],
+            },
         )
 
         aggregator.add_transformation_result(result)
@@ -131,13 +115,11 @@ class TestResultAggregator:
         # Add multiple validation results with issues
         issues1 = [
             ValidationIssue(RiskLevel.LOW, "Issue 1", 1, 0, "CODE1"),
-            ValidationIssue(RiskLevel.MEDIUM, "Issue 2", 2, 0, "CODE2")
+            ValidationIssue(RiskLevel.MEDIUM, "Issue 2", 2, 0, "CODE2"),
         ]
         result1 = ValidationResult("Validator1", RiskLevel.MEDIUM, issues1)
 
-        issues2 = [
-            ValidationIssue(RiskLevel.HIGH, "Issue 3", 3, 0, "CODE3")
-        ]
+        issues2 = [ValidationIssue(RiskLevel.HIGH, "Issue 3", 3, 0, "CODE3")]
         result2 = ValidationResult("Validator2", RiskLevel.HIGH, issues2)
 
         aggregator.add_validation_result(result1)
@@ -181,9 +163,7 @@ class TestResultAggregator:
         # Add various results
         analysis_result = ProcessorResult("Analyzer", True, {"tables": ["users"]})
         validation_result = ValidationResult(
-            "Validator",
-            RiskLevel.LOW,
-            [ValidationIssue(RiskLevel.LOW, "Test issue", 1, 0, "TEST001")]
+            "Validator", RiskLevel.LOW, [ValidationIssue(RiskLevel.LOW, "Test issue", 1, 0, "TEST001")]
         )
         transform_result = ProcessorResult("Transformer", True, {"sql": "SELECT 1"})
 
@@ -223,7 +203,7 @@ class TestResultAggregator:
             result = ValidationResult(
                 f"Validator{i}",
                 RiskLevel.MEDIUM,
-                [ValidationIssue(RiskLevel.MEDIUM, f"Issue from validator {i}", i+1, 0, f"CODE{i}")]
+                [ValidationIssue(RiskLevel.MEDIUM, f"Issue from validator {i}", i + 1, 0, f"CODE{i}")],
             )
             aggregator.add_validation_result(result)
 
@@ -234,19 +214,13 @@ class TestResultAggregator:
     def test_mixed_processor_results(self, aggregator) -> None:
         """Test handling mixed success/failure processor results."""
         # Successful analysis
-        aggregator.add_analysis_result(
-            ProcessorResult("SuccessAnalyzer", True, {"result": "data"})
-        )
+        aggregator.add_analysis_result(ProcessorResult("SuccessAnalyzer", True, {"result": "data"}))
 
         # Failed analysis
-        aggregator.add_analysis_result(
-            ProcessorResult("FailedAnalyzer", False, {"error": "Analysis failed"})
-        )
+        aggregator.add_analysis_result(ProcessorResult("FailedAnalyzer", False, {"error": "Analysis failed"}))
 
         # Successful transformation
-        aggregator.add_transformation_result(
-            ProcessorResult("Transformer", True, {"transformed": True})
-        )
+        aggregator.add_transformation_result(ProcessorResult("Transformer", True, {"transformed": True}))
 
         assert len(aggregator.analysis_results) == 2
         assert aggregator.analysis_results[0].success is True

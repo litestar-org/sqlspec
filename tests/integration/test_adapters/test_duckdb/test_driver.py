@@ -147,10 +147,10 @@ def test_select_value(duckdb_session: DuckDBDriver, params: Any, style: ParamSty
     assert isinstance(value_result, SQLResult)
     assert value_result.data is not None
     assert len(value_result.data) == 1
-    assert value_result.column_names is not None
+    assert value_result.column_names() is not None
 
     # Extract single value using column name
-    value = value_result.data[0][value_result.column_names[0]]
+    value = value_result.data[0][value_result.column_names()[0]]
     assert value == "test_name"
 
     duckdb_session.execute_script("DELETE FROM test_table")
@@ -184,8 +184,8 @@ def test_select_arrow(duckdb_session: DuckDBDriver, params: Any, style: ParamSty
         assert isinstance(arrow_result, ArrowResult)
         arrow_table = arrow_result.data
         assert isinstance(arrow_table, pa.Table)
-        assert arrow_table.num_rows == 1
-        assert arrow_table.num_columns == 2
+        assert arrow_table.num_rows() == 1
+        assert arrow_table.num_columns() == 2
         assert arrow_table.column_names == ["name", "id"]
         assert arrow_table.column("name").to_pylist() == ["arrow_name"]
         assert arrow_table.column("id").to_pylist() == [1]
@@ -359,7 +359,7 @@ def test_duckdb_complex_queries(duckdb_session: DuckDBDriver) -> None:
     """
 
     result = duckdb_session.execute(complex_query)
-    assert len(result.data) == 3
+    assert result.num_rows() == 3
 
     # Engineering should have highest average salary
     engineering_row = next(row for row in result.data if row["dept_name"] == "Engineering")
@@ -414,7 +414,7 @@ def test_duckdb_window_functions(duckdb_session: DuckDBDriver) -> None:
     """
 
     result = duckdb_session.execute(window_query)
-    assert len(result.data) == 5
+    assert result.num_rows() == 5
 
     # Verify window function results
     product_a_rows = [row for row in result.data if row["product"] == "Product A"]
@@ -537,8 +537,8 @@ def test_duckdb_arrow_integration_comprehensive(duckdb_session: DuckDBDriver) ->
     assert isinstance(arrow_result, ArrowResult)
     arrow_table = arrow_result.data
     assert isinstance(arrow_table, pa.Table)
-    assert arrow_table.num_rows == 3  # 3 active records
-    assert arrow_table.num_columns == 3
+    assert arrow_table.num_rows() == 3  # 3 active records
+    assert arrow_table.num_columns() == 3
     assert arrow_table.column_names == ["id", "name", "value"]
 
     # Verify Arrow data
@@ -562,8 +562,8 @@ def test_duckdb_arrow_integration_comprehensive(duckdb_session: DuckDBDriver) ->
     """)
 
     agg_table = agg_arrow_result.data
-    assert agg_table.num_rows == 2  # true and false groups
-    assert agg_table.num_columns == 3
+    assert agg_table.num_rows() == 2  # true and false groups
+    assert agg_table.num_columns() == 3
 
     # Clean up
     duckdb_session.execute_script("DROP TABLE arrow_test")
@@ -631,7 +631,7 @@ def test_duckdb_with_schema_type_conversion(duckdb_session: DuckDBDriver) -> Non
     )
 
     assert isinstance(result, SQLResult)
-    assert len(result.data) == 3
+    assert result.num_rows() == 3
 
     # Verify converted data types
     for i, record in enumerate(result.data, 1):
@@ -720,7 +720,7 @@ def test_duckdb_to_parquet(duckdb_session: DuckDBDriver) -> None:
     duckdb_session.execute("INSERT INTO test_table (id, name) VALUES (?, ?)", (1, "arrow1"))
     duckdb_session.execute("INSERT INTO test_table (id, name) VALUES (?, ?)", (2, "arrow2"))
     statement = SQL("SELECT id, name FROM test_table ORDER BY id")
-    with tempfile.NamedTemporaryFile() as tmp:
+    with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
         duckdb_session.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
         table = pq.read_table(tmp.name)
         assert table.num_rows == 2

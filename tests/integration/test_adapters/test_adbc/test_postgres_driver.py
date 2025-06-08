@@ -150,7 +150,7 @@ def test_parameter_styles(adbc_postgresql_session: AdbcDriver, params: Any, styl
     result = adbc_postgresql_session.execute(sql, params)
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
     assert result.data[0]["name"] == "test_value"
 
 
@@ -215,7 +215,7 @@ def test_multiple_parameters(adbc_postgresql_session: AdbcDriver) -> None:
     )
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 2
+    assert result.num_rows() == 2
     assert result.data[0]["name"] == "Alice"
     assert result.data[1]["name"] == "Bob"
 
@@ -241,7 +241,7 @@ def test_null_parameters(adbc_postgresql_session: AdbcDriver) -> None:
     )
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
     assert result.data[0]["nullable_text"] is None
     assert result.data[0]["nullable_int"] is None
 
@@ -606,7 +606,7 @@ def test_basic_types(adbc_postgresql_session: AdbcDriver) -> None:
     result = adbc_postgresql_session.execute("SELECT * FROM basic_types_test")
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
 
     row = result.data[0]
     assert row["int_col"] == 42
@@ -649,7 +649,7 @@ def test_date_time_types(adbc_postgresql_session: AdbcDriver) -> None:
     result = adbc_postgresql_session.execute("SELECT * FROM datetime_test")
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
 
     row = result.data[0]
     # Date/time handling may vary by ADBC driver version
@@ -690,7 +690,7 @@ def test_null_values(adbc_postgresql_session: AdbcDriver) -> None:
     result = adbc_postgresql_session.execute("SELECT * FROM null_values_test")
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
 
     row = result.data[0]
     assert row["nullable_int"] is None
@@ -738,7 +738,7 @@ def test_advanced_types(adbc_postgresql_session: AdbcDriver) -> None:
     result = adbc_postgresql_session.execute("SELECT * FROM advanced_types_test")
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
 
     row = result.data[0]
     assert row["array_int"] == [1, 2, 3, 4, 5]
@@ -767,8 +767,8 @@ def test_arrow_result_format(adbc_postgresql_session: AdbcDriver) -> None:
         assert isinstance(arrow_result, ArrowResult)
         arrow_table = arrow_result.data
         assert isinstance(arrow_table, pa.Table)
-        assert arrow_table.num_rows == 3
-        assert arrow_table.num_columns == 2
+        assert arrow_table.num_rows() == 3
+        assert arrow_table.num_columns() == 2
         assert arrow_table.column_names == ["name", "value"]
 
         # Verify data
@@ -804,15 +804,15 @@ def test_fetch_arrow_table(adbc_postgresql_session: AdbcDriver) -> None:
     result = adbc_postgresql_session.fetch_arrow_table("SELECT * FROM arrow_test ORDER BY name")
 
     assert isinstance(result, ArrowResult)
-    assert isinstance(result.data, pa.Table)
-    assert result.data.num_rows == 3
+    assert isinstance(result, ArrowResult)
+    assert result.num_rows() == 3
     assert result.data.num_columns == 3
-    assert result.data.column_names == ["name", "age", "salary"]
+    assert result.column_names() == ["name", "age", "salary"]
 
     # Verify data content
-    names = result.data.column("name").to_pylist()
-    ages = result.data.column("age").to_pylist()
-    salaries = result.data.column("salary").to_pylist()
+    names = result.column("name").to_pylist()
+    ages = result.column("age").to_pylist()
+    salaries = result.column("salary").to_pylist()
 
     assert names == ["Alice", "Bob", "Charlie"]
     assert ages == [25, 30, 35]
@@ -836,8 +836,8 @@ def test_to_parquet(adbc_postgresql_session: AdbcDriver) -> None:
 
         # Read back the Parquet file
         table = pq.read_table(tmp.name)
-        assert table.num_rows == 2
-        assert set(table.column_names) >= {"id", "name", "value"}
+        assert table.num_rows() == 2
+        assert set(table.column_names()) >= {"id", "name", "value"}
 
         # Verify data
         data = table.to_pylist()
@@ -858,10 +858,10 @@ def test_arrow_with_parameters(adbc_postgresql_session: AdbcDriver) -> None:
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.data.num_rows == 2
+    assert result.num_rows() == 2
 
-    names = result.data.column("name").to_pylist()
-    values = result.data.column("value").to_pylist()
+    names = result.column("name").to_pylist()
+    values = result.column("value").to_pylist()
     assert names == ["param_test2", "param_test3"]
     assert values == [20, 30]
 
@@ -875,10 +875,10 @@ def test_arrow_empty_result(adbc_postgresql_session: AdbcDriver) -> None:
     )
 
     assert isinstance(result, ArrowResult)
-    assert isinstance(result.data, pa.Table)
-    assert result.data.num_rows == 0
+    assert isinstance(result, ArrowResult)
+    assert result.num_rows() == 0
     assert result.data.num_columns == 2
-    assert result.data.column_names == ["name", "value"]
+    assert result.column_names() == ["name", "value"]
 
 
 @pytest.mark.xdist_group("postgres")
@@ -986,9 +986,9 @@ def test_column_names_and_metadata(adbc_postgresql_session: AdbcDriver) -> None:
         "SELECT id, name, value, created_at FROM test_table WHERE name = $1", ("metadata_test",)
     )
     assert isinstance(result, SQLResult)
-    assert result.column_names == ["id", "name", "value", "created_at"]
+    assert result.column_names() == ["id", "name", "value", "created_at"]
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
 
     # Test that we can access data by column name
     row = result.data[0]
@@ -1018,10 +1018,10 @@ def test_with_schema_type(adbc_postgresql_session: AdbcDriver) -> None:
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
 
     # The data should be converted to the schema type by the ResultConverter
-    assert result.column_names == ["id", "name", "value"]
+    assert result.column_names() == ["id", "name", "value"]
 
 
 @pytest.mark.xdist_group("postgres")
@@ -1063,7 +1063,7 @@ def test_insert_returning(adbc_postgresql_session: AdbcDriver) -> None:
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
     assert result.data[0]["name"] == "returning_test"
     assert result.data[0]["value"] == 999
     assert result.data[0]["id"] is not None
@@ -1092,7 +1092,7 @@ def test_update_returning(adbc_postgresql_session: AdbcDriver) -> None:
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
     assert result.data[0]["name"] == "update_returning"
     assert result.data[0]["value"] == 200
     assert result.data[0]["id"] is not None
@@ -1111,7 +1111,7 @@ def test_delete_returning(adbc_postgresql_session: AdbcDriver) -> None:
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 2
+    assert result.num_rows() == 2
 
     # Check returned data
     returned_names = {row["name"] for row in result.data}

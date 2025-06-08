@@ -381,38 +381,42 @@ class SyncStorageMixin:
 
     def fetch_arrow_table(
         self,
-        sql: Union[str, SQL],
-        parameters: Optional[Any] = None,
-        **kwargs: Any
-    ) -> ArrowResult:
-        """Execute SELECT and return Arrow table."""
+        query: str
+    ) -> pa.Table:
+        """Execute SELECT and return Arrow table directly."""
         # Intelligent routing - use native if available
         if hasattr(self.connection, 'fetch_arrow'):
-            return self._native_arrow_fetch(sql, parameters)
+            return self._native_arrow_fetch(query)
         else:
-            return self._generic_arrow_fetch(sql, parameters)
+            return self._generic_arrow_fetch(query)
 
     def export_to_storage(
         self,
-        sql: Union[str, SQL],
-        uri: str,
-        format: Optional[str] = None,
+        query: str,
+        destination_uri: str,
+        storage_key: Optional[str] = None,
         **kwargs: Any
-    ) -> ExportResult:
-        """Export query results directly to storage."""
-        # Auto-detect format from URI if not specified
-        if not format:
-            format = self._detect_format(uri)
+    ) -> int:
+        """Export query results directly to storage.
 
-        # Route to appropriate exporter
-        if format == "parquet":
-            return self.to_parquet(sql, uri, **kwargs)
-        elif format == "csv":
-            return self.to_csv(sql, uri, **kwargs)
-        elif format == "json":
-            return self.to_json(sql, uri, **kwargs)
+        Args:
+            query: SQL query string to execute
+            destination_uri: Target storage URI
+            storage_key: Optional storage backend key
+            **kwargs: Additional format-specific options
+
+        Returns:
+            Number of rows exported
+        """
+        # Auto-detect format from URI
+        format = self._detect_format(destination_uri)
+
+        # Use native export if available
+        if self._has_native_capability('export', destination_uri, format):
+            return self._native_export(query, destination_uri, format, **kwargs)
         else:
-            raise ValueError(f"Unsupported format: {format}")
+            # Fallback to storage backend
+            return self._storage_backend_export(query, destination_uri, storage_key, **kwargs)
 
     def copy_from(
         self,
@@ -466,9 +470,8 @@ class ToSchemaMixin:
 class PostgreSQLDriver(
     SyncDriverAdapterProtocol[psycopg.Connection, RowT],
     SQLTranslatorMixin[psycopg.Connection],
-    ResultConverter,
-    SyncArrowMixin[psycopg.Connection],
-    SyncExportMixin[psycopg.Connection],
+    SyncStorageMixin,
+    SyncInstrumentationMixin,
 ):
     """PostgreSQL driver using psycopg."""
 

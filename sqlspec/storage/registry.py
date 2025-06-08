@@ -68,8 +68,11 @@ class StorageRegistry:
 
     def _register_defaults(self) -> None:
         """Register default scheme mappings."""
-        # ObStore protocols (preferred)
-        for scheme in ("s3", "gs", "az", "file", "memory", "http", "https"):
+        # Local file protocol - use FSSpec as ObStore fallback
+        self._scheme_mapping["file"] = "fsspec"
+
+        # ObStore protocols (preferred) - with fallback to FSSpec if obstore not available
+        for scheme in ("s3", "gs", "az", "memory", "http", "https"):
             self._scheme_mapping[scheme] = "obstore"
 
         # FSSpec-only protocols (extended support)
@@ -170,14 +173,15 @@ class StorageRegistry:
         Raises:
             KeyError: If no suitable backend can be created
         """
-        scheme = uri.split("://")[0]
+        scheme = uri.split("://", maxsplit=1)[0]
         backend_type = self._scheme_mapping.get(scheme)
 
         if not backend_type:
-            # Try ObStore first, fall back to FSSpec
+            # Try ObStore first (if available), fall back to FSSpec
             try:
                 return self._create_backend("obstore", uri)
             except Exception:
+                # ObStore failed (likely not installed), try FSSpec
                 try:
                     return self._create_backend("fsspec", uri)
                 except Exception as e:
@@ -187,12 +191,16 @@ class StorageRegistry:
         try:
             return self._create_backend(backend_type, uri)
         except Exception as e:
-            # Try alternative backend type as fallback
-            fallback_type = "fsspec" if backend_type == "obstore" else "obstore"
-            try:
-                logger.debug("Falling back from %s to %s for %s", backend_type, fallback_type, uri)
-                return self._create_backend(fallback_type, uri)
-            except Exception:
+            # For obstore failures, automatically fall back to fsspec
+            if backend_type == "obstore":
+                try:
+                    logger.debug("ObStore not available, falling back to FSSpec for %s", uri)
+                    return self._create_backend("fsspec", uri)
+                except Exception:
+                    msg = f"Failed to create backend for URI '{uri}': {e}"
+                    raise KeyError(msg) from e
+            else:
+                # FSSpec failed, no fallback available
                 msg = f"Failed to create backend for URI '{uri}': {e}"
                 raise KeyError(msg) from e
 
@@ -209,15 +217,23 @@ class StorageRegistry:
             ValueError: If unknown backend type
         """
         if backend_type == "obstore":
-            from sqlspec.storage.backends.obstore import ObStoreBackend
+            try:
+                from sqlspec.storage.backends.obstore import ObStoreBackend
 
-            return ObStoreBackend
-        if backend_type == "fsspec":
+                return ObStoreBackend
+            except ImportError as e:
+                # ObStore not available, raise MissingDependencyError
+                from sqlspec.exceptions import MissingDependencyError
+
+                msg = "obstore"
+                raise MissingDependencyError(msg) from e
+        elif backend_type == "fsspec":
             from sqlspec.storage.backends.fsspec import FSSpecBackend
 
             return FSSpecBackend
-        msg = f"Unknown backend type: {backend_type}"
-        raise ValueError(msg)
+        else:
+            msg = f"Unknown backend type: {backend_type}. Supported types: 'obstore', 'fsspec'"
+            raise ValueError(msg)
 
     def _create_backend(self, backend_type: str, uri: str) -> ObjectStoreProtocol:
         """Create backend instance for URI.

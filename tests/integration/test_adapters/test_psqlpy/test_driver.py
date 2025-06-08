@@ -6,11 +6,10 @@ import tempfile
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any, Literal
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from sqlspec.adapters.psqlpy.config import PsqlpyConfig, PsqlpyPoolConfig
+from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL
 
@@ -28,10 +27,8 @@ def psqlpy_config(postgres_service: PostgresService) -> PsqlpyConfig:
     """Fixture for PsqlpyConfig using the postgres service."""
     dsn = f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
     return PsqlpyConfig(
-        pool_config=PsqlpyPoolConfig(
-            dsn=dsn,
-            max_db_pool_size=5,  # Adjust pool size as needed for tests
-        )
+        dsn=dsn,
+        max_db_pool_size=5,  # Adjust pool size as needed for tests
     )
 
 
@@ -74,7 +71,7 @@ async def test_insert_returning_param_styles(psqlpy_config: PsqlpyConfig, params
         result = await driver.execute(sql, params)
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert len(result.data) == 1
+        assert result.num_rows() == 1
         assert result.data[0]["name"] == "test_name"
         assert result.data[0]["id"] is not None
 
@@ -208,8 +205,8 @@ async def test_select_methods(psqlpy_config: PsqlpyConfig) -> None:
         assert isinstance(value_result, SQLResult)
         assert value_result.data is not None
         assert len(value_result.data) == 1
-        assert value_result.column_names is not None
-        value = value_result.data[0][value_result.column_names[0]]
+        assert value_result.column_names() is not None
+        value = value_result.data[0][value_result.column_names()[0]]
         assert isinstance(value, int)
 
 
@@ -274,8 +271,8 @@ async def test_scalar_parameter_handling(psqlpy_config: PsqlpyConfig) -> None:
         assert isinstance(value_result, SQLResult)
         assert value_result.data is not None
         assert len(value_result.data) == 1
-        assert value_result.column_names is not None
-        value = value_result.data[0][value_result.column_names[0]]
+        assert value_result.column_names() is not None
+        value = value_result.data[0][value_result.column_names()[0]]
         assert isinstance(value, int)
 
         # Test select_one_or_none with scalar parameter that doesn't exist
@@ -297,7 +294,7 @@ async def test_question_mark_in_edge_cases(psqlpy_config: PsqlpyConfig) -> None:
         result = await driver.execute("SELECT * FROM test_table WHERE name = ? AND '?' = '?'", "edge_case_test")
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert len(result.data) == 1
+        assert result.num_rows() == 1
         assert result.data[0]["name"] == "edge_case_test"
 
         # Test question mark in a comment - should not be treated as a parameter
@@ -306,7 +303,7 @@ async def test_question_mark_in_edge_cases(psqlpy_config: PsqlpyConfig) -> None:
         )
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert len(result.data) == 1
+        assert result.num_rows() == 1
         assert result.data[0]["name"] == "edge_case_test"
 
         # Test question mark in a block comment - should not be treated as a parameter
@@ -316,7 +313,7 @@ async def test_question_mark_in_edge_cases(psqlpy_config: PsqlpyConfig) -> None:
         )
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert len(result.data) == 1
+        assert result.num_rows() == 1
         assert result.data[0]["name"] == "edge_case_test"
 
         # Test with mixed parameter styles and multiple question marks
@@ -325,7 +322,7 @@ async def test_question_mark_in_edge_cases(psqlpy_config: PsqlpyConfig) -> None:
         )
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert len(result.data) == 1
+        assert result.num_rows() == 1
         assert result.data[0]["name"] == "edge_case_test"
 
         # Test a complex query with multiple question marks in different contexts
@@ -341,7 +338,7 @@ async def test_question_mark_in_edge_cases(psqlpy_config: PsqlpyConfig) -> None:
         )
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert len(result.data) == 1
+        assert result.num_rows() == 1
         assert result.data[0]["name"] == "edge_case_test"
 
 
@@ -466,9 +463,9 @@ async def test_psqlpy_fetch_arrow_table(psqlpy_config: PsqlpyConfig) -> None:
         result = await driver.fetch_arrow_table(statement)
         assert isinstance(result, ArrowResult)
         table = result.data
-        assert isinstance(table, pa.Table)
-        assert table.num_rows == 2
-        assert set(table.column_names) == {"name"}
+        assert isinstance(table, ArrowResult)
+        assert table.num_rows() == 2
+        assert set(table.column_names()) == {"name"}
         names = table.column("name").to_pylist()
         assert "arrow1" in names and "arrow2" in names
 
@@ -483,7 +480,7 @@ async def test_psqlpy_to_parquet(psqlpy_config: PsqlpyConfig) -> None:
         with tempfile.NamedTemporaryFile() as tmp:
             await driver.export_to_storage(statement, tmp.name)
             table = pq.read_table(tmp.name)
-            assert table.num_rows == 2
-            assert set(table.column_names) == {"name"}
+            assert table.num_rows() == 2
+            assert set(table.column_names()) == {"name"}
             names = table.column("name").to_pylist()
             assert "pq1" in names and "pq2" in names

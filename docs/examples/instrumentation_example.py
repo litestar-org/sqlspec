@@ -17,6 +17,8 @@ from sqlspec.config import InstrumentationConfig
 from sqlspec.utils.correlation import correlation_context
 from sqlspec.utils.logging import configure_logging
 
+__all__ = ("lifespan_with_instrumentation", "main")
+
 
 def main() -> None:
     """Example of comprehensive instrumentation setup."""
@@ -64,13 +66,11 @@ def main() -> None:
             )
 
             # Insert data with instrumentation
-            session.execute(
-                "INSERT INTO users (name, email) VALUES (?, ?)",
-                ["Alice", "alice@example.com"]
-            )
+            session.execute("INSERT INTO users (name, email) VALUES (?, ?)", ["Alice", "alice@example.com"])
 
             # Query data (slow query simulation)
             import time
+
             time.sleep(0.2)  # Simulate slow query
 
             result = session.execute("SELECT * FROM users WHERE email = ?", ["alice@example.com"])
@@ -135,12 +135,7 @@ def main() -> None:
     from sqlspec.base import sql
 
     with correlation_context("query-build-example"):
-        query = (
-            sql.select("id", "name", "email")
-            .from_("users")
-            .where("email = ?", "alice@example.com")
-            .limit(1)
-        )
+        query = sql.select("id", "name", "email").from_("users").where("email = ?", "alice@example.com").limit(1)
 
         # SQL generation is instrumented
         sql_obj = query

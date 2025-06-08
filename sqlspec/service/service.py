@@ -75,9 +75,7 @@ class DatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, RowT]):
             duration_ms = (perf_counter() - start_time) * 1000
             # Extract result_count from context to avoid duplicate keyword argument
             result_count = op_context.pop("result_count", None)
-            self._log_operation_complete(
-                operation, duration_ms, result_count=result_count, **op_context
-            )
+            self._log_operation_complete(operation, duration_ms, result_count=result_count, **op_context)
         except Exception as e:
             self._log_operation_error(operation, e, **op_context)
             raise
@@ -539,9 +537,7 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
             duration_ms = (perf_counter() - start_time) * 1000
             # Extract result_count from context to avoid duplicate keyword argument
             result_count = op_context.pop("result_count", None)
-            self._log_operation_complete(
-                operation, duration_ms, result_count=result_count, **op_context
-            )
+            self._log_operation_complete(operation, duration_ms, result_count=result_count, **op_context)
         except Exception as e:
             self._log_operation_error(operation, e, **op_context)
             raise

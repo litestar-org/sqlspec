@@ -6,12 +6,11 @@ import tempfile
 from collections.abc import AsyncGenerator
 from typing import Any, Literal
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, AsyncmyPoolConfig
+from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL
 
@@ -22,13 +21,11 @@ ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 async def asyncmy_session(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyDriver, None]:
     """Create an asyncmy session with test table."""
     config = AsyncmyConfig(
-        pool_config=AsyncmyPoolConfig(
-            host=mysql_service.host,
-            port=mysql_service.port,
-            user=mysql_service.user,
-            password=mysql_service.password,
-            database=mysql_service.db,
-        ),
+        host=mysql_service.host,
+        port=mysql_service.port,
+        user=mysql_service.user,
+        password=mysql_service.password,
+        database=mysql_service.db,
     )
 
     async with config.provide_session() as session:
@@ -111,7 +108,7 @@ async def test_asyncmy_parameter_styles(asyncmy_session: AsyncmyDriver, params: 
     result = await asyncmy_session.execute(sql, params)
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
     assert result.data[0]["name"] == "test_value"
 
 
@@ -386,9 +383,9 @@ async def test_asyncmy_column_names_and_metadata(asyncmy_session: AsyncmyDriver)
         "SELECT id, name, value, created_at FROM test_table WHERE name = %s", ("metadata_test",)
     )
     assert isinstance(result, SQLResult)
-    assert result.column_names == ["id", "name", "value", "created_at"]
+    assert result.column_names() == ["id", "name", "value", "created_at"]
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
 
     # Test that we can access data by column name
     row = result.data[0]
@@ -419,10 +416,10 @@ async def test_asyncmy_with_schema_type(asyncmy_session: AsyncmyDriver) -> None:
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert len(result.data) == 1
+    assert result.num_rows() == 1
 
     # The data should be converted to the schema type by the ResultConverter
-    assert result.column_names == ["id", "name", "value"]
+    assert result.column_names() == ["id", "name", "value"]
 
 
 @pytest.mark.xdist_group("mysql")
@@ -567,9 +564,9 @@ async def test_asyncmy_fetch_arrow_table(asyncmy_session: AsyncmyDriver) -> None
     result = await asyncmy_session.fetch_arrow_table(statement)
     assert isinstance(result, ArrowResult)
     table = result.data
-    assert isinstance(table, pa.Table)
-    assert table.num_rows == 2
-    assert set(table.column_names) == {"name", "value"}
+    assert isinstance(table, ArrowResult)
+    assert table.num_rows() == 2
+    assert set(table.column_names()) == {"name", "value"}
     names = table.column("name").to_pylist()
     assert "arrow1" in names and "arrow2" in names
 
@@ -583,7 +580,7 @@ async def test_asyncmy_to_parquet(asyncmy_session: AsyncmyDriver) -> None:
     with tempfile.NamedTemporaryFile() as tmp:
         await asyncmy_session.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
         table = pq.read_table(tmp.name)
-        assert table.num_rows == 2
-        assert set(table.column_names) == {"name", "value"}
+        assert table.num_rows() == 2
+        assert set(table.column_names()) == {"name", "value"}
         names = table.column("name").to_pylist()
         assert "pq1" in names and "pq2" in names
