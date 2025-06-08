@@ -488,3 +488,60 @@ def test_to_parquet_calls_extract_table(monkeypatch: pytest.MonkeyPatch, bigquer
     """Test that to_parquet calls extract_table with correct arguments if path and bucket are valid."""
     # Skip this test - unified storage mixin doesn't use extract_table anymore
     pytest.skip("Unified storage mixin doesn't use BigQuery extract_table")
+
+
+def test_bigquery_driver_fetch_arrow_table_native(bigquery_driver: BigQueryDriver, mock_query_job: Mock) -> None:
+    """Test BigQueryDriver._fetch_arrow_table uses native QueryJob.to_arrow()."""
+    import pyarrow as pa
+
+    from sqlspec.statement.result import ArrowResult
+
+    # Setup mock arrow table for native fetch
+    mock_arrow_table = pa.table({"id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"]})
+    mock_query_job.to_arrow.return_value = mock_arrow_table
+
+    # Mock the job result to complete successfully
+    mock_query_job.result.return_value = None
+
+    # Mock _execute to return the query job
+    bigquery_driver.connection.query.return_value = mock_query_job
+
+    statement = SQL("SELECT * FROM users")
+    result = bigquery_driver.fetch_arrow_table(statement)
+
+    assert isinstance(result, ArrowResult)
+    assert result.data is mock_arrow_table  # Should be the exact same table
+    assert result.data.num_rows == 3
+    assert result.data.column_names == ["id", "name"]
+
+    # Verify native to_arrow was called
+    mock_query_job.to_arrow.assert_called_once()
+    # Verify query job was waited on
+    mock_query_job.result.assert_called_once()
+
+
+def test_bigquery_driver_fetch_arrow_table_with_options(bigquery_driver: BigQueryDriver, mock_query_job: Mock) -> None:
+    """Test BigQueryDriver._fetch_arrow_table passes through BigQuery-specific options."""
+    import pyarrow as pa
+
+    from sqlspec.statement.result import ArrowResult
+
+    # Setup mock arrow table for native fetch
+    mock_arrow_table = pa.table({"id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"]})
+    mock_query_job.to_arrow.return_value = mock_arrow_table
+    mock_query_job.result.return_value = None
+
+    # Mock _execute to return the query job
+    bigquery_driver.connection.query.return_value = mock_query_job
+
+    statement = SQL("SELECT * FROM users")
+
+    # Test with BigQuery Storage API disabled
+    result = bigquery_driver.fetch_arrow_table(statement, use_bqstorage_api=False, bq_job_timeout=30)
+
+    assert isinstance(result, ArrowResult)
+
+    # Verify to_arrow was called with correct options
+    mock_query_job.to_arrow.assert_called_once_with(create_bqstorage_client=False)
+    # Verify timeout was passed to result()
+    mock_query_job.result.assert_called_once_with(timeout=30)

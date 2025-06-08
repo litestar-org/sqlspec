@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 """Centralized logging configuration for SQLSpec.
 
 This module provides a standardized logging setup for the entire SQLSpec library,

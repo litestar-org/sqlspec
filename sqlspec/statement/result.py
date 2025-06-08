@@ -12,7 +12,7 @@ from typing_extensions import TypeVar
 from sqlspec.typing import ArrowTable, RowT
 
 if TYPE_CHECKING:
-    from sqlspec.statement.sql import Statement
+    from sqlspec.statement.sql import SQL
 
 __all__ = ("ArrowResult", "SQLResult", "StatementResult")
 
@@ -37,7 +37,7 @@ class StatementResult(ABC, Generic[RowT]):
         metadata: Additional metadata about the operation.
     """
 
-    statement: "Union[Statement, str]"
+    statement: "SQL"
     """The original SQL statement that was executed."""
     data: "Any"
     """The result data from the operation."""

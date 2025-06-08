@@ -81,8 +81,6 @@ class StorageRegistry:
     ) -> None:
         """Register a named alias for a storage configuration.
 
-        Note: This is a secondary feature. Primary usage is direct URI access via get().
-
         Args:
             alias: Unique alias name for the configuration
             uri: Storage URI (e.g., "s3://bucket", "file:///path")
@@ -118,7 +116,6 @@ class StorageRegistry:
 
         Raises:
             KeyError: If alias not found and URI cannot be resolved
-            ValueError: If no suitable backend is available for the URI scheme
         """
         # Handle Path objects - convert to file:// URI
         if isinstance(uri_or_alias, Path):

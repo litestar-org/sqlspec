@@ -176,35 +176,57 @@ class SyncStorageMixin(StorageMixinBase):
         for filter_func in filters:
             sql_obj = filter_func(sql_obj)
 
-        # Use static parameter conversion (like execute_script)
-        final_sql = sql_obj.to_sql()
+        # Delegate to protected method that drivers can override
+        return self._fetch_arrow_table(sql_obj, connection=connection, **kwargs)
 
-        # Use provided connection or default
-        conn = connection or self._connection
+    def _fetch_arrow_table(
+        self,
+        sql_obj: SQL,
+        connection: "Optional[ConnectionT]" = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Protected method for driver-specific Arrow table fetching.
 
+        Drivers should override this method to provide native Arrow support.
+        The default implementation uses the generic fallback.
+
+        Args:
+            sql_obj: Processed SQL object
+            connection: Optional connection override
+            **kwargs: Additional driver-specific options
+
+        Returns:
+            ArrowResult with the fetched data
+        """
+        # Default implementation: use the fallback
+        return self._fetch_arrow_table_fallback(sql_obj, connection=connection, **kwargs)
+
+    def _fetch_arrow_table_fallback(
+        self,
+        sql_obj: SQL,
+        connection: "Optional[ConnectionT]" = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Generic fallback for Arrow table fetching.
+
+        This method executes a regular query and converts the results to Arrow format.
+        Drivers can call this method when they don't have native Arrow support.
+
+        Args:
+            sql_obj: SQL object to execute
+            connection: Optional connection override
+            **kwargs: Additional options (unused in fallback)
+
+        Returns:
+            ArrowResult with converted data
+        """
         with wrap_exceptions():
-            # Try native Arrow support first (fastest)
-            try:
-                # DuckDB-style native Arrow
-                arrow_table = conn.execute(final_sql).arrow()  # type: ignore[no-any-return]
-                return ArrowResult(statement=sql_obj, data=arrow_table)
-            except AttributeError:
-                pass
+            # Execute regular query
+            result = self.execute(sql_obj, connection=connection)  # type: ignore[attr-defined]
 
-            try:
-                # Driver-specific Arrow method
-                arrow_table = conn.fetch_arrow_table(final_sql)  # type: ignore[no-any-return]
-                return ArrowResult(statement=sql_obj, data=arrow_table)
-            except AttributeError:
-                pass
-
-            # Fallback: execute regular query and convert to Arrow
-            result = (
-                self.execute(sql_obj, connection=connection)  # type: ignore[attr-defined]
-                if connection
-                else self.execute(sql_obj)  # type: ignore[attr-defined]
-            )
+            # Convert to Arrow table
             arrow_table = self._rows_to_arrow_table(result.data or [], result.column_names or [])
+
             return ArrowResult(statement=sql_obj, data=arrow_table)
 
     def ingest_arrow_table(self, table: ArrowTable, target_table: str, mode: str = "create", **options: Any) -> int:
@@ -577,7 +599,6 @@ class AsyncStorageMixin(StorageMixinBase):
         """
         self._ensure_pyarrow_installed()
 
-        from sqlspec.statement.result import ArrowResult
         from sqlspec.statement.sql import SQL
 
         # Convert to SQL object for processing
@@ -595,34 +616,59 @@ class AsyncStorageMixin(StorageMixinBase):
         for filter_func in filters:
             sql_obj = filter_func(sql_obj)
 
-        # Use static parameter conversion (like execute_script)
-        final_sql = sql_obj.to_sql()
+        # Delegate to protected method that drivers can override
+        return await self._fetch_arrow_table(sql_obj, connection=connection, **kwargs)
 
-        # Use provided connection or default
-        conn = connection or self._connection
+    async def _fetch_arrow_table(
+        self,
+        sql_obj: SQL,
+        connection: "Optional[ConnectionT]" = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Protected async method for driver-specific Arrow table fetching.
+
+        Async drivers should override this method to provide native Arrow support.
+        The default implementation uses the generic fallback.
+
+        Args:
+            sql_obj: Processed SQL object
+            connection: Optional connection override
+            **kwargs: Additional driver-specific options
+
+        Returns:
+            ArrowResult with the fetched data
+        """
+        # Default implementation: use the fallback
+        return await self._fetch_arrow_table_fallback(sql_obj, connection=connection, **kwargs)
+
+    async def _fetch_arrow_table_fallback(
+        self,
+        sql_obj: SQL,
+        connection: "Optional[ConnectionT]" = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Generic async fallback for Arrow table fetching.
+
+        This method executes a regular query and converts the results to Arrow format.
+        Async drivers can call this method when they don't have native Arrow support.
+
+        Args:
+            sql_obj: SQL object to execute
+            connection: Optional connection override
+            **kwargs: Additional options (unused in fallback)
+
+        Returns:
+            ArrowResult with converted data
+        """
+        from sqlspec.statement.result import ArrowResult
 
         with wrap_exceptions():
-            # Try native Arrow support first
-            try:
-                result = await conn.execute(final_sql)
-                arrow_table = result.arrow()  # type: ignore[no-any-return]
-                return ArrowResult(statement=sql_obj, data=arrow_table)
-            except AttributeError:
-                pass
+            # Execute regular query
+            result = await self.execute(sql_obj, connection=connection)  # type: ignore[attr-defined]
 
-            try:
-                arrow_table = await conn.fetch_arrow_table(final_sql)  # type: ignore[no-any-return]
-                return ArrowResult(statement=sql_obj, data=arrow_table)
-            except AttributeError:
-                pass
-
-            # Fallback: execute regular query and convert to Arrow
-            result = (
-                await self.execute(sql_obj, connection=connection)  # type: ignore[attr-defined]
-                if connection
-                else await self.execute(sql_obj)  # type: ignore[attr-defined]
-            )
+            # Convert to Arrow table
             arrow_table = self._rows_to_arrow_table(result.data or [], result.column_names or [])
+
             return ArrowResult(statement=sql_obj, data=arrow_table)
 
     async def ingest_arrow_table(

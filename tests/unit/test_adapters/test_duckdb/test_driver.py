@@ -126,13 +126,9 @@ def test_duckdb_driver_fetch_arrow_table_with_parameters(
 ) -> None:
     """Test DuckDB driver fetch_arrow_table method with parameters."""
     # Setup mock cursor and arrow table
-    mock_cursor = Mock()
+    Mock()
     mock_arrow_table = Mock()
-    mock_duckdb_connection.cursor.return_value = mock_cursor
-    mock_cursor.execute.return_value = mock_cursor
-    mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
-    mock_cursor.description = [("id",), ("name",)]  # Mock cursor description
-    mock_cursor.fetchall.return_value = [(42, "Test User")]  # Mock fetchall with actual data
+    mock_arrow_table.num_rows = 1  # Mock the num_rows attribute
 
     # Mock the DuckDB-style native Arrow path: conn.execute(sql).arrow()
     mock_execute_result = Mock()
@@ -142,31 +138,20 @@ def test_duckdb_driver_fetch_arrow_table_with_parameters(
     # Create SQL statement with parameters
     statement = SQL("SELECT id, name FROM users WHERE id = ?", parameters=[42])
 
-    # Mock the driver's execute method which is used by the fallback path
-    from sqlspec.statement.result import SQLResult
-
-    mock_sql_result = SQLResult(
-        statement=statement,
-        data=[{"id": 42, "name": "Test User"}],
-        column_names=["id", "name"],
-    )
-
-    def mock_execute(sql_obj, **kwargs):
-        return mock_sql_result
-
-    monkeypatch.setattr(duckdb_driver, "execute", mock_execute)
-
-    # Execute fetch_arrow_table
+    # Execute fetch_arrow_table - will use DuckDB's native implementation
     result = duckdb_driver.fetch_arrow_table(statement)
 
-    # Verify result - should be an ArrowResult with PyArrow table from fallback conversion
+    # Verify result
     assert isinstance(result, ArrowResult)
-    assert result.statement is statement
-    assert result.data is not None
-    # Should be a real PyArrow table from the fallback conversion
-    import pyarrow as pa
+    assert result.statement.sql == statement.sql
+    assert result.data is mock_arrow_table
 
-    assert isinstance(result.data, pa.Table)
+    # Verify DuckDB native method was called with processed SQL
+    # The SQL object will convert ? to the actual parameter value
+    mock_duckdb_connection.execute.assert_called_once()
+    call_args = mock_duckdb_connection.execute.call_args[0][0]
+    assert "SELECT id, name FROM users WHERE id =" in call_args
+    mock_execute_result.arrow.assert_called_once()
 
 
 def test_duckdb_driver_fetch_arrow_table_non_query_error(duckdb_driver: DuckDBDriver) -> None:

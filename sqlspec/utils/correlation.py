@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 """Correlation ID tracking for distributed tracing.
 
 This module provides utilities for tracking correlation IDs across
@@ -12,7 +13,7 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, MutableMapping
     from logging import LoggerAdapter
 
 __all__ = (
@@ -137,7 +138,7 @@ def get_correlation_adapter(logger: Any) -> LoggerAdapter:
     class CorrelationAdapter(LoggerAdapter):
         """Logger adapter that adds correlation ID to all logs."""
 
-        def process(self, msg: str, kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        def process(self, msg: str, kwargs: MutableMapping[str, Any]) -> tuple[str, dict[str, Any]]:
             """Add correlation ID to the log record.
 
             Args:
@@ -154,6 +155,6 @@ def get_correlation_adapter(logger: Any) -> LoggerAdapter:
                 extra["correlation_id"] = correlation_id
 
             kwargs["extra"] = extra
-            return msg, kwargs
+            return msg, dict(kwargs)
 
     return CorrelationAdapter(logger, {})

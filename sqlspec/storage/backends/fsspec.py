@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Union
 
 from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError, wrap_exceptions
 from sqlspec.storage.protocol import ObjectStoreProtocol
-from sqlspec.typing import FSSPEC_INSTALLED
+from sqlspec.typing import FSSPEC_INSTALLED, PYARROW_INSTALLED
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -45,23 +45,9 @@ class FSSpecBackend(ObjectStoreProtocol):
     and offering fallback capabilities.
     """
 
-    @classmethod
-    def from_config(cls, config: "dict[str, Any]") -> "FSSpecBackend":
-        protocol = config["protocol"]
-        fs_config = config.get("fs_config", {})
-        base_path = config.get("base_path", "")
-        return cls(protocol=protocol, base_path=base_path, **fs_config)
-
     def __init__(self, fs: "Union[str, AbstractFileSystem]", base_path: str = "") -> None:
-        """Initialize with filesystem URL or instance.
-
-        Args:
-            fs: Either a URL string or an fsspec AbstractFileSystem instance
-            base_path: Base path to prepend to all operations
-        """
         if not FSSPEC_INSTALLED:
-            msg = "fsspec"
-            raise MissingDependencyError(msg)
+            raise MissingDependencyError(package="fsspec", install_package="fsspec")
 
         import fsspec
 
@@ -78,6 +64,19 @@ class FSSpecBackend(ObjectStoreProtocol):
                 self.protocol = fs.protocol
             self._fs_uri = f"{self.protocol}://"
 
+    @classmethod
+    def from_config(cls, config: "dict[str, Any]") -> "FSSpecBackend":
+        protocol = config["protocol"]
+        fs_config = config.get("fs_config", {})
+        base_path = config.get("base_path", "")
+
+        # Create filesystem instance from protocol
+        import fsspec
+
+        fs_instance = fsspec.filesystem(protocol, **fs_config)
+
+        return cls(fs=fs_instance, base_path=base_path)
+
     def _resolve_path(self, path: str) -> str:
         """Resolve path relative to base_path."""
         if self.base_path:
@@ -93,7 +92,7 @@ class FSSpecBackend(ObjectStoreProtocol):
         return self._fs_uri
 
     # Core Operations (sync)
-    def read_bytes(self, path: str) -> bytes:
+    def read_bytes(self, path: str, **kwargs: Any) -> bytes:
         """Read bytes from an object."""
         try:
             resolved_path = self._resolve_path(path)
@@ -102,7 +101,7 @@ class FSSpecBackend(ObjectStoreProtocol):
             msg = f"Failed to read bytes from {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    def write_bytes(self, path: str, data: bytes) -> None:
+    def write_bytes(self, path: str, data: bytes, **kwargs: Any) -> None:
         """Write bytes to an object."""
         try:
             resolved_path = self._resolve_path(path)
@@ -112,7 +111,7 @@ class FSSpecBackend(ObjectStoreProtocol):
             msg = f"Failed to write bytes to {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    def read_text(self, path: str, encoding: str = "utf-8") -> str:
+    def read_text(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from an object."""
         try:
             data = self.read_bytes(path)
@@ -121,7 +120,7 @@ class FSSpecBackend(ObjectStoreProtocol):
             msg = f"Failed to read text from {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    def write_text(self, path: str, data: str, encoding: str = "utf-8") -> None:
+    def write_text(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text to an object."""
         try:
             self.write_bytes(path, data.encode(encoding))
@@ -130,7 +129,7 @@ class FSSpecBackend(ObjectStoreProtocol):
             raise StorageOperationFailedError(msg) from exc
 
     # Object Operations
-    def exists(self, path: str) -> bool:
+    def exists(self, path: str, **kwargs: Any) -> bool:
         """Check if an object exists."""
         try:
             resolved_path = self._resolve_path(path)
@@ -139,7 +138,7 @@ class FSSpecBackend(ObjectStoreProtocol):
             msg = f"Failed to check existence of {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    def delete(self, path: str) -> None:
+    def delete(self, path: str, **kwargs: Any) -> None:
         """Delete an object."""
         try:
             resolved_path = self._resolve_path(path)
@@ -148,7 +147,7 @@ class FSSpecBackend(ObjectStoreProtocol):
             msg = f"Failed to delete {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    def copy(self, source: str, destination: str) -> None:
+    def copy(self, source: str, destination: str, **kwargs: Any) -> None:
         """Copy an object."""
         try:
             source_path = self._resolve_path(source)
@@ -159,7 +158,7 @@ class FSSpecBackend(ObjectStoreProtocol):
             msg = f"Failed to copy {source} to {destination}"
             raise StorageOperationFailedError(msg) from exc
 
-    def move(self, source: str, destination: str) -> None:
+    def move(self, source: str, destination: str, **kwargs: Any) -> None:
         """Move an object."""
         try:
             source_path = self._resolve_path(source)
@@ -202,7 +201,7 @@ class FSSpecBackend(ObjectStoreProtocol):
             raise StorageOperationFailedError(msg) from exc
 
     # Listing Operations
-    def list_objects(self, prefix: str = "", recursive: bool = True) -> list[str]:
+    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """List objects with optional prefix."""
         try:
             resolved_prefix = self._resolve_path(prefix) if prefix else self.base_path
@@ -221,7 +220,7 @@ class FSSpecBackend(ObjectStoreProtocol):
             msg = f"Failed to list objects with prefix {prefix}"
             raise StorageOperationFailedError(msg) from exc
 
-    def glob(self, pattern: str) -> list[str]:
+    def glob(self, pattern: str, **kwargs: Any) -> list[str]:
         """Find objects matching a glob pattern."""
         try:
             resolved_pattern = self._resolve_path(pattern)
@@ -251,7 +250,7 @@ class FSSpecBackend(ObjectStoreProtocol):
             msg = f"Failed to check if {path} is a prefix"
             raise StorageOperationFailedError(msg) from exc
 
-    def get_metadata(self, path: str) -> dict[str, Any]:
+    def get_metadata(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Get object metadata."""
         try:
             resolved_path = self._resolve_path(path)
@@ -285,7 +284,6 @@ class FSSpecBackend(ObjectStoreProtocol):
             return metadata
 
     def _stream_file_batches(self, obj_path: str) -> "Iterator[ArrowRecordBatch]":
-        """Helper method to stream batches from a single file."""
         try:
             import pyarrow.parquet as pq
 
@@ -297,8 +295,12 @@ class FSSpecBackend(ObjectStoreProtocol):
             logger.warning("Failed to read %s: %s", obj_path, e)
             return
 
-    def stream_arrow(self, pattern: str) -> "Iterator[ArrowRecordBatch]":
+    def stream_arrow(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
         """Stream Arrow record batches from matching objects."""
+        if not FSSPEC_INSTALLED:
+            raise MissingDependencyError(package="fsspec", install_package="fsspec")
+        if not PYARROW_INSTALLED:
+            raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
         try:
             # Find all matching objects
             matching_objects = self.glob(pattern)
@@ -315,7 +317,7 @@ class FSSpecBackend(ObjectStoreProtocol):
             raise StorageOperationFailedError(msg) from exc
 
     # Async versions using the sync wrapper
-    async def read_bytes_async(self, path: str) -> bytes:
+    async def read_bytes_async(self, path: str, **kwargs: Any) -> bytes:
         """Async read bytes from an object."""
         # Check if fsspec supports async natively
         with wrap_exceptions(suppress=(AttributeError, TypeError)):
@@ -325,7 +327,7 @@ class FSSpecBackend(ObjectStoreProtocol):
         # Fall back to sync in thread pool
         return await async_(self.read_bytes)(path)
 
-    async def write_bytes_async(self, path: str, data: bytes) -> None:
+    async def write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:
         """Async write bytes to an object."""
         # Check if fsspec supports async natively
         with wrap_exceptions(suppress=(AttributeError, TypeError)):
@@ -336,25 +338,25 @@ class FSSpecBackend(ObjectStoreProtocol):
         # Fall back to sync in thread pool
         await async_(self.write_bytes)(path, data)
 
-    async def read_text_async(self, path: str, encoding: str = "utf-8") -> str:
+    async def read_text_async(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Async read text from an object."""
         data = await self.read_bytes_async(path)
         return data.decode(encoding)
 
-    async def write_text_async(self, path: str, data: str, encoding: str = "utf-8") -> None:
+    async def write_text_async(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Async write text to an object."""
         await self.write_bytes_async(path, data.encode(encoding))
 
-    async def exists_async(self, path: str) -> bool:
+    async def exists_async(self, path: str, **kwargs: Any) -> bool:
         """Async check if an object exists."""
         # fsspec exists is usually fast, so just run in thread pool
         return await async_(self.exists)(path)
 
-    async def delete_async(self, path: str) -> None:
+    async def delete_async(self, path: str, **kwargs: Any) -> None:
         """Async delete an object."""
         await async_(self.delete)(path)
 
-    async def list_objects_async(self, prefix: str = "", recursive: bool = True) -> list[str]:
+    async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """Async list objects with optional prefix."""
         return await async_(self.list_objects)(prefix, recursive)
 
@@ -375,7 +377,7 @@ class FSSpecBackend(ObjectStoreProtocol):
             logger.warning("Failed to read %s: %s", obj_path, e)
             return
 
-    async def stream_arrow_async(self, pattern: str) -> "AsyncIterator[ArrowRecordBatch]":
+    async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
         """Async stream Arrow record batches from matching objects."""
         try:
             # Find all matching objects

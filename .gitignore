@@ -38,3 +38,7 @@ tmp/
 .bugs
 .tmp
 .todos
+todo/
+CLAUDE.md
+CLAUDE.*.md
+TODO*

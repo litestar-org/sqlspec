@@ -517,6 +517,29 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
     assert built_stmt_with_params.parameters == params_for_string
 
 
+def test_adbc_driver_fetch_arrow_table_native(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
+    """Test AdbcDriver._fetch_arrow_table uses native ADBC cursor.fetch_arrow_table()."""
+    mock_connection = adbc_driver.connection
+    mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
+
+    # Setup mock arrow table for native fetch
+    mock_arrow_table = pa.table({"id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"]})
+    mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
+
+    statement = SQL("SELECT * FROM users")
+    result = adbc_driver.fetch_arrow_table(statement)
+
+    assert isinstance(result, ArrowResult)
+    assert result.data is mock_arrow_table  # Should be the exact same table
+    assert result.data.num_rows == 3
+    assert result.data.column_names == ["id", "name"]
+
+    # Verify native fetch_arrow_table was called
+    mock_cursor.fetch_arrow_table.assert_called_once()
+    # Regular fetchall should NOT be called when using native Arrow
+    mock_cursor.fetchall.assert_not_called()
+
+
 def test_adbc_driver_to_parquet(adbc_driver: AdbcDriver, mock_cursor: Mock, monkeypatch: "pytest.MonkeyPatch") -> None:
     """Test to_parquet writes correct data to a Parquet file using Arrow Table and pyarrow."""
     # Set up the connection mock to return our mock cursor
