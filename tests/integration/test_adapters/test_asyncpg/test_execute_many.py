@@ -14,13 +14,11 @@ from sqlspec.statement.sql import SQLConfig
 async def asyncpg_batch_session(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgDriver, None]":
     """Create an AsyncPG session for batch operation testing."""
     config = AsyncpgConfig(
-        connection_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "database": postgres_service.database,
-        },
+        host=postgres_service.host,
+        port=postgres_service.port,
+        user=postgres_service.user,
+        password=postgres_service.password,
+        database=postgres_service.database,
         statement_config=SQLConfig(strict_mode=False),
     )
 

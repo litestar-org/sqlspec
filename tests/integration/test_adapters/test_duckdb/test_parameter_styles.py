@@ -5,18 +5,16 @@ from typing import Any
 
 import pytest
 
-from sqlspec.adapters.duckdb import DuckdbConfig, DuckdbDriver
+from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQLConfig
 
 
 @pytest.fixture
-def duckdb_params_session() -> "Generator[DuckdbDriver, None, None]":
+def duckdb_params_session() -> "Generator[DuckDBDriver, None, None]":
     """Create a DuckDB session for parameter style testing."""
-    config = DuckdbConfig(
-        connection_config={
-            "database": ":memory:",
-        },
+    config = DuckDBConfig(
+        database=":memory:",
         statement_config=SQLConfig(strict_mode=False),
     )
 
@@ -51,7 +49,7 @@ def duckdb_params_session() -> "Generator[DuckdbDriver, None, None]":
     ],
 )
 def test_duckdb_qmark_parameter_types(
-    duckdb_params_session: DuckdbDriver,
+    duckdb_params_session: DuckDBDriver,
     params: Any,
     expected_count: int,
 ) -> None:
@@ -76,7 +74,7 @@ def test_duckdb_qmark_parameter_types(
     ],
 )
 def test_duckdb_parameter_styles(
-    duckdb_params_session: DuckdbDriver,
+    duckdb_params_session: DuckDBDriver,
     params: Any,
     style: str,
     query: str,
@@ -90,7 +88,7 @@ def test_duckdb_parameter_styles(
     assert result.data[0]["name"] == "test1"
 
 
-def test_duckdb_multiple_parameters_qmark(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_multiple_parameters_qmark(duckdb_params_session: DuckDBDriver) -> None:
     """Test queries with multiple parameters using qmark style."""
     result = duckdb_params_session.execute(
         "SELECT * FROM test_params WHERE value >= ? AND value <= ? ORDER BY value",
@@ -103,7 +101,7 @@ def test_duckdb_multiple_parameters_qmark(duckdb_params_session: DuckdbDriver) -
     assert result.data[0]["value"] == 100
 
 
-def test_duckdb_multiple_parameters_numeric(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_multiple_parameters_numeric(duckdb_params_session: DuckDBDriver) -> None:
     """Test queries with multiple parameters using numeric style."""
     result = duckdb_params_session.execute(
         "SELECT * FROM test_params WHERE value >= $1 AND value <= $2 ORDER BY value",
@@ -116,7 +114,7 @@ def test_duckdb_multiple_parameters_numeric(duckdb_params_session: DuckdbDriver)
     assert result.data[0]["value"] == 100
 
 
-def test_duckdb_null_parameters(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_null_parameters(duckdb_params_session: DuckDBDriver) -> None:
     """Test handling of NULL parameters on DuckDB."""
     # Query for NULL values
     result = duckdb_params_session.execute(
@@ -143,7 +141,7 @@ def test_duckdb_null_parameters(duckdb_params_session: DuckdbDriver) -> None:
     assert null_result.data[0]["description"] is None
 
 
-def test_duckdb_parameter_escaping(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_parameter_escaping(duckdb_params_session: DuckDBDriver) -> None:
     """Test parameter escaping prevents SQL injection."""
     # This should safely search for a literal string with quotes
     malicious_input = "'; DROP TABLE test_params; --"
@@ -162,7 +160,7 @@ def test_duckdb_parameter_escaping(duckdb_params_session: DuckdbDriver) -> None:
     assert count_result.data[0]["count"] >= 3  # Our test data should still be there
 
 
-def test_duckdb_parameter_with_like(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_parameter_with_like(duckdb_params_session: DuckDBDriver) -> None:
     """Test parameters with LIKE operations."""
     result = duckdb_params_session.execute(
         "SELECT * FROM test_params WHERE name LIKE ?",
@@ -182,7 +180,7 @@ def test_duckdb_parameter_with_like(duckdb_params_session: DuckdbDriver) -> None
     assert numeric_result.data[0]["name"] == "test1"
 
 
-def test_duckdb_parameter_with_in_clause(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_parameter_with_in_clause(duckdb_params_session: DuckDBDriver) -> None:
     """Test parameters with IN clause."""
     # Insert additional test data
     duckdb_params_session.execute_many(
@@ -208,7 +206,7 @@ def test_duckdb_parameter_with_in_clause(duckdb_params_session: DuckdbDriver) ->
     assert result.data[2]["name"] == "test1"
 
 
-def test_duckdb_parameter_with_sql_object(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_parameter_with_sql_object(duckdb_params_session: DuckDBDriver) -> None:
     """Test parameters with SQL object."""
     from sqlspec.statement.sql import SQL
 
@@ -231,7 +229,7 @@ def test_duckdb_parameter_with_sql_object(duckdb_params_session: DuckdbDriver) -
     assert all(row["value"] < 150 for row in numeric_result.data)
 
 
-def test_duckdb_parameter_data_types(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_parameter_data_types(duckdb_params_session: DuckDBDriver) -> None:
     """Test different parameter data types with DuckDB."""
     # Create table for different data types
     duckdb_params_session.execute_script("""
@@ -270,7 +268,7 @@ def test_duckdb_parameter_data_types(duckdb_params_session: DuckdbDriver) -> Non
     assert result.data[0]["list_val"] == [1, 2, 3]
 
 
-def test_duckdb_parameter_edge_cases(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_parameter_edge_cases(duckdb_params_session: DuckDBDriver) -> None:
     """Test edge cases for DuckDB parameters."""
     # Empty string parameter
     duckdb_params_session.execute(
@@ -300,7 +298,7 @@ def test_duckdb_parameter_edge_cases(duckdb_params_session: DuckdbDriver) -> Non
     assert len(long_result.data[0]["description"]) == 1000
 
 
-def test_duckdb_parameter_with_analytics_functions(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_parameter_with_analytics_functions(duckdb_params_session: DuckDBDriver) -> None:
     """Test parameters with DuckDB analytics functions."""
     # Insert time series data for analytics
     duckdb_params_session.execute_many(
@@ -335,7 +333,7 @@ def test_duckdb_parameter_with_analytics_functions(duckdb_params_session: Duckdb
     assert len(non_null_diffs) >= 3
 
 
-def test_duckdb_parameter_with_array_functions(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_parameter_with_array_functions(duckdb_params_session: DuckDBDriver) -> None:
     """Test parameters with DuckDB array/list functions."""
     # Create table with array data
     duckdb_params_session.execute_script("""
@@ -377,7 +375,7 @@ def test_duckdb_parameter_with_array_functions(duckdb_params_session: DuckdbDriv
     assert len(element_result.data) >= 1
 
 
-def test_duckdb_parameter_with_json_functions(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_parameter_with_json_functions(duckdb_params_session: DuckDBDriver) -> None:
     """Test parameters with DuckDB JSON functions."""
     # Create table with JSON data
     duckdb_params_session.execute_script("""
@@ -421,7 +419,7 @@ def test_duckdb_parameter_with_json_functions(duckdb_params_session: DuckdbDrive
         assert len(result.data) >= 1
 
 
-def test_duckdb_parameter_with_date_functions(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_parameter_with_date_functions(duckdb_params_session: DuckDBDriver) -> None:
     """Test parameters with DuckDB date/time functions."""
     # Create table with date data
     duckdb_params_session.execute_script("""
@@ -463,7 +461,7 @@ def test_duckdb_parameter_with_date_functions(duckdb_params_session: DuckdbDrive
     assert len(timestamp_result.data) >= 1
 
 
-def test_duckdb_parameter_with_string_functions(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_parameter_with_string_functions(duckdb_params_session: DuckDBDriver) -> None:
     """Test parameters with DuckDB string functions."""
     # Test with string functions
     result = duckdb_params_session.execute(
@@ -486,7 +484,7 @@ def test_duckdb_parameter_with_string_functions(duckdb_params_session: DuckdbDri
         assert row["extended_name"].endswith("_suffix")
 
 
-def test_duckdb_parameter_with_math_functions(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_parameter_with_math_functions(duckdb_params_session: DuckDBDriver) -> None:
     """Test parameters with DuckDB mathematical functions."""
     # Test with math functions
     math_result = duckdb_params_session.execute(
@@ -502,7 +500,7 @@ def test_duckdb_parameter_with_math_functions(duckdb_params_session: DuckdbDrive
         assert row["powered"] == expected_powered
 
 
-def test_duckdb_parameter_with_aggregate_functions(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_parameter_with_aggregate_functions(duckdb_params_session: DuckDBDriver) -> None:
     """Test parameters with DuckDB aggregate functions."""
     # Insert more test data for aggregation
     duckdb_params_session.execute_many(
@@ -539,7 +537,7 @@ def test_duckdb_parameter_with_aggregate_functions(duckdb_params_session: Duckdb
         assert row["max_value"] >= 10
 
 
-def test_duckdb_parameter_performance(duckdb_params_session: DuckdbDriver) -> None:
+def test_duckdb_parameter_performance(duckdb_params_session: DuckDBDriver) -> None:
     """Test parameter performance with DuckDB."""
     import time
 

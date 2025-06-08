@@ -94,6 +94,7 @@ class SQLConfig:
     enable_validation: bool = True
     enable_transformations: bool = True
     enable_analysis: bool = False
+    enable_normalization: bool = True
     strict_mode: bool = True
     cache_parsed_expression: bool = True
     debug_mode: bool = False
@@ -694,15 +695,19 @@ class SQL:
             return
 
         validation_result = self._processed_state.validation_result
-        if validation_result is not None and not validation_result.is_safe and self._config.strict_mode:
-            # In strict mode, any unsafe SQL should raise an error if risk level is HIGH or above
-            if validation_result.risk_level is not None and validation_result.risk_level.value >= RiskLevel.HIGH.value:
-                error_msg = f"SQL validation failed with risk level {validation_result.risk_level}:\n"
-                error_msg += "Issues:\n" + "\n".join([f"- {issue}" for issue in validation_result.issues or []])
-                if validation_result.warnings:
-                    error_msg += "\nWarnings:\n" + "\n".join([f"- {warn}" for warn in validation_result.warnings])
-                # Use the raw SQL input instead of calling to_sql() to avoid recursion
-                raise SQLValidationError(error_msg, self._processed_state.raw_sql_input, validation_result.risk_level)
+        if (
+            validation_result is not None
+            and not validation_result.is_safe
+            and self._config.strict_mode
+            and validation_result.risk_level is not None
+            and validation_result.risk_level.value >= RiskLevel.HIGH.value
+        ):
+            error_msg = f"SQL validation failed with risk level {validation_result.risk_level}:\n"
+            error_msg += "Issues:\n" + "\n".join([f"- {issue}" for issue in validation_result.issues or []])
+            if validation_result.warnings:
+                error_msg += "\nWarnings:\n" + "\n".join([f"- {warn}" for warn in validation_result.warnings])
+            # Use the raw SQL input instead of calling to_sql() to avoid recursion
+            raise SQLValidationError(error_msg, self._processed_state.raw_sql_input, validation_result.risk_level)
 
     def _transform_sql_placeholders(
         self,
@@ -843,8 +848,16 @@ class SQL:
             return None
 
         if isinstance(self.parameters, dict):
-            generated_name = f"_arg_{param_info.ordinal}"
-            return self.parameters.get(generated_name)
+            # Try multiple naming conventions that might be used
+            possible_names = [
+                f"param_{param_info.ordinal}",  # ParameterizeLiterals uses this format
+                f"_arg_{param_info.ordinal}",  # Legacy format
+                f"arg_{param_info.ordinal}",  # Alternative format
+            ]
+            for name in possible_names:
+                if name in self.parameters:
+                    return self.parameters[name]
+            return None
 
         if param_info.ordinal == 0:
             return self.parameters
@@ -1476,18 +1489,37 @@ class SQL:
             )
 
     def _parse_initial_expression(self, context: "SQLProcessingContext") -> "Optional[Expression]":
-        """Parse the initial SQL expression if parsing is enabled."""
+        """Parse the initial SQL expression with SQLGlot normalization if parsing is enabled."""
         if not self._config.enable_parsing:
             context.current_expression = None
             return None
 
         try:
             with wrap_exceptions():
+                # Parse the initial expression
                 initial_expression = self.to_expression(
                     context.initial_sql_string, self._dialect, getattr(self, "_is_script", False)
                 )
-                context.current_expression = initial_expression
-                return initial_expression
+
+                # Apply SQLGlot normalization if enabled
+                if self._config.enable_normalization and initial_expression is not None:
+                    try:
+                        from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
+
+                        # Apply identifier normalization (converts to lowercase by default)
+                        normalized_expression = normalize_identifiers(initial_expression, dialect=self._dialect)
+                    except Exception as e:
+                        # Fallback to non-normalized expression if normalization fails
+                        logger = get_logger(__name__)
+                        logger.warning("SQLGlot normalization failed: %s, using original expression", e)
+                        context.current_expression = initial_expression
+                        return initial_expression
+                    else:
+                        context.current_expression = normalized_expression
+                        return normalized_expression
+                else:
+                    context.current_expression = initial_expression
+                    return initial_expression
         except SQLValidationError as e:
             # Create failed state for validation errors during parsing
             validation_result = ValidationResult(is_safe=False, risk_level=e.risk_level, issues=[str(e)])

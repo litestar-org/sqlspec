@@ -14,13 +14,11 @@ from sqlspec.statement.sql import SQLConfig
 async def asyncmy_batch_session(mysql_service: MySQLService) -> "AsyncGenerator[AsyncmyDriver, None]":
     """Create an AsyncMy session for batch operation testing."""
     config = AsyncmyConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.database,
-        },
+        host=mysql_service.host,
+        port=mysql_service.port,
+        user=mysql_service.user,
+        password=mysql_service.password,
+        database=mysql_service.database,
         statement_config=SQLConfig(strict_mode=False),
     )
 

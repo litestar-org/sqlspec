@@ -80,9 +80,9 @@ INSERT INTO users (username, email) VALUES (:username, :email);
 
     @pytest.fixture
     def mock_path_read(self, sample_sql_content: str) -> Mock:
-        """Mock Path.read_text."""
-        with patch.object(Path, "read_text") as mock_read:
-            mock_read.return_value = sample_sql_content
+        """Mock Path.read_bytes."""
+        with patch.object(Path, "read_bytes") as mock_read:
+            mock_read.return_value = sample_sql_content.encode("utf-8")
             yield mock_read
 
     @pytest.fixture
@@ -141,7 +141,7 @@ INSERT INTO users (username, email) VALUES (:username, :email);
     def test_load_multiple_files(self, mock_path_read: Mock, mock_path_exists: Mock, mock_path_is_file: Mock) -> None:
         """Test loading multiple SQL files."""
         # Set up different content for different files
-        contents = ["-- name: query1\nSELECT 1;", "-- name: query2\nSELECT 2;", "-- name: query3\nSELECT 3;"]
+        contents = [b"-- name: query1\nSELECT 1;", b"-- name: query2\nSELECT 2;", b"-- name: query3\nSELECT 3;"]
         mock_path_read.side_effect = contents
 
         loader = SQLFileLoader()
@@ -174,7 +174,7 @@ INSERT INTO users (username, email) VALUES (:username, :email);
 
     def test_no_named_queries(self, mock_path_read: Mock, mock_path_exists: Mock, mock_path_is_file: Mock) -> None:
         """Test error when file has no named queries."""
-        mock_path_read.return_value = "SELECT * FROM users;"  # No -- name: comment
+        mock_path_read.return_value = b"SELECT * FROM users;"  # No -- name: comment
 
         loader = SQLFileLoader()
         with pytest.raises(SQLFileParseError) as exc_info:
@@ -186,7 +186,7 @@ INSERT INTO users (username, email) VALUES (:username, :email);
         self, mock_path_read: Mock, mock_path_exists: Mock, mock_path_is_file: Mock
     ) -> None:
         """Test error when file has duplicate query names."""
-        mock_path_read.return_value = """
+        mock_path_read.return_value = b"""
 -- name: get_user
 SELECT * FROM users WHERE id = 1;
 
@@ -205,8 +205,8 @@ SELECT * FROM users WHERE id = 2;
     ) -> None:
         """Test error when query name exists in different file."""
         contents = [
-            "-- name: get_user\nSELECT 1;",
-            "-- name: get_user\nSELECT 2;",  # Same name
+            b"-- name: get_user\nSELECT 1;",
+            b"-- name: get_user\nSELECT 2;",  # Same name
         ]
         mock_path_read.side_effect = contents
 
@@ -254,19 +254,17 @@ SELECT * FROM users WHERE id = 2;
 
     def test_storage_backend_uri(self) -> None:
         """Test loading from storage backend URI."""
-        with patch("sqlspec.loader.StorageRegistry") as mock_registry:
-            mock_backend = Mock()
-            mock_backend.read_text.return_value = "-- name: test\nSELECT 1;"
+        mock_backend = Mock()
+        mock_backend.read_text.return_value = "-- name: test\nSELECT 1;"
 
-            mock_registry_instance = Mock()
-            mock_registry_instance.get.return_value = mock_backend
-            mock_registry.return_value = mock_registry_instance
+        mock_registry = Mock()
+        mock_registry.get.return_value = mock_backend
 
-            loader = SQLFileLoader()
-            loader.load_sql("s3://bucket/queries.sql")
+        loader = SQLFileLoader(storage_registry=mock_registry)
+        loader.load_sql("s3://bucket/queries.sql")
 
-            assert loader.has_query("test")
-            mock_backend.read_text.assert_called_once_with("s3://bucket/queries.sql", encoding="utf-8")
+        assert loader.has_query("test")
+        mock_backend.read_text.assert_called_once_with("s3://bucket/queries.sql", encoding="utf-8")
 
     def test_add_named_sql(self) -> None:
         """Test adding named SQL directly."""

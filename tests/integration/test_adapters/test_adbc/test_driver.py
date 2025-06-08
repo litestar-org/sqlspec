@@ -24,10 +24,8 @@ ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
     """Create an ADBC PostgreSQL session with test table."""
     config = AdbcConfig(
-        connection_config={
-            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            "driver_name": "adbc_driver_postgresql",
-        },
+        uri=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+        driver_name="adbc_driver_postgresql",
         statement_config=SQLConfig(strict_mode=False),  # Allow DDL statements for tests
     )
 
@@ -50,10 +48,8 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[Adbc
 def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session with test table."""
     config = AdbcConfig(
-        connection_config={
-            "uri": ":memory:",
-            "driver_name": "adbc_driver_sqlite",
-        },
+        uri=":memory:",
+        driver_name="adbc_driver_sqlite",
         statement_config=SQLConfig(strict_mode=False),  # Allow DDL statements for tests
     )
 
@@ -75,9 +71,7 @@ def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
 def adbc_duckdb_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC DuckDB session with test table."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "adbc_driver_duckdb.dbapi.connect",
-        },
+        driver_name="adbc_driver_duckdb.dbapi.connect",
         statement_config=SQLConfig(strict_mode=False),  # Allow DDL statements for tests
     )
 
@@ -96,10 +90,23 @@ def adbc_duckdb_session() -> Generator[AdbcDriver, None, None]:
 
 
 @pytest.fixture
-def adbc_bigquery_session() -> Generator[AdbcDriver, None, None]:
-    """Create an ADBC BigQuery session with test table (requires credentials)."""
-    # Skip if not in CI environment or missing credentials
-    pytest.skip("BigQuery ADBC tests require valid GCP credentials and project setup")
+def adbc_bigquery_session(bigquery_service):  # TODO: Import BigQueryService
+    """Create an ADBC BigQuery session using emulator."""
+
+    config = AdbcConfig(
+        driver_name="adbc_driver_bigquery",
+        project_id=bigquery_service.project,
+        dataset_id=bigquery_service.dataset,
+        db_kwargs={
+            "project_id": bigquery_service.project,
+            "client_options": {"api_endpoint": f"http://{bigquery_service.host}:{bigquery_service.port}"},
+            "credentials": None,
+        },
+        statement_config=SQLConfig(strict_mode=False),
+    )
+
+    with config.provide_session() as session:
+        yield session
 
 
 @pytest.mark.xdist_group("postgres")
@@ -446,11 +453,9 @@ def test_adbc_bigquery_basic_operations() -> None:
     # 3. Configured dataset
 
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "adbc_driver_bigquery",
-            "project_id": "test-project",  # Would need to be real
-            "dataset_id": "test_dataset",  # Would need to be real
-        },
+        driver_name="adbc_driver_bigquery",
+        project_id="test-project",  # Would need to be real
+        dataset_id="test_dataset",  # Would need to be real
     )
 
     # Since we don't have real credentials, this will fail and be xfailed
@@ -471,11 +476,9 @@ def test_adbc_bigquery_basic_operations() -> None:
 def test_adbc_bigquery_data_types() -> None:
     """Test BigQuery-specific data types with ADBC (requires valid GCP setup)."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "adbc_driver_bigquery",
-            "project_id": "test-project",  # Would need to be real
-            "dataset_id": "test_dataset",  # Would need to be real
-        },
+        driver_name="adbc_driver_bigquery",
+        project_id="test-project",  # Would need to be real
+        dataset_id="test_dataset",  # Would need to be real
     )
 
     with config.provide_session() as session:
@@ -808,7 +811,7 @@ def test_adbc_postgresql_column_names_and_metadata(adbc_postgresql_session: Adbc
         "SELECT id, name, value, created_at FROM test_table WHERE name = $1", ("metadata_test",)
     )
     assert isinstance(result, SQLResult)
-    assert result.column_names() == ["id", "name", "value", "created_at"]
+    assert result.column_names == ["id", "name", "value", "created_at"]
     assert result.data is not None
     assert result.num_rows() == 1
 
@@ -844,7 +847,7 @@ def test_adbc_postgresql_with_schema_type(adbc_postgresql_session: AdbcDriver) -
     assert result.num_rows() == 1
 
     # The data should be converted to the schema type by the ResultConverter
-    assert result.column_names() == ["id", "name", "value"]
+    assert result.column_names == ["id", "name", "value"]
 
 
 @pytest.mark.xdist_group("postgres")
@@ -909,7 +912,7 @@ def test_adbc_postgresql_to_parquet(adbc_postgresql_session: AdbcDriver) -> None
         adbc_postgresql_session.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
         table = pq.read_table(tmp.name)
         assert table.num_rows() == 2
-        assert set(table.column_names()) >= {"id", "name", "value"}
+        assert set(table.column_names) >= {"id", "name", "value"}
         data = table.to_pylist()
         assert any(row["name"] == "arrow1" and row["value"] == 111 for row in data)
         assert any(row["name"] == "arrow2" and row["value"] == 222 for row in data)

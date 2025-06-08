@@ -147,10 +147,10 @@ def test_select_value(duckdb_session: DuckDBDriver, params: Any, style: ParamSty
     assert isinstance(value_result, SQLResult)
     assert value_result.data is not None
     assert len(value_result.data) == 1
-    assert value_result.column_names() is not None
+    assert value_result.column_names is not None
 
     # Extract single value using column name
-    value = value_result.data[0][value_result.column_names()[0]]
+    value = value_result.data[0][value_result.column_names[0]]
     assert value == "test_name"
 
     duckdb_session.execute_script("DELETE FROM test_table")

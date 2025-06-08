@@ -139,7 +139,7 @@ async def test_psqlpy_driver_fetch_arrow_table_with_connection_override(psqlpy_d
     assert isinstance(result, ArrowResult)
     assert isinstance(result.data, pa.Table)
     assert result.num_rows() == 2
-    assert set(result.column_names()) == {"id", "name"}
+    assert set(result.column_names) == {"id", "name"}
 
 
 @pytest.mark.asyncio

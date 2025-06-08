@@ -18,10 +18,8 @@ def test_connection(postgres_service: PostgresService) -> None:
     """Test ADBC connection to PostgreSQL."""
     # Test direct connection
     config = AdbcConfig(
-        connection_config={
-            "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            "driver_name": "adbc_driver_postgresql.dbapi.connect",
-        }
+        uri=f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+        driver_name="adbc_driver_postgresql.dbapi.connect",
     )
 
     with config.create_connection() as conn:
@@ -38,9 +36,7 @@ def test_connection(postgres_service: PostgresService) -> None:
 def test_duckdb_connection() -> None:
     """Test ADBC connection to DuckDB."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "adbc_driver_duckdb.dbapi.connect",
-        }
+        driver_name="adbc_driver_duckdb.dbapi.connect",
     )
 
     with config.create_connection() as conn:
@@ -57,10 +53,8 @@ def test_duckdb_connection() -> None:
 def test_sqlite_connection() -> None:
     """Test ADBC connection to SQLite."""
     config = AdbcConfig(
-        connection_config={
-            "uri": ":memory:",
-            "driver_name": "adbc_driver_sqlite.dbapi.connect",
-        }
+        uri=":memory:",
+        driver_name="adbc_driver_sqlite.dbapi.connect",
     )
 
     with config.create_connection() as conn:
@@ -81,11 +75,9 @@ def test_sqlite_connection() -> None:
 def test_bigquery_connection() -> None:
     """Test ADBC connection to BigQuery (requires valid GCP setup)."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "adbc_driver_bigquery.dbapi.connect",
-            "project_id": "test-project",  # Would need to be real
-            "dataset_id": "test_dataset",  # Would need to be real
-        }
+        driver_name="adbc_driver_bigquery.dbapi.connect",
+        project_id="test-project",  # Would need to be real
+        dataset_id="test_dataset",  # Would need to be real
     )
 
     # This will likely xfail due to missing credentials

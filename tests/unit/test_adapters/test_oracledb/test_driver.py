@@ -185,7 +185,7 @@ async def test_oracle_async_driver_fetch_arrow_table_with_parameters(
     """Test Oracle async driver fetch_arrow_table method with parameters."""
     # Setup mock cursor and result data
     mock_cursor = AsyncMock()
-    mock_cursor.description = [("ID",), ("NAME",)]
+    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
     mock_cursor.fetchall.return_value = [(42, "Test User")]
     mock_oracle_async_connection.cursor.return_value = mock_cursor
 
@@ -234,7 +234,7 @@ async def test_oracle_async_driver_to_parquet(
 ) -> None:
     """Test to_parquet writes correct data to a Parquet file (async)."""
     mock_cursor = AsyncMock()
-    mock_cursor.description = [("id",), ("name",)]
+    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
     mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
     mock_oracle_async_connection.cursor.return_value = mock_cursor
     statement = SQL("SELECT id, name FROM users")

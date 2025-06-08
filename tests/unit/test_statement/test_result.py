@@ -495,15 +495,15 @@ def test_arrow_result_get_data(basic_arrow_result: ArrowResult, mock_arrow_table
 
 
 def test_arrow_result_column_names(basic_arrow_result: ArrowResult) -> None:
-    """Test column_names method."""
-    columns = basic_arrow_result.column_names()
+    """Test column_names property."""
+    columns = basic_arrow_result.column_names
     assert columns == ["id", "name", "value"]
 
     # Test with None data - create a result with None data
     none_result = ArrowResult(statement="SELECT * FROM users", data=basic_arrow_result.data)
     none_result.data = None  # type: ignore[assignment]
     with pytest.raises(ValueError, match="No Arrow table available"):
-        none_result.column_names()
+        none_result.column_names
 
 
 def test_arrow_result_num_rows(basic_arrow_result: ArrowResult) -> None:
@@ -547,9 +547,15 @@ def test_arrow_result_methods_with_none_table(method_name: str, expected_error: 
     none_result = ArrowResult(statement="SELECT * FROM users", data=mock_table)
     none_result.data = None  # type: ignore[assignment]
 
-    method = getattr(none_result, method_name)
-    with pytest.raises(ValueError, match=expected_error):
-        method()
+    # For properties, we need to check if accessing raises immediately
+    # For methods, we need to call them
+    if method_name == "column_names":  # This is a property
+        with pytest.raises(ValueError, match=expected_error):
+            _ = getattr(none_result, method_name)
+    else:  # These are methods
+        method = getattr(none_result, method_name)
+        with pytest.raises(ValueError, match=expected_error):
+            method()
 
 
 def test_result_inheritance_chain() -> None:

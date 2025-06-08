@@ -39,7 +39,7 @@ class PsycopgSyncDriver(
 ):
     """Psycopg Sync Driver Adapter. Refactored for new protocol."""
 
-    dialect: "DialectType" = "postgres"
+    dialect: "DialectType" = "postgres"  # pyright: ignore[reportInvalidTypeForm]
     __supports_arrow__: ClassVar[bool] = True
     __supports_parquet__: ClassVar[bool] = False
 
@@ -237,7 +237,7 @@ class PsycopgAsyncDriver(
 ):
     """Psycopg Async Driver Adapter. Refactored for new protocol."""
 
-    dialect: "DialectType" = "postgres"
+    dialect: "DialectType" = "postgres"  # pyright: ignore[reportInvalidTypeForm]
     __supports_arrow__: ClassVar[bool] = True
     __supports_parquet__: ClassVar[bool] = False
 

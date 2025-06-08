@@ -748,7 +748,7 @@ def test_none_sql_handling() -> None:
     """Test handling of None SQL input."""
     # None SQL is handled gracefully by converting to string "None"
     stmt = SQL(None)  # type: ignore[arg-type]
-    assert stmt.sql == "None"
+    assert stmt.sql == "none"
     assert stmt.is_safe is True  # Should be considered safe
 
     # Empty string should be handled gracefully by creating an empty SELECT

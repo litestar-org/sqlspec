@@ -18,13 +18,11 @@ from sqlspec.statement.sql import SQLConfig
 async def psqlpy_arrow_session(postgres_service: PostgresService) -> "AsyncGenerator[PsqlpyDriver, None]":
     """Create a PSQLPy session for Arrow testing."""
     config = PsqlpyConfig(
-        connection_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "username": postgres_service.user,
-            "password": postgres_service.password,
-            "db_name": postgres_service.database,
-        },
+        host=postgres_service.host,
+        port=postgres_service.port,
+        username=postgres_service.user,
+        password=postgres_service.password,
+        db_name=postgres_service.database,
         statement_config=SQLConfig(strict_mode=False),
     )
 
@@ -72,7 +70,7 @@ async def test_psqlpy_fetch_arrow_table(psqlpy_arrow_session: PsqlpyDriver) -> N
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
-    actual_columns = set(result.column_names())
+    actual_columns = set(result.column_names)
     assert expected_columns.issubset(actual_columns)
 
     # Check data types
@@ -261,9 +259,9 @@ async def test_psqlpy_arrow_with_postgresql_arrays(psqlpy_arrow_session: PsqlpyD
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 3
-    assert "tags" in result.column_names()
-    assert "scores" in result.column_names()
-    assert "tag_count" in result.column_names()
+    assert "tags" in result.column_names
+    assert "scores" in result.column_names
+    assert "tag_count" in result.column_names
 
     # Verify array handling
     tag_counts = result.data["tag_count"].to_pylist()
@@ -319,9 +317,9 @@ async def test_psqlpy_arrow_with_json_operations(psqlpy_arrow_session: PsqlpyDri
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 2  # Only electronics products
-    assert "product_name" in result.column_names()
-    assert "category" in result.column_names()
-    assert "theme" in result.column_names()
+    assert "product_name" in result.column_names
+    assert "category" in result.column_names
+    assert "theme" in result.column_names
 
     # Verify JSON extraction
     categories = result.data["category"].to_pylist()
@@ -352,10 +350,10 @@ async def test_psqlpy_arrow_with_window_functions(psqlpy_arrow_session: PsqlpyDr
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 5
-    assert "value_rank" in result.column_names()
-    assert "price_rank" in result.column_names()
-    assert "prev_value" in result.column_names()
-    assert "running_total" in result.column_names()
+    assert "value_rank" in result.column_names
+    assert "price_rank" in result.column_names
+    assert "prev_value" in result.column_names
+    assert "running_total" in result.column_names
 
     # Verify window function results
     ranks = result.data["value_rank"].to_pylist()
@@ -412,8 +410,8 @@ async def test_psqlpy_arrow_with_cte_and_recursive(psqlpy_arrow_session: PsqlpyD
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 5  # All products in sequence
-    assert "level" in result.column_names()
-    assert "prev_sequence_value" in result.column_names()
+    assert "level" in result.column_names
+    assert "prev_sequence_value" in result.column_names
 
     # Verify recursive sequence
     levels = result.data["level"].to_pylist()

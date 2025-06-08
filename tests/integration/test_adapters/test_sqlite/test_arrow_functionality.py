@@ -56,7 +56,7 @@ def test_sqlite_fetch_arrow_table(sqlite_arrow_session: SqliteDriver) -> None:
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
-    actual_columns = set(result.column_names())
+    actual_columns = set(result.column_names)
     assert expected_columns.issubset(actual_columns)
 
     # Check values

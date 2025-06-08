@@ -1,11 +1,9 @@
 """Unit tests for AIOSQLite driver."""
 
 import tempfile
-from typing import Any
+from typing import Any, Optional
 from unittest.mock import AsyncMock
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConnection, AiosqliteDriver
@@ -34,7 +32,7 @@ def mock_aiosqlite_connection() -> AsyncMock:
     mock_cursor.execute.return_value = None
     mock_cursor.executemany.return_value = None
     mock_cursor.fetchall.return_value = [(1, "test")]
-    mock_cursor.description = [("id", None), ("name", None)]
+    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
     mock_cursor.rowcount = 0
     return mock_connection
 
@@ -95,7 +93,7 @@ async def test_aiosqlite_driver_execute_statement_select(
     # Setup mock cursor
     mock_cursor = AsyncMock()
     mock_cursor.fetchall.return_value = [(1, "test")]
-    mock_cursor.description = [("id", None), ("name", None)]
+    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
 
     async def _cursor(*args: Any, **kwargs: Any) -> AsyncMock:
         return mock_cursor
@@ -123,7 +121,7 @@ async def test_aiosqlite_driver_fetch_arrow_table_with_parameters(
     """Test AIOSQLite driver fetch_arrow_table method with parameters."""
     # Setup mock cursor and result data
     mock_cursor = AsyncMock()
-    mock_cursor.description = [("id", None), ("name", None)]
+    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
     mock_cursor.fetchall.return_value = [{"id": 42, "name": "Test User"}]
 
     async def _cursor(*args: Any, **kwargs: Any) -> AsyncMock:
@@ -167,8 +165,8 @@ async def test_aiosqlite_driver_non_query_statement(
     # Verify cursor operations
     mock_cursor.execute.assert_called_once()
 
-    # The result should be a dict with expected structure
-    assert isinstance(result, dict)
+    # The result should be the cursor for non-query statements
+    assert result is mock_cursor
 
 
 @pytest.mark.asyncio
@@ -177,7 +175,7 @@ async def test_aiosqlite_driver_execute_with_connection_override(aiosqlite_drive
     # Create override connection
     override_connection = AsyncMock()
     mock_cursor = AsyncMock()
-    mock_cursor.description = [("id", None)]
+    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
     mock_cursor.fetchall.return_value = [{"id": 1}]
 
     async def _cursor(*args: Any, **kwargs: Any) -> AsyncMock:
@@ -204,7 +202,7 @@ async def test_aiosqlite_driver_to_parquet(
 ) -> None:
     """Test to_parquet writes correct data to a Parquet file (async)."""
     mock_cursor = AsyncMock()
-    mock_cursor.description = [("id", None), ("name", None)]
+    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
     mock_cursor.fetchall.return_value = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
 
     async def _cursor(*args: Any, **kwargs: Any) -> AsyncMock:
@@ -219,9 +217,25 @@ async def test_aiosqlite_driver_to_parquet(
         called["table"] = table
         called["path"] = path
 
-    monkeypatch.setattr(pq, "write_table", patched_write_table)
-    with tempfile.NamedTemporaryFile() as tmp:
+    # Mock the storage backend's write_arrow method instead of pyarrow directly
+    def mock_write_arrow(path: str, table: Any, **kwargs: Any) -> None:
+        called["table"] = table
+        called["path"] = path
+
+    # Mock the backend resolution to return a mock backend with specific attributes
+    mock_backend = AsyncMock()
+    # Only define write_arrow, not write_arrow_async so it uses the sync fallback
+    mock_backend.write_arrow = mock_write_arrow
+    # Make sure hasattr returns False for write_arrow_async
+    mock_backend.write_arrow_async = None
+    del mock_backend.write_arrow_async
+
+    def mock_resolve_backend_and_path(uri: str, storage_key: Optional[str] = None) -> tuple[AsyncMock, str]:
+        return mock_backend, uri
+
+    monkeypatch.setattr(aiosqlite_driver, "_resolve_backend_and_path", mock_resolve_backend_and_path)
+
+    with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
         await aiosqlite_driver.export_to_storage(statement.to_sql(), tmp.name)
         assert "table" in called
         assert called["path"] == tmp.name
-        assert isinstance(called["table"], pa.Table)

@@ -12,14 +12,14 @@ class TestInstrumentedService:
     """Test the InstrumentedService base class."""
 
     @pytest.fixture
-    def config(self):
+    def config(self) -> InstrumentationConfig:
         """Create instrumentation config."""
         return InstrumentationConfig(
             log_service_operations=True, log_queries=True, structured_logging=True, generate_correlation_id=True
         )
 
     @pytest.fixture
-    def service(self, config):
+    def service(self, config: InstrumentationConfig) -> InstrumentedService:
         """Create instrumented service instance."""
         return InstrumentedService(config, "TestService")
 
@@ -30,14 +30,14 @@ class TestInstrumentedService:
         assert service.service_name == "InstrumentedService"
         assert service.logger is not None
 
-    def test_init_with_config(self, config) -> None:
+    def test_init_with_config(self, config: InstrumentationConfig) -> None:
         """Test initialization with custom config."""
         service = InstrumentedService(config, "CustomService")
         assert service.instrumentation_config is config
         assert service.service_name == "CustomService"
 
     @patch("sqlspec.service.base.instrument_operation")
-    def test_instrument(self, mock_instrument, service) -> None:
+    def test_instrument(self, mock_instrument, service: InstrumentedService) -> None:
         """Test _instrument method creates proper context."""
         # Mock the context manager
         mock_cm = MagicMock()
@@ -55,7 +55,7 @@ class TestInstrumentedService:
         )
 
     @patch("sqlspec.utils.correlation.CorrelationContext.get")
-    def test_log_operation_start(self, mock_correlation, service) -> None:
+    def test_log_operation_start(self, mock_correlation, service: InstrumentedService) -> None:
         """Test logging operation start."""
         mock_correlation.return_value = "test-correlation-123"
 
@@ -84,7 +84,7 @@ class TestInstrumentedService:
             mock_info.assert_not_called()
 
     @patch("sqlspec.utils.correlation.CorrelationContext.get")
-    def test_log_operation_complete(self, mock_correlation, service) -> None:
+    def test_log_operation_complete(self, mock_correlation, service: InstrumentedService) -> None:
         """Test logging operation completion."""
         mock_correlation.return_value = "test-correlation-123"
 
@@ -105,7 +105,7 @@ class TestInstrumentedService:
             assert extra["result_count"] == 10
             assert extra["status"] == "success"
 
-    def test_log_operation_complete_no_result_count(self, service) -> None:
+    def test_log_operation_complete_no_result_count(self, service: InstrumentedService) -> None:
         """Test logging completion without result count."""
         with patch.object(service.logger, "info") as mock_info:
             service._log_operation_complete("test_op", duration_ms=100.0)
@@ -114,7 +114,7 @@ class TestInstrumentedService:
             assert "result_count" not in extra
 
     @patch("sqlspec.utils.correlation.CorrelationContext.get")
-    def test_log_operation_error(self, mock_correlation, service) -> None:
+    def test_log_operation_error(self, mock_correlation, service: InstrumentedService) -> None:
         """Test logging operation errors."""
         mock_correlation.return_value = "error-correlation-123"
         error = ValueError("Test error message")
@@ -135,7 +135,7 @@ class TestInstrumentedService:
                 },
             )
 
-    def test_inherited_service(self, config) -> None:
+    def test_inherited_service(self, config: InstrumentationConfig) -> None:
         """Test that services can inherit from InstrumentedService."""
 
         class MyCustomService(InstrumentedService):

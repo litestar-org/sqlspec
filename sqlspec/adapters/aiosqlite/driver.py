@@ -221,9 +221,15 @@ class AiosqliteDriver(
                     metadata={"status_message": result},
                 )
 
-            cursor = cast("aiosqlite.Cursor", result)
-            rows_affected = getattr(cursor, "rowcount", -1)
-            last_inserted_id = getattr(cursor, "lastrowid", None)
+            # result is an integer (rowcount) for execute_many operations
+            if isinstance(result, int):
+                rows_affected = result
+                last_inserted_id = None
+            else:
+                # Assume cursor object
+                cursor = cast("aiosqlite.Cursor", result)
+                rows_affected = getattr(cursor, "rowcount", -1)
+                last_inserted_id = getattr(cursor, "lastrowid", None)
 
             returned_data: list[dict[str, Any]] = []
 

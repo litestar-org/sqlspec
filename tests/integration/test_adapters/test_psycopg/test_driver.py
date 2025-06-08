@@ -375,7 +375,7 @@ def test_psycopg_column_names_and_metadata(psycopg_session: PsycopgSyncDriver) -
         "SELECT id, name, value, created_at FROM test_table WHERE name = %s", ("metadata_test",)
     )
     assert isinstance(result, SQLResult)
-    assert result.column_names() == ["id", "name", "value", "created_at"]
+    assert result.column_names == ["id", "name", "value", "created_at"]
     assert result.data is not None
     assert result.num_rows() == 1
 
@@ -411,7 +411,7 @@ def test_psycopg_with_schema_type(psycopg_session: PsycopgSyncDriver) -> None:
     assert result.num_rows() == 1
 
     # The data should be converted to the schema type by the ResultConverter
-    assert result.column_names() == ["id", "name", "value"]
+    assert result.column_names == ["id", "name", "value"]
 
 
 @pytest.mark.xdist_group("postgres")
@@ -550,7 +550,7 @@ def test_psycopg_fetch_arrow_table(psycopg_session: PsycopgSyncDriver) -> None:
     table = result.data
     assert isinstance(table, ArrowResult)
     assert table.num_rows() == 2
-    assert set(table.column_names()) == {"name", "value"}
+    assert set(table.column_names) == {"name", "value"}
     names = table.column("name").to_pylist()
     assert "arrow1" in names and "arrow2" in names
 
@@ -565,6 +565,6 @@ def test_psycopg_to_parquet(psycopg_session: PsycopgSyncDriver) -> None:
         psycopg_session.export_to_storage(statement, tmp.name)
         table = pq.read_table(tmp.name)
         assert table.num_rows() == 2
-        assert set(table.column_names()) == {"name", "value"}
+        assert set(table.column_names) == {"name", "value"}
         names = table.column("name").to_pylist()
         assert "pq1" in names and "pq2" in names

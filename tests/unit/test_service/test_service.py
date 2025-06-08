@@ -1,5 +1,6 @@
 """Unit tests for the database service layer."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,7 +16,7 @@ class TestDatabaseService:
     """Test sync database service."""
 
     @pytest.fixture
-    def mock_driver(self):
+    def mock_driver(self) -> MagicMock:
         """Create a mock sync driver."""
         driver = MagicMock()
         driver.config = MagicMock()
@@ -23,7 +24,7 @@ class TestDatabaseService:
         return driver
 
     @pytest.fixture
-    def mock_result(self):
+    def mock_result(self) -> MagicMock:
         """Create a mock SQL result."""
         result = MagicMock(spec=SQLResult)
         result.rowcount = 3
@@ -36,7 +37,7 @@ class TestDatabaseService:
         return result
 
     @pytest.fixture
-    def service(self, mock_driver):
+    def service(self, mock_driver: MagicMock):
         """Create a database service with mock driver."""
         return DatabaseService(
             driver=mock_driver,
@@ -44,20 +45,26 @@ class TestDatabaseService:
             service_name="TestService",
         )
 
-    def test_init(self, mock_driver) -> None:
+    def test_init(self, mock_driver: MagicMock) -> None:
         """Test service initialization."""
         service = DatabaseService(mock_driver)
         assert service.driver is mock_driver
         assert service.service_name == "DatabaseService"
         assert service.instrumentation_config is not None
 
-    def test_init_with_custom_name(self, mock_driver) -> None:
+    def test_init_with_custom_name(self, mock_driver: MagicMock) -> None:
         """Test service initialization with custom name."""
         service = DatabaseService(mock_driver, service_name="CustomService")
         assert service.service_name == "CustomService"
 
     @patch("sqlspec.utils.correlation.CorrelationContext.get")
-    def test_execute(self, mock_correlation, service, mock_driver, mock_result) -> None:
+    def test_execute(
+        self,
+        mock_correlation,
+        service: DatabaseService[Any, Any, dict[str, Any]],
+        mock_driver: MagicMock,
+        mock_result: MagicMock,
+    ) -> None:
         """Test execute method."""
         mock_correlation.return_value = "test-correlation-id"
         mock_driver.execute.return_value = mock_result
@@ -69,7 +76,9 @@ class TestDatabaseService:
         assert result is mock_result
         mock_driver.execute.assert_called_once_with(statement, params, connection=None, config=None, schema_type=None)
 
-    def test_execute_with_schema_type(self, service, mock_driver, mock_result) -> None:
+    def test_execute_with_schema_type(
+        self, service: DatabaseService[Any, Any, dict[str, Any]], mock_driver: MagicMock, mock_result: MagicMock
+    ) -> None:
         """Test execute with schema type."""
         mock_driver.execute.return_value = mock_result
         statement = SQL("SELECT * FROM users")
@@ -82,7 +91,9 @@ class TestDatabaseService:
         assert result is mock_result
         mock_driver.execute.assert_called_once_with(statement, None, connection=None, config=None, schema_type=UserDTO)
 
-    def test_execute_many(self, service, mock_driver, mock_result) -> None:
+    def test_execute_many(
+        self, service: DatabaseService[Any, Any, dict[str, Any]], mock_driver: MagicMock, mock_result: MagicMock
+    ) -> None:
         """Test execute_many method."""
         mock_driver.execute_many.return_value = mock_result
         statement = SQL("INSERT INTO users (name) VALUES (?)")
@@ -93,7 +104,9 @@ class TestDatabaseService:
         assert result is mock_result
         mock_driver.execute_many.assert_called_once_with(statement, params, connection=None, config=None)
 
-    def test_select(self, service, mock_driver, mock_result) -> None:
+    def test_select(
+        self, service: DatabaseService[Any, Any, dict[str, Any]], mock_driver: MagicMock, mock_result: MagicMock
+    ) -> None:
         """Test select method."""
         mock_result.all.return_value = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
         mock_driver.execute.return_value = mock_result
@@ -105,7 +118,9 @@ class TestDatabaseService:
         mock_driver.execute.assert_called_once()
         mock_result.all.assert_called_once()
 
-    def test_select_one(self, service, mock_driver, mock_result) -> None:
+    def test_select_one(
+        self, service: DatabaseService[Any, Any, dict[str, Any]], mock_driver: MagicMock, mock_result: MagicMock
+    ) -> None:
         """Test select_one method."""
         mock_result.one.return_value = {"id": 1, "name": "Alice"}
         mock_driver.execute.return_value = mock_result
@@ -117,7 +132,9 @@ class TestDatabaseService:
         mock_driver.execute.assert_called_once()
         mock_result.one.assert_called_once()
 
-    def test_select_one_or_none(self, service, mock_driver, mock_result) -> None:
+    def test_select_one_or_none(
+        self, service: DatabaseService[Any, Any, dict[str, Any]], mock_driver: MagicMock, mock_result: MagicMock
+    ) -> None:
         """Test select_one_or_none method."""
         mock_result.one_or_none.return_value = {"id": 1, "name": "Alice"}
         mock_driver.execute.return_value = mock_result
@@ -129,7 +146,9 @@ class TestDatabaseService:
         mock_driver.execute.assert_called_once()
         mock_result.one_or_none.assert_called_once()
 
-    def test_select_one_or_none_returns_none(self, service, mock_driver, mock_result) -> None:
+    def test_select_one_or_none_returns_none(
+        self, service: DatabaseService[Any, Any, dict[str, Any]], mock_driver: MagicMock, mock_result: MagicMock
+    ) -> None:
         """Test select_one_or_none when no results."""
         mock_result.one_or_none.return_value = None
         mock_driver.execute.return_value = mock_result
@@ -139,7 +158,9 @@ class TestDatabaseService:
 
         assert result is None
 
-    def test_select_value(self, service, mock_driver, mock_result) -> None:
+    def test_select_value(
+        self, service: DatabaseService[Any, Any, dict[str, Any]], mock_driver: MagicMock, mock_result: MagicMock
+    ) -> None:
         """Test select_value method."""
         mock_result.scalar.return_value = 42
         mock_driver.execute.return_value = mock_result
@@ -151,7 +172,9 @@ class TestDatabaseService:
         mock_driver.execute.assert_called_once()
         mock_result.scalar.assert_called_once()
 
-    def test_select_value_or_none(self, service, mock_driver, mock_result) -> None:
+    def test_select_value_or_none(
+        self, service: DatabaseService[Any, Any, dict[str, Any]], mock_driver: MagicMock, mock_result: MagicMock
+    ) -> None:
         """Test select_value_or_none method."""
         mock_result.scalar_or_none.return_value = 42
         mock_driver.execute.return_value = mock_result
@@ -163,7 +186,9 @@ class TestDatabaseService:
         mock_driver.execute.assert_called_once()
         mock_result.scalar_or_none.assert_called_once()
 
-    def test_insert(self, service, mock_driver, mock_result) -> None:
+    def test_insert(
+        self, service: DatabaseService[Any, Any, dict[str, Any]], mock_driver: MagicMock, mock_result: MagicMock
+    ) -> None:
         """Test insert method."""
         mock_result.rowcount = 1
         mock_driver.execute.return_value = mock_result
@@ -174,7 +199,9 @@ class TestDatabaseService:
         assert result is mock_result
         mock_driver.execute.assert_called_once()
 
-    def test_update(self, service, mock_driver, mock_result) -> None:
+    def test_update(
+        self, service: DatabaseService[Any, Any, dict[str, Any]], mock_driver: MagicMock, mock_result: MagicMock
+    ) -> None:
         """Test update method."""
         mock_result.rowcount = 5
         mock_driver.execute.return_value = mock_result
@@ -186,7 +213,9 @@ class TestDatabaseService:
         assert result.rowcount == 5
         mock_driver.execute.assert_called_once()
 
-    def test_delete(self, service, mock_driver, mock_result) -> None:
+    def test_delete(
+        self, service: DatabaseService[Any, Any, dict[str, Any]], mock_driver: MagicMock, mock_result: MagicMock
+    ) -> None:
         """Test delete method."""
         mock_result.rowcount = 3
         mock_driver.execute.return_value = mock_result
@@ -198,7 +227,7 @@ class TestDatabaseService:
         assert result.rowcount == 3
         mock_driver.execute.assert_called_once()
 
-    def test_error_handling(self, service, mock_driver) -> None:
+    def test_error_handling(self, service: DatabaseService[Any, Any, dict[str, Any]], mock_driver: MagicMock) -> None:
         """Test error handling and logging."""
         mock_driver.execute.side_effect = SQLSpecError("Database error")
         statement = SQL("SELECT * FROM users")
@@ -207,7 +236,7 @@ class TestDatabaseService:
             service.execute(statement)
 
     @patch("sqlspec.service.base.get_logger")
-    def test_logging_operations(self, mock_logger, mock_driver) -> None:
+    def test_logging_operations(self, mock_logger, mock_driver: MagicMock) -> None:
         """Test that operations are properly logged."""
         # Create a mock logger
         logger_instance = MagicMock()
@@ -228,7 +257,9 @@ class TestDatabaseService:
         # Verify logging calls
         assert logger_instance.info.call_count >= 2  # Start and complete logs
 
-    def test_track_operation_context(self, service, mock_driver, mock_result) -> None:
+    def test_track_operation_context(
+        self, service: DatabaseService[Any, Any, dict[str, Any]], mock_driver: MagicMock, mock_result: MagicMock
+    ) -> None:
         """Test operation tracking context."""
         mock_driver.execute.return_value = mock_result
         mock_result.rowcount = 10
@@ -272,7 +303,7 @@ class TestAsyncDatabaseService:
         return result
 
     @pytest.fixture
-    def service(self, mock_driver):
+    def service(self, mock_driver: AsyncMock):
         """Create an async database service with mock driver."""
         return AsyncDatabaseService(
             driver=mock_driver,
@@ -280,7 +311,7 @@ class TestAsyncDatabaseService:
             service_name="TestAsyncService",
         )
 
-    def test_init(self, mock_driver) -> None:
+    def test_init(self, mock_driver: AsyncMock) -> None:
         """Test async service initialization."""
         service = AsyncDatabaseService(mock_driver)
         assert service.driver is mock_driver
@@ -288,7 +319,9 @@ class TestAsyncDatabaseService:
         assert service.instrumentation_config is not None
 
     @pytest.mark.asyncio
-    async def test_execute(self, service, mock_driver, mock_result) -> None:
+    async def test_execute(
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+    ) -> None:
         """Test async execute method."""
         mock_driver.execute.return_value = mock_result
         statement = SQL("SELECT * FROM users")
@@ -300,7 +333,9 @@ class TestAsyncDatabaseService:
         mock_driver.execute.assert_called_once_with(statement, params, connection=None, config=None, schema_type=None)
 
     @pytest.mark.asyncio
-    async def test_execute_many(self, service, mock_driver, mock_result) -> None:
+    async def test_execute_many(
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+    ) -> None:
         """Test async execute_many method."""
         mock_driver.execute_many.return_value = mock_result
         statement = SQL("INSERT INTO users (name) VALUES (?)")
@@ -312,7 +347,9 @@ class TestAsyncDatabaseService:
         mock_driver.execute_many.assert_called_once_with(statement, params, connection=None, config=None)
 
     @pytest.mark.asyncio
-    async def test_select(self, service, mock_driver, mock_result) -> None:
+    async def test_select(
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+    ) -> None:
         """Test async select method."""
         mock_result.all.return_value = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
         mock_driver.execute.return_value = mock_result
@@ -325,7 +362,9 @@ class TestAsyncDatabaseService:
         mock_result.all.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_select_one(self, service, mock_driver, mock_result) -> None:
+    async def test_select_one(
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+    ) -> None:
         """Test async select_one method."""
         mock_result.one.return_value = {"id": 1, "name": "Alice"}
         mock_driver.execute.return_value = mock_result
@@ -338,7 +377,9 @@ class TestAsyncDatabaseService:
         mock_result.one.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_select_one_or_none(self, service, mock_driver, mock_result) -> None:
+    async def test_select_one_or_none(
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+    ) -> None:
         """Test async select_one_or_none method."""
         mock_result.one_or_none.return_value = {"id": 1, "name": "Alice"}
         mock_driver.execute.return_value = mock_result
@@ -351,7 +392,9 @@ class TestAsyncDatabaseService:
         mock_result.one_or_none.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_select_value(self, service, mock_driver, mock_result) -> None:
+    async def test_select_value(
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+    ) -> None:
         """Test async select_value method."""
         mock_result.scalar.return_value = 42
         mock_driver.execute.return_value = mock_result
@@ -364,7 +407,9 @@ class TestAsyncDatabaseService:
         mock_result.scalar.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_select_value_or_none(self, service, mock_driver, mock_result) -> None:
+    async def test_select_value_or_none(
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+    ) -> None:
         """Test async select_value_or_none method."""
         mock_result.scalar_or_none.return_value = 42
         mock_driver.execute.return_value = mock_result
@@ -377,7 +422,9 @@ class TestAsyncDatabaseService:
         mock_result.scalar_or_none.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_insert(self, service, mock_driver, mock_result) -> None:
+    async def test_insert(
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+    ) -> None:
         """Test async insert method."""
         mock_result.rowcount = 1
         mock_driver.execute.return_value = mock_result
@@ -389,7 +436,9 @@ class TestAsyncDatabaseService:
         mock_driver.execute.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_update(self, service, mock_driver, mock_result) -> None:
+    async def test_update(
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+    ) -> None:
         """Test async update method."""
         mock_result.rowcount = 5
         mock_driver.execute.return_value = mock_result
@@ -402,7 +451,9 @@ class TestAsyncDatabaseService:
         mock_driver.execute.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_delete(self, service, mock_driver, mock_result) -> None:
+    async def test_delete(
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+    ) -> None:
         """Test async delete method."""
         mock_result.rowcount = 3
         mock_driver.execute.return_value = mock_result
@@ -415,7 +466,9 @@ class TestAsyncDatabaseService:
         mock_driver.execute.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_error_handling(self, service, mock_driver) -> None:
+    async def test_error_handling(
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock
+    ) -> None:
         """Test async error handling."""
         mock_driver.execute.side_effect = SQLSpecError("Async database error")
         statement = SQL("SELECT * FROM users")
@@ -425,7 +478,7 @@ class TestAsyncDatabaseService:
 
     @pytest.mark.asyncio
     @patch("sqlspec.service.base.get_logger")
-    async def test_logging_operations(self, mock_logger, mock_driver) -> None:
+    async def test_logging_operations(self, mock_logger, mock_driver: AsyncMock) -> None:
         """Test that async operations are properly logged."""
         # Create a mock logger
         logger_instance = MagicMock()
@@ -447,7 +500,9 @@ class TestAsyncDatabaseService:
         assert logger_instance.info.call_count >= 2  # Start and complete logs
 
     @pytest.mark.asyncio
-    async def test_correlation_tracking(self, service, mock_driver, mock_result) -> None:
+    async def test_correlation_tracking(
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+    ) -> None:
         """Test correlation ID tracking in async operations."""
         mock_driver.execute.return_value = mock_result
 
@@ -459,7 +514,9 @@ class TestAsyncDatabaseService:
             mock_get.assert_called()
 
     @pytest.mark.asyncio
-    async def test_with_schema_type(self, service, mock_driver, mock_result) -> None:
+    async def test_with_schema_type(
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+    ) -> None:
         """Test async operations with schema type."""
 
         class UserDTO:

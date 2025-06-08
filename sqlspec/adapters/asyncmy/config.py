@@ -57,6 +57,32 @@ POOL_FIELDS = CONNECTION_FIELDS.union(
 class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver]):  # pyright: ignore
     """Configuration for Asyncmy database connections with direct field-based configuration."""
 
+    __slots__ = (
+        "autocommit",
+        "charset",
+        "connect_timeout",
+        "cursor_class",
+        "database",
+        "default_row_type",
+        "echo",
+        "extras",
+        "host",
+        "init_command",
+        "local_infile",
+        "maxsize",
+        "minsize",
+        "password",
+        "pool_recycle",
+        "port",
+        "read_default_file",
+        "read_default_group",
+        "sql_mode",
+        "ssl",
+        "statement_config",
+        "unix_socket",
+        "user",
+    )
+
     __is_async__: ClassVar[bool] = True
     __supports_connection_pooling__: ClassVar[bool] = True
 

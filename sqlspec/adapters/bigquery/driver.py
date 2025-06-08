@@ -55,6 +55,22 @@ class BigQueryDriver(
     - execute_script() - Multi-statement scripts and DDL operations
     """
 
+    __slots__ = (
+        "_default_query_job_config",
+        "_error_counter",
+        "_latency_histogram",
+        "_pool_connections_gauge",
+        "_pool_latency_histogram",
+        "_query_counter",
+        "_tracer",
+        "config",
+        "connection",
+        "default_row_type",
+        "instrumentation_config",
+        "on_job_complete",
+        "on_job_start",
+    )
+
     dialect: "DialectType" = "bigquery"
     connection: BigQueryConnection
     __supports_arrow__: ClassVar[bool] = True
@@ -147,10 +163,10 @@ class BigQueryDriver(
             return "STRING", None
         if isinstance(value, bytes):
             return "BYTES", None
-        if isinstance(value, datetime.date):
-            return "DATE", None
         if isinstance(value, datetime.datetime):
             return "TIMESTAMP" if value.tzinfo else "DATETIME", None
+        if isinstance(value, datetime.date):
+            return "DATE", None
         if isinstance(value, datetime.time):
             return "TIME", None
         if isinstance(value, (list, tuple)):

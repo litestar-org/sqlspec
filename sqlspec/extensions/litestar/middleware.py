@@ -1,12 +1,12 @@
 """Litestar middleware for SQLSpec integration."""
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 from uuid import uuid4
 
 from litestar import Request
 from litestar.datastructures import MutableScopeHeaders
 from litestar.enums import ScopeType
-from litestar.middleware import AbstractMiddleware
+from litestar.middleware import ASGIMiddleware
 
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
@@ -20,7 +20,7 @@ __all__ = ("CorrelationMiddleware",)
 logger = get_logger("extensions.litestar.middleware")
 
 
-class CorrelationMiddleware(AbstractMiddleware):
+class CorrelationMiddleware(ASGIMiddleware):
     """Middleware to track correlation IDs across requests.
 
     This middleware:
@@ -30,29 +30,28 @@ class CorrelationMiddleware(AbstractMiddleware):
     4. Adds the correlation ID to the response headers
     """
 
-    scopes = {ScopeType.HTTP}
+    scopes = (ScopeType.HTTP,)
 
-    def __init__(self, app: "ASGIApp", config: "AppConfig") -> None:
+    def __init__(self, config: "AppConfig") -> None:
         """Initialize the middleware.
 
         Args:
-            app: The ASGI application
             config: The application configuration
         """
-        super().__init__(app=app, scopes=self.scopes)
         self.config = config
         self.header_name = b"x-correlation-id"
 
-    async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
+    async def handle(self, scope: "Scope", receive: "Receive", send: "Send", next_app: "ASGIApp") -> None:
         """Process the request and response.
 
         Args:
             scope: ASGI connection scope
             receive: ASGI receive channel
             send: ASGI send channel
+            next_app: The next ASGI application in the chain
         """
         if scope["type"] != "http":
-            await self.app(scope, receive, send)
+            await next_app(scope, receive, send)
             return
 
         # Extract or generate correlation ID
@@ -87,7 +86,7 @@ class CorrelationMiddleware(AbstractMiddleware):
 
             # Process the request with correlation context
             try:
-                await self.app(scope, receive, send_wrapper)
+                await next_app(scope, receive, send_wrapper)
             except Exception:
                 logger.exception("Error processing request", extra={"correlation_id": correlation_id})
                 raise
@@ -105,7 +104,7 @@ def get_correlation_id_from_request(request: Request) -> Optional[str]:
     # Check state first (set by middleware)
     correlation_id = request.state.get("correlation_id")
     if correlation_id:
-        return correlation_id
+        return cast("str", correlation_id)
 
     # Fall back to header
     return request.headers.get("x-correlation-id")

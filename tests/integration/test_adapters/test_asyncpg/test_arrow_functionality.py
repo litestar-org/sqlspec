@@ -23,7 +23,7 @@ async def test_asyncpg_fetch_arrow_table(asyncpg_arrow_session: AsyncpgDriver) -
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
-    actual_columns = set(result.column_names())
+    actual_columns = set(result.column_names)
     assert expected_columns.issubset(actual_columns)
 
     # Check data types
@@ -192,8 +192,8 @@ async def test_asyncpg_arrow_complex_query(asyncpg_arrow_session: AsyncpgDriver)
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 4  # Products B, C, D, E
-    assert "status" in result.column_names()
-    assert "total_value" in result.column_names()
+    assert "status" in result.column_names
+    assert "total_value" in result.column_names
 
     # Verify calculated column
     total_values = result.data["total_value"].to_pylist()

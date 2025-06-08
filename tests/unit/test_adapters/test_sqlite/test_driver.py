@@ -1,7 +1,7 @@
 """Unit tests for SQLite driver."""
 
 import tempfile
-from typing import Any
+from typing import Any, Union
 from unittest.mock import MagicMock, Mock
 
 import pyarrow as pa
@@ -93,7 +93,7 @@ def test_sqlite_driver_execute_statement_select(sqlite_driver: SqliteDriver, moc
     """Test SQLite driver _execute_statement for SELECT statements."""
     # Setup mock cursor
     mock_cursor = mock_sqlite_connection.cursor.return_value.__enter__.return_value
-    mock_cursor.description = [("id",)]
+    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
     mock_cursor.fetchall.return_value = []
 
     # Create SQL statement
@@ -110,7 +110,7 @@ def test_sqlite_driver_execute_statement_select(sqlite_driver: SqliteDriver, moc
     assert isinstance(result, dict)
     assert "column_names" in result
     assert "data" in result
-    assert result["column_names"] == ["id"]
+    assert result["column_names"] == ["id", "name", "email"]
 
 
 def test_sqlite_driver_to_parquet(
@@ -120,20 +120,20 @@ def test_sqlite_driver_to_parquet(
 ) -> None:
     """Test to_parquet writes correct data to a Parquet file."""
     mock_cursor = mock_sqlite_connection.cursor.return_value.__enter__.return_value
-    mock_cursor.description = [("id",), ("name",)]
+    mock_cursor.description = [(col,) for col in ["id", "name"]]
 
     # Create mock Row objects that behave like sqlite3.Row
     class MockRow:
         def __init__(self, data) -> None:
             self._data = data
 
-        def keys(self):
+        def keys(self) -> list[Any]:
             return list(self._data.keys())
 
-        def __iter__(self):
+        def __iter__(self) -> Any:
             return iter(self._data.values())
 
-        def __getitem__(self, key):
+        def __getitem__(self, key: Union[int, str]) -> Any:
             if isinstance(key, int):
                 return list(self._data.values())[key]
             return self._data[key]

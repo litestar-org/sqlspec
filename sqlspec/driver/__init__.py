@@ -3,6 +3,7 @@
 from typing import Union
 
 from sqlspec.config import AsyncDatabaseConfig
+from sqlspec.driver import mixins
 from sqlspec.driver._async import AsyncDriverAdapterProtocol
 from sqlspec.driver._common import CommonDriverAttributes
 from sqlspec.driver._sync import SyncDriverAdapterProtocol
@@ -17,6 +18,7 @@ __all__ = (
     "DriverAdapterProtocol",
     "SyncDriverAdapterProtocol",
     "SyncInstrumentationMixin",
+    "mixins",
 )
 
 # Type alias for convenience

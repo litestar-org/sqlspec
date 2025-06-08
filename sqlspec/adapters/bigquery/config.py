@@ -77,6 +77,43 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     - Parquet and Arrow format optimization
     """
 
+    __slots__ = (
+        "client_info",
+        "client_options",
+        "credentials",
+        "credentials_path",
+        "dataframes_backend",
+        "dataset_id",
+        "default_load_job_config",
+        "default_query_job_config",
+        "default_row_type",
+        "edition",
+        "enable_bigquery_ml",
+        "enable_bigquery_omni",
+        "enable_column_level_security",
+        "enable_continuous_queries",
+        "enable_cross_cloud",
+        "enable_dataframes",
+        "enable_gemini_integration",
+        "enable_row_level_security",
+        "enable_vector_search",
+        "extras",
+        "job_timeout_ms",
+        "location",
+        "maximum_bytes_billed",
+        "on_connection_create",
+        "on_job_complete",
+        "on_job_start",
+        "parquet_enable_list_inference",
+        "project",
+        "query_timeout_ms",
+        "reservation_id",
+        "statement_config",
+        "use_avro_logical_types",
+        "use_legacy_sql",
+        "use_query_cache",
+    )
+
     __is_async__: ClassVar[bool] = False
     __supports_connection_pooling__: ClassVar[bool] = False
 

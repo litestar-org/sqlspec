@@ -6,22 +6,20 @@ from typing import Any
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.psycopg import PsycopgConfig, PsycopgDriver
+from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQLConfig
 
 
 @pytest.fixture
-def psycopg_params_session(postgres_service: PostgresService) -> "Generator[PsycopgDriver, None, None]":
+def psycopg_params_session(postgres_service: PostgresService) -> "Generator[PsycopgSyncDriver, None, None]":
     """Create a Psycopg session for parameter style testing."""
-    config = PsycopgConfig(
-        connection_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "dbname": postgres_service.database,
-        },
+    config = PsycopgSyncConfig(
+        host=postgres_service.host,
+        port=postgres_service.port,
+        user=postgres_service.user,
+        password=postgres_service.password,
+        dbname=postgres_service.database,
         statement_config=SQLConfig(strict_mode=False),
     )
 
@@ -62,7 +60,7 @@ def psycopg_params_session(postgres_service: PostgresService) -> "Generator[Psyc
     ],
 )
 def test_psycopg_pyformat_parameter_types(
-    psycopg_params_session: PsycopgDriver,
+    psycopg_params_session: PsycopgSyncDriver,
     params: Any,
     expected_count: int,
 ) -> None:
@@ -88,7 +86,7 @@ def test_psycopg_pyformat_parameter_types(
     ],
 )
 def test_psycopg_parameter_styles(
-    psycopg_params_session: PsycopgDriver,
+    psycopg_params_session: PsycopgSyncDriver,
     params: Any,
     style: str,
     query: str,
@@ -103,7 +101,7 @@ def test_psycopg_parameter_styles(
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_multiple_parameters_pyformat(psycopg_params_session: PsycopgDriver) -> None:
+def test_psycopg_multiple_parameters_pyformat(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test queries with multiple parameters using pyformat style."""
     result = psycopg_params_session.execute(
         "SELECT * FROM test_params WHERE value >= %s AND value <= %s ORDER BY value",
@@ -117,7 +115,7 @@ def test_psycopg_multiple_parameters_pyformat(psycopg_params_session: PsycopgDri
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_multiple_parameters_named(psycopg_params_session: PsycopgDriver) -> None:
+def test_psycopg_multiple_parameters_named(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test queries with multiple parameters using named style."""
     result = psycopg_params_session.execute(
         "SELECT * FROM test_params WHERE value >= %(min_val)s AND value <= %(max_val)s ORDER BY value",
@@ -131,7 +129,7 @@ def test_psycopg_multiple_parameters_named(psycopg_params_session: PsycopgDriver
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_null_parameters(psycopg_params_session: PsycopgDriver) -> None:
+def test_psycopg_null_parameters(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test handling of NULL parameters on Psycopg."""
     # Query for NULL values
     result = psycopg_params_session.execute(
@@ -159,7 +157,7 @@ def test_psycopg_null_parameters(psycopg_params_session: PsycopgDriver) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_parameter_escaping(psycopg_params_session: PsycopgDriver) -> None:
+def test_psycopg_parameter_escaping(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test parameter escaping prevents SQL injection."""
     # This should safely search for a literal string with quotes
     malicious_input = "'; DROP TABLE test_params; --"
@@ -179,7 +177,7 @@ def test_psycopg_parameter_escaping(psycopg_params_session: PsycopgDriver) -> No
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_parameter_with_like(psycopg_params_session: PsycopgDriver) -> None:
+def test_psycopg_parameter_with_like(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test parameters with LIKE operations."""
     result = psycopg_params_session.execute(
         "SELECT * FROM test_params WHERE name LIKE %s",
@@ -200,7 +198,7 @@ def test_psycopg_parameter_with_like(psycopg_params_session: PsycopgDriver) -> N
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_parameter_with_any_array(psycopg_params_session: PsycopgDriver) -> None:
+def test_psycopg_parameter_with_any_array(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test parameters with PostgreSQL ANY and arrays."""
     # Insert additional test data
     psycopg_params_session.execute_many(
@@ -227,7 +225,7 @@ def test_psycopg_parameter_with_any_array(psycopg_params_session: PsycopgDriver)
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_parameter_with_sql_object(psycopg_params_session: PsycopgDriver) -> None:
+def test_psycopg_parameter_with_sql_object(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test parameters with SQL object."""
     from sqlspec.statement.sql import SQL
 
@@ -251,7 +249,7 @@ def test_psycopg_parameter_with_sql_object(psycopg_params_session: PsycopgDriver
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_parameter_data_types(psycopg_params_session: PsycopgDriver) -> None:
+def test_psycopg_parameter_data_types(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test different parameter data types with Psycopg."""
     # Create table for different data types
     psycopg_params_session.execute_script("""
@@ -291,7 +289,7 @@ def test_psycopg_parameter_data_types(psycopg_params_session: PsycopgDriver) -> 
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_parameter_edge_cases(psycopg_params_session: PsycopgDriver) -> None:
+def test_psycopg_parameter_edge_cases(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test edge cases for Psycopg parameters."""
     # Empty string parameter
     psycopg_params_session.execute(
@@ -322,7 +320,7 @@ def test_psycopg_parameter_edge_cases(psycopg_params_session: PsycopgDriver) -> 
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_parameter_with_postgresql_functions(psycopg_params_session: PsycopgDriver) -> None:
+def test_psycopg_parameter_with_postgresql_functions(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test parameters with PostgreSQL functions."""
     # Test with string functions
     result = psycopg_params_session.execute(
@@ -347,7 +345,7 @@ def test_psycopg_parameter_with_postgresql_functions(psycopg_params_session: Psy
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_parameter_with_json(psycopg_params_session: PsycopgDriver) -> None:
+def test_psycopg_parameter_with_json(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test parameters with PostgreSQL JSON operations."""
     # Create table with JSONB column
     psycopg_params_session.execute_script("""
@@ -391,7 +389,7 @@ def test_psycopg_parameter_with_json(psycopg_params_session: PsycopgDriver) -> N
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_parameter_with_arrays(psycopg_params_session: PsycopgDriver) -> None:
+def test_psycopg_parameter_with_arrays(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test parameters with PostgreSQL array operations."""
     # Create table with array columns
     psycopg_params_session.execute_script("""
@@ -434,7 +432,7 @@ def test_psycopg_parameter_with_arrays(psycopg_params_session: PsycopgDriver) ->
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_parameter_with_window_functions(psycopg_params_session: PsycopgDriver) -> None:
+def test_psycopg_parameter_with_window_functions(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test parameters with PostgreSQL window functions."""
     # Insert some test data for window functions
     psycopg_params_session.execute_many(
@@ -471,7 +469,7 @@ def test_psycopg_parameter_with_window_functions(psycopg_params_session: Psycopg
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_parameter_with_copy_operations(psycopg_params_session: PsycopgDriver) -> None:
+def test_psycopg_parameter_with_copy_operations(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test parameters in queries alongside COPY operations."""
     # First use parameters to find specific data
     filter_result = psycopg_params_session.execute(
@@ -497,7 +495,7 @@ def test_psycopg_parameter_with_copy_operations(psycopg_params_session: PsycopgD
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_parameter_mixed_styles_same_query(psycopg_params_session: PsycopgDriver) -> None:
+def test_psycopg_parameter_mixed_styles_same_query(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test edge case where mixing parameter styles might occur."""
     # This should work with named parameters
     result = psycopg_params_session.execute(

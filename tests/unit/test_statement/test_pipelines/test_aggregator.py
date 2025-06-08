@@ -3,226 +3,204 @@
 import pytest
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.aggregator import ProcessorResult, ResultAggregator, ValidationIssue
+from sqlspec.statement.pipelines.aggregator import AggregatedResults, ResultAggregator
+from sqlspec.statement.pipelines.validators.base import ProcessorResult
+
+
+class TestAggregatedResults:
+    """Test the AggregatedResults class."""
+
+    def test_initialization(self) -> None:
+        """Test aggregated results initialization."""
+        results = AggregatedResults()
+        assert results.overall_risk_level == RiskLevel.SKIP
+        assert results.is_safe is True
+        assert results.all_issues == []
+        assert results.all_warnings == []
+        assert results.was_transformed is False
+        assert results.has_analysis is False
+
+    def test_add_processor_result(self) -> None:
+        """Test adding processor results."""
+        results = AggregatedResults()
+        processor_result = ProcessorResult(metadata={"test": "data", "performance_issues": [{"issue": "slow query"}]})
+
+        results.add_processor_result("test_processor", processor_result)
+
+        assert results.total_processors_run == 1
+        assert len(results.performance_issues) == 1
+        assert results.component_metadata["test_processor"]["test"] == "data"
+
+    def test_mark_processor_failed(self) -> None:
+        """Test marking processor as failed."""
+        results = AggregatedResults()
+
+        results.mark_processor_failed("test_processor", "Test error")
+
+        assert "test_processor" in results.failed_processors
+        assert "test_processor_error" in results.component_metadata
+        assert results.component_metadata["test_processor_error"]["error"] == "Test error"
+
+    def test_get_summary(self) -> None:
+        """Test getting summary of results."""
+        results = AggregatedResults()
+        results.overall_risk_level = RiskLevel.MEDIUM
+        results.was_transformed = True
+        results.transformations_applied = ["test_transform"]
+
+        summary = results.get_summary()
+
+        assert summary["overall_risk_level"] == "MEDIUM"
+        assert summary["was_transformed"] is True
+        assert summary["transformations_count"] == 1
+
+    def test_get_recommendations(self) -> None:
+        """Test getting recommendations."""
+        results = AggregatedResults()
+        results.performance_issues = [{"recommendation": "Add index"}]
+        results.security_issues = [{"recommendation": "Use parameterized queries"}]
+
+        recommendations = results.get_recommendations()
+
+        assert "Add index" in recommendations
+        assert "Use parameterized queries" in recommendations
+        assert len(recommendations) == 2
+
+    def test_to_dict(self) -> None:
+        """Test converting to dictionary."""
+        results = AggregatedResults()
+        results.overall_risk_level = RiskLevel.LOW
+        results.table_count = 2
+
+        result_dict = results.to_dict()
+
+        assert "summary" in result_dict
+        assert "risk_assessment" in result_dict
+        assert "analysis" in result_dict
+        assert result_dict["analysis"]["table_count"] == 2
 
 
 class TestResultAggregator:
     """Test the ResultAggregator class."""
 
     @pytest.fixture
-    def aggregator(self):
+    def aggregator(self) -> ResultAggregator:
         """Create a result aggregator instance."""
         return ResultAggregator()
 
-    def test_initialization(self, aggregator) -> None:
+    def test_initialization(self, aggregator: ResultAggregator) -> None:
         """Test aggregator initialization."""
-        assert aggregator.analysis_results == []
-        assert aggregator.validation_results == []
-        assert aggregator.transformation_results == []
-        assert aggregator.overall_risk_level == RiskLevel.SKIP
+        assert aggregator.results.overall_risk_level == RiskLevel.SKIP
+        assert aggregator.results.total_processors_run == 0
 
-    def test_add_analysis_result(self, aggregator) -> None:
-        """Test adding analysis results."""
-        result = ProcessorResult(processor_name="TestAnalyzer", success=True, data={"tables": ["users", "orders"]})
+    def test_aggregate_processor_results(self, aggregator: ResultAggregator) -> None:
+        """Test aggregating multiple processor results."""
+        result1 = ProcessorResult(metadata={"test1": "data1"})
+        result2 = ProcessorResult(metadata={"test2": "data2"})
 
-        aggregator.add_analysis_result(result)
-
-        assert len(aggregator.analysis_results) == 1
-        assert aggregator.analysis_results[0] == result
-
-    def test_add_validation_result_skip(self, aggregator) -> None:
-        """Test adding validation result with SKIP risk level."""
-        from sqlspec.statement.pipelines import ValidationResult
-
-        result = ValidationResult(processor_name="TestValidator", risk_level=RiskLevel.SKIP, issues=[])
-
-        aggregator.add_validation_result(result)
-
-        assert len(aggregator.validation_results) == 1
-        assert aggregator.overall_risk_level == RiskLevel.SKIP
-
-    def test_add_validation_result_low_risk(self, aggregator) -> None:
-        """Test adding validation result with LOW risk level."""
-        from sqlspec.statement.pipelines import ValidationResult
-
-        issue = ValidationIssue(
-            severity=RiskLevel.LOW, message="Minor performance concern", line_number=1, column_number=0, code="PERF001"
-        )
-
-        result = ValidationResult(processor_name="PerformanceValidator", risk_level=RiskLevel.LOW, issues=[issue])
-
-        aggregator.add_validation_result(result)
-
-        assert len(aggregator.validation_results) == 1
-        assert aggregator.overall_risk_level == RiskLevel.LOW
-
-    def test_risk_level_escalation(self, aggregator) -> None:
-        """Test that risk level escalates to highest level."""
-        from sqlspec.statement.pipelines import ValidationResult
-
-        # Add LOW risk
-        low_result = ValidationResult(
-            processor_name="Validator1",
-            risk_level=RiskLevel.LOW,
-            issues=[ValidationIssue(RiskLevel.LOW, "Low risk", 1, 0, "LOW001")],
-        )
-        aggregator.add_validation_result(low_result)
-        assert aggregator.overall_risk_level == RiskLevel.LOW
-
-        # Add MEDIUM risk - should escalate
-        medium_result = ValidationResult(
-            processor_name="Validator2",
-            risk_level=RiskLevel.MEDIUM,
-            issues=[ValidationIssue(RiskLevel.MEDIUM, "Medium risk", 2, 0, "MED001")],
-        )
-        aggregator.add_validation_result(medium_result)
-        assert aggregator.overall_risk_level == RiskLevel.MEDIUM
-
-        # Add HIGH risk - should escalate
-        high_result = ValidationResult(
-            processor_name="Validator3",
-            risk_level=RiskLevel.HIGH,
-            issues=[ValidationIssue(RiskLevel.HIGH, "High risk", 3, 0, "HIGH001")],
-        )
-        aggregator.add_validation_result(high_result)
-        assert aggregator.overall_risk_level == RiskLevel.HIGH
-
-        # Add another LOW risk - should remain HIGH
-        aggregator.add_validation_result(low_result)
-        assert aggregator.overall_risk_level == RiskLevel.HIGH
-
-    def test_add_transformation_result(self, aggregator) -> None:
-        """Test adding transformation results."""
-        result = ProcessorResult(
-            processor_name="ParameterTransformer",
-            success=True,
-            data={
-                "original_sql": "SELECT * FROM users WHERE id = 1",
-                "transformed_sql": "SELECT * FROM users WHERE id = ?",
-                "extracted_params": [1],
-            },
-        )
-
-        aggregator.add_transformation_result(result)
-
-        assert len(aggregator.transformation_results) == 1
-        assert aggregator.transformation_results[0] == result
-
-    def test_get_all_issues(self, aggregator) -> None:
-        """Test retrieving all validation issues."""
-        from sqlspec.statement.pipelines import ValidationResult
-
-        # Add multiple validation results with issues
-        issues1 = [
-            ValidationIssue(RiskLevel.LOW, "Issue 1", 1, 0, "CODE1"),
-            ValidationIssue(RiskLevel.MEDIUM, "Issue 2", 2, 0, "CODE2"),
+        results = [
+            ("processor1", result1),
+            ("processor2", result2),
         ]
-        result1 = ValidationResult("Validator1", RiskLevel.MEDIUM, issues1)
 
-        issues2 = [ValidationIssue(RiskLevel.HIGH, "Issue 3", 3, 0, "CODE3")]
-        result2 = ValidationResult("Validator2", RiskLevel.HIGH, issues2)
+        aggregated = aggregator.aggregate_processor_results(results)
 
-        aggregator.add_validation_result(result1)
-        aggregator.add_validation_result(result2)
+        assert aggregated.total_processors_run == 2
+        assert "processor1" in aggregated.component_metadata
+        assert "processor2" in aggregated.component_metadata
 
-        all_issues = aggregator.get_all_issues()
+    def test_add_timing_info(self, aggregator: ResultAggregator) -> None:
+        """Test adding timing information."""
+        aggregator.add_timing_info(123.45)
 
-        assert len(all_issues) == 3
-        assert all_issues[0].message == "Issue 1"
-        assert all_issues[1].message == "Issue 2"
-        assert all_issues[2].message == "Issue 3"
+        assert aggregator.results.processing_time_ms == 123.45
 
-    def test_get_issues_by_severity(self, aggregator) -> None:
-        """Test filtering issues by severity."""
-        from sqlspec.statement.pipelines import ValidationResult
+    def test_reset(self, aggregator: ResultAggregator) -> None:
+        """Test resetting the aggregator."""
+        # Add some data
+        aggregator.add_timing_info(100.0)
+        aggregator.results.total_processors_run = 5
 
-        issues = [
-            ValidationIssue(RiskLevel.LOW, "Low issue", 1, 0, "LOW1"),
-            ValidationIssue(RiskLevel.MEDIUM, "Medium issue", 2, 0, "MED1"),
-            ValidationIssue(RiskLevel.HIGH, "High issue", 3, 0, "HIGH1"),
-            ValidationIssue(RiskLevel.LOW, "Another low", 4, 0, "LOW2"),
-        ]
-        result = ValidationResult("MultiValidator", RiskLevel.HIGH, issues)
-        aggregator.add_validation_result(result)
+        # Reset
+        aggregator.reset()
 
-        # Get only HIGH severity issues
-        high_issues = aggregator.get_issues_by_severity(RiskLevel.HIGH)
-        assert len(high_issues) == 1
-        assert high_issues[0].message == "High issue"
+        # Should be back to initial state
+        assert aggregator.results.processing_time_ms == 0.0
+        assert aggregator.results.total_processors_run == 0
 
-        # Get only LOW severity issues
-        low_issues = aggregator.get_issues_by_severity(RiskLevel.LOW)
-        assert len(low_issues) == 2
-        assert low_issues[0].message == "Low issue"
-        assert low_issues[1].message == "Another low"
+    def test_merge_with(self, aggregator: ResultAggregator) -> None:
+        """Test merging with another aggregated result."""
+        # Setup first aggregator
+        aggregator.add_timing_info(50.0)
+        aggregator.results.total_processors_run = 2
+        aggregator.results.all_issues = ["issue1"]
 
-    def test_to_dict(self, aggregator) -> None:
-        """Test serialization to dictionary."""
-        from sqlspec.statement.pipelines import ValidationResult
+        # Setup second result to merge
+        other_results = AggregatedResults()
+        other_results.processing_time_ms = 75.0
+        other_results.total_processors_run = 3
+        other_results.all_issues = ["issue2"]
+        other_results.overall_risk_level = RiskLevel.HIGH
 
-        # Add various results
-        analysis_result = ProcessorResult("Analyzer", True, {"tables": ["users"]})
-        validation_result = ValidationResult(
-            "Validator", RiskLevel.LOW, [ValidationIssue(RiskLevel.LOW, "Test issue", 1, 0, "TEST001")]
+        # Merge
+        aggregator.merge_with(other_results)
+
+        # Check merged results
+        assert aggregator.results.processing_time_ms == 125.0  # 50 + 75
+        assert aggregator.results.total_processors_run == 5  # 2 + 3
+        assert len(aggregator.results.all_issues) == 2  # Both issues
+        assert aggregator.results.overall_risk_level == RiskLevel.HIGH  # Highest level
+
+
+class TestResultAggregatorIntegration:
+    """Test aggregator integration scenarios."""
+
+    def test_complex_aggregation_scenario(self) -> None:
+        """Test a complex aggregation scenario with multiple components."""
+        aggregator = ResultAggregator()
+
+        # Add validation result
+        validation_result = ProcessorResult(
+            metadata={
+                "validation_type": "security",
+                "security_issues": [{"type": "sql_injection", "recommendation": "Use parameters"}],
+                "performance_issues": [{"type": "missing_index", "recommendation": "Add index on user_id"}],
+            }
         )
-        transform_result = ProcessorResult("Transformer", True, {"sql": "SELECT 1"})
 
-        aggregator.add_analysis_result(analysis_result)
-        aggregator.add_validation_result(validation_result)
-        aggregator.add_transformation_result(transform_result)
+        # Add analysis result
+        analysis_result = ProcessorResult(
+            metadata={"analysis_type": "statement", "tables": ["users", "orders"], "complexity": "medium"}
+        )
 
-        result_dict = aggregator.to_dict()
+        # Add transformation result
+        transform_result = ProcessorResult(
+            metadata={"transformation_type": "parameterize", "parameters_extracted": 3, "comments_removed": 2}
+        )
 
-        assert "overall_risk_level" in result_dict
-        assert result_dict["overall_risk_level"] == "low"
-        assert "analysis_results" in result_dict
-        assert len(result_dict["analysis_results"]) == 1
-        assert "validation_results" in result_dict
-        assert len(result_dict["validation_results"]) == 1
-        assert "transformation_results" in result_dict
-        assert len(result_dict["transformation_results"]) == 1
-        assert "all_issues" in result_dict
-        assert len(result_dict["all_issues"]) == 1
+        # Aggregate all results
+        results = [
+            ("SecurityValidator", validation_result),
+            ("StatementAnalyzer", analysis_result),
+            ("ParameterTransformer", transform_result),
+        ]
 
-    def test_empty_aggregator_to_dict(self, aggregator) -> None:
-        """Test serialization of empty aggregator."""
-        result_dict = aggregator.to_dict()
+        final_results = aggregator.aggregate_processor_results(results)
+        aggregator.add_timing_info(89.5)
 
-        assert result_dict["overall_risk_level"] == "skip"
-        assert result_dict["analysis_results"] == []
-        assert result_dict["validation_results"] == []
-        assert result_dict["transformation_results"] == []
-        assert result_dict["all_issues"] == []
+        # Verify aggregation
+        assert final_results.total_processors_run == 3
+        assert len(final_results.security_issues) == 1
+        assert len(final_results.performance_issues) == 1
+        assert final_results.processing_time_ms == 89.5
 
-    def test_multiple_validators_same_risk_level(self, aggregator) -> None:
-        """Test aggregating results from multiple validators with same risk level."""
-        from sqlspec.statement.pipelines import ValidationResult
+        # Test summary
+        summary = final_results.get_summary()
+        assert summary["processors_run"] == 3
+        assert summary["security_issues_count"] == 1
+        assert summary["performance_issues_count"] == 1
 
-        # Multiple validators all finding MEDIUM risk issues
-        for i in range(3):
-            result = ValidationResult(
-                f"Validator{i}",
-                RiskLevel.MEDIUM,
-                [ValidationIssue(RiskLevel.MEDIUM, f"Issue from validator {i}", i + 1, 0, f"CODE{i}")],
-            )
-            aggregator.add_validation_result(result)
-
-        assert len(aggregator.validation_results) == 3
-        assert aggregator.overall_risk_level == RiskLevel.MEDIUM
-        assert len(aggregator.get_all_issues()) == 3
-
-    def test_mixed_processor_results(self, aggregator) -> None:
-        """Test handling mixed success/failure processor results."""
-        # Successful analysis
-        aggregator.add_analysis_result(ProcessorResult("SuccessAnalyzer", True, {"result": "data"}))
-
-        # Failed analysis
-        aggregator.add_analysis_result(ProcessorResult("FailedAnalyzer", False, {"error": "Analysis failed"}))
-
-        # Successful transformation
-        aggregator.add_transformation_result(ProcessorResult("Transformer", True, {"transformed": True}))
-
-        assert len(aggregator.analysis_results) == 2
-        assert aggregator.analysis_results[0].success is True
-        assert aggregator.analysis_results[1].success is False
-        assert len(aggregator.transformation_results) == 1
+        # Test recommendations
+        recommendations = final_results.get_recommendations()
+        assert "Use parameters" in recommendations
+        assert "Add index on user_id" in recommendations

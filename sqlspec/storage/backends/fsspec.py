@@ -255,7 +255,10 @@ class FSSpecBackend(ObjectStoreProtocol):
         try:
             resolved_path = self._resolve_path(path)
             info = self.fs.info(resolved_path)
-
+        except Exception as exc:
+            msg = f"Failed to get metadata for {path}"
+            raise StorageOperationFailedError(msg) from exc
+        else:
             # Convert fsspec info to dict
             if isinstance(info, dict):
                 return info
@@ -279,29 +282,29 @@ class FSSpecBackend(ObjectStoreProtocol):
             metadata.setdefault("size", None)
             metadata.setdefault("type", "file")
             return metadata
-        except Exception as exc:
-            msg = f"Failed to get metadata for {path}"
-            raise StorageOperationFailedError(msg) from exc
+
+    def _stream_file_batches(self, obj_path: str) -> "Iterator[ArrowRecordBatch]":
+        """Helper method to stream batches from a single file."""
+        try:
+            import pyarrow.parquet as pq
+
+            with self.fs.open(obj_path, mode="rb") as f:
+                parquet_file = pq.ParquetFile(f)
+                yield from parquet_file.iter_batches()
+        except Exception as e:
+            # Log but continue with other files
+            logger.warning("Failed to read %s: %s", obj_path, e)
+            return
 
     def stream_arrow(self, pattern: str) -> "Iterator[ArrowRecordBatch]":
         """Stream Arrow record batches from matching objects."""
         try:
-            import pyarrow.parquet as pq
-
             # Find all matching objects
             matching_objects = self.glob(pattern)
 
             # Stream each file as record batches
             for obj_path in matching_objects:
-                try:
-                    with self.fs.open(obj_path, mode="rb") as f:
-                        parquet_file = pq.ParquetFile(f)
-                        # Yield batches from this file
-                        yield from parquet_file.iter_batches()
-                except Exception as e:
-                    # Log but continue with other files
-                    logger.warning("Failed to read %s: %s", obj_path, e)
-                    continue
+                yield from self._stream_file_batches(obj_path)
 
         except ImportError:
             msg = "pyarrow"
@@ -354,30 +357,34 @@ class FSSpecBackend(ObjectStoreProtocol):
         """Async list objects with optional prefix."""
         return await async_(self.list_objects)(prefix, recursive)
 
+    async def _stream_file_batches_async(self, obj_path: str) -> "AsyncIterator[ArrowRecordBatch]":
+        """Helper method to async stream batches from a single file."""
+        try:
+            from io import BytesIO
+
+            import pyarrow.parquet as pq
+
+            data = await self.read_bytes_async(obj_path)
+            parquet_file = pq.ParquetFile(BytesIO(data))
+
+            for batch in parquet_file.iter_batches():
+                yield batch
+        except Exception as e:
+            # Log but continue with other files
+            logger.warning("Failed to read %s: %s", obj_path, e)
+            return
+
     async def stream_arrow_async(self, pattern: str) -> "AsyncIterator[ArrowRecordBatch]":
         """Async stream Arrow record batches from matching objects."""
         try:
-            import pyarrow.parquet as pq
-
             # Find all matching objects
             matching_objects = await self.list_objects_async()
             filtered_objects = [obj for obj in matching_objects if self._matches_pattern(obj, pattern)]
 
             # Stream each file as record batches
             for obj_path in filtered_objects:
-                try:
-                    data = await self.read_bytes_async(obj_path)
-                    from io import BytesIO
-
-                    parquet_file = pq.ParquetFile(BytesIO(data))
-
-                    # Yield batches from this file
-                    for batch in parquet_file.iter_batches():
-                        yield batch
-                except Exception as e:
-                    # Log but continue with other files
-                    logger.warning("Failed to read %s: %s", obj_path, e)
-                    continue
+                async for batch in self._stream_file_batches_async(obj_path):
+                    yield batch
 
         except ImportError:
             msg = "pyarrow"

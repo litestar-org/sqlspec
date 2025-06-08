@@ -38,6 +38,19 @@ class SqliteDriver(
     instrumentation standards following the psycopg pattern.
     """
 
+    __slots__ = (
+        "_error_counter",
+        "_latency_histogram",
+        "_pool_connections_gauge",
+        "_pool_latency_histogram",
+        "_query_counter",
+        "_tracer",
+        "config",
+        "connection",
+        "default_row_type",
+        "instrumentation_config",
+    )
+
     __supports_arrow__: "ClassVar[bool]" = True
     __supports_parquet__: "ClassVar[bool]" = False
     dialect: "DialectType" = "sqlite"

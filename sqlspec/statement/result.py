@@ -299,6 +299,7 @@ class ArrowResult(StatementResult[ArrowTable]):
             raise ValueError(msg)
         return self.data
 
+    @property
     def column_names(self) -> "list[str]":
         """Get the column names from the Arrow table.
 

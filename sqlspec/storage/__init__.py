@@ -7,13 +7,13 @@ This module provides a flexible storage system with:
 - Key-based named storage configurations
 """
 
-from sqlspec.storage.protocol import StorageBackendProtocol
+from sqlspec.storage.protocol import ObjectStoreProtocol
 from sqlspec.storage.registry import StorageRegistry
 
 storage_registry = StorageRegistry()
 
 __all__ = (
-    "StorageBackendProtocol",
+    "ObjectStoreProtocol",
     "StorageRegistry",
     "storage_registry",
 )

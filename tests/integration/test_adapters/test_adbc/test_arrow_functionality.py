@@ -23,10 +23,8 @@ from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_m
 def adbc_postgresql_arrow_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
     """Create an ADBC PostgreSQL session for Arrow testing."""
     config = AdbcConfig(
-        connection_config={
-            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            "driver_name": "adbc_driver_postgresql",
-        },
+        uri=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+        driver_name="adbc_driver_postgresql",
         statement_config=SQLConfig(strict_mode=False),
     )
 
@@ -62,10 +60,8 @@ def adbc_postgresql_arrow_session(postgres_service: PostgresService) -> Generato
 def adbc_sqlite_arrow_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session for Arrow testing."""
     config = AdbcConfig(
-        connection_config={
-            "uri": ":memory:",
-            "driver_name": "adbc_driver_sqlite",
-        },
+        uri=":memory:",
+        driver_name="adbc_driver_sqlite",
         statement_config=SQLConfig(strict_mode=False),
     )
 
@@ -107,7 +103,7 @@ def test_postgresql_fetch_arrow_table(adbc_postgresql_arrow_session: AdbcDriver)
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
-    actual_columns = set(result.column_names())
+    actual_columns = set(result.column_names)
     assert expected_columns.issubset(actual_columns)
 
     # Check data types
@@ -133,7 +129,7 @@ def test_sqlite_fetch_arrow_table(adbc_sqlite_arrow_session: AdbcDriver) -> None
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
-    actual_columns = set(result.column_names())
+    actual_columns = set(result.column_names)
     assert expected_columns.issubset(actual_columns)
 
     # Check values

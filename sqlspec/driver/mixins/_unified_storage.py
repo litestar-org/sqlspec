@@ -7,6 +7,7 @@ just two comprehensive mixins: SyncStorageMixin and AsyncStorageMixin.
 These mixins provide intelligent routing between native database capabilities
 and storage backend operations for optimal performance.
 """
+# pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 
 import logging
 import tempfile
@@ -16,13 +17,15 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from urllib.parse import urlparse
 
 from sqlspec.exceptions import MissingDependencyError, wrap_exceptions
+from sqlspec.statement.result import ArrowResult
+from sqlspec.statement.sql import SQL
 from sqlspec.storage import storage_registry
 from sqlspec.typing import ArrowTable, RowT, SQLParameterType
 
 if TYPE_CHECKING:
     from sqlspec.config import StorageConfig
     from sqlspec.statement.filters import StatementFilter
-    from sqlspec.statement.result import ArrowResult, SQLResult
+    from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQLConfig, Statement
     from sqlspec.storage.protocol import ObjectStoreProtocol
     from sqlspec.typing import ConnectionT
@@ -57,18 +60,9 @@ class StorageMixinBase:
             return self.config.storage  # type: ignore[no-any-return]
         return None
 
-    def _get_storage_backend(self, uri_or_key: str) -> "ObjectStoreProtocol":
+    @staticmethod
+    def _get_storage_backend(uri_or_key: str) -> "ObjectStoreProtocol":
         """Get storage backend by URI or key with intelligent routing."""
-        storage_config = self._get_storage_config()
-
-        if storage_config:
-            try:
-                return storage_registry.get(uri_or_key)
-            except (KeyError, ValueError):
-                # Key not found, will try as URI below
-                logger.debug("Key %s not found in storage config, trying as URI", uri_or_key)
-
-        # Use global registry resolution
         return storage_registry.get(uri_or_key)
 
     @staticmethod
@@ -167,16 +161,14 @@ class SyncStorageMixin(StorageMixinBase):
         """
         self._ensure_pyarrow_installed()
 
-        from sqlspec.statement.result import ArrowResult
-        from sqlspec.statement.sql import SQL
-
         # Convert to SQL object for processing
         if isinstance(statement, str):
             sql_obj = SQL(statement, parameters=parameters, config=config or self.config)
         elif hasattr(statement, "to_sql"):  # SQL object
             sql_obj = statement
             if parameters is not None:
-                sql_obj = sql_obj.with_parameters(parameters)
+                # Create a new SQL object with the provided parameters
+                sql_obj = SQL(statement.sql, parameters=parameters, config=config or sql_obj._config)
         else:  # sqlglot Expression
             sql_obj = SQL(statement, parameters=parameters, config=config or self.config)
 
@@ -207,7 +199,7 @@ class SyncStorageMixin(StorageMixinBase):
                 pass
 
             # Fallback: execute regular query and convert to Arrow
-            result = self.execute(sql_obj)  # type: ignore[attr-defined]
+            result = self.execute(sql_obj, connection=connection)  # type: ignore[attr-defined]
             arrow_table = self._rows_to_arrow_table(result.data or [], result.column_names or [])
             return ArrowResult(statement=sql_obj, data=arrow_table)
 
@@ -407,18 +399,33 @@ class SyncStorageMixin(StorageMixinBase):
     def _resolve_backend_and_path(
         self, uri_or_key: str, storage_key: "Optional[str]" = None
     ) -> "tuple[ObjectStoreProtocol, str]":
-        """Resolve backend and path from URI or key."""
-        original_path = uri_or_key
+        """Resolve backend and path from URI or key.
 
-        # Convert absolute paths to file:// URIs if needed
-        if self._is_uri(uri_or_key) and "://" not in uri_or_key:
-            # It's an absolute path without scheme
-            uri_or_key = f"file://{uri_or_key}"
+        Args:
+            uri_or_key: Either a URI (e.g., "s3://bucket/path") or a path to use with storage_key
+            storage_key: Optional storage backend key to use (overrides URI-based resolution)
 
-        backend = self._get_storage_backend(storage_key or uri_or_key)
+        Returns:
+            Tuple of (backend, path) where path is relative to the backend's base path
+        """
+        if storage_key:
+            # Use the specified storage key to get backend
+            backend = self._get_storage_backend(storage_key)
+            # uri_or_key is the path in this case
+            path = uri_or_key
+        else:
+            # Treat uri_or_key as either a registered key or a URI
+            original_path = uri_or_key
 
-        # For file:// URIs, return just the path part for the backend
-        path = uri_or_key[7:] if uri_or_key.startswith("file://") else original_path
+            # Convert absolute paths to file:// URIs if needed
+            if self._is_uri(uri_or_key) and "://" not in uri_or_key:
+                # It's an absolute path without scheme
+                uri_or_key = f"file://{uri_or_key}"
+
+            backend = self._get_storage_backend(uri_or_key)
+
+            # For file:// URIs, return just the path part for the backend
+            path = uri_or_key[7:] if uri_or_key.startswith("file://") else original_path
 
         return backend, path
 
@@ -589,7 +596,8 @@ class AsyncStorageMixin(StorageMixinBase):
         elif hasattr(statement, "to_sql"):  # SQL object
             sql_obj = statement
             if parameters is not None:
-                sql_obj = sql_obj.with_parameters(parameters)
+                # Create a new SQL object with the provided parameters
+                sql_obj = SQL(statement.sql, parameters=parameters, config=config or sql_obj._config)
         else:  # sqlglot Expression
             sql_obj = SQL(statement, parameters=parameters, config=config or self.config)
 
@@ -721,7 +729,7 @@ class AsyncStorageMixin(StorageMixinBase):
             if file_format == "parquet":
                 arrow_result = await self.fetch_arrow_table(query_str)
                 arrow_table = arrow_result.data
-                await backend.write_arrow(path, arrow_table, **options)  # type: ignore[misc]
+                await backend.write_arrow_async(path, arrow_table, **options)
                 return arrow_table.num_rows
 
         return await self._export_via_backend(query_str, backend, path, file_format, **options)
@@ -748,11 +756,10 @@ class AsyncStorageMixin(StorageMixinBase):
 
         with wrap_exceptions():
             if file_format == "parquet":
-                try:
-                    arrow_table = await backend.read_arrow(path, **options)  # type: ignore[misc]
+                arrow_table = await backend.read_arrow_async(path, **options)  # type: ignore[misc]
+
+                if arrow_table is not None:
                     return await self.ingest_arrow_table(arrow_table, table_name, mode=mode)
-                except AttributeError:
-                    pass
 
         return await self._import_via_backend(backend, path, table_name, file_format, mode, **options)
 
@@ -763,32 +770,33 @@ class AsyncStorageMixin(StorageMixinBase):
     def _resolve_backend_and_path(
         self, uri_or_key: str, storage_key: "Optional[str]" = None
     ) -> "tuple[ObjectStoreProtocol, str]":
-        """Resolve backend and path from URI or key (reuse sync implementation)."""
-        original_path = uri_or_key
+        """Resolve backend and path from URI or key.
 
-        # Convert absolute paths to file:// URIs if needed
-        if self._is_uri(uri_or_key) and "://" not in uri_or_key:
-            # It's an absolute path without scheme
-            uri_or_key = f"file://{uri_or_key}"
+        Args:
+            uri_or_key: Either a URI (e.g., "s3://bucket/path") or a path to use with storage_key
+            storage_key: Optional storage backend key to use (overrides URI-based resolution)
 
-        storage_config = self._get_storage_config()
+        Returns:
+            Tuple of (backend, path) where path is relative to the backend's base path
+        """
+        if storage_key:
+            # Use the specified storage key to get backend
+            backend = self._get_storage_backend(storage_key)
+            # uri_or_key is the path in this case
+            path = uri_or_key
+        else:
+            # Treat uri_or_key as either a registered key or a URI
+            original_path = uri_or_key
 
-        if storage_config:
-            try:
-                backend = storage_registry.get(uri_or_key)
-                # For file:// URIs, return just the path part for the backend
-                path = uri_or_key[7:] if uri_or_key.startswith("file://") else original_path
+            # Convert absolute paths to file:// URIs if needed
+            if self._is_uri(uri_or_key) and "://" not in uri_or_key:
+                # It's an absolute path without scheme
+                uri_or_key = f"file://{uri_or_key}"
 
-            except (KeyError, ValueError):
-                # Key not found, will try as URI below
-                logger.debug("Key %s not found in storage config, trying as URI", uri_or_key)
-            else:
-                return backend, path
-        # Use global registry resolution
-        backend = self._get_storage_backend(storage_key or uri_or_key)
+            backend = self._get_storage_backend(uri_or_key)
 
-        # For file:// URIs, return just the path part for the backend
-        path = uri_or_key[7:] if uri_or_key.startswith("file://") else original_path
+            # For file:// URIs, return just the path part for the backend
+            path = uri_or_key[7:] if uri_or_key.startswith("file://") else original_path
 
         return backend, path
 
@@ -861,10 +869,7 @@ class AsyncStorageMixin(StorageMixinBase):
         try:
             # Upload to storage backend (async if supported)
             with wrap_exceptions():
-                try:
-                    await backend.write_bytes_async(path, tmp_path.read_bytes())
-                except AttributeError:
-                    backend.write_bytes(path, tmp_path.read_bytes())
+                await backend.write_bytes_async(path, tmp_path.read_bytes())
             return result.rows_affected or len(result.data or [])
         finally:
             tmp_path.unlink(missing_ok=True)
@@ -875,10 +880,7 @@ class AsyncStorageMixin(StorageMixinBase):
         """Async import via storage backend."""
         # Download from storage backend (async if supported)
         with wrap_exceptions():
-            try:
-                data = await backend.read_bytes_async(path)
-            except AttributeError:
-                data = backend.read_bytes(path)
+            data = await backend.read_bytes_async(path)
 
         with tempfile.NamedTemporaryFile(mode="wb", suffix=f".{format}", delete=False) as tmp:
             tmp.write(data)

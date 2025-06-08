@@ -231,7 +231,7 @@ async def test_asyncpg_driver_wrap_select_result(asyncpg_driver: AsyncpgDriver) 
     assert result.statement is statement
     assert result.column_names == ["id", "name"]
     # Data should be converted to dict format
-    assert result.num_rows == 2
+    assert result.total_count == 2
 
 
 @pytest.mark.asyncio

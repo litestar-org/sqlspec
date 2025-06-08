@@ -328,14 +328,14 @@ class TestRealAdapterDialects:
     @pytest.mark.asyncio
     async def test_asyncmy_config_dialect(self) -> None:
         """Test AsyncMy config dialect property."""
-        from sqlspec.adapters.asyncmy import AsyncMyConfig, AsyncmyDriver
+        from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
 
-        # AsyncMyConfig should have driver_class set
-        assert hasattr(AsyncMyConfig, "driver_class")
-        assert AsyncMyConfig.driver_class == AsyncmyDriver
+        # AsyncmyConfig should have driver_class set
+        assert hasattr(AsyncmyConfig, "driver_class")
+        assert AsyncmyConfig.driver_class == AsyncmyDriver
 
         # Create instance and check dialect
-        config = AsyncMyConfig(
+        config = AsyncmyConfig(
             pool_config={
                 "host": "localhost",
                 "port": 3306,

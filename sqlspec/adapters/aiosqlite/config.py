@@ -42,6 +42,19 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
     Note: Aiosqlite doesn't support connection pooling, so pool_instance is always None.
     """
 
+    __slots__ = (
+        "cached_statements",
+        "check_same_thread",
+        "database",
+        "default_row_type",
+        "detect_types",
+        "extras",
+        "isolation_level",
+        "statement_config",
+        "timeout",
+        "uri",
+    )
+
     __is_async__: ClassVar[bool] = True
     __supports_connection_pooling__: ClassVar[bool] = False
 

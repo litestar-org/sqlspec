@@ -18,13 +18,11 @@ from sqlspec.statement.sql import SQLConfig
 async def asyncmy_arrow_session(mysql_service: MySQLService) -> "AsyncGenerator[AsyncmyDriver, None]":
     """Create an AsyncMy session for Arrow testing."""
     config = AsyncmyConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.database,
-        },
+        host=mysql_service.host,
+        port=mysql_service.port,
+        user=mysql_service.user,
+        password=mysql_service.password,
+        database=mysql_service.database,
         statement_config=SQLConfig(strict_mode=False),
     )
 
@@ -71,7 +69,7 @@ async def test_asyncmy_fetch_arrow_table(asyncmy_arrow_session: AsyncmyDriver) -
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
-    actual_columns = set(result.column_names())
+    actual_columns = set(result.column_names)
     assert expected_columns.issubset(actual_columns)
 
     # Check values
@@ -241,8 +239,8 @@ async def test_asyncmy_arrow_mysql_functions(asyncmy_arrow_session: AsyncmyDrive
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 3  # Products B, C, D
-    assert "formatted_name" in result.column_names()
-    assert "price_with_tax" in result.column_names()
+    assert "formatted_name" in result.column_names
+    assert "price_with_tax" in result.column_names
 
     # Verify MySQL function results
     formatted_names = result.data["formatted_name"].to_pylist()
@@ -268,9 +266,9 @@ async def test_asyncmy_arrow_with_datetime_functions(asyncmy_arrow_session: Asyn
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 3
-    assert "date_only" in result.column_names()
-    assert "year_part" in result.column_names()
-    assert "month_part" in result.column_names()
+    assert "date_only" in result.column_names
+    assert "year_part" in result.column_names
+    assert "month_part" in result.column_names
 
     # Verify datetime extraction
     years = result.data["year_part"].to_pylist()
@@ -296,9 +294,9 @@ async def test_asyncmy_arrow_with_aggregation(asyncmy_arrow_session: AsyncmyDriv
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 2  # True and False groups
-    assert "count" in result.column_names()
-    assert "avg_value" in result.column_names()
-    assert "total_price" in result.column_names()
+    assert "count" in result.column_names
+    assert "avg_value" in result.column_names
+    assert "total_price" in result.column_names
 
     # Verify aggregation results
     counts = result.data["count"].to_pylist()
@@ -328,8 +326,8 @@ async def test_asyncmy_arrow_with_case_statements(asyncmy_arrow_session: Asyncmy
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 5
-    assert "value_category" in result.column_names()
-    assert "status" in result.column_names()
+    assert "value_category" in result.column_names
+    assert "status" in result.column_names
 
     # Verify CASE statement results
     categories = result.data["value_category"].to_pylist()

@@ -16,9 +16,11 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.telemetry import instrument_operation
 
 if TYPE_CHECKING:
+    from pyarrow import Table as ArrowTable
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.config import InstrumentationConfig
+    from sqlspec.statement.result import ArrowResult
 
 __all__ = ("DuckDBConnection", "DuckDBDriver")
 
@@ -76,7 +78,7 @@ class DuckDBDriver(
         logger = get_logger("adapters.duckdb")
         # Intentionally catch per-backend errors to allow partial registration and robust startup.
         try:
-            storage_registry.register(key, backend_config)
+            storage_registry.register(key, backend_config)  # pyright: ignore[reportCallIssue]
         except Exception as e:
             logger.warning("Failed to register storage backend '%s': %s", key, e)
 
@@ -262,3 +264,111 @@ class DuckDBDriver(
                 rows_affected=rows_affected,
                 operation_type=operation_type,
             )
+
+    # ============================================================================
+    # DuckDB Native Storage Operations (Override base implementations)
+    # ============================================================================
+
+    def _has_native_capability(self, operation: str, uri: str, format: Optional[str] = None) -> bool:  # pyright: ignore[reportIncompatibleMethodOverride]
+        """Check if DuckDB has native capability for the operation."""
+        # DuckDB has excellent native support for many formats and operations
+        if operation == "export" and format in {"parquet", "csv", "json"}:
+            return True
+        if operation == "import" and format in {"parquet", "csv", "json"}:
+            return True
+        return bool(operation == "read" and format == "parquet")
+
+    def _export_native(self, query: str, destination_uri: str, format: str, **options: Any) -> int:
+        """Use DuckDB's native COPY TO for efficient export."""
+        with instrument_operation(self, "duckdb_export_native", "database"):
+            connection = self._connection(None)
+            # Build COPY TO statement with DuckDB syntax
+            if format == "parquet":
+                copy_sql = f"COPY ({query}) TO '{destination_uri}' (FORMAT PARQUET)"
+            elif format == "csv":
+                copy_sql = f"COPY ({query}) TO '{destination_uri}' (FORMAT CSV, HEADER)"
+            elif format == "json":
+                copy_sql = f"COPY ({query}) TO '{destination_uri}' (FORMAT JSON)"
+            else:
+                msg = f"Unsupported format for DuckDB native export: {format}"
+                raise ValueError(msg)
+
+            # Execute the COPY TO statement
+            result = connection.execute(copy_sql).fetchone()
+            if result:
+                rows_exported = result[0] if isinstance(result, tuple) else 0
+                logger.debug("Exported %d rows to %s", rows_exported, destination_uri)
+                return rows_exported
+            return 0
+
+    def _import_native(self, source_uri: str, table_name: str, format: str, mode: str, **options: Any) -> int:
+        """Use DuckDB's native reading capabilities for efficient import."""
+        with instrument_operation(self, "duckdb_import_native", "database"):
+            connection = self._connection(None)
+            # Determine read function based on format
+            if format == "parquet":
+                read_func = f"read_parquet('{source_uri}')"
+            elif format == "csv":
+                read_func = f"read_csv_auto('{source_uri}')"
+            elif format == "json":
+                read_func = f"read_json_auto('{source_uri}')"
+            else:
+                msg = f"Unsupported format for DuckDB native import: {format}"
+                raise ValueError(msg)
+
+            # Handle different import modes
+            if mode == "create":
+                sql = f"CREATE TABLE {table_name} AS SELECT * FROM {read_func}"
+            elif mode == "replace":
+                sql = f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM {read_func}"
+            elif mode == "append":
+                sql = f"INSERT INTO {table_name} SELECT * FROM {read_func}"
+            else:
+                msg = f"Unsupported import mode: {mode}"
+                raise ValueError(msg)
+
+            # Execute the import
+            result = connection.execute(sql).fetchone()
+            if result:
+                rows_imported = result[0] if isinstance(result, tuple) else 0
+                logger.debug("Imported %d rows to table %s", rows_imported, table_name)
+                return rows_imported
+
+            # If no result, get count from the table
+            count_result = connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
+            return count_result[0] if count_result else 0
+
+    def _read_parquet_native(  # pyright: ignore[reportIncompatibleMethodOverride]
+        self, source_uri: str, columns: Optional[list[str]] = None, **options: Any
+    ) -> "ArrowResult":
+        """Use DuckDB's native Parquet reader that returns Arrow directly."""
+        from sqlspec.statement.result import ArrowResult
+
+        with instrument_operation(self, "duckdb_read_parquet_native", "database"):
+            connection = self._connection(None)
+            # Build column selection
+            column_list = ", ".join(columns) if columns else "*"
+
+            # DuckDB can read Parquet and return as Arrow table directly
+            query = f"SELECT {column_list} FROM read_parquet('{source_uri}')"
+            arrow_table = connection.execute(query).fetch_arrow_table()
+
+            return ArrowResult(
+                statement=SQL(query),
+                data=arrow_table,
+            )
+
+    def _write_parquet_native(self, data: Union[str, "ArrowTable"], destination_uri: str, **options: Any) -> None:
+        """Use DuckDB's native Parquet writer."""
+        with instrument_operation(self, "duckdb_write_parquet_native", "database"):
+            connection = self._connection(None)
+            if isinstance(data, str):
+                # Direct query to Parquet
+                copy_sql = f"COPY ({data}) TO '{destination_uri}' (FORMAT PARQUET)"
+                connection.execute(copy_sql)
+            else:
+                # Arrow table to Parquet
+                # Register the Arrow table as a view, then copy to Parquet
+                connection.register("arrow_data", data)
+                connection.execute(f"COPY arrow_data TO '{destination_uri}' (FORMAT PARQUET)")
+                connection.unregister("arrow_data")

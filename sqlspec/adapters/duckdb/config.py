@@ -107,6 +107,48 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
     - Performance optimizations for analytics workloads
     """
 
+    __slots__ = (
+        "allow_community_extensions",
+        "allow_persistent_secrets",
+        "allow_unsigned_extensions",
+        "arrow_large_buffer_size",
+        "autoinstall_extension_repository",
+        "autoinstall_known_extensions",
+        "autoload_known_extensions",
+        "binary_as_string",
+        "checkpoint_threshold",
+        "config",
+        "custom_extension_repository",
+        "database",
+        "default_null_order",
+        "default_order",
+        "default_row_type",
+        "enable_external_access",
+        "enable_external_file_cache",
+        "enable_logging",
+        "enable_object_cache",
+        "enable_progress_bar",
+        "errors_as_json",
+        "extension_directory",
+        "extensions",
+        "extras",
+        "ieee_floating_point_ops",
+        "log_query_path",
+        "logging_level",
+        "max_temp_directory_size",
+        "memory_limit",
+        "on_connection_create",
+        "parquet_metadata_cache",
+        "preserve_insertion_order",
+        "progress_bar_time",
+        "read_only",
+        "secret_directory",
+        "secrets",
+        "statement_config",
+        "temp_directory",
+        "threads",
+    )
+
     __is_async__: ClassVar[bool] = False
     __supports_connection_pooling__: ClassVar[bool] = False
 
@@ -340,17 +382,33 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
     @property
     def connection_config_dict(self) -> dict[str, Any]:
         """Return the connection configuration as a dict for duckdb.connect()."""
-        # Gather non-None connection parameters
-        config = {
-            field: getattr(self, field)
-            for field in CONNECTION_FIELDS
-            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
-        }
+        # DuckDB connect() only accepts database, read_only, and config parameters
+        connect_params: dict[str, Any] = {}
 
-        # Merge extras parameters
-        config.update(self.extras)
+        # Set database if provided
+        if hasattr(self, "database") and self.database is not None and self.database is not Empty:
+            connect_params["database"] = self.database
 
-        return config
+        # Set read_only if provided
+        if hasattr(self, "read_only") and self.read_only is not None and self.read_only is not Empty:
+            connect_params["read_only"] = self.read_only
+
+        # All other parameters go into the config dict
+        config_dict = {}
+        for field in CONNECTION_FIELDS:
+            if field not in {"database", "read_only", "config"}:
+                value = getattr(self, field, None)
+                if value is not None and value is not Empty:
+                    config_dict[field] = value
+
+        # Add extras to config dict
+        config_dict.update(self.extras)
+
+        # If we have config parameters, add them
+        if config_dict:
+            connect_params["config"] = config_dict
+
+        return connect_params
 
     def create_connection(self) -> DuckDBConnection:
         """Create and return a DuckDB connection with intelligent configuration applied."""
@@ -499,6 +557,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                 driver = self.driver_type(
                     connection=connection,
                     config=statement_config,
+                    instrumentation_config=self.instrumentation,
                 )
                 yield driver
 

@@ -5,22 +5,20 @@ from collections.abc import Generator
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
-from sqlspec.adapters.psycopg import PsycopgConfig, PsycopgDriver
+from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQLConfig
 
 
 @pytest.fixture
-def psycopg_batch_session(postgres_service: PostgresService) -> "Generator[PsycopgDriver, None, None]":
+def psycopg_batch_session(postgres_service: PostgresService) -> "Generator[PsycopgSyncDriver, None, None]":
     """Create a Psycopg session for batch operation testing."""
-    config = PsycopgConfig(
-        connection_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "dbname": postgres_service.database,
-        },
+    config = PsycopgSyncConfig(
+        host=postgres_service.host,
+        port=postgres_service.port,
+        user=postgres_service.user,
+        password=postgres_service.password,
+        dbname=postgres_service.database,
         statement_config=SQLConfig(strict_mode=False),
     )
 
@@ -43,7 +41,7 @@ def psycopg_batch_session(postgres_service: PostgresService) -> "Generator[Psyco
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_execute_many_basic(psycopg_batch_session: PsycopgDriver) -> None:
+def test_psycopg_execute_many_basic(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test basic execute_many with Psycopg."""
     parameters = [
         ("Item 1", 100, "A"),
@@ -68,7 +66,7 @@ def test_psycopg_execute_many_basic(psycopg_batch_session: PsycopgDriver) -> Non
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_execute_many_update(psycopg_batch_session: PsycopgDriver) -> None:
+def test_psycopg_execute_many_update(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many for UPDATE operations with Psycopg."""
     # First insert some data
     psycopg_batch_session.execute_many(
@@ -102,7 +100,7 @@ def test_psycopg_execute_many_update(psycopg_batch_session: PsycopgDriver) -> No
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_execute_many_empty(psycopg_batch_session: PsycopgDriver) -> None:
+def test_psycopg_execute_many_empty(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with empty parameter list on Psycopg."""
     result = psycopg_batch_session.execute_many(
         "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)",
@@ -118,7 +116,7 @@ def test_psycopg_execute_many_empty(psycopg_batch_session: PsycopgDriver) -> Non
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_execute_many_mixed_types(psycopg_batch_session: PsycopgDriver) -> None:
+def test_psycopg_execute_many_mixed_types(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with mixed parameter types on Psycopg."""
     parameters = [
         ("String Item", 123, "CAT1"),
@@ -147,7 +145,7 @@ def test_psycopg_execute_many_mixed_types(psycopg_batch_session: PsycopgDriver) 
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_execute_many_delete(psycopg_batch_session: PsycopgDriver) -> None:
+def test_psycopg_execute_many_delete(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many for DELETE operations with Psycopg."""
     # First insert test data
     psycopg_batch_session.execute_many(
@@ -187,7 +185,7 @@ def test_psycopg_execute_many_delete(psycopg_batch_session: PsycopgDriver) -> No
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_execute_many_large_batch(psycopg_batch_session: PsycopgDriver) -> None:
+def test_psycopg_execute_many_large_batch(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with large batch size on Psycopg."""
     # Create a large batch of parameters
     large_batch = [(f"Item {i}", i * 10, f"CAT{i % 3}") for i in range(1000)]
@@ -216,7 +214,7 @@ def test_psycopg_execute_many_large_batch(psycopg_batch_session: PsycopgDriver) 
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgDriver) -> None:
+def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with SQL object on Psycopg."""
     from sqlspec.statement.sql import SQL
 
@@ -242,7 +240,7 @@ def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgDriv
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_execute_many_with_returning(psycopg_batch_session: PsycopgDriver) -> None:
+def test_psycopg_execute_many_with_returning(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with RETURNING clause on Psycopg."""
     parameters = [
         ("Return 1", 111, "RET"),
@@ -280,7 +278,7 @@ def test_psycopg_execute_many_with_returning(psycopg_batch_session: PsycopgDrive
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_execute_many_with_arrays(psycopg_batch_session: PsycopgDriver) -> None:
+def test_psycopg_execute_many_with_arrays(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with PostgreSQL array types on Psycopg."""
     # Create table with array columns
     psycopg_batch_session.execute_script("""
@@ -317,7 +315,7 @@ def test_psycopg_execute_many_with_arrays(psycopg_batch_session: PsycopgDriver) 
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_execute_many_with_json(psycopg_batch_session: PsycopgDriver) -> None:
+def test_psycopg_execute_many_with_json(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with JSON data on Psycopg."""
     # Create table with JSON column
     psycopg_batch_session.execute_script("""
@@ -354,7 +352,7 @@ def test_psycopg_execute_many_with_json(psycopg_batch_session: PsycopgDriver) ->
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_execute_many_with_upsert(psycopg_batch_session: PsycopgDriver) -> None:
+def test_psycopg_execute_many_with_upsert(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with PostgreSQL UPSERT (ON CONFLICT) on Psycopg."""
     # Create table with unique constraint
     psycopg_batch_session.execute_script("""
@@ -402,7 +400,7 @@ def test_psycopg_execute_many_with_upsert(psycopg_batch_session: PsycopgDriver) 
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_execute_many_with_copy(psycopg_batch_session: PsycopgDriver) -> None:
+def test_psycopg_execute_many_with_copy(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many efficiency compared to COPY operations on Psycopg."""
     # Test that execute_many works well alongside COPY operations
     large_batch = [(f"Copy Item {i}", i * 10, f"COPY{i % 2}") for i in range(100)]

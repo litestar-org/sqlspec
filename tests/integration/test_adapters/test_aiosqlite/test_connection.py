@@ -11,7 +11,7 @@ from sqlspec.statement.result import SQLResult
 async def test_connection() -> None:
     """Test connection components."""
     # Test direct connection
-    config = AiosqliteConfig()
+    config = AiosqliteConfig(database=":memory:")
 
     async with config.provide_connection() as conn:
         assert conn is not None

@@ -1,10 +1,21 @@
 """Performance validator for SQL query optimization."""
 
+import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 import sqlglot.expressions as exp
+from sqlglot.optimizer import (
+    eliminate_joins,
+    eliminate_subqueries,
+    merge_subqueries,
+    normalize_identifiers,
+    optimize_joins,
+    pushdown_predicates,
+    pushdown_projections,
+    simplify,
+)
 
 from sqlspec.exceptions import RiskLevel
 from sqlspec.statement.pipelines.validators.base import BaseValidator, ProcessorResult
@@ -12,7 +23,16 @@ from sqlspec.statement.pipelines.validators.base import BaseValidator, Processor
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
 
-__all__ = ("JoinCondition", "PerformanceAnalysis", "PerformanceConfig", "PerformanceIssue", "PerformanceValidator")
+__all__ = (
+    "JoinCondition",
+    "OptimizationOpportunity",
+    "PerformanceAnalysis",
+    "PerformanceConfig",
+    "PerformanceIssue",
+    "PerformanceValidator",
+)
+
+logger = logging.getLogger(__name__)
 
 # Constants
 DEEP_NESTING_THRESHOLD = 2
@@ -29,6 +49,12 @@ class PerformanceConfig:
     warn_on_missing_index: bool = True
     complexity_threshold: int = 50
     analyze_execution_plan: bool = False
+
+    # SQLGlot optimization analysis
+    enable_optimization_analysis: bool = True
+    suggest_optimizations: bool = True
+    optimization_threshold: float = 0.2  # 20% potential improvement to flag
+    max_optimization_attempts: int = 3
 
 
 @dataclass
@@ -51,6 +77,18 @@ class JoinCondition:
     right_table: str
     condition: "Optional[exp.Expression]"
     join_type: str
+
+
+@dataclass
+class OptimizationOpportunity:
+    """Represents a potential optimization for the query."""
+
+    optimization_type: str  # "join_elimination", "predicate_pushdown", etc.
+    description: str
+    potential_improvement: float  # Estimated improvement factor (0.0 to 1.0)
+    complexity_reduction: int  # Estimated complexity score reduction
+    recommendation: str
+    optimized_sql: "Optional[str]" = None
 
 
 @dataclass
@@ -80,6 +118,12 @@ class PerformanceAnalysis:
     select_star_count: int = 0
     implicit_conversions: int = 0
     non_sargable_predicates: int = 0
+
+    # SQLGlot optimization analysis
+    optimization_opportunities: "list[OptimizationOpportunity]" = field(default_factory=list)
+    original_complexity: int = 0
+    optimized_complexity: int = 0
+    potential_improvement: float = 0.0
 
 
 class PerformanceValidator(BaseValidator):
@@ -126,6 +170,13 @@ class PerformanceValidator(BaseValidator):
 
         # Single traversal for all checks
         self._analyze_expression(context.current_expression, analysis)
+
+        # Calculate baseline complexity
+        analysis.original_complexity = self._calculate_complexity(analysis)
+
+        # Perform SQLGlot optimization analysis if enabled
+        if self.config.enable_optimization_analysis:
+            self._analyze_optimization_opportunities(context.current_expression, analysis, context)
 
         # Check for cartesian products
         if self.config.warn_on_cartesian:
@@ -180,8 +231,19 @@ class PerformanceValidator(BaseValidator):
                 "total_subqueries": analysis.subquery_count,
                 "correlated_subqueries": analysis.correlated_subqueries,
             },
-            "recommendations": [issue.recommendation for issue in issues],
+            "optimization_analysis": {
+                "opportunities": [self._optimization_to_dict(opt) for opt in analysis.optimization_opportunities],
+                "original_complexity": analysis.original_complexity,
+                "optimized_complexity": analysis.optimized_complexity,
+                "potential_improvement": analysis.potential_improvement,
+                "optimization_enabled": self.config.enable_optimization_analysis,
+            },
+            "recommendations": [issue.recommendation for issue in issues]
+            + [opt.recommendation for opt in analysis.optimization_opportunities],
         }
+
+        # Store metadata in context for access by caller
+        context.set_additional_data("performance_validator", metadata)
 
         # Return result
         return self._create_result(
@@ -512,6 +574,127 @@ class PerformanceValidator(BaseValidator):
                 components.append(component)
 
         return components
+
+    def _analyze_optimization_opportunities(
+        self, expression: "exp.Expression", analysis: PerformanceAnalysis, context: "SQLProcessingContext"
+    ) -> None:
+        """Analyze query using SQLGlot optimizers to find improvement opportunities.
+
+        Args:
+            expression: The SQL expression to analyze
+            analysis: Analysis state to update
+            context: Processing context for dialect information
+        """
+        if not expression:
+            return
+
+        original_sql = expression.sql(dialect=context.dialect)
+        opportunities = []
+
+        try:
+            # Try different SQLGlot optimization strategies
+            optimizations = [
+                ("join_elimination", eliminate_joins, "Eliminate unnecessary joins"),
+                ("subquery_elimination", eliminate_subqueries, "Eliminate or merge subqueries"),
+                ("subquery_merging", merge_subqueries, "Merge subqueries into main query"),
+                ("predicate_pushdown", pushdown_predicates, "Push predicates closer to data sources"),
+                ("projection_pushdown", pushdown_projections, "Push projections down to reduce data movement"),
+                ("join_optimization", optimize_joins, "Optimize join order and conditions"),
+                ("simplification", simplify.simplify, "Simplify expressions and conditions"),
+                ("identifier_normalization", normalize_identifiers, "Normalize identifier casing"),
+            ]
+
+            best_optimized = expression.copy()
+            cumulative_improvement = 0.0
+
+            for opt_type, optimizer, description in optimizations:
+                try:
+                    # Apply the optimization
+                    optimized = optimizer(expression.copy(), dialect=context.dialect)
+
+                    if optimized is None:
+                        continue
+
+                    optimized_sql = optimized.sql(dialect=context.dialect)
+
+                    # Skip if no changes made
+                    if optimized_sql == original_sql:
+                        continue
+
+                    # Calculate complexity before and after
+                    original_temp_analysis = PerformanceAnalysis()
+                    optimized_temp_analysis = PerformanceAnalysis()
+
+                    self._analyze_expression(expression, original_temp_analysis)
+                    self._analyze_expression(optimized, optimized_temp_analysis)
+
+                    original_complexity = self._calculate_complexity(original_temp_analysis)
+                    optimized_complexity = self._calculate_complexity(optimized_temp_analysis)
+
+                    # Calculate improvement factor
+                    if original_complexity > 0:
+                        improvement = (original_complexity - optimized_complexity) / original_complexity
+                    else:
+                        improvement = 0.0
+
+                    # Only add if improvement meets threshold
+                    if improvement >= self.config.optimization_threshold:
+                        opportunities.append(
+                            OptimizationOpportunity(
+                                optimization_type=opt_type,
+                                description=f"{description} (complexity reduction: {original_complexity - optimized_complexity})",
+                                potential_improvement=improvement,
+                                complexity_reduction=original_complexity - optimized_complexity,
+                                recommendation=f"Apply {opt_type}: {description.lower()}",
+                                optimized_sql=optimized_sql,
+                            )
+                        )
+
+                        # Update the best optimization if this is better
+                        if improvement > cumulative_improvement:
+                            best_optimized = optimized
+                            cumulative_improvement = improvement
+
+                except Exception as e:
+                    # Optimization failed, log and continue with next one
+                    logger.debug("SQLGlot optimization failed: %s", e)
+                    continue
+
+            # Calculate final optimized complexity
+            if opportunities:
+                optimized_analysis = PerformanceAnalysis()
+                self._analyze_expression(best_optimized, optimized_analysis)
+                analysis.optimized_complexity = self._calculate_complexity(optimized_analysis)
+                analysis.potential_improvement = cumulative_improvement
+            else:
+                analysis.optimized_complexity = analysis.original_complexity
+                analysis.potential_improvement = 0.0
+
+            analysis.optimization_opportunities = opportunities
+
+        except Exception:
+            # If optimization analysis fails completely, just skip it
+            analysis.optimization_opportunities = []
+            analysis.optimized_complexity = analysis.original_complexity
+            analysis.potential_improvement = 0.0
+
+    def _optimization_to_dict(self, optimization: OptimizationOpportunity) -> "dict[str, Any]":
+        """Convert OptimizationOpportunity to dictionary.
+
+        Args:
+            optimization: The optimization opportunity
+
+        Returns:
+            Dictionary representation
+        """
+        return {
+            "optimization_type": optimization.optimization_type,
+            "description": optimization.description,
+            "potential_improvement": optimization.potential_improvement,
+            "complexity_reduction": optimization.complexity_reduction,
+            "recommendation": optimization.recommendation,
+            "optimized_sql": optimization.optimized_sql,
+        }
 
     def _issue_to_dict(self, issue: PerformanceIssue) -> "dict[str, Any]":
         """Convert PerformanceIssue to dictionary.

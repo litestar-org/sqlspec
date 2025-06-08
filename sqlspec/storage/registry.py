@@ -9,6 +9,7 @@ This module provides a flexible, lazy-loading storage registry that supports:
 - Instrumentation integration
 """
 
+# TODO: TRY300 - Review try-except patterns for else block opportunities
 import logging
 from pathlib import Path
 from typing import Any, Optional, TypeVar, Union
@@ -219,14 +220,14 @@ class StorageRegistry:
         if backend_type == "obstore":
             try:
                 from sqlspec.storage.backends.obstore import ObStoreBackend
-
-                return ObStoreBackend
             except ImportError as e:
                 # ObStore not available, raise MissingDependencyError
                 from sqlspec.exceptions import MissingDependencyError
 
                 msg = "obstore"
                 raise MissingDependencyError(msg) from e
+            else:
+                return ObStoreBackend
         elif backend_type == "fsspec":
             from sqlspec.storage.backends.fsspec import FSSpecBackend
 
@@ -246,7 +247,7 @@ class StorageRegistry:
             Backend instance
         """
         backend_cls = self._get_backend_class(backend_type)
-        return backend_cls(uri)
+        return backend_cls(uri)  # type: ignore[call-arg]
 
     # Utility methods
     def is_registered(self, key: str) -> bool:

@@ -29,7 +29,7 @@ def mock_psycopg_sync_connection() -> Mock:
     mock_cursor.execute.return_value = None
     mock_cursor.executemany.return_value = None
     mock_cursor.fetchall.return_value = []
-    mock_cursor.description = []
+    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
     mock_cursor.rowcount = 0
     mock_cursor.statusmessage = "EXECUTE"
     return mock_connection
@@ -45,7 +45,7 @@ def mock_psycopg_async_connection() -> AsyncMock:
     mock_cursor.execute.return_value = None
     mock_cursor.executemany.return_value = None
     mock_cursor.fetchall.return_value = []
-    mock_cursor.description = []
+    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
     mock_cursor.rowcount = 0
     mock_cursor.statusmessage = "EXECUTE"
     return mock_connection
@@ -190,7 +190,7 @@ def test_psycopg_sync_driver_execute_statement_select(
     """Test Psycopg sync driver _execute_statement for SELECT statements."""
     mock_cursor = MagicMock()
     mock_cursor.fetchall.return_value = [{"id": 1, "name": "test"}]
-    mock_cursor.description = [Mock(name="id"), Mock(name="name")]
+    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
     mock_psycopg_sync_connection.cursor = MagicMock(return_value=mock_cursor)
     mock_cursor.__enter__.return_value = mock_cursor
     mock_cursor.__exit__.return_value = None
@@ -218,7 +218,7 @@ async def test_psycopg_async_driver_to_parquet(
 ) -> None:
     """Test to_parquet writes correct data to a Parquet file (async)."""
     mock_cursor = mock_psycopg_async_connection.cursor.return_value.__aenter__.return_value
-    mock_cursor.description = [Mock(name="id"), Mock(name="name")]
+    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
     mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
     statement = SQL("SELECT id, name FROM users")
     called = {}

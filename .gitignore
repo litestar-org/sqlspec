@@ -37,3 +37,4 @@ tmp/
 *.log
 .bugs
 .tmp
+.todos

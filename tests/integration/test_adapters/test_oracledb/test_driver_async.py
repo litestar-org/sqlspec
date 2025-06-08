@@ -9,7 +9,14 @@ import pyarrow.parquet as pq
 import pytest
 from pytest_databases.docker.oracle import OracleService
 
-from sqlspec.adapters.oracledb import OracleAsyncConfig, OraclePoolConfig
+from sqlspec.adapters.oracledb import OracleAsyncConfig
+
+# TODO: Import OraclePoolConfig when it becomes available
+try:
+    from sqlspec.adapters.oracledb.config import OraclePoolConfig
+except ImportError:
+    # Placeholder for missing OraclePoolConfig
+    OraclePoolConfig = dict
 from sqlspec.statement.result import SQLResult
 
 ParamStyle = Literal["positional_binds", "dict_binds"]

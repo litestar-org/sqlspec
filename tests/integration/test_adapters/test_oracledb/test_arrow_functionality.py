@@ -3,60 +3,59 @@
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
-from unittest.mock import Mock
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from pytest_databases.docker.oracle import OracleService
 
-from sqlspec.adapters.oracledb import OracleDbConfig, OracleDbDriver
+from sqlspec.adapters.oracledb import OracleSyncConfig, OracleSyncDriver
 from sqlspec.statement.result import ArrowResult
 from sqlspec.statement.sql import SQLConfig
 
 
 @pytest.fixture
-def oracledb_arrow_session() -> "Generator[OracleDbDriver, None, None]":
-    """Create an OracleDB session for Arrow testing."""
-    # Mock OracleDB connection for testing since Oracle requires complex setup
-    mock_connection = Mock()
-    mock_cursor = Mock()
-    mock_connection.cursor.return_value.__enter__.return_value = mock_cursor
-    mock_cursor.fetchall.return_value = [
-        (1, "Product A", 100, 19.99, 1),
-        (2, "Product B", 200, 29.99, 1),
-        (3, "Product C", 300, 39.99, 0),
-        (4, "Product D", 400, 49.99, 1),
-        (5, "Product E", 500, 59.99, 0),
-    ]
-    mock_cursor.description = [
-        ("ID", None),
-        ("NAME", None),
-        ("VALUE", None),
-        ("PRICE", None),
-        ("IS_ACTIVE", None),
-        ("CREATED_AT", None),
-    ]
+def oracledb_arrow_session(oracle_23ai_service: OracleService) -> "Generator[OracleSyncDriver, None, None]":
+    """Create an OracleDB session for Arrow testing using real Oracle service."""
 
-    config = OracleDbConfig(
-        connection_config={
-            "user": "test_user",
-            "password": "test_password",
-            "dsn": "localhost:1521/XE",
-        },
+    config = OracleSyncConfig(
+        host=oracle_23ai_service.host,
+        port=oracle_23ai_service.port,
+        service_name=oracle_23ai_service.service_name,
+        user=oracle_23ai_service.user,
+        password=oracle_23ai_service.password,
         statement_config=SQLConfig(strict_mode=False),
     )
 
-    # Replace the connection creation to use our mock
-    config.create_connection = lambda: mock_connection
-
     with config.provide_session() as session:
+        # Set up test data
+        session.execute_script("""
+            CREATE TABLE test_arrow_data_data (
+                id NUMBER,
+                name VARCHAR2(100),
+                value NUMBER,
+                price NUMBER(10,2),
+                is_active NUMBER(1)
+            )
+        """)
+
+        session.execute_script("""
+            INSERT ALL
+                INTO test_arrow_data_data VALUES (1, 'Product A', 100, 19.99, 1)
+                INTO test_arrow_data_data VALUES (2, 'Product B', 200, 29.99, 1)
+                INTO test_arrow_data_data VALUES (3, 'Product C', 300, 39.99, 0)
+                INTO test_arrow_data_data VALUES (4, 'Product D', 400, 49.99, 1)
+                INTO test_arrow_data_data VALUES (5, 'Product E', 500, 59.99, 0)
+            SELECT * FROM DUAL
+        """)
+
         yield session
 
 
-@pytest.mark.skip(reason="OracleDB tests require actual Oracle instance or more complex mocking")
-def test_oracledb_fetch_arrow_table(oracledb_arrow_session: OracleDbDriver) -> None:
+@pytest.mark.xdist_group("oracle")
+def test_oracledb_fetch_arrow_table(oracledb_arrow_session: OracleSyncDriver) -> None:
     """Test fetch_arrow_table method with OracleDB."""
-    result = oracledb_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow ORDER BY id")
+    result = oracledb_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow_data ORDER BY id")
 
     assert isinstance(result, ArrowResult)
     assert isinstance(result, ArrowResult)
@@ -65,7 +64,7 @@ def test_oracledb_fetch_arrow_table(oracledb_arrow_session: OracleDbDriver) -> N
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
-    actual_columns = set(result.column_names())
+    actual_columns = set(result.column_names)
     assert expected_columns.issubset(actual_columns)
 
     # Check values
@@ -74,14 +73,14 @@ def test_oracledb_fetch_arrow_table(oracledb_arrow_session: OracleDbDriver) -> N
     assert "Product E" in names
 
 
-@pytest.mark.skip(reason="OracleDB tests require actual Oracle instance or more complex mocking")
-def test_oracledb_to_parquet(oracledb_arrow_session: OracleDbDriver) -> None:
+@pytest.mark.xdist_group("oracle")
+def test_oracledb_to_parquet(oracledb_arrow_session: OracleSyncDriver) -> None:
     """Test to_parquet export with OracleDB."""
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir) / "test_output.parquet"
 
         oracledb_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE is_active = 1",
+            "SELECT * FROM test_arrow_data WHERE is_active = 1",
             str(output_path),
         )
 
@@ -97,11 +96,11 @@ def test_oracledb_to_parquet(oracledb_arrow_session: OracleDbDriver) -> None:
         assert "Product C" not in names  # Inactive product
 
 
-@pytest.mark.skip(reason="OracleDB tests require actual Oracle instance or more complex mocking")
-def test_oracledb_arrow_with_parameters(oracledb_arrow_session: OracleDbDriver) -> None:
+@pytest.mark.xdist_group("oracle")
+def test_oracledb_arrow_with_parameters(oracledb_arrow_session: OracleSyncDriver) -> None:
     """Test fetch_arrow_table with parameters on OracleDB."""
     result = oracledb_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE value >= :min_val AND value <= :max_val ORDER BY value",
+        "SELECT * FROM test_arrow_data WHERE value >= :min_val AND value <= :max_val ORDER BY value",
         {"min_val": 200, "max_val": 400},
     )
 
@@ -111,11 +110,11 @@ def test_oracledb_arrow_with_parameters(oracledb_arrow_session: OracleDbDriver) 
     assert values == [200, 300, 400]
 
 
-@pytest.mark.skip(reason="OracleDB tests require actual Oracle instance or more complex mocking")
-def test_oracledb_arrow_empty_result(oracledb_arrow_session: OracleDbDriver) -> None:
+@pytest.mark.xdist_group("oracle")
+def test_oracledb_arrow_empty_result(oracledb_arrow_session: OracleSyncDriver) -> None:
     """Test fetch_arrow_table with empty result on OracleDB."""
     result = oracledb_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE value > :threshold",
+        "SELECT * FROM test_arrow_data WHERE value > :threshold",
         {"threshold": 1000},
     )
 
@@ -124,10 +123,10 @@ def test_oracledb_arrow_empty_result(oracledb_arrow_session: OracleDbDriver) -> 
     assert result.data.num_columns >= 5  # Schema should still be present
 
 
-@pytest.mark.skip(reason="OracleDB tests require actual Oracle instance or more complex mocking")
-def test_oracledb_arrow_data_types(oracledb_arrow_session: OracleDbDriver) -> None:
+@pytest.mark.xdist_group("oracle")
+def test_oracledb_arrow_data_types(oracledb_arrow_session: OracleSyncDriver) -> None:
     """Test Arrow data type mapping for OracleDB."""
-    result = oracledb_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow WHERE ROWNUM = 1")
+    result = oracledb_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow_data WHERE ROWNUM = 1")
 
     assert isinstance(result, ArrowResult)
 
@@ -145,12 +144,12 @@ def test_oracledb_arrow_data_types(oracledb_arrow_session: OracleDbDriver) -> No
     assert pa.types.is_string(result.data.schema.field("name").type)
 
 
-@pytest.mark.skip(reason="OracleDB tests require actual Oracle instance or more complex mocking")
-def test_oracledb_to_arrow_with_sql_object(oracledb_arrow_session: OracleDbDriver) -> None:
+@pytest.mark.xdist_group("oracle")
+def test_oracledb_to_arrow_with_sql_object(oracledb_arrow_session: OracleSyncDriver) -> None:
     """Test to_arrow with SQL object instead of string."""
     from sqlspec.statement.sql import SQL
 
-    sql_obj = SQL("SELECT name, value FROM test_arrow WHERE is_active = :active", parameters={"active": 1})
+    sql_obj = SQL("SELECT name, value FROM test_arrow_data WHERE is_active = :active", parameters={"active": 1})
     result = oracledb_arrow_session.fetch_arrow_table(sql_obj)
 
     assert isinstance(result, ArrowResult)
@@ -162,8 +161,8 @@ def test_oracledb_to_arrow_with_sql_object(oracledb_arrow_session: OracleDbDrive
     assert "Product C" not in names  # Inactive
 
 
-@pytest.mark.skip(reason="OracleDB tests require actual Oracle instance or more complex mocking")
-def test_oracledb_arrow_with_oracle_functions(oracledb_arrow_session: OracleDbDriver) -> None:
+@pytest.mark.xdist_group("oracle")
+def test_oracledb_arrow_with_oracle_functions(oracledb_arrow_session: OracleSyncDriver) -> None:
     """Test Arrow functionality with Oracle-specific functions."""
     result = oracledb_arrow_session.fetch_arrow_table(
         """
@@ -175,7 +174,7 @@ def test_oracledb_arrow_with_oracle_functions(oracledb_arrow_session: OracleDbDr
             ROUND(price * 1.1, 2) as price_with_tax,
             ROW_NUMBER() OVER (ORDER BY value) as row_num,
             SYSDATE as query_time
-        FROM test_arrow
+        FROM test_arrow_data
         WHERE value BETWEEN :min_val AND :max_val
         ORDER BY value
     """,
@@ -184,10 +183,10 @@ def test_oracledb_arrow_with_oracle_functions(oracledb_arrow_session: OracleDbDr
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 3  # Products B, C, D
-    assert "name_upper" in result.column_names()
-    assert "price_with_tax" in result.column_names()
-    assert "row_num" in result.column_names()
-    assert "query_time" in result.column_names()
+    assert "name_upper" in result.column_names
+    assert "price_with_tax" in result.column_names
+    assert "row_num" in result.column_names
+    assert "query_time" in result.column_names
 
     # Verify Oracle function results
     upper_names = result.data["name_upper"].to_pylist()
@@ -197,8 +196,8 @@ def test_oracledb_arrow_with_oracle_functions(oracledb_arrow_session: OracleDbDr
     assert row_nums == [1, 2, 3]  # Sequential row numbers
 
 
-@pytest.mark.skip(reason="OracleDB tests require actual Oracle instance or more complex mocking")
-def test_oracledb_arrow_with_hierarchical_queries(oracledb_arrow_session: OracleDbDriver) -> None:
+@pytest.mark.xdist_group("oracle")
+def test_oracledb_arrow_with_hierarchical_queries(oracledb_arrow_session: OracleSyncDriver) -> None:
     """Test Arrow functionality with Oracle hierarchical queries."""
     # Create a hierarchical table structure
     oracledb_arrow_session.execute_script("""
@@ -237,9 +236,9 @@ def test_oracledb_arrow_with_hierarchical_queries(oracledb_arrow_session: Oracle
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 5
-    assert "hierarchy_level" in result.column_names()
-    assert "path" in result.column_names()
-    assert "is_leaf" in result.column_names()
+    assert "hierarchy_level" in result.column_names
+    assert "path" in result.column_names
+    assert "is_leaf" in result.column_names
 
     # Verify hierarchical query results
     levels = result.data["hierarchy_level"].to_pylist()
@@ -250,8 +249,8 @@ def test_oracledb_arrow_with_hierarchical_queries(oracledb_arrow_session: Oracle
     assert any("/Electronics" in path for path in paths)
 
 
-@pytest.mark.skip(reason="OracleDB tests require actual Oracle instance or more complex mocking")
-def test_oracledb_arrow_with_analytical_functions(oracledb_arrow_session: OracleDbDriver) -> None:
+@pytest.mark.xdist_group("oracle")
+def test_oracledb_arrow_with_analytical_functions(oracledb_arrow_session: OracleSyncDriver) -> None:
     """Test Arrow functionality with Oracle analytical functions."""
     result = oracledb_arrow_session.fetch_arrow_table("""
         SELECT
@@ -265,17 +264,17 @@ def test_oracledb_arrow_with_analytical_functions(oracledb_arrow_session: Oracle
             LEAD(value, 1) OVER (ORDER BY id) as next_value,
             FIRST_VALUE(value) OVER (ORDER BY id ROWS UNBOUNDED PRECEDING) as first_value,
             LAST_VALUE(value) OVER (ORDER BY id ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) as last_value
-        FROM test_arrow
+        FROM test_arrow_data
         ORDER BY id
     """)
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 5
-    assert "value_rank" in result.column_names()
-    assert "price_rank" in result.column_names()
-    assert "value_tercile" in result.column_names()
-    assert "prev_value" in result.column_names()
-    assert "next_value" in result.column_names()
+    assert "value_rank" in result.column_names
+    assert "price_rank" in result.column_names
+    assert "value_tercile" in result.column_names
+    assert "prev_value" in result.column_names
+    assert "next_value" in result.column_names
 
     # Verify analytical function results
     ranks = result.data["value_rank"].to_pylist()
@@ -285,8 +284,8 @@ def test_oracledb_arrow_with_analytical_functions(oracledb_arrow_session: Oracle
     assert set(terciles) == {1, 2, 3}  # Should have all three terciles
 
 
-@pytest.mark.skip(reason="OracleDB tests require actual Oracle instance or more complex mocking")
-def test_oracledb_arrow_with_pivot_operations(oracledb_arrow_session: OracleDbDriver) -> None:
+@pytest.mark.xdist_group("oracle")
+def test_oracledb_arrow_with_pivot_operations(oracledb_arrow_session: OracleSyncDriver) -> None:
     """Test Arrow functionality with Oracle PIVOT operations."""
     result = oracledb_arrow_session.fetch_arrow_table("""
         SELECT * FROM (
@@ -296,7 +295,7 @@ def test_oracledb_arrow_with_pivot_operations(oracledb_arrow_session: OracleDbDr
                      ELSE 'High' END as value_category,
                 is_active,
                 price
-            FROM test_arrow
+            FROM test_arrow_data
         )
         PIVOT (
             SUM(price) as total_price,
@@ -310,7 +309,7 @@ def test_oracledb_arrow_with_pivot_operations(oracledb_arrow_session: OracleDbDr
     assert result.num_rows() >= 1  # At least one category
 
     # Check for pivot columns
-    column_names = result.column_names()
+    column_names = result.column_names
     assert "value_category" in column_names
 
     # Verify pivot result structure
@@ -318,8 +317,8 @@ def test_oracledb_arrow_with_pivot_operations(oracledb_arrow_session: OracleDbDr
     assert any(cat in ["Low", "Medium", "High"] for cat in categories)
 
 
-@pytest.mark.skip(reason="OracleDB tests require actual Oracle instance or more complex mocking")
-def test_oracledb_parquet_export_with_clob_handling(oracledb_arrow_session: OracleDbDriver) -> None:
+@pytest.mark.xdist_group("oracle")
+def test_oracledb_parquet_export_with_clob_handling(oracledb_arrow_session: OracleSyncDriver) -> None:
     """Test Parquet export with CLOB data handling."""
     # Create table with CLOB column
     oracledb_arrow_session.execute_script("""

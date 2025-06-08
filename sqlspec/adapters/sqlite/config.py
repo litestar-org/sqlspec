@@ -36,6 +36,20 @@ __all__ = ("CONNECTION_FIELDS", "SqliteConfig", "sqlite3")
 class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
     """Configuration for SQLite database connections with direct field-based configuration."""
 
+    __slots__ = (
+        "cached_statements",
+        "check_same_thread",
+        "database",
+        "default_row_type",
+        "detect_types",
+        "extras",
+        "factory",
+        "isolation_level",
+        "statement_config",
+        "timeout",
+        "uri",
+    )
+
     __is_async__: ClassVar[bool] = False
     __supports_connection_pooling__: ClassVar[bool] = False
 

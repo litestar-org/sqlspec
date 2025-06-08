@@ -8,6 +8,15 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Optional
 
 from sqlglot import exp
+from sqlglot.expressions import (
+    EQ,
+    Binary,
+    Func,
+    Literal,
+    Or,
+    Subquery,
+    Union,
+)
 
 from sqlspec.exceptions import RiskLevel
 from sqlspec.statement.pipelines.base import ProcessorProtocol, ValidationResult
@@ -16,6 +25,11 @@ if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 __all__ = ("SecurityIssue", "SecurityIssueType", "SecurityValidator", "SecurityValidatorConfig")
+
+# Constants for magic values
+MAX_FUNCTION_ARGS = 10
+MAX_NESTING_LEVELS = 5
+MIN_UNION_COUNT_FOR_INJECTION = 2
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +44,8 @@ class SecurityIssueType(Enum):
     TAUTOLOGY = auto()
     SUSPICIOUS_KEYWORD = auto()
     COMBINED_ATTACK = auto()
+    AST_ANOMALY = auto()  # New: AST-based detection
+    STRUCTURAL_ATTACK = auto()  # New: Structural analysis
 
 
 @dataclass
@@ -43,6 +59,8 @@ class SecurityIssue:
     pattern_matched: Optional[str] = None
     recommendation: Optional[str] = None
     metadata: "dict[str, Any]" = field(default_factory=dict)
+    ast_node_type: Optional[str] = None  # New: AST node type for AST-based detection
+    confidence: float = 1.0  # New: Confidence level (0.0 to 1.0)
 
 
 @dataclass
@@ -54,24 +72,30 @@ class SecurityValidatorConfig:
     check_tautology: bool = True
     check_keywords: bool = True
     check_combined_patterns: bool = True
+    check_ast_anomalies: bool = True  # New: AST-based anomaly detection
+    check_structural_attacks: bool = True  # New: Structural attack detection
 
     # Risk levels
     default_risk_level: "RiskLevel" = RiskLevel.HIGH
     injection_risk_level: "RiskLevel" = RiskLevel.HIGH
     tautology_risk_level: "RiskLevel" = RiskLevel.MEDIUM
     keyword_risk_level: "RiskLevel" = RiskLevel.MEDIUM
+    ast_anomaly_risk_level: "RiskLevel" = RiskLevel.MEDIUM
 
     # Thresholds
     max_union_count: int = 3
     max_null_padding: int = 5
     max_system_tables: int = 2
+    max_nesting_depth: int = 5  # New: Maximum nesting depth
+    max_literal_length: int = 1000  # New: Maximum literal length
+    min_confidence_threshold: float = 0.7  # New: Minimum confidence for reporting
 
     # Allowed/blocked lists
     allowed_functions: "list[str]" = field(default_factory=list)
     blocked_functions: "list[str]" = field(default_factory=list)
     allowed_system_schemas: "list[str]" = field(default_factory=list)
 
-    # Custom patterns
+    # Custom patterns (legacy support)
     custom_injection_patterns: "list[str]" = field(default_factory=list)
     custom_suspicious_patterns: "list[str]" = field(default_factory=list)
 
@@ -174,18 +198,23 @@ class SecurityValidator(ProcessorProtocol[exp.Expression]):
         visited_nodes: set[int] = set()
 
         # Single AST traversal for all security checks
+        nesting_depth = 0
         for node in context.current_expression.walk():
             node_id = id(node)
             if node_id in visited_nodes:
                 continue
             visited_nodes.add(node_id)
 
-            # Check injection patterns
+            # Track nesting depth
+            if isinstance(node, (Subquery, exp.Select)):
+                nesting_depth += 1
+
+            # Check injection patterns (enhanced AST-based)
             if self.config.check_injection:
                 injection_issues = self._check_injection_patterns(node, context)
                 security_issues.extend(injection_issues)
 
-            # Check tautology conditions
+            # Check tautology conditions (enhanced)
             if self.config.check_tautology:
                 tautology_issues = self._check_tautology_patterns(node, context)
                 security_issues.extend(tautology_issues)
@@ -194,6 +223,16 @@ class SecurityValidator(ProcessorProtocol[exp.Expression]):
             if self.config.check_keywords:
                 keyword_issues = self._check_suspicious_keywords(node, context)
                 security_issues.extend(keyword_issues)
+
+            # New: Check AST anomalies
+            if self.config.check_ast_anomalies:
+                anomaly_issues = self._check_ast_anomalies(node, context, nesting_depth)
+                security_issues.extend(anomaly_issues)
+
+            # New: Check structural attacks
+            if self.config.check_structural_attacks:
+                structural_issues = self._check_structural_attacks(node, context)
+                security_issues.extend(structural_issues)
 
         # Check combined attack patterns
         if self.config.check_combined_patterns and security_issues:
@@ -245,6 +284,47 @@ class SecurityValidator(ProcessorProtocol[exp.Expression]):
                 },
             },
         )
+
+        # Filter issues by confidence threshold
+        filtered_issues = [
+            issue for issue in security_issues if issue.confidence >= self.config.min_confidence_threshold
+        ]
+
+        # Update validation result with filtered issues
+        if filtered_issues != security_issues:
+            # Re-determine risk level with filtered issues
+            risk_level = RiskLevel.SKIP
+            if filtered_issues:
+                risk_level = max(issue.risk_level for issue in filtered_issues)
+
+            validation_result = ValidationResult(
+                is_safe=(risk_level == RiskLevel.SKIP),
+                risk_level=risk_level,
+                issues=[issue.description for issue in filtered_issues],
+            )
+
+            # Update metadata with filtered issues
+            context.set_additional_data(
+                "security_validator",
+                {
+                    "security_issues": filtered_issues,
+                    "total_issues_found": len(security_issues),
+                    "issues_after_confidence_filter": len(filtered_issues),
+                    "confidence_threshold": self.config.min_confidence_threshold,
+                    "checks_performed": [
+                        "injection" if self.config.check_injection else None,
+                        "tautology" if self.config.check_tautology else None,
+                        "keywords" if self.config.check_keywords else None,
+                        "combined" if self.config.check_combined_patterns else None,
+                        "ast_anomalies" if self.config.check_ast_anomalies else None,
+                        "structural" if self.config.check_structural_attacks else None,
+                    ],
+                    "issue_breakdown": {
+                        issue_type.name: sum(1 for issue in filtered_issues if issue.issue_type == issue_type)
+                        for issue_type in SecurityIssueType
+                    },
+                },
+            )
 
         return context.current_expression, validation_result
 
@@ -631,3 +711,272 @@ class SecurityValidator(ProcessorProtocol[exp.Expression]):
             )
 
         return combined_issues
+
+    def _check_ast_anomalies(
+        self, node: "exp.Expression", context: "SQLProcessingContext", nesting_depth: int
+    ) -> "list[SecurityIssue]":
+        """Check for AST-based anomalies that could indicate injection attempts.
+
+        This method uses sophisticated AST analysis instead of regex patterns.
+        """
+        issues: list[SecurityIssue] = []
+
+        # Check for excessive nesting (potential injection)
+        if nesting_depth > self.config.max_nesting_depth:
+            issues.append(
+                SecurityIssue(
+                    issue_type=SecurityIssueType.AST_ANOMALY,
+                    risk_level=self.config.ast_anomaly_risk_level,
+                    description=f"Excessive query nesting detected (depth: {nesting_depth})",
+                    location=node.sql()[:100] if hasattr(node, "sql") else str(node)[:100],
+                    pattern_matched="excessive_nesting",
+                    recommendation="Review query structure for potential injection",
+                    ast_node_type=type(node).__name__,
+                    confidence=0.8,
+                    metadata={"nesting_depth": nesting_depth, "max_allowed": self.config.max_nesting_depth},
+                )
+            )
+
+        # Check for suspiciously long literals (potential injection payload)
+        if isinstance(node, Literal) and isinstance(node.this, str):
+            literal_length = len(str(node.this))
+            if literal_length > self.config.max_literal_length:
+                issues.append(
+                    SecurityIssue(
+                        issue_type=SecurityIssueType.AST_ANOMALY,
+                        risk_level=self.config.ast_anomaly_risk_level,
+                        description=f"Suspiciously long literal detected ({literal_length} chars)",
+                        location=str(node.this)[:100],
+                        pattern_matched="long_literal",
+                        recommendation="Validate input length and content",
+                        ast_node_type="Literal",
+                        confidence=0.6,
+                        metadata={"literal_length": literal_length, "max_allowed": self.config.max_literal_length},
+                    )
+                )
+
+        # Check for unusual function call patterns
+        if isinstance(node, Func):
+            func_issues = self._analyze_function_anomalies(node)
+            issues.extend(func_issues)
+
+        # Check for suspicious binary operations (potential injection)
+        if isinstance(node, Binary):
+            binary_issues = self._analyze_binary_anomalies(node)
+            issues.extend(binary_issues)
+
+        return issues
+
+    def _check_structural_attacks(
+        self, node: "exp.Expression", context: "SQLProcessingContext"
+    ) -> "list[SecurityIssue]":
+        """Check for structural attack patterns using AST analysis."""
+        issues: list[SecurityIssue] = []
+
+        # Check for UNION-based injection using AST structure
+        if isinstance(node, Union):
+            union_issues = self._analyze_union_structure(node)
+            issues.extend(union_issues)
+
+        # Check for subquery injection patterns
+        if isinstance(node, Subquery):
+            subquery_issues = self._analyze_subquery_structure(node)
+            issues.extend(subquery_issues)
+
+        # Check for OR-based injection using AST structure
+        if isinstance(node, Or):
+            or_issues = self._analyze_or_structure(node)
+            issues.extend(or_issues)
+
+        return issues
+
+    def _analyze_function_anomalies(self, func_node: Func) -> "list[SecurityIssue]":
+        """Analyze function calls for anomalous patterns."""
+        issues: list[SecurityIssue] = []
+
+        if not func_node.name:
+            return issues
+
+        func_name = func_node.name.lower()
+
+        # Check for chained function calls (potential evasion)
+        if hasattr(func_node, "this") and isinstance(func_node.this, Func):
+            nested_func = func_node.this
+            if nested_func.name and nested_func.name.lower() in SUSPICIOUS_FUNCTIONS:
+                issues.append(
+                    SecurityIssue(
+                        issue_type=SecurityIssueType.AST_ANOMALY,
+                        risk_level=RiskLevel.MEDIUM,
+                        description=f"Nested suspicious function call: {nested_func.name.lower()} inside {func_name}",
+                        location=func_node.sql()[:100],
+                        pattern_matched="nested_suspicious_function",
+                        recommendation="Review nested function calls for evasion attempts",
+                        ast_node_type="Func",
+                        confidence=0.7,
+                        metadata={"outer_function": func_name, "inner_function": nested_func.name.lower()},
+                    )
+                )
+
+        # Check for unusual argument patterns
+        if hasattr(func_node, "expressions") and func_node.expressions:
+            arg_count = len(func_node.expressions)
+            if func_name in ["concat", "concat_ws"] and arg_count > MAX_FUNCTION_ARGS:
+                issues.append(
+                    SecurityIssue(
+                        issue_type=SecurityIssueType.AST_ANOMALY,
+                        risk_level=RiskLevel.MEDIUM,
+                        description=f"Excessive arguments to {func_name} function ({arg_count} args)",
+                        location=func_node.sql()[:100],
+                        pattern_matched="excessive_function_args",
+                        recommendation="Review function arguments for potential injection",
+                        ast_node_type="Func",
+                        confidence=0.6,
+                        metadata={"function": func_name, "arg_count": arg_count},
+                    )
+                )
+
+        return issues
+
+    def _analyze_binary_anomalies(self, binary_node: Binary) -> "list[SecurityIssue]":
+        """Analyze binary operations for suspicious patterns."""
+        issues: list[SecurityIssue] = []
+
+        # Check for deeply nested binary operations (potential injection)
+        depth = self._calculate_binary_depth(binary_node)
+        if depth > MAX_NESTING_LEVELS:  # Arbitrary threshold
+            issues.append(
+                SecurityIssue(
+                    issue_type=SecurityIssueType.AST_ANOMALY,
+                    risk_level=RiskLevel.LOW,
+                    description=f"Deeply nested binary operations detected (depth: {depth})",
+                    location=binary_node.sql()[:100],
+                    pattern_matched="deep_binary_nesting",
+                    recommendation="Review complex condition structures",
+                    ast_node_type="Binary",
+                    confidence=0.5,
+                    metadata={"nesting_depth": depth},
+                )
+            )
+
+        return issues
+
+    def _analyze_union_structure(self, union_node: Union) -> "list[SecurityIssue]":
+        """Analyze UNION structure for injection patterns."""
+        issues: list[SecurityIssue] = []
+
+        # Check if UNION has mismatched column counts (classic injection)
+        if hasattr(union_node, "left") and hasattr(union_node, "right"):
+            left_cols = self._count_select_columns(union_node.left)
+            right_cols = self._count_select_columns(union_node.right)
+
+            if left_cols != right_cols and left_cols > 0 and right_cols > 0:
+                issues.append(
+                    SecurityIssue(
+                        issue_type=SecurityIssueType.STRUCTURAL_ATTACK,
+                        risk_level=RiskLevel.HIGH,
+                        description=f"UNION with mismatched column counts ({left_cols} vs {right_cols})",
+                        location=union_node.sql()[:100],
+                        pattern_matched="union_column_mismatch",
+                        recommendation="UNION queries should have matching column counts",
+                        ast_node_type="Union",
+                        confidence=0.9,
+                        metadata={"left_columns": left_cols, "right_columns": right_cols},
+                    )
+                )
+
+        return issues
+
+    def _analyze_subquery_structure(self, subquery_node: Subquery) -> "list[SecurityIssue]":
+        """Analyze subquery structure for injection patterns."""
+        issues: list[SecurityIssue] = []
+
+        # Check for subqueries that return unusual patterns
+        if hasattr(subquery_node, "this") and isinstance(subquery_node.this, exp.Select):
+            select_expr = subquery_node.this
+
+            # Check if subquery selects only literals (potential injection)
+            if hasattr(select_expr, "expressions") and select_expr.expressions:
+                literal_count = sum(1 for expr in select_expr.expressions if isinstance(expr, Literal))
+                total_expressions = len(select_expr.expressions)
+
+                if literal_count == total_expressions and total_expressions > MIN_UNION_COUNT_FOR_INJECTION:
+                    issues.append(
+                        SecurityIssue(
+                            issue_type=SecurityIssueType.STRUCTURAL_ATTACK,
+                            risk_level=RiskLevel.MEDIUM,
+                            description=f"Subquery selecting only literals ({literal_count} literals)",
+                            location=subquery_node.sql()[:100],
+                            pattern_matched="literal_only_subquery",
+                            recommendation="Review subqueries that only select literal values",
+                            ast_node_type="Subquery",
+                            confidence=0.7,
+                            metadata={"literal_count": literal_count, "total_expressions": total_expressions},
+                        )
+                    )
+
+        return issues
+
+    def _analyze_or_structure(self, or_node: Or) -> "list[SecurityIssue]":
+        """Analyze OR conditions for tautology patterns."""
+        issues: list[SecurityIssue] = []
+
+        # Check for OR with tautological conditions using AST
+        if (
+            hasattr(or_node, "left")
+            and hasattr(or_node, "right")
+            and (self._is_always_true_condition(or_node.left) or self._is_always_true_condition(or_node.right))
+        ):
+            issues.append(
+                SecurityIssue(
+                    issue_type=SecurityIssueType.STRUCTURAL_ATTACK,
+                    risk_level=RiskLevel.HIGH,
+                    description="OR condition with always-true clause detected",
+                    location=or_node.sql()[:100],
+                    pattern_matched="or_tautology_ast",
+                    recommendation="Remove always-true conditions from OR clauses",
+                    ast_node_type="Or",
+                    confidence=0.95,
+                    metadata={
+                        "left_always_true": self._is_always_true_condition(or_node.left),
+                        "right_always_true": self._is_always_true_condition(or_node.right),
+                    },
+                )
+            )
+
+        return issues
+
+    def _calculate_binary_depth(self, node: Binary, depth: int = 0) -> int:
+        """Calculate the depth of nested binary operations."""
+        max_depth = depth
+
+        if hasattr(node, "left") and isinstance(node.left, Binary):
+            max_depth = max(max_depth, self._calculate_binary_depth(node.left, depth + 1))
+
+        if hasattr(node, "right") and isinstance(node.right, Binary):
+            max_depth = max(max_depth, self._calculate_binary_depth(node.right, depth + 1))
+
+        return max_depth
+
+    def _count_select_columns(self, node: "exp.Expression") -> int:
+        """Count the number of columns in a SELECT statement."""
+        if isinstance(node, exp.Select) and hasattr(node, "expressions"):
+            return len(node.expressions) if node.expressions else 0
+        return 0
+
+    def _is_always_true_condition(self, node: "exp.Expression") -> bool:
+        """Check if a condition is always true using AST analysis."""
+        # Check for literal true
+        if isinstance(node, Literal) and str(node.this).upper() in ["TRUE", "1"]:
+            return True
+
+        # Check for 1=1 or similar tautologies
+        return bool(
+            isinstance(node, EQ)
+            and hasattr(node, "left")
+            and hasattr(node, "right")
+            and (
+                isinstance(node.left, Literal)
+                and isinstance(node.right, Literal)
+                and str(node.left.this) == str(node.right.this)
+            )
+        )

@@ -41,14 +41,16 @@ def test_adbc_field_constants() -> None:
 def test_adbc_config_basic_creation() -> None:
     """Test ADBC config creation with basic parameters."""
     # Test minimal config creation
-    config = AdbcConfig(driver="adbc_driver_sqlite", uri="file::memory:?mode=memory")
-    assert config.driver == "adbc_driver_sqlite"
+    config = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory")
+    assert config.driver_name == "adbc_driver_sqlite"
     assert config.uri == "file::memory:?mode=memory"
 
     # Test with all parameters
-    config_full = AdbcConfig(driver="adbc_driver_sqlite", uri="file::memory:?mode=memory", extras={"custom": "value"})
-    assert config.driver == "adbc_driver_sqlite"
-    assert config.uri == "file::memory:?mode=memory"
+    config_full = AdbcConfig(
+        driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory", extras={"custom": "value"}
+    )
+    assert config_full.driver_name == "adbc_driver_sqlite"
+    assert config_full.uri == "file::memory:?mode=memory"
     assert config_full.extras["custom"] == "value"
 
 
@@ -56,14 +58,16 @@ def test_adbc_config_extras_handling() -> None:
     """Test ADBC config extras parameter handling."""
     # Test with explicit extras
     config = AdbcConfig(
-        driver="adbc_driver_sqlite", uri="file::memory:?mode=memory", extras={"custom_param": "value", "debug": True}
+        driver_name="adbc_driver_sqlite",
+        uri="file::memory:?mode=memory",
+        extras={"custom_param": "value", "debug": True},
     )
     assert config.extras["custom_param"] == "value"
     assert config.extras["debug"] is True
 
     # Test with kwargs going to extras
     config2 = AdbcConfig(
-        driver="adbc_driver_sqlite", uri="file::memory:?mode=memory", unknown_param="test", another_param=42
+        driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory", unknown_param="test", another_param=42
     )
     assert config2.extras["unknown_param"] == "test"
     assert config2.extras["another_param"] == 42
@@ -72,7 +76,7 @@ def test_adbc_config_extras_handling() -> None:
 def test_adbc_config_initialization() -> None:
     """Test ADBC config initialization."""
     # Test with default parameters
-    config = AdbcConfig(driver="adbc_driver_sqlite", uri="file::memory:?mode=memory")
+    config = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory")
     assert isinstance(config.statement_config, SQLConfig)
     assert isinstance(config.instrumentation, InstrumentationConfig)
 
@@ -81,7 +85,7 @@ def test_adbc_config_initialization() -> None:
     custom_instrumentation = InstrumentationConfig(log_queries=True)
 
     config = AdbcConfig(
-        driver="adbc_driver_sqlite",
+        driver_name="adbc_driver_sqlite",
         uri="file::memory:?mode=memory",
         statement_config=custom_statement_config,
         instrumentation=custom_instrumentation,
@@ -92,49 +96,55 @@ def test_adbc_config_initialization() -> None:
 
 def test_adbc_config_provide_session() -> None:
     """Test ADBC config provide_session context manager."""
-    config = AdbcConfig(driver="adbc_driver_sqlite", uri="file::memory:?mode=memory")
+    config = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory")
 
     # Test session context manager behavior
     with config.provide_session() as session:
         assert isinstance(session, AdbcDriver)
         # Check that parameter styles were set
-        assert session.config.allowed_parameter_styles == ("qmark", "numeric", "named_colon", "named_at")
+        assert session.config.allowed_parameter_styles == ("qmark", "named_colon")
         assert session.config.target_parameter_style == "qmark"
-        assert session.instrumentation_config is config.instrumentation
+        assert session.instrumentation_config == config.instrumentation
 
 
 def test_adbc_config_driver_type() -> None:
     """Test ADBC config driver_type property."""
-    config = AdbcConfig(driver="adbc_driver_sqlite", uri="file::memory:?mode=memory")
+    config = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory")
     assert config.driver_type is AdbcDriver
 
 
 def test_adbc_config_is_async() -> None:
     """Test ADBC config __is_async__ attribute."""
-    config = AdbcConfig(driver="adbc_driver_sqlite", uri="file::memory:?mode=memory")
+    config = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory")
     assert config.__is_async__ is False
     assert AdbcConfig.__is_async__ is False
 
 
 def test_adbc_config_supports_connection_pooling() -> None:
     """Test ADBC config __supports_connection_pooling__ attribute."""
-    config = AdbcConfig(driver="adbc_driver_sqlite", uri="file::memory:?mode=memory")
+    config = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory")
     assert config.__supports_connection_pooling__ is False
     assert AdbcConfig.__supports_connection_pooling__ is False
 
 
 def test_adbc_config_from_connection_config() -> None:
     """Test ADBC config from_connection_config backward compatibility."""
-    # Test basic backward compatibility
-    connection_config = {"db_kwargs": "test_db_kwargs", "driver": "test_driver", "uri": "test_uri"}
+    # Test with driver_name (modern way)
+    connection_config = {"db_kwargs": "test_db_kwargs", "driver_name": "test_driver", "uri": "test_uri"}
     config = AdbcConfig.from_connection_config(connection_config)
-    # Add specific assertions based on fields
-    assert config.extras == {}
+    assert config.driver_name == "test_driver"
+    assert config.uri == "test_uri"
+
+    # Test with driver (backward compatibility)
+    connection_config_legacy = {"db_kwargs": "test_db_kwargs", "driver": "test_driver", "uri": "test_uri"}
+    config_legacy = AdbcConfig.from_connection_config(connection_config_legacy)
+    assert config_legacy.driver_name == "test_driver"  # Should be mapped to driver_name
+    assert config_legacy.uri == "test_uri"
 
     # Test with extra parameters
     connection_config_with_extras = {
         "db_kwargs": "test_db_kwargs",
-        "driver": "test_driver",
+        "driver_name": "test_driver",
         "unknown_param": "test_value",
         "another_param": 42,
     }

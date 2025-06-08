@@ -8,8 +8,9 @@ from sqlglot import exp
 
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.driver import SyncDriverAdapterProtocol
+from sqlspec.driver.mixins._sql_translator import SQLTranslatorMixin
 from sqlspec.exceptions import SQLConversionError
-from sqlspec.statement.mixins import SQLTranslatorMixin
+from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -20,11 +21,11 @@ class MockConnection:
     pass
 
 
-class MockDriver(SyncDriverAdapterProtocol[MockConnection, DictRow], SQLTranslatorMixin[MockConnection]):
+class MockDriver(SyncDriverAdapterProtocol[MockConnection, DictRow], SQLTranslatorMixin):
     """Mock driver with SQLTranslatorMixin for testing."""
 
     dialect = "sqlite"  # Use a real dialect for testing
-    parameter_style = "qmark"
+    parameter_style: "ParameterStyle" = ParameterStyle.QMARK
 
     def _execute_statement(self, statement: Any, connection: Any = None, **kwargs: Any) -> Any:
         return {"data": []}
@@ -35,8 +36,8 @@ class MockDriver(SyncDriverAdapterProtocol[MockConnection, DictRow], SQLTranslat
     def _wrap_execute_result(self, statement: Any, result: Any, **kwargs: Any) -> Any:
         return result
 
-    def _get_placeholder_style(self) -> str:
-        return "qmark"
+    def _get_placeholder_style(self) -> "ParameterStyle":
+        return ParameterStyle.QMARK
 
 
 class MockConfig(NoPoolSyncConfig[MockConnection, MockDriver]):
@@ -50,13 +51,8 @@ class MockConfig(NoPoolSyncConfig[MockConnection, MockDriver]):
         self.connection_config = {"host": "localhost"}
         super().__init__()
 
-    @property
-    def connection_type(self) -> type[MockConnection]:
-        return MockConnection
-
-    @property
-    def driver_type(self) -> type[MockDriver]:
-        return MockDriver
+    connection_type: "type[MockConnection]" = MockConnection
+    driver_type: "type[MockDriver]" = MockDriver
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
@@ -79,7 +75,7 @@ class TestSQLTranslatorMixinWithDialect:
         assert driver.dialect == "sqlite"
 
         # Test convert_to_dialect with string SQL
-        with patch("sqlspec.statement.mixins._sql_translator.parse_one") as mock_parse:
+        with patch("sqlspec.driver.mixins._sql_translator.parse_one") as mock_parse:
             mock_expr = Mock()
             mock_expr.sql.return_value = "SELECT * FROM users"
             mock_parse.return_value = mock_expr
@@ -121,7 +117,7 @@ class TestSQLTranslatorMixinWithDialect:
         )
 
         # Test conversion to different dialect
-        with patch("sqlspec.statement.mixins._sql_translator.parse_one") as mock_parse:
+        with patch("sqlspec.driver.mixins._sql_translator.parse_one") as mock_parse:
             mock_expr = Mock()
             mock_expr.sql.return_value = "SELECT * FROM users"
             mock_parse.return_value = mock_expr
@@ -166,14 +162,14 @@ class TestSQLTranslatorMixinWithDialect:
             driver.convert_to_dialect(sql)
 
         # Test with parse error
-        with patch("sqlspec.statement.mixins._sql_translator.parse_one") as mock_parse:
+        with patch("sqlspec.driver.mixins._sql_translator.parse_one") as mock_parse:
             mock_parse.side_effect = Exception("Parse error")
 
             with pytest.raises(SQLConversionError, match="Failed to parse SQL statement"):
                 driver.convert_to_dialect("INVALID SQL")
 
         # Test with conversion error
-        with patch("sqlspec.statement.mixins._sql_translator.parse_one") as mock_parse:
+        with patch("sqlspec.driver.mixins._sql_translator.parse_one") as mock_parse:
             mock_expr = Mock()
             mock_expr.sql.side_effect = Exception("Conversion error")
             mock_parse.return_value = mock_expr
@@ -200,7 +196,7 @@ class TestSQLTranslatorMixinWithDialect:
             assert driver.dialect == dialect
 
             # Test that it uses the correct dialect
-            with patch("sqlspec.statement.mixins._sql_translator.parse_one") as mock_parse:
+            with patch("sqlspec.driver.mixins._sql_translator.parse_one") as mock_parse:
                 mock_expr = Mock()
                 mock_expr.sql.return_value = f"SELECT * FROM users -- {dialect}"
                 mock_parse.return_value = mock_expr
@@ -229,7 +225,7 @@ class TestSQLTranslatorMixinWithDialect:
         assert driver.dialect == "sqlite"
 
         # Test translation works
-        with patch("sqlspec.statement.mixins._sql_translator.parse_one") as mock_parse:
+        with patch("sqlspec.driver.mixins._sql_translator.parse_one") as mock_parse:
             mock_expr = Mock()
             mock_expr.sql.return_value = "SELECT 1"
             mock_parse.return_value = mock_expr
@@ -246,7 +242,7 @@ class TestSQLTranslatorMixinWithDialect:
             config=SQLConfig(),
         )
 
-        with patch("sqlspec.statement.mixins._sql_translator.parse_one") as mock_parse:
+        with patch("sqlspec.driver.mixins._sql_translator.parse_one") as mock_parse:
             mock_expr = Mock()
             mock_expr.sql.return_value = "SELECT * FROM users"
             mock_parse.return_value = mock_expr
@@ -276,7 +272,7 @@ class TestRealAdapterTranslatorMixin:
         assert driver.dialect == "sqlite"
 
         # Test conversion
-        with patch("sqlspec.statement.mixins._sql_translator.parse_one") as mock_parse:
+        with patch("sqlspec.driver.mixins._sql_translator.parse_one") as mock_parse:
             mock_expr = Mock()
             mock_expr.sql.return_value = "SELECT * FROM users"
             mock_parse.return_value = mock_expr

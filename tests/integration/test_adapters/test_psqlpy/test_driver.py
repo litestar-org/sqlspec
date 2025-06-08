@@ -205,8 +205,8 @@ async def test_select_methods(psqlpy_config: PsqlpyConfig) -> None:
         assert isinstance(value_result, SQLResult)
         assert value_result.data is not None
         assert len(value_result.data) == 1
-        assert value_result.column_names() is not None
-        value = value_result.data[0][value_result.column_names()[0]]
+        assert value_result.column_names is not None
+        value = value_result.data[0][value_result.column_names[0]]
         assert isinstance(value, int)
 
 
@@ -271,8 +271,8 @@ async def test_scalar_parameter_handling(psqlpy_config: PsqlpyConfig) -> None:
         assert isinstance(value_result, SQLResult)
         assert value_result.data is not None
         assert len(value_result.data) == 1
-        assert value_result.column_names() is not None
-        value = value_result.data[0][value_result.column_names()[0]]
+        assert value_result.column_names is not None
+        value = value_result.data[0][value_result.column_names[0]]
         assert isinstance(value, int)
 
         # Test select_one_or_none with scalar parameter that doesn't exist
@@ -465,7 +465,7 @@ async def test_psqlpy_fetch_arrow_table(psqlpy_config: PsqlpyConfig) -> None:
         table = result.data
         assert isinstance(table, ArrowResult)
         assert table.num_rows() == 2
-        assert set(table.column_names()) == {"name"}
+        assert set(table.column_names) == {"name"}
         names = table.column("name").to_pylist()
         assert "arrow1" in names and "arrow2" in names
 
@@ -481,6 +481,6 @@ async def test_psqlpy_to_parquet(psqlpy_config: PsqlpyConfig) -> None:
             await driver.export_to_storage(statement, tmp.name)
             table = pq.read_table(tmp.name)
             assert table.num_rows() == 2
-            assert set(table.column_names()) == {"name"}
+            assert set(table.column_names) == {"name"}
             names = table.column("name").to_pylist()
             assert "pq1" in names and "pq2" in names

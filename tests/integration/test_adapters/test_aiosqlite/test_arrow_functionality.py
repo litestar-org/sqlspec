@@ -16,9 +16,7 @@ from sqlspec.statement.sql import SQLConfig
 async def aiosqlite_arrow_session() -> "AsyncGenerator[AiosqliteDriver, None]":
     """Create an AIOSQLite session for Arrow testing."""
     config = AiosqliteConfig(
-        connection_config={
-            "database": ":memory:",
-        },
+        database=":memory:",
         statement_config=SQLConfig(strict_mode=False),
     )
 
@@ -60,7 +58,7 @@ async def test_aiosqlite_fetch_arrow_table(aiosqlite_arrow_session: AiosqliteDri
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
-    actual_columns = set(result.column_names())
+    actual_columns = set(result.column_names)
     assert expected_columns.issubset(actual_columns)
 
     # Check values
@@ -236,7 +234,7 @@ async def test_aiosqlite_arrow_with_joins(aiosqlite_arrow_session: AiosqliteDriv
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 3  # Only active products
-    assert "category_name" in result.column_names()
+    assert "category_name" in result.column_names
 
     # Verify join results
     categories = result.data["category_name"].to_pylist()
@@ -265,10 +263,10 @@ async def test_aiosqlite_arrow_with_sqlite_functions(aiosqlite_arrow_session: Ai
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 3  # Products B, C, D
-    assert "name_upper" in result.column_names()
-    assert "name_length" in result.column_names()
-    assert "price_rounded" in result.column_names()
-    assert "name_prefix" in result.column_names()
+    assert "name_upper" in result.column_names
+    assert "name_length" in result.column_names
+    assert "price_rounded" in result.column_names
+    assert "name_prefix" in result.column_names
 
     # Verify SQLite function results
     upper_names = result.data["name_upper"].to_pylist()
@@ -306,9 +304,9 @@ async def test_aiosqlite_arrow_with_cte(aiosqlite_arrow_session: AiosqliteDriver
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 3  # Only active products
-    assert "total_count" in result.column_names()
-    assert "avg_value" in result.column_names()
-    assert "value_diff" in result.column_names()
+    assert "total_count" in result.column_names
+    assert "avg_value" in result.column_names
+    assert "value_diff" in result.column_names
 
     # Verify CTE results
     total_counts = result.data["total_count"].to_pylist()

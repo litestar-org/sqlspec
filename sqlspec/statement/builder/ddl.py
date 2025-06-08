@@ -1589,13 +1589,19 @@ class CommentOnBuilder(DDLBuilder):
 
     def _create_base_expression(self) -> exp.Expression:
         if self._target_type == "TABLE" and self._table and self._comment is not None:
-            sql = f"COMMENT ON TABLE {self._table} IS '{self._comment}'"
-        elif self._target_type == "COLUMN" and self._table and self._column and self._comment is not None:
-            sql = f"COMMENT ON COLUMN {self._table}.{self._column} IS '{self._comment}'"
-        else:
-            self._raise_sql_builder_error("Must specify target and comment for COMMENT ON statement.")
-        # Use exp.Command if available, else use exp.Literal
-        return exp.Command(this=exp.Literal.string(sql)) if hasattr(exp, "Command") else exp.Literal.string(sql)
+            # Create a proper Comment expression
+            return exp.Comment(
+                this=exp.to_table(self._table), kind="TABLE", expression=exp.Literal.string(self._comment)
+            )
+        if self._target_type == "COLUMN" and self._table and self._column and self._comment is not None:
+            # Create a proper Comment expression for column
+            return exp.Comment(
+                this=exp.Column(table=self._table, this=self._column),
+                kind="COLUMN",
+                expression=exp.Literal.string(self._comment),
+            )
+        self._raise_sql_builder_error("Must specify target and comment for COMMENT ON statement.")
+        return None
 
 
 @dataclass
@@ -1619,6 +1625,9 @@ class RenameTableBuilder(DDLBuilder):
     def _create_base_expression(self) -> exp.Expression:
         if not self._old_name or not self._new_name:
             self._raise_sql_builder_error("Both old and new table names must be set for RENAME TABLE.")
+        # Create ALTER TABLE with RENAME TO action
         return exp.Alter(
-            this=exp.to_table(self._old_name), expression=exp.Literal.string(f"RENAME TO {self._new_name}")
+            this=exp.to_table(self._old_name),
+            kind="TABLE",
+            actions=[exp.AlterRename(this=exp.to_identifier(self._new_name))],
         )

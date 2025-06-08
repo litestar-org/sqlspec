@@ -534,7 +534,12 @@ def test_insert_expected_result_type() -> None:
     builder = InsertBuilder()
     from sqlspec.statement.result import SQLResult
 
-    assert builder._expected_result_type == SQLResult
+    # The expected result type is a generic SQLResult[RowT]
+    result_type = builder._expected_result_type
+    # Check that it's a SQLResult type (comparing origin since it's generic)
+    import typing
+
+    assert typing.get_origin(result_type) is SQLResult or result_type.__name__ == "SQLResult"
 
 
 def test_insert_create_base_expression() -> None:

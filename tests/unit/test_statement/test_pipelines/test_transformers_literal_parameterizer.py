@@ -297,3 +297,168 @@ class TestParameterizeLiterals:
         param_sql = param_expr.sql()
         assert "NULL" in param_sql.upper()
         assert None not in parameters
+
+    # New tests for enhanced features
+    def test_context_aware_parameterization(self) -> None:
+        """Test context-aware parameterization based on AST position."""
+        sql = """
+        SELECT
+            id,
+            name,
+            CASE
+                WHEN age > 18 THEN 'Adult'
+                ELSE 'Minor'
+            END as category
+        FROM users
+        WHERE created_at > '2023-01-01'
+        """
+
+        parameterizer = ParameterizeLiterals(placeholder_style=":name")
+        context = _create_test_context(sql)
+
+        _, _ = parameterizer.process(context)
+
+        # Check that parameters were extracted
+        parameters = parameterizer.get_parameters()
+        assert len(parameters) > 0
+
+        # Check parameter metadata
+        metadata = context.get_additional_data("parameter_metadata")
+        assert metadata is not None
+        assert len(metadata) == len(parameters)
+
+        # Verify context information is captured
+        for meta in metadata:
+            assert "context" in meta
+            assert meta["context"] in ["case_when", "where", "general", "select"]
+
+    def test_array_parameterization(self) -> None:
+        """Test parameterization of array literals."""
+        sql = "SELECT * FROM products WHERE category IN (1, 2, 3, 4, 5)"
+
+        parameterizer = ParameterizeLiterals(parameterize_arrays=True, parameterize_in_lists=True)
+        context = _create_test_context(sql)
+
+        _, _ = parameterizer.process(context)
+
+        # Should parameterize the IN list values
+        parameters = parameterizer.get_parameters()
+        assert len(parameters) == 5
+        assert parameters == [1, 2, 3, 4, 5]
+
+    def test_in_clause_size_limit(self) -> None:
+        """Test IN clause parameterization with size limits."""
+        # Small IN list (should be parameterized)
+        small_sql = "SELECT * FROM users WHERE id IN (1, 2, 3)"
+
+        parameterizer = ParameterizeLiterals(max_in_list_size=5)
+        context = _create_test_context(small_sql)
+
+        _, _ = parameterizer.process(context)
+        parameters = parameterizer.get_parameters()
+        assert len(parameters) == 3
+
+        # Large IN list (should not be parameterized)
+        large_values = ", ".join(str(i) for i in range(100))
+        large_sql = f"SELECT * FROM users WHERE id IN ({large_values})"
+
+        parameterizer = ParameterizeLiterals(max_in_list_size=50)
+        context = _create_test_context(large_sql)
+
+        _, _ = parameterizer.process(context)
+        parameters = parameterizer.get_parameters()
+        # Should not parameterize due to size limit
+        assert len(parameters) == 0
+
+    def test_preserve_in_functions(self) -> None:
+        """Test preserving literals in specific functions."""
+        sql = """
+        SELECT
+            COALESCE(name, 'Unknown') as display_name,
+            ROUND(price, 2) as rounded_price
+        FROM products
+        """
+
+        parameterizer = ParameterizeLiterals(preserve_in_functions=["COALESCE", "IFNULL"])
+        context = _create_test_context(sql)
+
+        param_expr, _ = parameterizer.process(context)
+        param_sql = param_expr.sql()
+
+        # 'Unknown' should be preserved in COALESCE
+        assert "'Unknown'" in param_sql
+
+        # 2 in ROUND should be parameterized
+        parameters = parameterizer.get_parameters()
+        assert 2 in parameters
+
+    def test_type_preservation(self) -> None:
+        """Test preservation of exact literal types."""
+        sql = """
+        SELECT * FROM accounts
+        WHERE balance = 123.456789012345
+        AND count = 42
+        AND name = 'Test'
+        """
+
+        parameterizer = ParameterizeLiterals(type_preservation=True)
+        context = _create_test_context(sql)
+
+        _, _ = parameterizer.process(context)
+
+        # Check parameter metadata for type information
+        metadata = context.get_additional_data("parameter_metadata")
+        assert metadata is not None
+
+        # Find metadata for each parameter
+        types_found = {meta["type"] for meta in metadata}
+        assert "decimal" in types_found or "float" in types_found
+        assert "integer" in types_found
+        assert "string" in types_found
+
+    def test_named_parameter_generation(self) -> None:
+        """Test generation of named parameters with context hints."""
+        sql = """
+        SELECT u.name, o.total
+        FROM users u
+        JOIN orders o ON u.id = o.user_id
+        WHERE u.status = 'active'
+        AND o.created_at > '2023-01-01'
+        """
+
+        parameterizer = ParameterizeLiterals(placeholder_style=":name")
+        context = _create_test_context(sql)
+
+        param_expr, _ = parameterizer.process(context)
+        param_sql = param_expr.sql()
+
+        # Should have context-aware parameter names
+        assert ":param_" in param_sql or ":where_param_" in param_sql
+
+        # Check metadata
+        metadata = context.get_additional_data("parameter_metadata")
+        assert metadata is not None
+
+        # Should have captured context
+        contexts = [meta["context"] for meta in metadata]
+        assert any("where" in ctx or "join" in ctx for ctx in contexts)
+
+    def test_get_parameter_metadata(self) -> None:
+        """Test retrieving parameter metadata."""
+        sql = "SELECT * FROM users WHERE age = 25 AND name = 'John'"
+
+        parameterizer = ParameterizeLiterals()
+        context = _create_test_context(sql)
+
+        _, _ = parameterizer.process(context)
+
+        # Get metadata
+        metadata = parameterizer.get_parameter_metadata()
+        assert len(metadata) == 2
+
+        # Check metadata structure
+        for meta in metadata:
+            assert "index" in meta
+            assert "type" in meta
+            assert "original_sql" in meta
+            assert "context" in meta

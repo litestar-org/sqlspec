@@ -155,38 +155,17 @@ class SelectBuilder(
         return self
 
     def build(self) -> "SafeQuery":
-        """Builds the SQL query string and parameters.
+        """Builds the SQL query string and parameters with hint injection.
 
         Returns:
             SafeQuery: A dataclass containing the SQL string and parameters.
         """
-        if self._expression is None:
-            self._raise_sql_builder_error("QueryBuilder expression not initialized.")
-        final_expression = self._expression.copy()
+        # Call parent build method which handles CTEs and optimization
+        safe_query = super().build()
 
-        if self._with_ctes:
-            if hasattr(final_expression, "with_") and callable(getattr(final_expression, "with_", None)):
-                processed_expression = final_expression
-                for alias, cte_node in self._with_ctes.items():
-                    processed_expression = processed_expression.with_(  # pyright: ignore
-                        cte_node.args["this"],  # The SELECT expression
-                        as_=alias,  # The alias
-                        copy=False,
-                    )
-                final_expression = processed_expression
-            elif isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union)):
-                ctes_for_with_expression = list(self._with_ctes.values())
-                if ctes_for_with_expression:
-                    final_expression = exp.With(expressions=ctes_for_with_expression, this=final_expression)
-            else:
-                logger.warning(
-                    "Expression type %s may not support CTEs. CTEs will not be added.",
-                    type(final_expression).__name__,
-                )
-
-        sql = final_expression.sql(dialect=self.dialect_name)
         # Inject statement-level hints as comments at the top of the SQL string
         if hasattr(self, "_hints") and self._hints:
+            sql = safe_query.sql
             statement_hints = [h["hint"] for h in self._hints if h.get("location") == "statement"]
             if statement_hints:
                 hint_comment = " ".join(f"/*+ {h} */" for h in statement_hints)
@@ -199,12 +178,16 @@ class SelectBuilder(
                 # Regex to match FROM <table> or JOIN <table> (optionally with alias)
                 import re
 
-                # FROM <table> [AS] <alias>
-                pattern_from = rf"(FROM\s+)(`?{re.escape(table)}\b)`?"
-                # JOIN <table> [AS] <alias>
-                pattern_join = rf"(JOIN\s+)(`?{re.escape(table)}\b)`?"
+                # FROM <table> [AS] <alias> - handle quotes
+                pattern_from = rf'(FROM\s+)(["`]?{re.escape(table)}\b["`]?)'
+                # JOIN <table> [AS] <alias> - handle quotes
+                pattern_join = rf'(JOIN\s+)(["`]?{re.escape(table)}\b["`]?)'
                 # Replace in FROM clause
-                sql = re.sub(pattern_from, rf"\\1/*+ {hint} */ \\2", sql, flags=re.IGNORECASE)
+                sql = re.sub(pattern_from, rf"\1/*+ {hint} */ \2", sql, flags=re.IGNORECASE)
                 # Replace in JOIN clause
-                sql = re.sub(pattern_join, rf"\\1/*+ {hint} */ \\2", sql, flags=re.IGNORECASE)
-        return SafeQuery(sql=sql, parameters=self._parameters.copy(), dialect=self.dialect_name)
+                sql = re.sub(pattern_join, rf"\1/*+ {hint} */ \2", sql, flags=re.IGNORECASE)
+
+            # Return new SafeQuery with modified SQL
+            return SafeQuery(sql=sql, parameters=safe_query.parameters, dialect=safe_query.dialect)
+
+        return safe_query

@@ -5,20 +5,25 @@ from __future__ import annotations
 import pytest
 from pytest_databases.docker.oracle import OracleService
 
-from sqlspec.adapters.oracledb import OracleAsyncConfig, OraclePoolConfig, OracleSyncConfig
+from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
+
+# TODO: Import OraclePoolConfig when it becomes available
+try:
+    from sqlspec.adapters.oracledb.config import OraclePoolConfig
+except ImportError:
+    # Placeholder for missing OraclePoolConfig
+    OraclePoolConfig = dict
 
 
 @pytest.mark.xdist_group("oracle")
 async def test_async_connection(oracle_23ai_service: OracleService) -> None:
     """Test async connection components for OracleDB."""
     async_config = OracleAsyncConfig(
-        pool_config=OraclePoolConfig(
-            host=oracle_23ai_service.host,
-            port=oracle_23ai_service.port,
-            service_name=oracle_23ai_service.service_name,
-            user=oracle_23ai_service.user,
-            password=oracle_23ai_service.password,
-        )
+        host=oracle_23ai_service.host,
+        port=oracle_23ai_service.port,
+        service_name=oracle_23ai_service.service_name,
+        user=oracle_23ai_service.user,
+        password=oracle_23ai_service.password,
     )
 
     # Test direct connection (if applicable, depends on adapter design)

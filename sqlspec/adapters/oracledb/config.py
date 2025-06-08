@@ -78,6 +78,41 @@ POOL_FIELDS = CONNECTION_FIELDS.union(
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool", OracleSyncDriver]):
     """Configuration for Oracle synchronous database connections with direct field-based configuration."""
 
+    __slots__ = (
+        "config_dir",
+        "default_row_type",
+        "dsn",
+        "edition",
+        "events",
+        "extras",
+        "getmode",
+        "homogeneous",
+        "host",
+        "increment",
+        "max",
+        "max_lifetime_session",
+        "max_sessions_per_shard",
+        "min",
+        "mode",
+        "password",
+        "ping_interval",
+        "port",
+        "retry_count",
+        "retry_delay",
+        "service_name",
+        "session_callback",
+        "sid",
+        "soda_metadata_cache",
+        "statement_config",
+        "tcp_connect_timeout",
+        "threaded",
+        "timeout",
+        "user",
+        "wait_timeout",
+        "wallet_location",
+        "wallet_password",
+    )
+
     __is_async__: ClassVar[bool] = False
     __supports_connection_pooling__: ClassVar[bool] = True
 
@@ -384,6 +419,41 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
 
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnectionPool", OracleAsyncDriver]):
     """Configuration for Oracle asynchronous database connections with direct field-based configuration."""
+
+    __slots__ = (
+        "config_dir",
+        "default_row_type",
+        "dsn",
+        "edition",
+        "events",
+        "extras",
+        "getmode",
+        "homogeneous",
+        "host",
+        "increment",
+        "max",
+        "max_lifetime_session",
+        "max_sessions_per_shard",
+        "min",
+        "mode",
+        "password",
+        "ping_interval",
+        "port",
+        "retry_count",
+        "retry_delay",
+        "service_name",
+        "session_callback",
+        "sid",
+        "soda_metadata_cache",
+        "statement_config",
+        "tcp_connect_timeout",
+        "threaded",
+        "timeout",
+        "user",
+        "wait_timeout",
+        "wallet_location",
+        "wallet_password",
+    )
 
     __is_async__: ClassVar[bool] = True
     __supports_connection_pooling__: ClassVar[bool] = True

@@ -1,5 +1,7 @@
 """Unit tests for BigQuery configuration."""
 
+from unittest.mock import MagicMock, patch
+
 from sqlspec.adapters.bigquery import CONNECTION_FIELDS, BigQueryConfig, BigQueryDriver
 from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.sql import SQLConfig
@@ -43,14 +45,14 @@ def test_bigquery_field_constants() -> None:
 def test_bigquery_config_basic_creation() -> None:
     """Test BigQuery config creation with basic parameters."""
     # Test minimal config creation
-    config = BigQueryConfig(project="test-project", dataset="test_dataset")
+    config = BigQueryConfig(project="test-project", dataset_id="test_dataset")
     assert config.project == "test-project"
-    assert config.dataset == "test_dataset"
+    assert config.dataset_id == "test_dataset"
 
     # Test with all parameters
-    config_full = BigQueryConfig(project="test-project", dataset="test_dataset", extras={"custom": "value"})
-    assert config.project == "test-project"
-    assert config.dataset == "test_dataset"
+    config_full = BigQueryConfig(project="test-project", dataset_id="test_dataset", extras={"custom": "value"})
+    assert config_full.project == "test-project"
+    assert config_full.dataset_id == "test_dataset"
     assert config_full.extras["custom"] == "value"
 
 
@@ -58,13 +60,13 @@ def test_bigquery_config_extras_handling() -> None:
     """Test BigQuery config extras parameter handling."""
     # Test with explicit extras
     config = BigQueryConfig(
-        project="test-project", dataset="test_dataset", extras={"custom_param": "value", "debug": True}
+        project="test-project", dataset_id="test_dataset", extras={"custom_param": "value", "debug": True}
     )
     assert config.extras["custom_param"] == "value"
     assert config.extras["debug"] is True
 
     # Test with kwargs going to extras
-    config2 = BigQueryConfig(project="test-project", dataset="test_dataset", unknown_param="test", another_param=42)
+    config2 = BigQueryConfig(project="test-project", dataset_id="test_dataset", unknown_param="test", another_param=42)
     assert config2.extras["unknown_param"] == "test"
     assert config2.extras["another_param"] == 42
 
@@ -72,7 +74,7 @@ def test_bigquery_config_extras_handling() -> None:
 def test_bigquery_config_initialization() -> None:
     """Test BigQuery config initialization."""
     # Test with default parameters
-    config = BigQueryConfig(project="test-project", dataset="test_dataset")
+    config = BigQueryConfig(project="test-project", dataset_id="test_dataset")
     assert isinstance(config.statement_config, SQLConfig)
     assert isinstance(config.instrumentation, InstrumentationConfig)
 
@@ -82,7 +84,7 @@ def test_bigquery_config_initialization() -> None:
 
     config = BigQueryConfig(
         project="test-project",
-        dataset="test_dataset",
+        dataset_id="test_dataset",
         statement_config=custom_statement_config,
         instrumentation=custom_instrumentation,
     )
@@ -92,33 +94,36 @@ def test_bigquery_config_initialization() -> None:
 
 def test_bigquery_config_provide_session() -> None:
     """Test BigQuery config provide_session context manager."""
-    config = BigQueryConfig(project="test-project", dataset="test_dataset")
+    config = BigQueryConfig(project="test-project", dataset_id="test_dataset")
 
-    # Test session context manager behavior
-    with config.provide_session() as session:
-        assert isinstance(session, BigQueryDriver)
-        # Check that parameter styles were set
-        assert session.config.allowed_parameter_styles == ("named_at",)
-        assert session.config.target_parameter_style == "named_at"
-        assert session.instrumentation_config is config.instrumentation
+    # Mock the connection creation to avoid requiring real credentials
+    mock_connection = MagicMock()
+    with patch.object(config, "create_connection", return_value=mock_connection):
+        # Test session context manager behavior
+        with config.provide_session() as session:
+            assert isinstance(session, BigQueryDriver)
+            # Check that parameter styles were set
+            assert session.config.allowed_parameter_styles == ("named_at",)
+            assert session.config.target_parameter_style == "named_at"
+            assert session.instrumentation_config is config.instrumentation
 
 
 def test_bigquery_config_driver_type() -> None:
     """Test BigQuery config driver_type property."""
-    config = BigQueryConfig(project="test-project", dataset="test_dataset")
+    config = BigQueryConfig(project="test-project", dataset_id="test_dataset")
     assert config.driver_type is BigQueryDriver
 
 
 def test_bigquery_config_is_async() -> None:
     """Test BigQuery config __is_async__ attribute."""
-    config = BigQueryConfig(project="test-project", dataset="test_dataset")
+    config = BigQueryConfig(project="test-project", dataset_id="test_dataset")
     assert config.__is_async__ is False
     assert BigQueryConfig.__is_async__ is False
 
 
 def test_bigquery_config_supports_connection_pooling() -> None:
     """Test BigQuery config __supports_connection_pooling__ attribute."""
-    config = BigQueryConfig(project="test-project", dataset="test_dataset")
+    config = BigQueryConfig(project="test-project", dataset_id="test_dataset")
     assert config.__supports_connection_pooling__ is False
     assert BigQueryConfig.__supports_connection_pooling__ is False
 
@@ -127,7 +132,7 @@ def test_bigquery_config_from_connection_config() -> None:
     """Test BigQuery config from_connection_config backward compatibility."""
     # Test basic backward compatibility
     connection_config = {
-        "dataset": "test_dataset",
+        "dataset_id": "test_dataset",
         "default_query_job_config": "test_default_query_job_config",
         "client_info": "test_client_info",
     }
@@ -137,7 +142,7 @@ def test_bigquery_config_from_connection_config() -> None:
 
     # Test with extra parameters
     connection_config_with_extras = {
-        "dataset": "test_dataset",
+        "dataset_id": "test_dataset",
         "default_query_job_config": "test_default_query_job_config",
         "unknown_param": "test_value",
         "another_param": 42,

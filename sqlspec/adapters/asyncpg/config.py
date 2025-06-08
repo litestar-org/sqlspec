@@ -62,6 +62,38 @@ POOL_FIELDS = CONNECTION_FIELDS.union(
 class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", AsyncpgDriver]):
     """Configuration for AsyncPG database connections using TypedDict."""
 
+    __slots__ = (
+        "command_timeout",
+        "connect_timeout",
+        "connection_class",
+        "database",
+        "default_row_type",
+        "direct_tls",
+        "dsn",
+        "extras",
+        "host",
+        "init",
+        "json_deserializer",
+        "json_serializer",
+        "loop",
+        "max_cacheable_statement_size",
+        "max_cached_statement_lifetime",
+        "max_inactive_connection_lifetime",
+        "max_queries",
+        "max_size",
+        "min_size",
+        "passfile",
+        "password",
+        "port",
+        "record_class",
+        "server_settings",
+        "setup",
+        "ssl",
+        "statement_cache_size",
+        "statement_config",
+        "user",
+    )
+
     __is_async__: ClassVar[bool] = True
     __supports_connection_pooling__: ClassVar[bool] = True
 

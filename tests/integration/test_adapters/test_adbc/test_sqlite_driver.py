@@ -21,10 +21,8 @@ from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_m
 def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session with test table."""
     config = AdbcConfig(
-        connection_config={
-            "uri": ":memory:",
-            "driver_name": "adbc_driver_sqlite.dbapi.connect",
-        },
+        uri=":memory:",
+        driver_name="adbc_driver_sqlite.dbapi.connect",
         statement_config=SQLConfig(strict_mode=False),  # Allow DDL statements for tests
     )
 
@@ -46,12 +44,7 @@ def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
 @xfail_if_driver_missing
 def test_connection() -> None:
     """Test basic ADBC SQLite connection."""
-    config = AdbcConfig(
-        connection_config={
-            "uri": ":memory:",
-            "driver_name": "adbc_driver_sqlite.dbapi.connect",
-        }
-    )
+    config = AdbcConfig(uri=":memory:", driver_name="adbc_driver_sqlite.dbapi.connect")
 
     # Test connection creation
     with config.create_connection() as conn:
@@ -426,7 +419,7 @@ def test_fetch_arrow_table(adbc_sqlite_session: AdbcDriver) -> None:
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 3
     assert result.data.num_columns == 3
-    assert result.column_names() == ["name", "age", "salary"]
+    assert result.column_names == ["name", "age", "salary"]
 
     # Verify data content
     names = result.column("name").to_pylist()
@@ -456,7 +449,7 @@ def test_to_parquet(adbc_sqlite_session: AdbcDriver) -> None:
         # Read back the Parquet file
         table = pq.read_table(tmp.name)
         assert table.num_rows() == 2
-        assert set(table.column_names()) >= {"id", "name", "value"}
+        assert set(table.column_names) >= {"id", "name", "value"}
 
         # Verify data
         data = table.to_pylist()

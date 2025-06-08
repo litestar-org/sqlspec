@@ -16,7 +16,7 @@ from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL
 from sqlspec.storage import storage_registry
-from sqlspec.storage.backends.fsspec import FsspecBackend
+from sqlspec.storage.backends.fsspec import FSSpecBackend
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -557,10 +557,10 @@ def test_bigquery_to_parquet_gcs_export(bigquery_session: BigQueryDriver, bigque
         _ = fs.ls("")
     except Exception:
         pytest.skip("GCS credentials not available for integration test.")
-    # Register FsspecBackend for the test bucket
+    # Register FSSpecBackend for the test bucket
     bucket = "sqlspec-test-bucket"  # Replace with a real test bucket
     key = f"gs://{bucket}"
-    backend = FsspecBackend(protocol="gs", base_path="", bucket=bucket)
+    backend = FSSpecBackend(protocol="gs", base_path="", bucket=bucket)
     try:
         storage_registry.register_backend(key, backend)
     except Exception:

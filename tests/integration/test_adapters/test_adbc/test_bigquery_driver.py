@@ -2,50 +2,77 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
+
 import pytest
+from pytest_databases.docker.bigquery import BigQueryService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.statement.result import SQLResult
+from sqlspec.statement.sql import SQLConfig
 
 # Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
 
 @pytest.fixture
-def adbc_bigquery_session() -> AdbcDriver:
-    """Create an ADBC BigQuery session (requires valid GCP credentials)."""
-    # Skip if not in CI environment or missing credentials
-    pytest.skip("BigQuery ADBC tests require valid GCP credentials and project setup")
-
-
-@pytest.mark.skipif(
-    "not config.getoption('--run-bigquery-tests', default=False)",
-    reason="BigQuery ADBC tests require --run-bigquery-tests flag and valid GCP credentials",
-)
-@pytest.mark.xdist_group("adbc_bigquery")
-@xfail_if_driver_missing
-def test_connection() -> None:
-    """Test basic ADBC BigQuery connection (requires valid GCP setup)."""
+def adbc_bigquery_session(bigquery_service: BigQueryService) -> Generator[AdbcDriver, None]:
+    """Create an ADBC BigQuery session using emulator."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "adbc_driver_bigquery",
-            "project_id": "test-project",  # Would need to be real
-            "dataset_id": "test_dataset",  # Would need to be real
+        driver_name="adbc_driver_bigquery",
+        project_id=bigquery_service.project,
+        dataset_id=bigquery_service.dataset,
+        # BigQuery emulator connection details
+        db_kwargs={
+            "project_id": bigquery_service.project,
+            "client_options": {"api_endpoint": f"http://{bigquery_service.host}:{bigquery_service.port}"},
+            "credentials": None,  # Use anonymous credentials for emulator
         },
+        statement_config=SQLConfig(strict_mode=False),
     )
 
-    # Since we don't have real credentials, this will fail and be xfailed
-    with config.provide_connection() as conn:
-        assert conn is not None
-
-    # Test session creation
     with config.provide_session() as session:
-        assert session is not None
-        assert isinstance(session, AdbcDriver)
-        result = session.execute("SELECT 1 as test_value")
-        assert isinstance(result, SQLResult)
-        assert result.data is not None
-        assert result.data[0]["test_value"] == 1
+        yield session
+
+
+@pytest.mark.xdist_group("bigquery")
+@xfail_if_driver_missing
+def test_bigquery_connection(adbc_bigquery_session: AdbcDriver) -> None:
+    """Test basic ADBC BigQuery connection using emulator."""
+    assert adbc_bigquery_session is not None
+    assert isinstance(adbc_bigquery_session, AdbcDriver)
+
+    # Test basic query
+    result = adbc_bigquery_session.execute("SELECT 1 as test_value")
+    assert isinstance(result, SQLResult)
+    assert result.data is not None
+    assert result.data[0]["test_value"] == 1
+
+
+@pytest.mark.xdist_group("bigquery")
+@xfail_if_driver_missing
+def test_bigquery_create_table(adbc_bigquery_session: AdbcDriver) -> None:
+    """Test creating a table with BigQuery ADBC."""
+    # Create a test table
+    adbc_bigquery_session.execute_script("""
+        CREATE OR REPLACE TABLE test_table (
+            id INT64,
+            name STRING,
+            value FLOAT64
+        )
+    """)
+
+    # Insert test data
+    adbc_bigquery_session.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "test", 123.45))
+
+    # Query the data back
+    result = adbc_bigquery_session.execute("SELECT * FROM test_table")
+    assert isinstance(result, SQLResult)
+    assert result.data is not None
+    assert len(result.data) == 1
+    assert result.data[0]["id"] == 1
+    assert result.data[0]["name"] == "test"
+    assert result.data[0]["value"] == 123.45
 
 
 @pytest.mark.skipif(
@@ -65,11 +92,9 @@ def test_basic_operations() -> None:
     # 3. Configured dataset
 
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "adbc_driver_bigquery",
-            "project_id": "test-project",  # Would need to be real
-            "dataset_id": "test_dataset",  # Would need to be real
-        },
+        driver_name="adbc_driver_bigquery",
+        project_id="test-project",  # Would need to be real
+        dataset_id="test_dataset",  # Would need to be real
     )
 
     # Since we don't have real credentials, this will fail and be xfailed
@@ -90,11 +115,9 @@ def test_basic_operations() -> None:
 def test_data_types() -> None:
     """Test BigQuery-specific data types with ADBC (requires valid GCP setup)."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "adbc_driver_bigquery",
-            "project_id": "test-project",  # Would need to be real
-            "dataset_id": "test_dataset",  # Would need to be real
-        },
+        driver_name="adbc_driver_bigquery",
+        project_id="test-project",  # Would need to be real
+        dataset_id="test_dataset",  # Would need to be real
     )
 
     with config.provide_session() as session:
@@ -132,11 +155,9 @@ def test_data_types() -> None:
 def test_bigquery_specific_features() -> None:
     """Test BigQuery-specific SQL features (requires valid GCP setup)."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "adbc_driver_bigquery",
-            "project_id": "test-project",  # Would need to be real
-            "dataset_id": "test_dataset",  # Would need to be real
-        },
+        driver_name="adbc_driver_bigquery",
+        project_id="test-project",  # Would need to be real
+        dataset_id="test_dataset",  # Would need to be real
     )
 
     with config.provide_session() as session:
@@ -184,11 +205,9 @@ def test_bigquery_specific_features() -> None:
 def test_parameterized_queries() -> None:
     """Test parameterized queries with BigQuery ADBC (requires valid GCP setup)."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "adbc_driver_bigquery",
-            "project_id": "test-project",  # Would need to be real
-            "dataset_id": "test_dataset",  # Would need to be real
-        },
+        driver_name="adbc_driver_bigquery",
+        project_id="test-project",  # Would need to be real
+        dataset_id="test_dataset",  # Would need to be real
     )
 
     with config.provide_session() as session:
@@ -225,11 +244,9 @@ def test_parameterized_queries() -> None:
 def test_bigquery_analytics_functions() -> None:
     """Test BigQuery analytics and window functions (requires valid GCP setup)."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "adbc_driver_bigquery",
-            "project_id": "test-project",  # Would need to be real
-            "dataset_id": "test_dataset",  # Would need to be real
-        },
+        driver_name="adbc_driver_bigquery",
+        project_id="test-project",  # Would need to be real
+        dataset_id="test_dataset",  # Would need to be real
     )
 
     with config.provide_session() as session:

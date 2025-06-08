@@ -9,7 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 from pytest_databases.docker.oracle import OracleService
 
-from sqlspec.adapters.oracledb import OraclePoolConfig, OracleSyncConfig
+from sqlspec.adapters.oracledb import OracleSyncConfig
 from sqlspec.statement.result import SQLResult
 
 ParamStyle = Literal["positional_binds", "dict_binds"]
@@ -21,13 +21,11 @@ ParamStyle = Literal["positional_binds", "dict_binds"]
 def oracle_sync_session(oracle_23ai_service: OracleService) -> OracleSyncConfig:
     """Create an Oracle synchronous session."""
     return OracleSyncConfig(
-        pool_config=OraclePoolConfig(
-            host=oracle_23ai_service.host,
-            port=oracle_23ai_service.port,
-            service_name=oracle_23ai_service.service_name,
-            user=oracle_23ai_service.user,
-            password=oracle_23ai_service.password,
-        )
+        host=oracle_23ai_service.host,
+        port=oracle_23ai_service.port,
+        service_name=oracle_23ai_service.service_name,
+        user=oracle_23ai_service.user,
+        password=oracle_23ai_service.password,
     )
 
 
@@ -166,8 +164,8 @@ def test_sync_select_value(oracle_sync_session: OracleSyncConfig, params: Any, s
         assert isinstance(value_result, SQLResult)
         assert value_result.data is not None
         assert len(value_result.data) == 1
-        assert value_result.column_names() is not None
-        value = value_result.data[0][value_result.column_names()[0]]
+        assert value_result.column_names is not None
+        value = value_result.data[0][value_result.column_names[0]]
         assert value == "test_value"
         driver.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
@@ -246,7 +244,7 @@ def test_sync_to_parquet(oracle_sync_session: OracleSyncConfig) -> None:
             driver.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
             table = pq.read_table(tmp.name)
             assert table.num_rows() == 2
-            assert set(table.column_names()) == {"NAME", "ID"}
+            assert set(table.column_names) == {"NAME", "ID"}
             names = table.column("NAME").to_pylist()
             assert "pq1" in names and "pq2" in names
         driver.execute_script(

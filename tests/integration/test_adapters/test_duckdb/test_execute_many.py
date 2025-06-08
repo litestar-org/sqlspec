@@ -4,18 +4,16 @@ from collections.abc import Generator
 
 import pytest
 
-from sqlspec.adapters.duckdb import DuckDbConfig, DuckDbDriver
+from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQLConfig
 
 
 @pytest.fixture
-def duckdb_batch_session() -> "Generator[DuckDbDriver, None, None]":
+def duckdb_batch_session() -> "Generator[DuckDBDriver, None, None]":
     """Create a DuckDB session for batch operation testing."""
-    config = DuckDbConfig(
-        connection_config={
-            "database": ":memory:",
-        },
+    config = DuckDBConfig(
+        database=":memory:",
         statement_config=SQLConfig(strict_mode=False),
     )
 
@@ -32,7 +30,7 @@ def duckdb_batch_session() -> "Generator[DuckDbDriver, None, None]":
         yield session
 
 
-def test_duckdb_execute_many_basic(duckdb_batch_session: DuckDbDriver) -> None:
+def test_duckdb_execute_many_basic(duckdb_batch_session: DuckDBDriver) -> None:
     """Test basic execute_many with DuckDB."""
     parameters = [
         (1, "Item 1", 100, "A"),
@@ -56,7 +54,7 @@ def test_duckdb_execute_many_basic(duckdb_batch_session: DuckDbDriver) -> None:
     assert count_result.data[0]["count"] == 5
 
 
-def test_duckdb_execute_many_update(duckdb_batch_session: DuckDbDriver) -> None:
+def test_duckdb_execute_many_update(duckdb_batch_session: DuckDBDriver) -> None:
     """Test execute_many for UPDATE operations with DuckDB."""
     # First insert some data
     duckdb_batch_session.execute_many(
@@ -89,7 +87,7 @@ def test_duckdb_execute_many_update(duckdb_batch_session: DuckDbDriver) -> None:
     assert all(row["value"] in (100, 200, 300) for row in check_result.data)
 
 
-def test_duckdb_execute_many_empty(duckdb_batch_session: DuckDbDriver) -> None:
+def test_duckdb_execute_many_empty(duckdb_batch_session: DuckDBDriver) -> None:
     """Test execute_many with empty parameter list on DuckDB."""
     result = duckdb_batch_session.execute_many(
         "INSERT INTO test_batch (id, name, value, category) VALUES (?, ?, ?, ?)",
@@ -104,7 +102,7 @@ def test_duckdb_execute_many_empty(duckdb_batch_session: DuckDbDriver) -> None:
     assert count_result.data[0]["count"] == 0
 
 
-def test_duckdb_execute_many_mixed_types(duckdb_batch_session: DuckDbDriver) -> None:
+def test_duckdb_execute_many_mixed_types(duckdb_batch_session: DuckDBDriver) -> None:
     """Test execute_many with mixed parameter types on DuckDB."""
     parameters = [
         (1, "String Item", 123, "CAT1"),
@@ -135,7 +133,7 @@ def test_duckdb_execute_many_mixed_types(duckdb_batch_session: DuckDbDriver) -> 
     assert float_result.data[0]["value"] == 78.5
 
 
-def test_duckdb_execute_many_delete(duckdb_batch_session: DuckDbDriver) -> None:
+def test_duckdb_execute_many_delete(duckdb_batch_session: DuckDBDriver) -> None:
     """Test execute_many for DELETE operations with DuckDB."""
     # First insert test data
     duckdb_batch_session.execute_many(
@@ -174,7 +172,7 @@ def test_duckdb_execute_many_delete(duckdb_batch_session: DuckDbDriver) -> None:
     assert remaining_names == ["Delete 3", "Keep 1"]
 
 
-def test_duckdb_execute_many_large_batch(duckdb_batch_session: DuckDbDriver) -> None:
+def test_duckdb_execute_many_large_batch(duckdb_batch_session: DuckDBDriver) -> None:
     """Test execute_many with large batch size on DuckDB."""
     # Create a large batch of parameters
     large_batch = [(i, f"Item {i}", i * 10, f"CAT{i % 3}") for i in range(1000)]
@@ -202,7 +200,7 @@ def test_duckdb_execute_many_large_batch(duckdb_batch_session: DuckDbDriver) -> 
     assert sample_result.data[2]["value"] == 9990  # Item 999
 
 
-def test_duckdb_execute_many_with_sql_object(duckdb_batch_session: DuckDbDriver) -> None:
+def test_duckdb_execute_many_with_sql_object(duckdb_batch_session: DuckDBDriver) -> None:
     """Test execute_many with SQL object on DuckDB."""
     from sqlspec.statement.sql import SQL
 
@@ -227,7 +225,7 @@ def test_duckdb_execute_many_with_sql_object(duckdb_batch_session: DuckDbDriver)
     assert check_result.data[0]["count"] == 3
 
 
-def test_duckdb_execute_many_with_analytics(duckdb_batch_session: DuckDbDriver) -> None:
+def test_duckdb_execute_many_with_analytics(duckdb_batch_session: DuckDBDriver) -> None:
     """Test execute_many with DuckDB analytics features."""
     # Insert data for analytics
     analytics_data = [(i, f"Analytics {i}", i * 10, f"ANAL{i % 2}") for i in range(1, 11)]
@@ -261,7 +259,7 @@ def test_duckdb_execute_many_with_analytics(duckdb_batch_session: DuckDbDriver) 
     assert anal1_data["count"] == 5  # Odd numbers: 1, 3, 5, 7, 9
 
 
-def test_duckdb_execute_many_with_arrays(duckdb_batch_session: DuckDbDriver) -> None:
+def test_duckdb_execute_many_with_arrays(duckdb_batch_session: DuckDBDriver) -> None:
     """Test execute_many with DuckDB array operations."""
     # Create table with array support
     duckdb_batch_session.execute_script("""
@@ -312,7 +310,7 @@ def test_duckdb_execute_many_with_arrays(duckdb_batch_session: DuckDbDriver) -> 
         assert check_result.data[0]["count"] == 3
 
 
-def test_duckdb_execute_many_with_time_series(duckdb_batch_session: DuckDbDriver) -> None:
+def test_duckdb_execute_many_with_time_series(duckdb_batch_session: DuckDBDriver) -> None:
     """Test execute_many with time series data on DuckDB."""
     # Create time series table
     duckdb_batch_session.execute_script("""

@@ -70,6 +70,37 @@ __all__ = (
 class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool, PsycopgSyncDriver]):
     """Configuration for Psycopg synchronous database connections with direct field-based configuration."""
 
+    __slots__ = (
+        "application_name",
+        "autocommit",
+        "configure",
+        "connect_timeout",
+        "conninfo",
+        "dbname",
+        "default_row_type",
+        "extras",
+        "host",
+        "kwargs",
+        "max_idle",
+        "max_lifetime",
+        "max_size",
+        "max_waiting",
+        "min_size",
+        "name",
+        "num_workers",
+        "options",
+        "password",
+        "port",
+        "reconnect_timeout",
+        "sslcert",
+        "sslkey",
+        "sslmode",
+        "sslrootcert",
+        "statement_config",
+        "timeout",
+        "user",
+    )
+
     __is_async__: ClassVar[bool] = False
     __supports_connection_pooling__: ClassVar[bool] = True
 
@@ -388,6 +419,37 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
 class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnectionPool, PsycopgAsyncDriver]):
     """Configuration for Psycopg asynchronous database connections with direct field-based configuration."""
+
+    __slots__ = (
+        "application_name",
+        "autocommit",
+        "configure",
+        "connect_timeout",
+        "conninfo",
+        "dbname",
+        "default_row_type",
+        "extras",
+        "host",
+        "kwargs",
+        "max_idle",
+        "max_lifetime",
+        "max_size",
+        "max_waiting",
+        "min_size",
+        "name",
+        "num_workers",
+        "options",
+        "password",
+        "port",
+        "reconnect_timeout",
+        "sslcert",
+        "sslkey",
+        "sslmode",
+        "sslrootcert",
+        "statement_config",
+        "timeout",
+        "user",
+    )
 
     __is_async__: ClassVar[bool] = True
     __supports_connection_pooling__: ClassVar[bool] = True

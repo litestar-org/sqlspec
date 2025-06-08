@@ -167,7 +167,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
         **kwargs: Any,
     ) -> "SQLResult[RowT]": ...
 
-    @overload
+    @overload  # pyright: ignore[reportOverlappingOverload]
     def execute(
         self,
         statement: "SQL",
@@ -179,7 +179,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
         **kwargs: Any,
     ) -> "SQLResult[ModelDTOT]": ...
 
-    @overload
+    @overload  # pyright: ignore[reportOverlappingOverload]
     def execute(
         self,
         statement: "SQL",

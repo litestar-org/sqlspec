@@ -1,31 +1,39 @@
+# ruff: noqa: PLR0904
 """Base class for instrumented storage backends.
 
 This module provides a base class that adds instrumentation to storage operations,
 including correlation tracking, performance monitoring, and structured logging.
+
+All concrete backends should inherit from this class to get automatic instrumentation.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.telemetry import instrument_operation
 
 if TYPE_CHECKING:
-    import pyarrow as pa
+    from collections.abc import AsyncIterator, Iterator
 
     from sqlspec.config import InstrumentationConfig
+    from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
-__all__ = ("InstrumentedStorageBackend",)
+__all__ = ("InstrumentedObjectStore",)
 
 
-class InstrumentedStorageBackend(ABC):
+class InstrumentedObjectStore(ABC):
     """Base class for instrumented storage backends.
 
     This class provides instrumentation for all storage operations,
     including logging, telemetry, and performance tracking.
+
+    All methods use 'path' terminology consistent with object store patterns.
+    Concrete implementations must provide both sync and async operations.
     """
 
     def __init__(
@@ -46,16 +54,21 @@ class InstrumentedStorageBackend(ABC):
         self.logger = get_logger(f"storage.{self.backend_name}")
 
     @property
-    @abstractmethod
     def backend_type(self) -> str:
-        """Return the backend type identifier."""
-        raise NotImplementedError
+        """Return the backend type identifier.
 
-    def read_bytes(self, uri: str, **kwargs: Any) -> bytes:
+        Default implementation uses the class name.
+        Override if you need a different identifier.
+        """
+        return self.__class__.__name__.replace("Backend", "").lower()
+
+    # Sync Operations with Instrumentation
+
+    def read_bytes(self, path: str, **kwargs: Any) -> bytes:
         """Read bytes from storage with instrumentation.
 
         Args:
-            uri: URI to read from
+            path: Path to read from
             **kwargs: Additional backend-specific options
 
         Returns:
@@ -67,30 +80,42 @@ class InstrumentedStorageBackend(ABC):
             self,
             "storage.read_bytes",
             "storage",
-            uri=uri,
+            path=path,
             backend=self.backend_type,
         ):
             if self.instrumentation_config.debug_mode:
                 self.logger.debug(
                     "Reading bytes from %s",
-                    uri,
+                    path,
                     extra={
-                        "uri": uri,
+                        "path": path,
                         "backend": self.backend_type,
                         "correlation_id": correlation_id,
                     },
                 )
 
             try:
-                data = self._read_bytes(uri, **kwargs)
-
+                data = self._read_bytes(path, **kwargs)
+            except Exception as e:
+                self.logger.exception(
+                    "Failed to read from %s",
+                    path,
+                    extra={
+                        "path": path,
+                        "backend": self.backend_type,
+                        "error_type": type(e).__name__,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                raise
+            else:
                 if self.instrumentation_config.log_service_operations:
                     self.logger.info(
                         "Read %d bytes from %s",
                         len(data),
-                        uri,
+                        path,
                         extra={
-                            "uri": uri,
+                            "path": path,
                             "size_bytes": len(data),
                             "backend": self.backend_type,
                             "correlation_id": correlation_id,
@@ -99,24 +124,11 @@ class InstrumentedStorageBackend(ABC):
 
                 return data
 
-            except Exception as e:
-                self.logger.exception(
-                    "Failed to read from %s",
-                    uri,
-                    extra={
-                        "uri": uri,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
-                raise
-
-    def write_bytes(self, uri: str, data: bytes, **kwargs: Any) -> None:
+    def write_bytes(self, path: str, data: bytes, **kwargs: Any) -> None:
         """Write bytes to storage with instrumentation.
 
         Args:
-            uri: URI to write to
+            path: Path to write to
             data: Bytes to write
             **kwargs: Additional backend-specific options
         """
@@ -126,7 +138,7 @@ class InstrumentedStorageBackend(ABC):
             self,
             "storage.write_bytes",
             "storage",
-            uri=uri,
+            path=path,
             size_bytes=len(data),
             backend=self.backend_type,
         ):
@@ -134,9 +146,9 @@ class InstrumentedStorageBackend(ABC):
                 self.logger.debug(
                     "Writing %d bytes to %s",
                     len(data),
-                    uri,
+                    path,
                     extra={
-                        "uri": uri,
+                        "path": path,
                         "size_bytes": len(data),
                         "backend": self.backend_type,
                         "correlation_id": correlation_id,
@@ -144,27 +156,13 @@ class InstrumentedStorageBackend(ABC):
                 )
 
             try:
-                self._write_bytes(uri, data, **kwargs)
-
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Wrote %d bytes to %s",
-                        len(data),
-                        uri,
-                        extra={
-                            "uri": uri,
-                            "size_bytes": len(data),
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
+                self._write_bytes(path, data, **kwargs)
             except Exception as e:
                 self.logger.exception(
                     "Failed to write to %s",
-                    uri,
+                    path,
                     extra={
-                        "uri": uri,
+                        "path": path,
                         "size_bytes": len(data),
                         "backend": self.backend_type,
                         "error_type": type(e).__name__,
@@ -172,12 +170,25 @@ class InstrumentedStorageBackend(ABC):
                     },
                 )
                 raise
+            else:
+                if self.instrumentation_config.log_service_operations:
+                    self.logger.info(
+                        "Wrote %d bytes to %s",
+                        len(data),
+                        path,
+                        extra={
+                            "path": path,
+                            "size_bytes": len(data),
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
 
-    def read_text(self, uri: str, encoding: str = "utf-8", **kwargs: Any) -> str:
+    def read_text(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from storage with instrumentation.
 
         Args:
-            uri: URI to read from
+            path: Path to read from
             encoding: Text encoding
             **kwargs: Additional backend-specific options
 
@@ -190,20 +201,33 @@ class InstrumentedStorageBackend(ABC):
             self,
             "storage.read_text",
             "storage",
-            uri=uri,
+            path=path,
             encoding=encoding,
             backend=self.backend_type,
         ):
             try:
-                text = self._read_text(uri, encoding, **kwargs)
-
+                text = self._read_text(path, encoding, **kwargs)
+            except Exception as e:
+                self.logger.exception(
+                    "Failed to read text from %s",
+                    path,
+                    extra={
+                        "path": path,
+                        "encoding": encoding,
+                        "backend": self.backend_type,
+                        "error_type": type(e).__name__,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                raise
+            else:
                 if self.instrumentation_config.log_service_operations:
                     self.logger.info(
                         "Read text from %s (%d chars)",
-                        uri,
+                        path,
                         len(text),
                         extra={
-                            "uri": uri,
+                            "path": path,
                             "char_count": len(text),
                             "encoding": encoding,
                             "backend": self.backend_type,
@@ -213,25 +237,11 @@ class InstrumentedStorageBackend(ABC):
 
                 return text
 
-            except Exception as e:
-                self.logger.exception(
-                    "Failed to read text from %s",
-                    uri,
-                    extra={
-                        "uri": uri,
-                        "encoding": encoding,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
-                raise
-
-    def write_text(self, uri: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    def write_text(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text to storage with instrumentation.
 
         Args:
-            uri: URI to write to
+            path: Path to write to
             data: Text to write
             encoding: Text encoding
             **kwargs: Additional backend-specific options
@@ -242,34 +252,19 @@ class InstrumentedStorageBackend(ABC):
             self,
             "storage.write_text",
             "storage",
-            uri=uri,
+            path=path,
             char_count=len(data),
             encoding=encoding,
             backend=self.backend_type,
         ):
             try:
-                self._write_text(uri, data, encoding, **kwargs)
-
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Wrote text to %s (%d chars)",
-                        uri,
-                        len(data),
-                        extra={
-                            "uri": uri,
-                            "char_count": len(data),
-                            "encoding": encoding,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
+                self._write_text(path, data, encoding, **kwargs)
             except Exception as e:
                 self.logger.exception(
                     "Failed to write text to %s",
-                    uri,
+                    path,
                     extra={
-                        "uri": uri,
+                        "path": path,
                         "char_count": len(data),
                         "encoding": encoding,
                         "backend": self.backend_type,
@@ -278,17 +273,31 @@ class InstrumentedStorageBackend(ABC):
                     },
                 )
                 raise
+            else:
+                if self.instrumentation_config.log_service_operations:
+                    self.logger.info(
+                        "Wrote text to %s (%d chars)",
+                        path,
+                        len(data),
+                        extra={
+                            "path": path,
+                            "char_count": len(data),
+                            "encoding": encoding,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
 
-    def list_objects(self, uri: str, recursive: bool = True, **kwargs: Any) -> list[str]:
+    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """List objects in storage with instrumentation.
 
         Args:
-            uri: URI to list
+            prefix: Path prefix to list (empty for root)
             recursive: Whether to list recursively
             **kwargs: Additional backend-specific options
 
         Returns:
-            List of object URIs
+            List of object paths
         """
         correlation_id = CorrelationContext.get()
 
@@ -296,20 +305,33 @@ class InstrumentedStorageBackend(ABC):
             self,
             "storage.list_objects",
             "storage",
-            uri=uri,
+            prefix=prefix,
             recursive=recursive,
             backend=self.backend_type,
         ):
             try:
-                objects = self._list_objects(uri, recursive, **kwargs)
-
+                objects = self._list_objects(prefix, recursive, **kwargs)
+            except Exception as e:
+                self.logger.exception(
+                    "Failed to list objects with prefix %s",
+                    prefix,
+                    extra={
+                        "prefix": prefix,
+                        "recursive": recursive,
+                        "backend": self.backend_type,
+                        "error_type": type(e).__name__,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                raise
+            else:
                 if self.instrumentation_config.log_service_operations:
                     self.logger.info(
-                        "Listed %d objects in %s",
+                        "Listed %d objects with prefix %s",
                         len(objects),
-                        uri,
+                        prefix,
                         extra={
-                            "uri": uri,
+                            "prefix": prefix,
                             "object_count": len(objects),
                             "recursive": recursive,
                             "backend": self.backend_type,
@@ -319,25 +341,11 @@ class InstrumentedStorageBackend(ABC):
 
                 return objects
 
-            except Exception as e:
-                self.logger.exception(
-                    "Failed to list objects in %s",
-                    uri,
-                    extra={
-                        "uri": uri,
-                        "recursive": recursive,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
-                raise
-
-    def exists(self, uri: str, **kwargs: Any) -> bool:
+    def exists(self, path: str, **kwargs: Any) -> bool:
         """Check if object exists with instrumentation.
 
         Args:
-            uri: URI to check
+            path: Path to check
             **kwargs: Additional backend-specific options
 
         Returns:
@@ -349,19 +357,31 @@ class InstrumentedStorageBackend(ABC):
             self,
             "storage.exists",
             "storage",
-            uri=uri,
+            path=path,
             backend=self.backend_type,
         ):
             try:
-                exists = self._exists(uri, **kwargs)
-
+                exists = self._exists(path, **kwargs)
+            except Exception as e:
+                self.logger.exception(
+                    "Failed to check existence of %s",
+                    path,
+                    extra={
+                        "path": path,
+                        "backend": self.backend_type,
+                        "error_type": type(e).__name__,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                raise
+            else:
                 if self.instrumentation_config.debug_mode:
                     self.logger.debug(
                         "Checked existence of %s: %s",
-                        uri,
+                        path,
                         exists,
                         extra={
-                            "uri": uri,
+                            "path": path,
                             "exists": exists,
                             "backend": self.backend_type,
                             "correlation_id": correlation_id,
@@ -370,24 +390,11 @@ class InstrumentedStorageBackend(ABC):
 
                 return exists
 
-            except Exception as e:
-                self.logger.exception(
-                    "Failed to check existence of %s",
-                    uri,
-                    extra={
-                        "uri": uri,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
-                raise
-
-    def delete(self, uri: str, **kwargs: Any) -> None:
+    def delete(self, path: str, **kwargs: Any) -> None:
         """Delete object with instrumentation.
 
         Args:
-            uri: URI to delete
+            path: Path to delete
             **kwargs: Additional backend-specific options
         """
         correlation_id = CorrelationContext.get()
@@ -396,41 +403,303 @@ class InstrumentedStorageBackend(ABC):
             self,
             "storage.delete",
             "storage",
-            uri=uri,
+            path=path,
             backend=self.backend_type,
         ):
             try:
-                self._delete(uri, **kwargs)
-
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Deleted %s",
-                        uri,
-                        extra={
-                            "uri": uri,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
+                self._delete(path, **kwargs)
             except Exception as e:
                 self.logger.exception(
                     "Failed to delete %s",
-                    uri,
+                    path,
                     extra={
-                        "uri": uri,
+                        "path": path,
                         "backend": self.backend_type,
                         "error_type": type(e).__name__,
                         "correlation_id": correlation_id,
                     },
                 )
                 raise
+            else:
+                if self.instrumentation_config.log_service_operations:
+                    self.logger.info(
+                        "Deleted %s",
+                        path,
+                        extra={
+                            "path": path,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
 
-    def read_arrow(self, uri: str, **kwargs: Any) -> pa.Table:
+    def copy(self, source: str, destination: str, **kwargs: Any) -> None:
+        """Copy object with instrumentation.
+
+        Args:
+            source: Source path
+            destination: Destination path
+            **kwargs: Additional backend-specific options
+        """
+        correlation_id = CorrelationContext.get()
+
+        with instrument_operation(
+            self,
+            "storage.copy",
+            "storage",
+            source=source,
+            destination=destination,
+            backend=self.backend_type,
+        ):
+            try:
+                self._copy(source, destination, **kwargs)
+            except Exception as e:
+                self.logger.exception(
+                    "Failed to copy %s to %s",
+                    source,
+                    destination,
+                    extra={
+                        "source": source,
+                        "destination": destination,
+                        "backend": self.backend_type,
+                        "error_type": type(e).__name__,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                raise
+            else:
+                if self.instrumentation_config.log_service_operations:
+                    self.logger.info(
+                        "Copied %s to %s",
+                        source,
+                        destination,
+                        extra={
+                            "source": source,
+                            "destination": destination,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+    def move(self, source: str, destination: str, **kwargs: Any) -> None:
+        """Move object with instrumentation.
+
+        Args:
+            source: Source path
+            destination: Destination path
+            **kwargs: Additional backend-specific options
+        """
+        correlation_id = CorrelationContext.get()
+
+        with instrument_operation(
+            self,
+            "storage.move",
+            "storage",
+            source=source,
+            destination=destination,
+            backend=self.backend_type,
+        ):
+            try:
+                self._move(source, destination, **kwargs)
+            except Exception as e:
+                self.logger.exception(
+                    "Failed to move %s to %s",
+                    source,
+                    destination,
+                    extra={
+                        "source": source,
+                        "destination": destination,
+                        "backend": self.backend_type,
+                        "error_type": type(e).__name__,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                raise
+            else:
+                if self.instrumentation_config.log_service_operations:
+                    self.logger.info(
+                        "Moved %s to %s",
+                        source,
+                        destination,
+                        extra={
+                            "source": source,
+                            "destination": destination,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+    def glob(self, pattern: str, **kwargs: Any) -> list[str]:
+        """Find objects matching pattern with instrumentation.
+
+        Args:
+            pattern: Glob pattern
+            **kwargs: Additional backend-specific options
+
+        Returns:
+            List of matching paths
+        """
+        correlation_id = CorrelationContext.get()
+
+        with instrument_operation(
+            self,
+            "storage.glob",
+            "storage",
+            pattern=pattern,
+            backend=self.backend_type,
+        ):
+            try:
+                matches = self._glob(pattern, **kwargs)
+            except Exception as e:
+                self.logger.exception(
+                    "Failed to glob %s",
+                    pattern,
+                    extra={
+                        "pattern": pattern,
+                        "backend": self.backend_type,
+                        "error_type": type(e).__name__,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                raise
+            else:
+                if self.instrumentation_config.log_service_operations:
+                    self.logger.info(
+                        "Found %d matches for %s",
+                        len(matches),
+                        pattern,
+                        extra={
+                            "pattern": pattern,
+                            "match_count": len(matches),
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+                return matches
+
+    def get_metadata(self, path: str, **kwargs: Any) -> dict[str, Any]:
+        """Get object metadata with instrumentation.
+
+        Args:
+            path: Path to get metadata for
+            **kwargs: Additional backend-specific options
+
+        Returns:
+            Object metadata
+        """
+        correlation_id = CorrelationContext.get()
+
+        with instrument_operation(
+            self,
+            "storage.get_metadata",
+            "storage",
+            path=path,
+            backend=self.backend_type,
+        ):
+            try:
+                metadata = self._get_metadata(path, **kwargs)
+            except Exception as e:
+                self.logger.exception(
+                    "Failed to get metadata for %s",
+                    path,
+                    extra={
+                        "path": path,
+                        "backend": self.backend_type,
+                        "error_type": type(e).__name__,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                raise
+            else:
+                if self.instrumentation_config.debug_mode:
+                    self.logger.debug(
+                        "Got metadata for %s",
+                        path,
+                        extra={
+                            "path": path,
+                            "metadata": metadata,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+                return metadata
+
+    def get_signed_url(
+        self,
+        path: str,
+        operation: Literal["read", "write"] = "read",
+        expires_in: int = 3600,
+        **kwargs: Any,
+    ) -> str:
+        """Generate signed URL with instrumentation.
+
+        Args:
+            path: Path to sign
+            operation: Operation type
+            expires_in: Expiration in seconds
+            **kwargs: Additional backend-specific options
+
+        Returns:
+            Signed URL
+        """
+        correlation_id = CorrelationContext.get()
+
+        with instrument_operation(
+            self,
+            "storage.get_signed_url",
+            "storage",
+            path=path,
+            operation=operation,
+            expires_in=expires_in,
+            backend=self.backend_type,
+        ):
+            try:
+                url = self._get_signed_url(path, operation, expires_in, **kwargs)
+            except Exception as e:
+                self.logger.exception(
+                    "Failed to get signed URL for %s",
+                    path,
+                    extra={
+                        "path": path,
+                        "operation": operation,
+                        "expires_in": expires_in,
+                        "backend": self.backend_type,
+                        "error_type": type(e).__name__,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                raise
+            else:
+                if self.instrumentation_config.log_service_operations:
+                    self.logger.info(
+                        "Generated signed URL for %s (%s)",
+                        path,
+                        operation,
+                        extra={
+                            "path": path,
+                            "operation": operation,
+                            "expires_in": expires_in,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+                return url
+
+    def is_object(self, path: str) -> bool:
+        """Check if path is an object."""
+        return self._is_object(path)
+
+    def is_path(self, path: str) -> bool:
+        """Check if path is a prefix/directory."""
+        return self._is_path(path)
+
+    def read_arrow(self, path: str, **kwargs: Any) -> ArrowTable:
         """Read Arrow table with instrumentation.
 
         Args:
-            uri: URI to read from
+            path: Path to read from
             **kwargs: Additional backend-specific options
 
         Returns:
@@ -442,19 +711,31 @@ class InstrumentedStorageBackend(ABC):
             self,
             "storage.read_arrow",
             "storage",
-            uri=uri,
+            path=path,
             backend=self.backend_type,
         ):
             try:
-                table = self._read_arrow(uri, **kwargs)
-
+                table = self._read_arrow(path, **kwargs)
+            except Exception as e:
+                self.logger.exception(
+                    "Failed to read Arrow table from %s",
+                    path,
+                    extra={
+                        "path": path,
+                        "backend": self.backend_type,
+                        "error_type": type(e).__name__,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                raise
+            else:
                 if self.instrumentation_config.log_service_operations:
                     self.logger.info(
                         "Read Arrow table from %s (%d rows)",
-                        uri,
+                        path,
                         len(table),
                         extra={
-                            "uri": uri,
+                            "path": path,
                             "row_count": len(table),
                             "column_count": len(table.columns),
                             "backend": self.backend_type,
@@ -464,24 +745,11 @@ class InstrumentedStorageBackend(ABC):
 
                 return table
 
-            except Exception as e:
-                self.logger.exception(
-                    "Failed to read Arrow table from %s",
-                    uri,
-                    extra={
-                        "uri": uri,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
-                raise
-
-    def write_arrow(self, uri: str, table: pa.Table, **kwargs: Any) -> None:
+    def write_arrow(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
         """Write Arrow table with instrumentation.
 
         Args:
-            uri: URI to write to
+            path: Path to write to
             table: Arrow table to write
             **kwargs: Additional backend-specific options
         """
@@ -491,33 +759,18 @@ class InstrumentedStorageBackend(ABC):
             self,
             "storage.write_arrow",
             "storage",
-            uri=uri,
+            path=path,
             row_count=len(table),
             backend=self.backend_type,
         ):
             try:
-                self._write_arrow(uri, table, **kwargs)
-
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Wrote Arrow table to %s (%d rows)",
-                        uri,
-                        len(table),
-                        extra={
-                            "uri": uri,
-                            "row_count": len(table),
-                            "column_count": len(table.columns),
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
+                self._write_arrow(path, table, **kwargs)
             except Exception as e:
                 self.logger.exception(
                     "Failed to write Arrow table to %s",
-                    uri,
+                    path,
                     extra={
-                        "uri": uri,
+                        "path": path,
                         "row_count": len(table),
                         "backend": self.backend_type,
                         "error_type": type(e).__name__,
@@ -525,50 +778,221 @@ class InstrumentedStorageBackend(ABC):
                     },
                 )
                 raise
+            else:
+                if self.instrumentation_config.log_service_operations:
+                    self.logger.info(
+                        "Wrote Arrow table to %s (%d rows)",
+                        path,
+                        len(table),
+                        extra={
+                            "path": path,
+                            "row_count": len(table),
+                            "column_count": len(table.columns),
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+    def stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator[ArrowRecordBatch]:
+        """Stream Arrow record batches with instrumentation.
+
+        Args:
+            pattern: Pattern to match objects
+            **kwargs: Additional backend-specific options
+
+        Yields:
+            Iterator of Arrow record batches
+        """
+        correlation_id = CorrelationContext.get()
+
+        with instrument_operation(
+            self,
+            "storage.stream_arrow",
+            "storage",
+            pattern=pattern,
+            backend=self.backend_type,
+        ):
+            if self.instrumentation_config.log_service_operations:
+                self.logger.info(
+                    "Starting Arrow stream for pattern %s",
+                    pattern,
+                    extra={
+                        "pattern": pattern,
+                        "backend": self.backend_type,
+                        "correlation_id": correlation_id,
+                    },
+                )
+
+            try:
+                yield from self._stream_arrow(pattern, **kwargs)
+            except Exception as e:
+                self.logger.exception(
+                    "Failed to stream Arrow from %s",
+                    pattern,
+                    extra={
+                        "pattern": pattern,
+                        "backend": self.backend_type,
+                        "error_type": type(e).__name__,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                raise
+
+    # Async Operations with Instrumentation
+    # Default implementations use sync-to-async conversion
+    # Backends can override for native async support
+
+    async def read_bytes_async(self, path: str, **kwargs: Any) -> bytes:
+        """Async read bytes from storage."""
+        return await async_(self.read_bytes)(path, **kwargs)
+
+    async def write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:
+        """Async write bytes to storage."""
+        await async_(self.write_bytes)(path, data, **kwargs)
+
+    async def read_text_async(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
+        """Async read text from storage."""
+        return await async_(self.read_text)(path, encoding, **kwargs)
+
+    async def write_text_async(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+        """Async write text to storage."""
+        await async_(self.write_text)(path, data, encoding, **kwargs)
+
+    async def exists_async(self, path: str, **kwargs: Any) -> bool:
+        """Async check if object exists."""
+        return await async_(self.exists)(path, **kwargs)
+
+    async def delete_async(self, path: str, **kwargs: Any) -> None:
+        """Async delete object."""
+        await async_(self.delete)(path, **kwargs)
+
+    async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
+        """Async list objects."""
+        return await async_(self.list_objects)(prefix, recursive, **kwargs)
+
+    async def copy_async(self, source: str, destination: str, **kwargs: Any) -> None:
+        """Async copy object."""
+        await async_(self.copy)(source, destination, **kwargs)
+
+    async def move_async(self, source: str, destination: str, **kwargs: Any) -> None:
+        """Async move object."""
+        await async_(self.move)(source, destination, **kwargs)
+
+    async def get_metadata_async(self, path: str, **kwargs: Any) -> dict[str, Any]:
+        """Async get object metadata."""
+        return await async_(self.get_metadata)(path, **kwargs)
+
+    async def read_arrow_async(self, path: str, **kwargs: Any) -> ArrowTable:
+        """Async read Arrow table."""
+        return await async_(self.read_arrow)(path, **kwargs)
+
+    async def write_arrow_async(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
+        """Async write Arrow table."""
+        await async_(self.write_arrow)(path, table, **kwargs)
+
+    async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
+        """Async stream Arrow record batches.
+
+        Args:
+            pattern: Pattern to match objects
+            **kwargs: Additional backend-specific options
+
+        Yields:
+            AsyncIterator of Arrow record batches
+        """
+        # Default implementation converts sync iterator to async
+        for batch in await async_(lambda: list(self.stream_arrow(pattern, **kwargs)))():
+            yield batch
 
     # Abstract methods that subclasses must implement
 
     @abstractmethod
-    def _read_bytes(self, uri: str, **kwargs: Any) -> bytes:
+    def _read_bytes(self, path: str, **kwargs: Any) -> bytes:
         """Actual implementation of read_bytes in subclasses."""
         raise NotImplementedError
 
     @abstractmethod
-    def _write_bytes(self, uri: str, data: bytes, **kwargs: Any) -> None:
+    def _write_bytes(self, path: str, data: bytes, **kwargs: Any) -> None:
         """Actual implementation of write_bytes in subclasses."""
         raise NotImplementedError
 
     @abstractmethod
-    def _read_text(self, uri: str, encoding: str = "utf-8", **kwargs: Any) -> str:
+    def _read_text(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Actual implementation of read_text in subclasses."""
         raise NotImplementedError
 
     @abstractmethod
-    def _write_text(self, uri: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    def _write_text(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Actual implementation of write_text in subclasses."""
         raise NotImplementedError
 
     @abstractmethod
-    def _list_objects(self, uri: str, recursive: bool = True, **kwargs: Any) -> list[str]:
+    def _list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """Actual implementation of list_objects in subclasses."""
         raise NotImplementedError
 
     @abstractmethod
-    def _exists(self, uri: str, **kwargs: Any) -> bool:
+    def _exists(self, path: str, **kwargs: Any) -> bool:
         """Actual implementation of exists in subclasses."""
         raise NotImplementedError
 
     @abstractmethod
-    def _delete(self, uri: str, **kwargs: Any) -> None:
+    def _delete(self, path: str, **kwargs: Any) -> None:
         """Actual implementation of delete in subclasses."""
         raise NotImplementedError
 
     @abstractmethod
-    def _read_arrow(self, uri: str, **kwargs: Any) -> pa.Table:
+    def _copy(self, source: str, destination: str, **kwargs: Any) -> None:
+        """Actual implementation of copy in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _move(self, source: str, destination: str, **kwargs: Any) -> None:
+        """Actual implementation of move in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _glob(self, pattern: str, **kwargs: Any) -> list[str]:
+        """Actual implementation of glob in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _get_metadata(self, path: str, **kwargs: Any) -> dict[str, Any]:
+        """Actual implementation of get_metadata in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _get_signed_url(
+        self,
+        path: str,
+        operation: Literal["read", "write"] = "read",
+        expires_in: int = 3600,
+        **kwargs: Any,
+    ) -> str:
+        """Actual implementation of get_signed_url in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _is_object(self, path: str) -> bool:
+        """Actual implementation of is_object in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _is_path(self, path: str) -> bool:
+        """Actual implementation of is_path in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _read_arrow(self, path: str, **kwargs: Any) -> ArrowTable:
         """Actual implementation of read_arrow in subclasses."""
         raise NotImplementedError
 
     @abstractmethod
-    def _write_arrow(self, uri: str, table: pa.Table, **kwargs: Any) -> None:
+    def _write_arrow(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
         """Actual implementation of write_arrow in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator[ArrowRecordBatch]:
+        """Actual implementation of stream_arrow in subclasses."""
         raise NotImplementedError

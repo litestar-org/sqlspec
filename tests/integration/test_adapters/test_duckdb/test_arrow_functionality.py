@@ -8,18 +8,16 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from sqlspec.adapters.duckdb import DuckDbConfig, DuckDbDriver
+from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.statement.result import ArrowResult
 from sqlspec.statement.sql import SQLConfig
 
 
 @pytest.fixture
-def duckdb_arrow_session() -> "Generator[DuckDbDriver, None, None]":
+def duckdb_arrow_session() -> "Generator[DuckDBDriver, None, None]":
     """Create a DuckDB session for Arrow testing."""
-    config = DuckDbConfig(
-        connection_config={
-            "database": ":memory:",
-        },
+    config = DuckDBConfig(
+        database=":memory:",
         statement_config=SQLConfig(strict_mode=False),
     )
 
@@ -49,7 +47,7 @@ def duckdb_arrow_session() -> "Generator[DuckDbDriver, None, None]":
         yield session
 
 
-def test_duckdb_fetch_arrow_table(duckdb_arrow_session: DuckDbDriver) -> None:
+def test_duckdb_fetch_arrow_table(duckdb_arrow_session: DuckDBDriver) -> None:
     """Test fetch_arrow_table method with DuckDB."""
     result = duckdb_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow ORDER BY id")
 
@@ -59,7 +57,7 @@ def test_duckdb_fetch_arrow_table(duckdb_arrow_session: DuckDbDriver) -> None:
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
-    actual_columns = set(result.column_names())
+    actual_columns = set(result.column_names)
     assert expected_columns.issubset(actual_columns)
 
     # Check values
@@ -72,7 +70,7 @@ def test_duckdb_fetch_arrow_table(duckdb_arrow_session: DuckDbDriver) -> None:
     assert "Product E" in names
 
 
-def test_duckdb_to_parquet(duckdb_arrow_session: DuckDbDriver) -> None:
+def test_duckdb_to_parquet(duckdb_arrow_session: DuckDBDriver) -> None:
     """Test to_parquet export with DuckDB."""
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir) / "test_output.parquet"
@@ -94,7 +92,7 @@ def test_duckdb_to_parquet(duckdb_arrow_session: DuckDbDriver) -> None:
         assert "Product C" not in names  # Inactive product
 
 
-def test_duckdb_arrow_with_parameters(duckdb_arrow_session: DuckDbDriver) -> None:
+def test_duckdb_arrow_with_parameters(duckdb_arrow_session: DuckDBDriver) -> None:
     """Test fetch_arrow_table with parameters on DuckDB."""
     result = duckdb_arrow_session.fetch_arrow_table(
         "SELECT * FROM test_arrow WHERE value >= ? AND value <= ? ORDER BY value",
@@ -107,7 +105,7 @@ def test_duckdb_arrow_with_parameters(duckdb_arrow_session: DuckDbDriver) -> Non
     assert values == [200, 300, 400]
 
 
-def test_duckdb_arrow_empty_result(duckdb_arrow_session: DuckDbDriver) -> None:
+def test_duckdb_arrow_empty_result(duckdb_arrow_session: DuckDBDriver) -> None:
     """Test fetch_arrow_table with empty result on DuckDB."""
     result = duckdb_arrow_session.fetch_arrow_table(
         "SELECT * FROM test_arrow WHERE value > ?",
@@ -119,7 +117,7 @@ def test_duckdb_arrow_empty_result(duckdb_arrow_session: DuckDbDriver) -> None:
     assert result.num_columns() >= 5  # Schema should still be present
 
 
-def test_duckdb_arrow_data_types(duckdb_arrow_session: DuckDbDriver) -> None:
+def test_duckdb_arrow_data_types(duckdb_arrow_session: DuckDBDriver) -> None:
     """Test Arrow data type mapping for DuckDB."""
     result = duckdb_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow LIMIT 1")
 
@@ -140,7 +138,7 @@ def test_duckdb_arrow_data_types(duckdb_arrow_session: DuckDbDriver) -> None:
     assert pa.types.is_boolean(result.data.schema.field("is_active").type)
 
 
-def test_duckdb_to_arrow_with_sql_object(duckdb_arrow_session: DuckDbDriver) -> None:
+def test_duckdb_to_arrow_with_sql_object(duckdb_arrow_session: DuckDBDriver) -> None:
     """Test to_arrow with SQL object instead of string."""
     from sqlspec.statement.sql import SQL
 
@@ -156,7 +154,7 @@ def test_duckdb_to_arrow_with_sql_object(duckdb_arrow_session: DuckDbDriver) -> 
     assert "Product C" not in names  # Inactive
 
 
-def test_duckdb_arrow_large_dataset(duckdb_arrow_session: DuckDbDriver) -> None:
+def test_duckdb_arrow_large_dataset(duckdb_arrow_session: DuckDBDriver) -> None:
     """Test Arrow functionality with larger dataset."""
     # Insert more test data
     large_data = [(i, f"Item {i}", i * 10, float(i * 2.5), i % 2 == 0) for i in range(100, 1000)]
@@ -174,7 +172,7 @@ def test_duckdb_arrow_large_dataset(duckdb_arrow_session: DuckDbDriver) -> None:
     assert total_count == 905  # 5 original + 900 new records
 
 
-def test_duckdb_parquet_export_options(duckdb_arrow_session: DuckDbDriver) -> None:
+def test_duckdb_parquet_export_options(duckdb_arrow_session: DuckDBDriver) -> None:
     """Test Parquet export with different options."""
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir) / "test_compressed.parquet"
@@ -196,7 +194,7 @@ def test_duckdb_parquet_export_options(duckdb_arrow_session: DuckDbDriver) -> No
         assert output_path.stat().st_size > 0
 
 
-def test_duckdb_arrow_analytics_functions(duckdb_arrow_session: DuckDbDriver) -> None:
+def test_duckdb_arrow_analytics_functions(duckdb_arrow_session: DuckDBDriver) -> None:
     """Test Arrow functionality with DuckDB analytics functions."""
     result = duckdb_arrow_session.fetch_arrow_table("""
         SELECT
@@ -211,15 +209,15 @@ def test_duckdb_arrow_analytics_functions(duckdb_arrow_session: DuckDbDriver) ->
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 5
-    assert "prev_value" in result.column_names()
-    assert "rank_by_value" in result.column_names()
+    assert "prev_value" in result.column_names
+    assert "rank_by_value" in result.column_names
 
     # Check window function results
     ranks = result.data["rank_by_value"].to_pylist()
     assert len(set(ranks)) == 5  # All ranks should be unique
 
 
-def test_duckdb_arrow_with_json_data(duckdb_arrow_session: DuckDbDriver) -> None:
+def test_duckdb_arrow_with_json_data(duckdb_arrow_session: DuckDBDriver) -> None:
     """Test Arrow functionality with JSON data in DuckDB."""
     # Create table with JSON column
     duckdb_arrow_session.execute_script("""
@@ -239,27 +237,27 @@ def test_duckdb_arrow_with_json_data(duckdb_arrow_session: DuckDbDriver) -> None
         ],
     )
 
-    # Query with JSON extraction
+    # Query with JSON extraction using DuckDB's json_extract_string function
     result = duckdb_arrow_session.fetch_arrow_table("""
         SELECT
             id,
-            data->>'$.name' as name,
-            CAST(data->>'$.age' AS INTEGER) as age
+            json_extract_string(data, '$.name') as name,
+            CAST(json_extract_string(data, '$.age') AS INTEGER) as age
         FROM test_json
         ORDER BY id
     """)
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 3
-    assert "name" in result.column_names()
-    assert "age" in result.column_names()
+    assert "name" in result.column_names
+    assert "age" in result.column_names
 
     names = result.data["name"].to_pylist()
     assert "Alice" in names
     assert "Charlie" in names
 
 
-def test_duckdb_arrow_with_aggregation(duckdb_arrow_session: DuckDbDriver) -> None:
+def test_duckdb_arrow_with_aggregation(duckdb_arrow_session: DuckDBDriver) -> None:
     """Test Arrow functionality with aggregation queries."""
     result = duckdb_arrow_session.fetch_arrow_table("""
         SELECT
@@ -276,16 +274,16 @@ def test_duckdb_arrow_with_aggregation(duckdb_arrow_session: DuckDbDriver) -> No
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 2  # True and False groups
-    assert "count" in result.column_names()
-    assert "avg_value" in result.column_names()
-    assert "total_price" in result.column_names()
+    assert "count" in result.column_names
+    assert "avg_value" in result.column_names
+    assert "total_price" in result.column_names
 
     # Verify aggregation results
     counts = result.data["count"].to_pylist()
     assert sum(counts) == 5  # Total should be 5 records
 
 
-def test_duckdb_arrow_with_parquet_integration(duckdb_arrow_session: DuckDbDriver) -> None:
+def test_duckdb_arrow_with_parquet_integration(duckdb_arrow_session: DuckDBDriver) -> None:
     """Test Arrow functionality with DuckDB's native Parquet integration."""
     with tempfile.TemporaryDirectory() as tmpdir:
         parquet_path = Path(tmpdir) / "source_data.parquet"
@@ -308,7 +306,7 @@ def test_duckdb_arrow_with_parquet_integration(duckdb_arrow_session: DuckDbDrive
 
         assert isinstance(result, ArrowResult)
         assert result.num_rows() == 3  # Only active products
-        assert "doubled_value" in result.column_names()
+        assert "doubled_value" in result.column_names
 
         # Verify the doubling calculation
         doubled_values = result.data["doubled_value"].to_pylist()

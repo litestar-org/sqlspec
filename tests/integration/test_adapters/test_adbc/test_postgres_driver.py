@@ -27,10 +27,8 @@ ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
     """Create an ADBC PostgreSQL session with test table."""
     config = AdbcConfig(
-        connection_config={
-            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            "driver_name": "adbc_driver_postgresql.dbapi.connect",
-        },
+        uri=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+        driver_name="adbc_driver_postgresql.dbapi.connect",
         statement_config=SQLConfig(strict_mode=False),  # Allow DDL statements for tests
     )
 
@@ -54,10 +52,8 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[Adbc
 def test_connection(postgres_service: PostgresService) -> None:
     """Test basic ADBC PostgreSQL connection."""
     config = AdbcConfig(
-        connection_config={
-            "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            "driver_name": "adbc_driver_postgresql.dbapi.connect",
-        }
+        uri=f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+        driver_name="adbc_driver_postgresql.dbapi.connect",
     )
 
     # Test connection creation
@@ -807,7 +803,7 @@ def test_fetch_arrow_table(adbc_postgresql_session: AdbcDriver) -> None:
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 3
     assert result.data.num_columns == 3
-    assert result.column_names() == ["name", "age", "salary"]
+    assert result.column_names == ["name", "age", "salary"]
 
     # Verify data content
     names = result.column("name").to_pylist()
@@ -837,7 +833,7 @@ def test_to_parquet(adbc_postgresql_session: AdbcDriver) -> None:
         # Read back the Parquet file
         table = pq.read_table(tmp.name)
         assert table.num_rows() == 2
-        assert set(table.column_names()) >= {"id", "name", "value"}
+        assert set(table.column_names) >= {"id", "name", "value"}
 
         # Verify data
         data = table.to_pylist()
@@ -878,7 +874,7 @@ def test_arrow_empty_result(adbc_postgresql_session: AdbcDriver) -> None:
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 0
     assert result.data.num_columns == 2
-    assert result.column_names() == ["name", "value"]
+    assert result.column_names == ["name", "value"]
 
 
 @pytest.mark.xdist_group("postgres")
@@ -986,7 +982,7 @@ def test_column_names_and_metadata(adbc_postgresql_session: AdbcDriver) -> None:
         "SELECT id, name, value, created_at FROM test_table WHERE name = $1", ("metadata_test",)
     )
     assert isinstance(result, SQLResult)
-    assert result.column_names() == ["id", "name", "value", "created_at"]
+    assert result.column_names == ["id", "name", "value", "created_at"]
     assert result.data is not None
     assert result.num_rows() == 1
 
@@ -1021,7 +1017,7 @@ def test_with_schema_type(adbc_postgresql_session: AdbcDriver) -> None:
     assert result.num_rows() == 1
 
     # The data should be converted to the schema type by the ResultConverter
-    assert result.column_names() == ["id", "name", "value"]
+    assert result.column_names == ["id", "name", "value"]
 
 
 @pytest.mark.xdist_group("postgres")

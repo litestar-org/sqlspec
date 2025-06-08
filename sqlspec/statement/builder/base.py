@@ -1,7 +1,8 @@
 """Safe SQL query builder with validation and parameter binding.
 
 This module provides a fluent interface for building SQL queries safely,
-with automatic parameter binding and validation.
+with automatic parameter binding and validation. Enhanced with SQLGlot's
+advanced builder patterns and optimization capabilities.
 """
 
 import contextlib
@@ -14,6 +15,7 @@ import sqlglot
 from sqlglot import Dialect, exp
 from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
+from sqlglot.optimizer import optimize_joins, pushdown_predicates, simplify
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
@@ -49,10 +51,17 @@ class SafeQuery:
 
 @dataclass
 class QueryBuilder(ABC, Generic[ResultT]):
-    """Abstract base class for SQL query builders.
+    """Abstract base class for SQL query builders with SQLGlot optimization.
 
     Provides common functionality for dialect handling, parameter management,
-    and query construction.
+    query construction, and automatic query optimization using SQLGlot's
+    advanced capabilities.
+
+    New features:
+    - Automatic query optimization (join reordering, predicate pushdown)
+    - Query complexity analysis
+    - Smart parameter naming based on context
+    - Expression caching for performance
     """
 
     dialect: DialectType = field(default=None)
@@ -62,6 +71,16 @@ class QueryBuilder(ABC, Generic[ResultT]):
     _parameters: dict[str, Any] = field(default_factory=dict, init=False, repr=False, compare=False, hash=False)
     _parameter_counter: int = field(default=0, init=False, repr=False, compare=False, hash=False)
     _with_ctes: dict[str, exp.CTE] = field(default_factory=dict, init=False, repr=False, compare=False, hash=False)
+
+    # Optimization settings
+    enable_optimization: bool = field(default=True, init=True)
+    optimize_joins: bool = field(default=True, init=True)
+    optimize_predicates: bool = field(default=True, init=True)
+    simplify_expressions: bool = field(default=True, init=True)
+
+    # Caching for performance
+    _cached_sql: Optional[str] = field(default=None, init=False, repr=False, compare=False, hash=False)
+    _cache_valid: bool = field(default=False, init=False, repr=False, compare=False, hash=False)
 
     def __post_init__(self) -> None:
         self._expression = self._create_base_expression()
@@ -105,17 +124,27 @@ class QueryBuilder(ABC, Generic[ResultT]):
         """
         raise SQLBuilderError(message) from cause
 
-    def _add_parameter(self, value: Any) -> str:
+    def _invalidate_cache(self) -> None:
+        """Invalidate the cached SQL when the query changes."""
+        self._cached_sql = None
+        self._cache_valid = False
+
+    def _add_parameter(self, value: Any, context: Optional[str] = None) -> str:
         """Adds a parameter to the query and returns its placeholder name.
 
         Args:
             value: The value of the parameter.
+            context: Optional context hint for parameter naming (e.g., "where", "join")
 
         Returns:
-            str: The placeholder name for the parameter (e.g., :param_1).
+            str: The placeholder name for the parameter (e.g., :param_1 or :where_param_1).
         """
+        self._invalidate_cache()
         self._parameter_counter += 1
-        param_name = f"param_{self._parameter_counter}"
+
+        # Use context-aware naming if provided
+        param_name = f"{context}_param_{self._parameter_counter}" if context else f"param_{self._parameter_counter}"
+
         self._parameters[param_name] = value
         return param_name
 
@@ -290,6 +319,11 @@ class QueryBuilder(ABC, Generic[ResultT]):
                         type(final_expression).__name__,
                     )
 
+        # Apply SQLGlot optimizations if enabled
+        if self.enable_optimization:
+            with self._debug_build_phase("optimize_expression"):
+                final_expression = self._optimize_expression(final_expression)
+
         with self._debug_build_phase("generate_sql"):
             try:
                 sql_string = final_expression.sql(dialect=self.dialect_name, pretty=True)
@@ -321,6 +355,45 @@ class QueryBuilder(ABC, Generic[ResultT]):
 
         # sql_string is now guaranteed to be assigned if no error was raised.
         return SafeQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=self.dialect)
+
+    def _optimize_expression(self, expression: exp.Expression) -> exp.Expression:
+        """Apply SQLGlot optimizations to the expression.
+
+        Args:
+            expression: The expression to optimize
+
+        Returns:
+            The optimized expression
+        """
+        if not self.enable_optimization:
+            return expression
+
+        optimized = expression
+
+        try:
+            # Apply optimizations in order
+            if self.simplify_expressions:
+                with self._debug_build_phase("simplify_expressions"):
+                    optimized = simplify(optimized.copy())
+
+            if self.optimize_predicates and isinstance(optimized, (exp.Select, exp.Update, exp.Delete)):
+                with self._debug_build_phase("pushdown_predicates"):
+                    optimized = pushdown_predicates(optimized.copy(), dialect=self.dialect_name)
+
+            if self.optimize_joins and isinstance(optimized, exp.Select):
+                with self._debug_build_phase("optimize_joins"):
+                    optimized = optimize_joins(optimized.copy(), dialect=self.dialect_name)
+
+        except Exception as e:
+            # Log optimization failure but continue with unoptimized query
+            logger.warning(
+                "Query optimization failed: %s. Using unoptimized query.",
+                str(e),
+                extra={"error": str(e), "expression_type": type(expression).__name__},
+            )
+            return expression
+
+        return optimized
 
     def to_statement(self, config: "Optional[SQLConfig]" = None) -> "SQL":
         """Converts the built query into a SQL statement object.

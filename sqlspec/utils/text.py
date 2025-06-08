@@ -6,21 +6,19 @@ from functools import lru_cache
 from typing import Optional
 
 # Compiled regex for slugify
-_SLUGIFY_REMOVE_INVALID_CHARS_RE = re.compile(r"[^\w\s-]")
-_SLUGIFY_COLLAPSE_SEPARATORS_RE = re.compile(r"[-\s]+")
+_SLUGIFY_REMOVE_NON_ALPHANUMERIC = re.compile(r"[^\w]+", re.UNICODE)
+_SLUGIFY_HYPHEN_COLLAPSE = re.compile(r"-+")
 
 # Compiled regex for snake_case
-# Handles sequences like "HTTPRequest" -> "HTTP_Request" or "SSLError" -> "SSL_Error"
-_SNAKE_CASE_RE_ACRONYM_SEQUENCE = re.compile(r"([A-Z\d]+)([A-Z][a-z])")
-# Handles transitions like "camelCase" -> "camel_Case" or "PascalCase" -> "Pascal_Case" (partially)
-_SNAKE_CASE_RE_LOWER_UPPER_TRANSITION = re.compile(r"([a-z\d])([A-Z])")
-# Replaces hyphens, spaces, and dots with a single underscore
-_SNAKE_CASE_RE_REPLACE_SEP = re.compile(r"[-\s.]+")
-# Cleans up multiple consecutive underscores
-_SNAKE_CASE_RE_CLEAN_MULTIPLE_UNDERSCORE = re.compile(r"__+")
+# Insert underscore between lowercase/digit and uppercase letter
+_SNAKE_CASE_RE_LOWER_OR_DIGIT_TO_UPPER = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+# Insert underscore between uppercase letter and uppercase followed by lowercase
+_SNAKE_CASE_RE_UPPER_TO_UPPER_LOWER = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])")
+# Replace hyphens and spaces with underscores for snake_case
+_SNAKE_CASE_RE_HYPHEN_SPACE = re.compile(r"[-\s]+")
+# Collapse multiple underscores
+_SNAKE_CASE_RE_MULTIPLE_UNDERSCORES = re.compile(r"__+")
 
-# Additional compiled regex for leading digit underscore cleanup
-_SNAKE_CASE_RE_LEADING_DIGIT_UNDERSCORE = re.compile(r"^([0-9])_+")
 
 __all__ = (
     "camelize",
@@ -75,12 +73,17 @@ def slugify(value: str, allow_unicode: bool = False, separator: Optional[str] = 
     sep = separator if separator is not None else "-"
     if not sep:
         # Remove all non-alphanumeric characters and return
-        return re.sub(r"[^\w]+", "", value, flags=re.UNICODE)
+        return _SLUGIFY_REMOVE_NON_ALPHANUMERIC.sub("", value)
     # Replace all runs of non-alphanumeric chars with the separator
-    value = re.sub(r"[^\w]+", sep, value, flags=re.UNICODE)
-    # Remove leading/trailing separators
+    value = _SLUGIFY_REMOVE_NON_ALPHANUMERIC.sub(sep, value)
+    # Remove leading/trailing separators and collapse multiple separators
+    # For dynamic separators, we need to use re.sub with escaped separator
+    if sep == "-":
+        # Use pre-compiled regex for common case
+        value = value.strip("-")
+        return _SLUGIFY_HYPHEN_COLLAPSE.sub("-", value)
+    # For other separators, use dynamic regex
     value = re.sub(rf"^{re.escape(sep)}+|{re.escape(sep)}+$", "", value)
-    # Collapse multiple separators into one
     return re.sub(rf"{re.escape(sep)}+", sep, value)
 
 
@@ -114,20 +117,26 @@ def snake_case(string: str) -> str:
     """
     if not string:
         return ""
-    s = string.strip()
-    # Replace separators (space, hyphen, dot, etc.) with underscore
-    s = _SNAKE_CASE_RE_REPLACE_SEP.sub("_", s)
-    # Add underscore between acronym and next word (e.g., 'HTTPServer' -> 'HTTP_Server')
-    s = _SNAKE_CASE_RE_ACRONYM_SEQUENCE.sub(r"\1_\2", s)
-    # Add underscore between a lowercase/digit and uppercase (e.g., 'fooBar' -> 'foo_Bar')
-    s = _SNAKE_CASE_RE_LOWER_UPPER_TRANSITION.sub(r"\1_\2", s)
-    # Remove non-word characters except underscores
-    s = re.sub(r"[^\w_]", "", s, flags=re.UNICODE)
-    # Collapse multiple underscores
-    s = _SNAKE_CASE_RE_CLEAN_MULTIPLE_UNDERSCORE.sub("_", s)
-    # Lowercase
+    # 1. Replace hyphens and spaces with underscores
+    s = _SNAKE_CASE_RE_HYPHEN_SPACE.sub("_", string)
+
+    # 2. Insert an underscore between a lowercase/digit and an uppercase letter.
+    #    e.g., "helloWorld" -> "hello_World"
+    #    e.g., "Python3IsGreat" -> "Python3_IsGreat"
+    #    Uses a positive lookbehind `(?<=[...])` and a positive lookahead `(?=[...])`
+    s = _SNAKE_CASE_RE_LOWER_OR_DIGIT_TO_UPPER.sub("_", s)
+
+    # 3. Insert an underscore between an uppercase letter and another
+    #    uppercase letter followed by a lowercase letter.
+    #    e.g., "HTTPRequest" -> "HTTP_Request"
+    #    This handles acronyms gracefully.
+    s = _SNAKE_CASE_RE_UPPER_TO_UPPER_LOWER.sub("_", s)
+
+    # 4. Convert the entire string to lowercase.
     s = s.lower()
-    # Remove leading/trailing underscores
+
+    # 5. Remove any leading or trailing underscores that might have been created.
     s = s.strip("_")
-    # Remove underscore after leading digit (e.g., '2_fast' -> '2fast')
-    return _SNAKE_CASE_RE_LEADING_DIGIT_UNDERSCORE.sub(r"\1", s)
+
+    # 6. Collapse multiple consecutive underscores into a single one.
+    return _SNAKE_CASE_RE_MULTIPLE_UNDERSCORES.sub("_", s)

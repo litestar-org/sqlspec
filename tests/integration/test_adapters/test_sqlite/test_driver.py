@@ -357,7 +357,7 @@ def test_sqlite_column_names_and_metadata(sqlite_session: SqliteDriver) -> None:
         "SELECT id, name, value, created_at FROM test_table WHERE name = ?", ("metadata_test",)
     )
     assert isinstance(result, SQLResult)
-    assert result.column_names() == ["id", "name", "value", "created_at"]
+    assert result.column_names == ["id", "name", "value", "created_at"]
     assert result.data is not None
     assert len(result.data) == 1
 
@@ -395,7 +395,7 @@ def test_sqlite_with_schema_type(sqlite_session: SqliteDriver) -> None:
 
     # The data should be converted to the schema type by the ResultConverter
     # The exact behavior depends on the ResultConverter implementation
-    assert result.column_names() == ["id", "name", "value"]
+    assert result.column_names == ["id", "name", "value"]
 
 
 @pytest.mark.xdist_group("sqlite")
@@ -434,9 +434,9 @@ def test_sqlite_fetch_arrow_table(sqlite_session: SqliteDriver) -> None:
     result = sqlite_session.fetch_arrow_table("SELECT name, value FROM test_table ORDER BY name")
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 2
-    assert result.column_names() == ["name", "value"]
-    assert result.column("name").to_pylist() == ["arrow1", "arrow2"]
-    assert result.column("value").to_pylist() == [111, 222]
+    assert result.column_names == ["name", "value"]
+    assert result.data.column("name").to_pylist() == ["arrow1", "arrow2"]
+    assert result.data.column("value").to_pylist() == [111, 222]
 
 
 @pytest.mark.xdist_group("sqlite")

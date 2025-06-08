@@ -18,6 +18,7 @@ from sqlspec.config import (
     NoPoolSyncConfig,
     SyncDatabaseConfig,
 )
+from sqlspec.typing import DictRow
 
 # Test Fixtures and Mock Classes
 
@@ -408,7 +409,7 @@ def test_get_session_driver_instantiation() -> None:
         mock_driver_class.assert_called_once_with(
             connection=mock_connection,
             instrumentation_config=config.instrumentation,
-            default_row_type=None,
+            default_row_type=DictRow,
         )
         assert session == mock_driver_instance
 

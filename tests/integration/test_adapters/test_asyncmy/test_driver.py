@@ -383,9 +383,9 @@ async def test_asyncmy_column_names_and_metadata(asyncmy_session: AsyncmyDriver)
         "SELECT id, name, value, created_at FROM test_table WHERE name = %s", ("metadata_test",)
     )
     assert isinstance(result, SQLResult)
-    assert result.column_names() == ["id", "name", "value", "created_at"]
+    assert result.column_names == ["id", "name", "value", "created_at"]
     assert result.data is not None
-    assert result.num_rows() == 1
+    assert result.rows_affected == 1
 
     # Test that we can access data by column name
     row = result.data[0]
@@ -416,10 +416,10 @@ async def test_asyncmy_with_schema_type(asyncmy_session: AsyncmyDriver) -> None:
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.num_rows() == 1
+    assert result.rows_affected == 1
 
     # The data should be converted to the schema type by the ResultConverter
-    assert result.column_names() == ["id", "name", "value"]
+    assert result.column_names == ["id", "name", "value"]
 
 
 @pytest.mark.xdist_group("mysql")
@@ -565,8 +565,8 @@ async def test_asyncmy_fetch_arrow_table(asyncmy_session: AsyncmyDriver) -> None
     assert isinstance(result, ArrowResult)
     table = result.data
     assert isinstance(table, ArrowResult)
-    assert table.num_rows() == 2
-    assert set(table.column_names()) == {"name", "value"}
+    assert table.num_rows == 2
+    assert set(table.column_names) == {"name", "value"}
     names = table.column("name").to_pylist()
     assert "arrow1" in names and "arrow2" in names
 
@@ -580,7 +580,7 @@ async def test_asyncmy_to_parquet(asyncmy_session: AsyncmyDriver) -> None:
     with tempfile.NamedTemporaryFile() as tmp:
         await asyncmy_session.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
         table = pq.read_table(tmp.name)
-        assert table.num_rows() == 2
-        assert set(table.column_names()) == {"name", "value"}
+        assert table.num_rows == 2
+        assert set(table.column_names) == {"name", "value"}
         names = table.column("name").to_pylist()
         assert "pq1" in names and "pq2" in names
