@@ -22,43 +22,41 @@ logger = logging.getLogger(__name__)
 __all__ = ("CONNECTION_FIELDS", "DuckDBConfig", "DuckDBExtensionConfig", "DuckDBSecretConfig")
 
 
-CONNECTION_FIELDS = frozenset(
-    {
-        "database",
-        "read_only",
-        "config",
-        "memory_limit",
-        "threads",
-        "temp_directory",
-        "max_temp_directory_size",
-        "autoload_known_extensions",
-        "autoinstall_known_extensions",
-        "allow_community_extensions",
-        "allow_unsigned_extensions",
-        "extension_directory",
-        "custom_extension_repository",
-        "autoinstall_extension_repository",
-        "allow_persistent_secrets",
-        "enable_external_access",
-        "secret_directory",
-        "enable_object_cache",
-        "parquet_metadata_cache",
-        "enable_external_file_cache",
-        "checkpoint_threshold",
-        "enable_progress_bar",
-        "progress_bar_time",
-        "enable_logging",
-        "log_query_path",
-        "logging_level",
-        "preserve_insertion_order",
-        "default_null_order",
-        "default_order",
-        "ieee_floating_point_ops",
-        "binary_as_string",
-        "arrow_large_buffer_size",
-        "errors_as_json",
-    }
-)
+CONNECTION_FIELDS = frozenset({
+    "database",
+    "read_only",
+    "config",
+    "memory_limit",
+    "threads",
+    "temp_directory",
+    "max_temp_directory_size",
+    "autoload_known_extensions",
+    "autoinstall_known_extensions",
+    "allow_community_extensions",
+    "allow_unsigned_extensions",
+    "extension_directory",
+    "custom_extension_repository",
+    "autoinstall_extension_repository",
+    "allow_persistent_secrets",
+    "enable_external_access",
+    "secret_directory",
+    "enable_object_cache",
+    "parquet_metadata_cache",
+    "enable_external_file_cache",
+    "checkpoint_threshold",
+    "enable_progress_bar",
+    "progress_bar_time",
+    "enable_logging",
+    "log_query_path",
+    "logging_level",
+    "preserve_insertion_order",
+    "default_null_order",
+    "default_order",
+    "ieee_floating_point_ops",
+    "binary_as_string",
+    "arrow_large_buffer_size",
+    "errors_as_json",
+})
 
 
 class DuckDBExtensionConfig(TypedDict, total=False):
@@ -386,11 +384,11 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         connect_params: dict[str, Any] = {}
 
         # Set database if provided
-        if hasattr(self, "database") and self.database is not None and self.database is not Empty:
+        if hasattr(self, "database") and self.database is not None:
             connect_params["database"] = self.database
 
         # Set read_only if provided
-        if hasattr(self, "read_only") and self.read_only is not None and self.read_only is not Empty:
+        if hasattr(self, "read_only") and self.read_only is not None:
             connect_params["read_only"] = self.read_only
 
         # All other parameters go into the config dict

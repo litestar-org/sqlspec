@@ -10,7 +10,7 @@ from typing import (
     overload,
 )
 
-from sqlspec.driver._common import CommonDriverAttributes
+from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.driver.mixins import AsyncInstrumentationMixin
 from sqlspec.statement.builder import (
     DeleteBuilder,
@@ -41,7 +41,7 @@ __all__ = ("AsyncDriverAdapterProtocol",)
 EMPTY_FILTERS: "list[StatementFilter]" = []
 
 
-class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], AsyncInstrumentationMixin, ABC):
+class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], AsyncInstrumentationMixin, ABC):
     def __init__(
         self,
         connection: "ConnectionT",
@@ -209,7 +209,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], Asyn
                 connection=self._connection(connection),
                 **kwargs,
             )
-            if CommonDriverAttributes.returns_rows(sql_statement.expression):
+            if self.returns_rows(sql_statement.expression):
                 return await self._wrap_select_result(sql_statement, result, schema_type=schema_type, **kwargs)
             return await self._wrap_execute_result(sql_statement, result, **kwargs)
 

@@ -18,13 +18,11 @@ from sqlspec.statement.sql import SQLConfig
 def psycopg_arrow_session(postgres_service: PostgresService) -> "Generator[PsycopgSyncDriver, None, None]":
     """Create a Psycopg session for Arrow testing."""
     config = PsycopgSyncConfig(
-        pool_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "dbname": postgres_service.database,
-        },
+        host=postgres_service.host,
+        port=postgres_service.port,
+        user=postgres_service.user,
+        password=postgres_service.password,
+        dbname=postgres_service.database,
         statement_config=SQLConfig(strict_mode=False),
     )
 

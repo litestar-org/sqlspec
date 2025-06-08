@@ -66,7 +66,8 @@ class TestStorageMixins:
         class MockDriver(SyncStorageMixin):
             def __init__(self) -> None:
                 self.config = MagicMock()
-                # No storage attribute
+                # Simulate missing storage attribute by making it raise AttributeError
+                del self.config.storage
                 self._connection = MagicMock()
 
         driver = MockDriver()

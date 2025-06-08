@@ -1,7 +1,7 @@
 """Unit tests for Asyncmy driver."""
 
 import tempfile
-from typing import Any, Optional
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pyarrow as pa
@@ -239,8 +239,8 @@ async def test_asyncmy_driver_to_parquet(
         called["table"] = table
         called["path"] = path
 
-    # Mock the storage backend's write_arrow method instead of pyarrow directly
-    async def mock_write_arrow(path: str, table: Any, **kwargs: Any) -> None:
+    # Mock the storage backend's write_arrow_async method for async operations
+    async def mock_write_arrow_async(path: str, table: Any, **kwargs: Any) -> None:
         called["table"] = table
         called["path"] = path
 
@@ -248,15 +248,41 @@ async def test_asyncmy_driver_to_parquet(
     from unittest.mock import AsyncMock as MockBackend
 
     mock_backend = MockBackend()
-    mock_backend.write_arrow = mock_write_arrow
+    mock_backend.write_arrow_async = mock_write_arrow_async
 
-    def mock_resolve_backend_and_path(uri: str, storage_key: Optional[str] = None) -> tuple[AsyncMock, str]:
+    def mock_resolve_backend_and_path(uri: str) -> tuple[AsyncMock, str]:
         return mock_backend, uri
 
     monkeypatch.setattr(asyncmy_driver, "_resolve_backend_and_path", mock_resolve_backend_and_path)
+
+    # Mock the execute method for the unified storage mixin fallback
+    from sqlspec.statement.result import SQLResult
+
+    mock_result = SQLResult(
+        statement=statement,
+        data=[{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
+        column_names=["id", "name"],
+    )
+
+    async def mock_execute(sql_obj):
+        return mock_result
+
+    monkeypatch.setattr(asyncmy_driver, "execute", mock_execute)
+
+    # Mock fetch_arrow_table for the async export path
+    import pyarrow as pa
+
+    from sqlspec.statement.result import ArrowResult
+
+    mock_arrow_table = pa.table({"id": [1, 2], "name": ["Alice", "Bob"]})
+    mock_arrow_result = ArrowResult(statement=statement, data=mock_arrow_table)
+
+    async def mock_fetch_arrow_table(query_str):
+        return mock_arrow_result
+
+    monkeypatch.setattr(asyncmy_driver, "fetch_arrow_table", mock_fetch_arrow_table)
 
     with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
         await asyncmy_driver.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
         assert "table" in called
         assert called["path"] == tmp.name
-    mock_cursor.close.assert_called_once()

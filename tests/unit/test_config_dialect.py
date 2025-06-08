@@ -13,6 +13,7 @@ from sqlspec.config import (
     SyncDatabaseConfig,
 )
 from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow
 
@@ -27,7 +28,7 @@ class MockDriver(SyncDriverAdapterProtocol[MockConnection, DictRow]):
     """Mock driver for testing."""
 
     dialect = "sqlite"  # Use a real dialect for testing
-    parameter_style = "qmark"
+    parameter_style = ParameterStyle.QMARK
 
     def _execute_statement(self, statement: Any, connection: Optional[MockConnection] = None, **kwargs: Any) -> Any:
         return {"data": [], "column_names": []}
@@ -38,15 +39,15 @@ class MockDriver(SyncDriverAdapterProtocol[MockConnection, DictRow]):
     def _wrap_execute_result(self, statement: Any, result: Any, **kwargs: Any) -> Any:
         return result
 
-    def _get_placeholder_style(self) -> str:
-        return "qmark"
+    def _get_placeholder_style(self) -> ParameterStyle:
+        return ParameterStyle.QMARK
 
 
 class MockAsyncDriver(AsyncDriverAdapterProtocol[MockConnection, DictRow]):
     """Mock async driver for testing."""
 
     dialect = "postgres"  # Use a real dialect for testing
-    parameter_style = "numeric"
+    parameter_style = ParameterStyle.NUMERIC
 
     async def _execute_statement(
         self, statement: Any, connection: Optional[MockConnection] = None, **kwargs: Any
@@ -59,14 +60,14 @@ class MockAsyncDriver(AsyncDriverAdapterProtocol[MockConnection, DictRow]):
     async def _wrap_execute_result(self, statement: Any, result: Any, **kwargs: Any) -> Any:
         return result
 
-    def _get_placeholder_style(self) -> str:
-        return "numeric"
+    def _get_placeholder_style(self) -> ParameterStyle:
+        return ParameterStyle.NUMERIC
 
 
 class TestSyncConfigDialect:
     """Test sync config dialect implementation."""
 
-    def test_nopoolsync_config_dialect(self) -> None:
+    def test_no_pool_sync_config_dialect(self) -> None:
         """Test that NoPoolSyncConfig returns dialect from driver class."""
 
         class TestNoPoolConfig(NoPoolSyncConfig[MockConnection, MockDriver]):
@@ -75,20 +76,20 @@ class TestSyncConfigDialect:
             def __init__(self, **kwargs: Any) -> None:
                 self.instrumentation = InstrumentationConfig()
                 self.statement_config = SQLConfig()
-                self.connection_config = {"host": "localhost"}
+                self.host = "localhost"
                 super().__init__(**kwargs)
 
             @property
-            def connection_type(self) -> type[MockConnection]:
+            def connection_type(self) -> type[MockConnection]:  # pyright: ignore
                 return MockConnection
 
             @property
-            def driver_type(self) -> type[MockDriver]:
+            def driver_type(self) -> type[MockDriver]:  # pyright: ignore
                 return MockDriver
 
             @property
             def connection_config_dict(self) -> dict[str, Any]:
-                return self.connection_config
+                return {"host": self.host}
 
             def create_connection(self) -> MockConnection:
                 return MockConnection()
@@ -96,13 +97,13 @@ class TestSyncConfigDialect:
         config = TestNoPoolConfig()
         assert config.dialect == "sqlite"
 
-    def test_nopoolsync_config_dialect_with_missing_driver_class(self) -> None:
+    def test_no_pool_sync_config_dialect_with_missing_driver_class(self) -> None:
         """Test that config raises AttributeError when driver_class is not set and driver has no dialect."""
 
         # Create a driver without dialect attribute
         class DriverWithoutDialect(SyncDriverAdapterProtocol[MockConnection, DictRow]):
             # No dialect attribute
-            parameter_style = "qmark"
+            parameter_style = ParameterStyle.QMARK
 
             def _execute_statement(
                 self, statement: Any, connection: Optional[MockConnection] = None, **kwargs: Any
@@ -115,8 +116,8 @@ class TestSyncConfigDialect:
             def _wrap_execute_result(self, statement: Any, result: Any, **kwargs: Any) -> Any:
                 return result
 
-            def _get_placeholder_style(self) -> str:
-                return "qmark"
+            def _get_placeholder_style(self) -> ParameterStyle:
+                return ParameterStyle.QMARK
 
         class BrokenNoPoolConfig(NoPoolSyncConfig[MockConnection, DriverWithoutDialect]):
             # Intentionally not setting driver_class
@@ -124,20 +125,20 @@ class TestSyncConfigDialect:
             def __init__(self, **kwargs: Any) -> None:
                 self.instrumentation = InstrumentationConfig()
                 self.statement_config = SQLConfig()
-                self.connection_config = {"host": "localhost"}
+                self.host = "localhost"
                 super().__init__(**kwargs)
 
             @property
-            def connection_type(self) -> type[MockConnection]:
+            def connection_type(self) -> type[MockConnection]:  # pyright: ignore
                 return MockConnection
 
             @property
-            def driver_type(self) -> type[DriverWithoutDialect]:
+            def driver_type(self) -> type[DriverWithoutDialect]:  # pyright: ignore
                 return DriverWithoutDialect
 
             @property
             def connection_config_dict(self) -> dict[str, Any]:
-                return self.connection_config
+                return {"host": self.host}
 
             def create_connection(self) -> MockConnection:
                 return MockConnection()
@@ -165,11 +166,11 @@ class TestSyncConfigDialect:
                 super().__init__(**kwargs)
 
             @property
-            def connection_type(self) -> type[MockConnection]:
+            def connection_type(self) -> type[MockConnection]:  # pyright: ignore
                 return MockConnection
 
             @property
-            def driver_type(self) -> type[MockDriver]:
+            def driver_type(self) -> type[MockDriver]:  # pyright: ignore
                 return MockDriver
 
             @property
@@ -193,7 +194,7 @@ class TestAsyncConfigDialect:
     """Test async config dialect implementation."""
 
     @pytest.mark.asyncio
-    async def test_nopoolasync_config_dialect(self) -> None:
+    async def test_no_pool_async_config_dialect(self) -> None:
         """Test that NoPoolAsyncConfig returns dialect from driver class."""
 
         class TestNoPoolAsyncConfig(NoPoolAsyncConfig[MockConnection, MockAsyncDriver]):
@@ -206,11 +207,11 @@ class TestAsyncConfigDialect:
                 super().__init__(**kwargs)
 
             @property
-            def connection_type(self) -> type[MockConnection]:
+            def connection_type(self) -> type[MockConnection]:  # pyright: ignore
                 return MockConnection
 
             @property
-            def driver_type(self) -> type[MockAsyncDriver]:
+            def driver_type(self) -> type[MockAsyncDriver]:  # pyright: ignore
                 return MockAsyncDriver
 
             @property
@@ -241,11 +242,11 @@ class TestAsyncConfigDialect:
                 super().__init__(**kwargs)
 
             @property
-            def connection_type(self) -> type[MockConnection]:
+            def connection_type(self) -> type[MockConnection]:  # pyright: ignore
                 return MockConnection
 
             @property
-            def driver_type(self) -> type[MockAsyncDriver]:
+            def driver_type(self) -> type[MockAsyncDriver]:  # pyright: ignore
                 return MockAsyncDriver
 
             @property
@@ -277,7 +278,7 @@ class TestRealAdapterDialects:
         assert SqliteConfig.driver_class == SqliteDriver
 
         # Create instance and check dialect
-        config = SqliteConfig(connection_config={"database": ":memory:"})
+        config = SqliteConfig(database=":memory:")
         assert config.dialect == "sqlite"
 
     def test_duckdb_config_dialect(self) -> None:
@@ -295,34 +296,32 @@ class TestRealAdapterDialects:
     @pytest.mark.asyncio
     async def test_asyncpg_config_dialect(self) -> None:
         """Test AsyncPG config dialect property."""
-        from sqlspec.adapters.asyncpg import AsyncPGConfig, AsyncpgDriver
+        from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 
-        # AsyncPGConfig should have driver_class set
-        assert hasattr(AsyncPGConfig, "driver_class")
-        assert AsyncPGConfig.driver_class == AsyncpgDriver
+        # AsyncpgConfig should have driver_class set
+        assert hasattr(AsyncpgConfig, "driver_class")
+        assert AsyncpgConfig.driver_class == AsyncpgDriver
 
         # Create instance and check dialect
-        config = AsyncPGConfig(
-            pool_config={
-                "host": "localhost",
-                "port": 5432,
-                "database": "test",
-                "user": "test",
-                "password": "test",
-            }
+        config = AsyncpgConfig(
+            host="localhost",
+            port=5432,
+            database="test",
+            user="test",
+            password="test",
         )
         assert config.dialect == "postgres"
 
     def test_psycopg_config_dialect(self) -> None:
         """Test Psycopg config dialect property."""
-        from sqlspec.adapters.psycopg import PsycopgConfig, PsycopgSyncDriver
+        from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
 
         # PsycopgConfig should have driver_class set
-        assert hasattr(PsycopgConfig, "driver_class")
-        assert PsycopgConfig.driver_class == PsycopgSyncDriver
+        assert hasattr(PsycopgSyncConfig, "driver_class")
+        assert PsycopgSyncConfig.driver_class == PsycopgSyncDriver
 
         # Create instance and check dialect
-        config = PsycopgConfig(pool_config={"conninfo": "postgresql://test:test@localhost/test"})
+        config = PsycopgSyncConfig(conninfo="postgresql://test:test@localhost/test")
         assert config.dialect == "postgres"
 
     @pytest.mark.asyncio
@@ -387,9 +386,9 @@ class TestDialectPropagation:
     def test_sql_translator_mixin_uses_driver_dialect(self) -> None:
         """Test that SQLTranslatorMixin uses the driver's dialect."""
 
-        from sqlspec.statement.mixins import SQLTranslatorMixin
+        from sqlspec.driver.mixins import SQLTranslatorMixin
 
-        class TestTranslatorDriver(MockDriver, SQLTranslatorMixin[MockConnection]):
+        class TestTranslatorDriver(MockDriver, SQLTranslatorMixin):
             dialect = "postgres"
 
         driver = TestTranslatorDriver(
@@ -399,7 +398,7 @@ class TestDialectPropagation:
 
         # Test convert_to_dialect uses driver dialect by default
         test_sql = "SELECT * FROM users"
-        with patch("sqlspec.statement.mixins._sql_translator.parse_one") as mock_parse:
+        with patch("sqlspec.driver.mixins._sql_translator.parse_one") as mock_parse:
             mock_expr = Mock()
             mock_expr.sql.return_value = "converted sql"
             mock_parse.return_value = mock_expr
@@ -435,7 +434,7 @@ class TestDialectValidation:
         # Create a driver without dialect attribute
         class DriverWithoutDialect(SyncDriverAdapterProtocol[MockConnection, DictRow]):
             # No dialect attribute
-            parameter_style = "qmark"
+            parameter_style = ParameterStyle.QMARK
 
             def _execute_statement(
                 self, statement: Any, connection: Optional[MockConnection] = None, **kwargs: Any
@@ -448,8 +447,8 @@ class TestDialectValidation:
             def _wrap_execute_result(self, statement: Any, result: Any, **kwargs: Any) -> Any:
                 return result
 
-            def _get_placeholder_style(self) -> str:
-                return "qmark"
+            def _get_placeholder_style(self) -> ParameterStyle:
+                return ParameterStyle.QMARK
 
         class IncompleteConfig(NoPoolSyncConfig[MockConnection, DriverWithoutDialect]):
             # No driver_class attribute
@@ -457,20 +456,20 @@ class TestDialectValidation:
             def __init__(self, **kwargs: Any) -> None:
                 self.instrumentation = InstrumentationConfig()
                 self.statement_config = SQLConfig()
-                self.connection_config = {"host": "localhost"}
+                self.host = "localhost"
                 super().__init__(**kwargs)
 
             @property
-            def connection_type(self) -> type[MockConnection]:
+            def connection_type(self) -> type[MockConnection]:  # pyright: ignore
                 return MockConnection
 
             @property
-            def driver_type(self) -> type[DriverWithoutDialect]:
+            def driver_type(self) -> type[DriverWithoutDialect]:  # pyright: ignore
                 return DriverWithoutDialect
 
             @property
             def connection_config_dict(self) -> dict[str, Any]:
-                return self.connection_config
+                return {"host": self.host}
 
             def create_connection(self) -> MockConnection:
                 return MockConnection()

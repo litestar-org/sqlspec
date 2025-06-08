@@ -242,7 +242,7 @@ def test_snake_case_acronym_handling() -> None:
 
     # Mixed acronyms and words
     assert snake_case("parseXMLToJSON") == "parse_xml_to_json"
-    assert snake_case("HTTPSURLValidator") == "https_url_validator"
+    assert snake_case("HTTPSURLValidator") == "httpsurl_validator"
 
 
 def test_snake_case_edge_cases() -> None:

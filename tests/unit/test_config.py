@@ -795,7 +795,7 @@ def test_sync_config_create_pool_exception_handling() -> None:
     """Test SyncDatabaseConfig pool creation exception handling."""
     config = MockSyncPoolConfig()
 
-    with patch.object(config, "_create_pool_impl", side_effect=Exception("Pool creation failed")):
+    with patch.object(config, "_create_pool", side_effect=Exception("Pool creation failed")):
         with pytest.raises(Exception, match="Pool creation failed"):
             config.create_pool()
 
@@ -804,7 +804,7 @@ async def test_async_config_create_pool_exception_handling() -> None:
     """Test AsyncDatabaseConfig pool creation exception handling."""
     config = MockAsyncPoolConfig()
 
-    with patch.object(config, "_create_pool_impl", side_effect=Exception("Async pool creation failed")):
+    with patch.object(config, "_create_pool", side_effect=Exception("Async pool creation failed")):
         with pytest.raises(Exception, match="Async pool creation failed"):
             await config.create_pool()
 
@@ -813,7 +813,7 @@ def test_sync_config_close_pool_exception_handling() -> None:
     """Test SyncDatabaseConfig pool closure exception handling."""
     config = MockSyncPoolConfig()
 
-    with patch.object(config, "_close_pool_impl", side_effect=Exception("Pool closure failed")):
+    with patch.object(config, "_close_pool", side_effect=Exception("Pool closure failed")):
         with pytest.raises(Exception, match="Pool closure failed"):
             config.close_pool()
 
@@ -822,7 +822,7 @@ async def test_async_config_close_pool_exception_handling() -> None:
     """Test AsyncDatabaseConfig pool closure exception handling."""
     config = MockAsyncPoolConfig()
 
-    with patch.object(config, "_close_pool_impl", side_effect=Exception("Async pool closure failed")):
+    with patch.object(config, "_close_pool", side_effect=Exception("Async pool closure failed")):
         with pytest.raises(Exception, match="Async pool closure failed"):
             await config.close_pool()
 

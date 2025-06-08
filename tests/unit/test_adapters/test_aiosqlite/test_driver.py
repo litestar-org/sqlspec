@@ -1,7 +1,7 @@
 """Unit tests for AIOSQLite driver."""
 
 import tempfile
-from typing import Any, Optional
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -230,7 +230,7 @@ async def test_aiosqlite_driver_to_parquet(
     mock_backend.write_arrow_async = None
     del mock_backend.write_arrow_async
 
-    def mock_resolve_backend_and_path(uri: str, storage_key: Optional[str] = None) -> tuple[AsyncMock, str]:
+    def mock_resolve_backend_and_path(uri: str) -> tuple[AsyncMock, str]:
         return mock_backend, uri
 
     monkeypatch.setattr(aiosqlite_driver, "_resolve_backend_and_path", mock_resolve_backend_and_path)

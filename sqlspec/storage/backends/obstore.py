@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError
 from sqlspec.storage.backends.base import InstrumentedObjectStore
-from sqlspec.typing import OBSTORE_INSTALLED
+from sqlspec.typing import OBSTORE_INSTALLED, PYARROW_INSTALLED
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -58,8 +58,7 @@ class ObStoreBackend(InstrumentedObjectStore):
         super().__init__(instrumentation_config, "ObStore")
 
         if not OBSTORE_INSTALLED:
-            msg = "obstore is required for ObStoreBackend"
-            raise MissingDependencyError(msg)
+            raise MissingDependencyError(package="obstore", install_package="obstore")
 
         try:
             from obstore.store import from_url
@@ -108,7 +107,7 @@ class ObStoreBackend(InstrumentedObjectStore):
             resolved_path = self._resolve_path(path)
             result = self.store.get(resolved_path)
             # GetResult provides .bytes() method for obstore
-            return result.bytes()  # type: ignore[no-any-return]
+            return result.bytes()  # type: ignore[return-value]
         except Exception as exc:
             msg = f"Failed to read bytes from {path}"
             raise StorageOperationFailedError(msg) from exc
@@ -148,7 +147,7 @@ class ObStoreBackend(InstrumentedObjectStore):
 
             if not recursive:
                 # Use delimiter-based listing for non-recursive (required by obstore)
-                for item in self.store.list_with_delimiter(resolved_prefix, "/"):
+                for item in self.store.list_with_delimiter(resolved_prefix):
                     path = getattr(item, "path", getattr(item, "key", str(item)))
                     objects.append(path)
             else:
@@ -268,13 +267,13 @@ class ObStoreBackend(InstrumentedObjectStore):
 
             # Check if obstore supports signed URLs
             if hasattr(self.store, "sign_url"):
-                return self.store.sign_url(resolved_path, operation, expires_in)  # type: ignore[attr-defined,no-any-return]
-            self._raise_signed_url_not_supported()
+                return self.store.sign_url(resolved_path, operation, expires_in)  # type: ignore[union-attr]
+            return self._raise_signed_url_not_supported()
         except Exception as exc:
             msg = f"Failed to generate signed URL for {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    def _raise_signed_url_not_supported(self) -> None:
+    def _raise_signed_url_not_supported(self) -> str:
         """Raise NotImplementedError for unsupported signed URL generation."""
         msg = f"Signed URL generation not supported for {self.backend_type} backend"
         raise NotImplementedError(msg)
@@ -309,7 +308,7 @@ class ObStoreBackend(InstrumentedObjectStore):
             # Try native obstore arrow support first
             if self._has_native_arrow:
                 resolved_path = self._resolve_path(path)
-                return self.store.read_arrow(resolved_path, **kwargs)  # type: ignore[attr-defined,no-any-return]
+                return self.store.read_arrow(resolved_path, **kwargs)  # type: ignore[union-attr]
 
             # Fallback to PyArrow + bytes
             from io import BytesIO
@@ -328,11 +327,13 @@ class ObStoreBackend(InstrumentedObjectStore):
 
     def _write_arrow(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
         """Write Arrow table using obstore (with native support if available)."""
+        if not PYARROW_INSTALLED:
+            raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
         try:
             # Try native obstore arrow support first
             if self._has_native_arrow:
                 resolved_path = self._resolve_path(path)
-                self.store.write_arrow(resolved_path, table, **kwargs)  # type: ignore[attr-defined]
+                self.store.write_arrow(resolved_path, table, **kwargs)  # type: ignore[union-attr]
                 return
 
             # Fallback to PyArrow + bytes
@@ -344,9 +345,6 @@ class ObStoreBackend(InstrumentedObjectStore):
             pq.write_table(table, buffer, **kwargs)
             self._write_bytes(path, buffer.getvalue())
 
-        except ImportError as exc:
-            msg = "pyarrow is required for Arrow operations"
-            raise MissingDependencyError(msg) from exc
         except Exception as exc:
             msg = f"Failed to write Arrow table to {path}"
             raise StorageOperationFailedError(msg) from exc
@@ -357,19 +355,18 @@ class ObStoreBackend(InstrumentedObjectStore):
         Yields:
             Iterator of Arrow record batches from matching objects.
         """
+        if not PYARROW_INSTALLED:
+            raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
         try:
             # Try native obstore streaming if available
             if hasattr(self.store, "stream_arrow"):
                 resolved_pattern = self._resolve_path(pattern)
-                yield from self.store.stream_arrow(resolved_pattern, **kwargs)  # type: ignore[attr-defined]
+                yield from self.store.stream_arrow(resolved_pattern, **kwargs)  # type: ignore[union-attr]
                 return
 
             # Fallback to manual streaming
             yield from self._stream_arrow_manual(pattern, **kwargs)
 
-        except ImportError as exc:
-            msg = "pyarrow is required for Arrow streaming"
-            raise MissingDependencyError(msg) from exc
         except Exception as exc:
             msg = f"Failed to stream Arrow data for pattern {pattern}"
             raise StorageOperationFailedError(msg) from exc
@@ -403,17 +400,13 @@ class ObStoreBackend(InstrumentedObjectStore):
 
     async def read_bytes_async(self, path: str, **kwargs: Any) -> bytes:
         """Async read bytes using native obstore async if available."""
-        if hasattr(self.store, "get_async"):
-            try:
-                resolved_path = self._resolve_path(path)
-                result = await self.store.get_async(resolved_path)  # type: ignore[misc]
-                return result.bytes()  # type: ignore[no-any-return]
-            except Exception as exc:
-                msg = f"Failed to async read bytes from {path}"
-                raise StorageOperationFailedError(msg) from exc
-        else:
-            # Fallback to sync-to-async
-            return await super().read_bytes_async(path, **kwargs)
+        try:
+            resolved_path = self._resolve_path(path)
+            result = await self.store.get_async(resolved_path)  # type: ignore[misc]
+            return result.bytes()  # type: ignore[return-value]
+        except Exception as exc:
+            msg = f"Failed to async read bytes from {path}"
+            raise StorageOperationFailedError(msg) from exc
 
     async def write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:
         """Async write bytes using native obstore async if available."""
@@ -430,24 +423,21 @@ class ObStoreBackend(InstrumentedObjectStore):
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """Async list objects using native obstore async if available."""
-        if hasattr(self.store, "list_async"):
-            try:
-                resolved_prefix = self._resolve_path(prefix) if prefix else self.base_path or ""
-                objects = []
 
-                async for item in self.store.list_async(resolved_prefix):  # type: ignore[attr-defined]
-                    path = getattr(item, "path", getattr(item, "key", str(item)))
-                    objects.append(path)
+        try:
+            resolved_prefix = self._resolve_path(prefix) if prefix else self.base_path or ""
+            objects = []
 
-                # Manual filtering for non-recursive if needed
-                if not recursive and resolved_prefix:
-                    base_depth = resolved_prefix.count("/")
-                    objects = [obj for obj in objects if obj.count("/") <= base_depth + 1]
+            async for item in self.store.list_async(resolved_prefix):  # type: ignore[union-attr]
+                path = getattr(item, "path", getattr(item, "key", str(item)))
+                objects.append(path)
 
-                return sorted(objects)
-            except Exception as exc:
-                msg = f"Failed to async list objects with prefix '{prefix}'"
-                raise StorageOperationFailedError(msg) from exc
-        else:
-            # Fallback to sync-to-async
-            return await super().list_objects_async(prefix, recursive, **kwargs)
+            # Manual filtering for non-recursive if needed
+            if not recursive and resolved_prefix:
+                base_depth = resolved_prefix.count("/")
+                objects = [obj for obj in objects if obj.count("/") <= base_depth + 1]
+
+            return sorted(objects)
+        except Exception as exc:
+            msg = f"Failed to async list objects with prefix '{prefix}'"
+            raise StorageOperationFailedError(msg) from exc

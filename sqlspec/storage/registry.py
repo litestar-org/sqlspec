@@ -2,11 +2,11 @@
 """Unified Storage Registry for ObjectStore backends.
 
 This module provides a flexible, lazy-loading storage registry that supports:
-- Two-backend architecture: ObStore (primary) and FSSpec (fallback)
-- Object store terminology with base path support
-- Smart protocol detection with automatic backend selection
-- Lazy instantiation with caching
-- Instrumentation integration
+- URI-first access pattern with automatic backend detection
+- ObStore preferred, FSSpec fallback architecture
+- Intelligent scheme-based routing with dependency detection
+- Named aliases for commonly used configurations (secondary feature)
+- Automatic instrumentation integration
 """
 
 # TODO: TRY300 - Review try-except patterns for else block opportunities
@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Optional, TypeVar, Union
 
 from sqlspec.storage.protocol import ObjectStoreProtocol
+from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED
 
 __all__ = ("StorageRegistry", "storage_registry")
 
@@ -24,146 +25,129 @@ BackendT = TypeVar("BackendT", bound=ObjectStoreProtocol)
 
 
 class StorageRegistry:
-    """Unified storage registry supporting sync and async operations.
+    """Unified storage registry with URI-first access and intelligent backend selection.
 
-    This registry implements the storage redesign plan with:
-    - Two backends: ObStore (primary) and FSSpec (fallback/extended protocols)
-    - Object store terminology consistent with cloud storage patterns
-    - Base path support for different configurations
-    - Smart protocol detection with automatic backend selection
-    - Instrumentation integration for all operations
+    This registry implements Phase 3 of the unified storage redesign:
+    - URI-first access pattern - pass URIs directly to get()
+    - Automatic ObStore preference when available
+    - Intelligent FSSpec fallback for unsupported schemes or when ObStore unavailable
+    - Named aliases as secondary feature for commonly used configurations
+    - Dependency-aware backend selection with clear error messages
 
     Examples:
-        # Register with URI and base path
-        registry.register(
-            "s3-data",
-            uri="s3://my-bucket/data",
+        # Primary usage: Direct URI access (no registration needed)
+        backend = registry.get("s3://my-bucket/file.parquet")    # ObStore preferred
+        backend = registry.get("file:///tmp/data.csv")          # Obstore for local files
+        backend = registry.get("gs://bucket/data.json")         # ObStore for GCS
+
+        # Secondary usage: Named aliases for complex configurations
+        registry.register_alias(
+            "production-s3",
+            uri="s3://prod-bucket/data",
             base_path="sqlspec",
             aws_access_key_id="...",
             aws_secret_access_key="..."
         )
+        backend = registry.get("production-s3")  # Uses alias
 
-        # Register with explicit backend
-        registry.register(
-            "local-storage",
-            backend=FSSpecBackend,
-            uri="file:///tmp/storage",
-            base_path="app"
-        )
-
-        # Get backend (lazy loaded)
-        backend = registry.get("s3-data")
-
-        # Resolve from URI with automatic fallback
-        backend = registry.get("s3://my-bucket/file.parquet")  # Auto-creates ObStore backend
+        # Automatic fallback when ObStore unavailable
+        # If obstore not installed: s3:// → FSSpec automatically
+        # Clear error if neither backend supports the scheme
     """
 
     def __init__(self) -> None:
-        self._backends: dict[str, tuple[type[ObjectStoreProtocol], dict]] = {}
+        # Named aliases (secondary feature)
+        self._aliases: dict[str, tuple[type[ObjectStoreProtocol], dict]] = {}
         self._instances: dict[str, ObjectStoreProtocol] = {}
-        self._scheme_mapping: dict[str, str] = {}
-        self._default_backend: str = "obstore"
 
-        # Register default schemes
-        self._register_defaults()
+        # ObStore preferred schemes (will fallback to FSSpec if ObStore unavailable)
+        self._obstore_schemes = {"s3", "s3a", "gs", "gcs", "az", "azure", "abfs", "abfss", "memory", "http", "https"}
 
-    def _register_defaults(self) -> None:
-        """Register default scheme mappings."""
-        # Local file protocol - use FSSpec as ObStore fallback
-        self._scheme_mapping["file"] = "fsspec"
+        # FSSpec preferred schemes (use FSSpec first)
+        self._fsspec_schemes = {"file", "ftp", "sftp", "webdav", "dropbox", "gdrive"}
 
-        # ObStore protocols (preferred) - with fallback to FSSpec if obstore not available
-        for scheme in ("s3", "gs", "az", "memory", "http", "https"):
-            self._scheme_mapping[scheme] = "obstore"
+        # Extended schemes that either backend might support
+        self._flexible_schemes = {"hdfs", "gcp", "adl"}
 
-        # FSSpec-only protocols (extended support)
-        for scheme in ("ftp", "sftp", "webdav", "dropbox", "gdrive"):
-            self._scheme_mapping[scheme] = "fsspec"
-
-    def register(
+    def register_alias(
         self,
-        key: str,
+        alias: str,
+        uri: str,
         *,
         backend: Optional[type[ObjectStoreProtocol]] = None,
-        uri: Optional[str] = None,
         base_path: str = "",
         config: Optional[dict] = None,
         **kwargs: Any,
     ) -> None:
-        """Register a storage backend configuration.
+        """Register a named alias for a storage configuration.
+
+        Note: This is a secondary feature. Primary usage is direct URI access via get().
 
         Args:
-            key: Unique identifier for the backend
-            backend: Backend class to use (auto-detected from URI if not provided)
+            alias: Unique alias name for the configuration
             uri: Storage URI (e.g., "s3://bucket", "file:///path")
+            backend: Backend class to use (auto-detected from URI if not provided)
             base_path: Base path to prepend to all operations
             config: Additional configuration dict
             **kwargs: Backend-specific configuration options
         """
         if backend is None:
-            # Auto-detect from URI
-            if uri:
-                scheme = uri.split("://")[0]
-                backend_type = self._scheme_mapping.get(scheme, self._default_backend)
-                backend = self._get_backend_class(backend_type)
-            else:
-                msg = "Either backend or uri must be provided"
-                raise ValueError(msg)
+            # Auto-detect from URI using new intelligent selection
+            backend = self._determine_backend_class(uri)
 
         config = config or {}
         config.update(kwargs)
         config["base_path"] = base_path
-        if uri:
-            config["store"] = uri  # For ObStore
-            config["fs"] = uri  # For FSSpec
 
-        self._backends[key] = (backend, config)
+        # Set URI for both backend types
+        if "obstore" in backend.__module__:
+            config["store_uri"] = uri
+        else:
+            config["uri"] = uri
 
-    def get(self, key_or_uri: Union[str, Path]) -> ObjectStoreProtocol:
-        """Get backend instance by key or URI.
+        self._aliases[alias] = (backend, config)
+
+    def get(self, uri_or_alias: Union[str, Path]) -> ObjectStoreProtocol:
+        """Get backend instance using URI-first routing with intelligent backend selection.
 
         Args:
-            key_or_uri: Either a registered key or a URI to resolve
+            uri_or_alias: URI to resolve directly OR named alias (secondary feature)
 
         Returns:
-            Backend instance
+            Backend instance with automatic ObStore preference and FSSpec fallback
 
         Raises:
-            KeyError: If key not found and URI cannot be resolved
+            KeyError: If alias not found and URI cannot be resolved
+            ValueError: If no suitable backend is available for the URI scheme
         """
-        # Handle Path objects
-        if isinstance(key_or_uri, Path):
-            key_or_uri = f"file://{key_or_uri.resolve()}"
+        # Handle Path objects - convert to file:// URI
+        if isinstance(uri_or_alias, Path):
+            uri_or_alias = f"file://{uri_or_alias.resolve()}"
 
-        # Check if it's a registered key
-        if key_or_uri in self._instances:
-            return self._instances[key_or_uri]
+        # Check cache first
+        if uri_or_alias in self._instances:
+            return self._instances[uri_or_alias]
 
-        if key_or_uri in self._backends:
-            # Lazy instantiation
-            backend_cls, config = self._backends[key_or_uri]
+        # PRIMARY: Try URI-first routing
+        if "://" in uri_or_alias:
+            backend = self._resolve_from_uri(uri_or_alias)
+            # Cache the instance for future use
+            self._instances[uri_or_alias] = backend
+            return backend
+
+        # SECONDARY: Check if it's a registered alias
+        if uri_or_alias in self._aliases:
+            backend_cls, config = self._aliases[uri_or_alias]
             instance = backend_cls(**config)
-            self._instances[key_or_uri] = instance
+            self._instances[uri_or_alias] = instance
             return instance
 
-        # Try to parse as URI
-        if "://" in key_or_uri:
-            return self._resolve_from_uri(key_or_uri)
-
-        msg = f"No backend registered for '{key_or_uri}'"
+        # Not a URI and not an alias
+        msg = f"No backend available for '{uri_or_alias}'. Use a valid URI (e.g., 's3://bucket/path') or register an alias."
         raise KeyError(msg)
 
-    def register_scheme(self, scheme: str, backend: str = "obstore") -> None:
-        """Register a URI scheme to backend mapping.
-
-        Args:
-            scheme: URI scheme (e.g., 's3', 'gs', 'file')
-            backend: Backend type ('obstore' or 'fsspec')
-        """
-        self._scheme_mapping[scheme] = backend
-
     def _resolve_from_uri(self, uri: str) -> ObjectStoreProtocol:
-        """Resolve backend from URI with intelligent fallback.
+        """Resolve backend from URI with intelligent ObStore preference and FSSpec fallback.
 
         Args:
             uri: URI to resolve backend for
@@ -174,36 +158,116 @@ class StorageRegistry:
         Raises:
             KeyError: If no suitable backend can be created
         """
-        scheme = uri.split("://", maxsplit=1)[0]
-        backend_type = self._scheme_mapping.get(scheme)
+        scheme = uri.split("://", maxsplit=1)[0].lower()
 
-        if not backend_type:
-            # Try ObStore first (if available), fall back to FSSpec
-            try:
-                return self._create_backend("obstore", uri)
-            except Exception:
-                # ObStore failed (likely not installed), try FSSpec
+        # Determine backend preference based on scheme and availability
+        if scheme in self._obstore_schemes:
+            # Try ObStore first for these schemes
+            if OBSTORE_INSTALLED:
+                try:
+                    return self._create_backend("obstore", uri)
+                except Exception as e:
+                    logger.debug("ObStore failed for %s, trying FSSpec fallback: %s", uri, e)
+                    # Fall through to FSSpec attempt
+
+            # ObStore not available or failed, try FSSpec
+            if FSSPEC_INSTALLED:
                 try:
                     return self._create_backend("fsspec", uri)
                 except Exception as e:
-                    msg = f"Failed to create backend for URI '{uri}': {e}"
-                    raise KeyError(msg) from e
-
-        try:
-            return self._create_backend(backend_type, uri)
-        except Exception as e:
-            # For obstore failures, automatically fall back to fsspec
-            if backend_type == "obstore":
-                try:
-                    logger.debug("ObStore not available, falling back to FSSpec for %s", uri)
-                    return self._create_backend("fsspec", uri)
-                except Exception:
-                    msg = f"Failed to create backend for URI '{uri}': {e}"
+                    msg = f"Neither ObStore nor FSSpec could handle URI '{uri}': {e}"
                     raise KeyError(msg) from e
             else:
-                # FSSpec failed, no fallback available
-                msg = f"Failed to create backend for URI '{uri}': {e}"
-                raise KeyError(msg) from e
+                msg = f"URI '{uri}' requires ObStore or FSSpec but neither is installed"
+                raise KeyError(msg)
+
+        elif scheme in self._fsspec_schemes:
+            # Use FSSpec first for these schemes
+            if FSSPEC_INSTALLED:
+                try:
+                    return self._create_backend("fsspec", uri)
+                except Exception as e:
+                    logger.debug("FSSpec failed for %s: %s", uri, e)
+                    msg = f"FSSpec could not handle URI '{uri}': {e}"
+                    raise KeyError(msg) from e
+            else:
+                msg = f"URI scheme '{scheme}' requires FSSpec but it is not installed"
+                raise KeyError(msg)
+
+        elif scheme in self._flexible_schemes:
+            # Try both backends for flexible schemes
+            last_error = None
+
+            # Try ObStore first if available
+            if OBSTORE_INSTALLED:
+                try:
+                    return self._create_backend("obstore", uri)
+                except Exception as e:
+                    last_error = e
+                    logger.debug("ObStore failed for %s, trying FSSpec: %s", uri, e)
+
+            # Try FSSpec
+            if FSSPEC_INSTALLED:
+                try:
+                    return self._create_backend("fsspec", uri)
+                except Exception as e:
+                    last_error = e
+                    logger.debug("FSSpec also failed for %s: %s", uri, e)
+
+            # Both failed or neither available
+            msg = f"No backend could handle URI '{uri}'"
+            if last_error:
+                msg += f": {last_error}"
+            raise KeyError(msg)
+        else:
+            # Unknown scheme - try both backends
+            logger.warning("Unknown URI scheme '%s', trying available backends", scheme)
+            last_error = None
+
+            # Try ObStore first if available
+            if OBSTORE_INSTALLED:
+                try:
+                    return self._create_backend("obstore", uri)
+                except Exception as e:
+                    last_error = e
+
+            # Try FSSpec
+            if FSSPEC_INSTALLED:
+                try:
+                    return self._create_backend("fsspec", uri)
+                except Exception as e:
+                    last_error = e
+
+            # Neither worked
+            msg = f"Unknown URI scheme '{scheme}' and no backend could handle '{uri}'"
+            if last_error:
+                msg += f": {last_error}"
+            raise KeyError(msg)
+
+    def _determine_backend_class(self, uri: str) -> type[ObjectStoreProtocol]:
+        """Determine the best backend class for a URI based on scheme and availability.
+
+        Args:
+            uri: URI to determine backend for
+
+        Returns:
+            Backend class (not instance)
+
+        Raises:
+            ValueError: If no suitable backend is available
+        """
+        scheme = uri.split("://", maxsplit=1)[0].lower()
+
+        if scheme in self._obstore_schemes and OBSTORE_INSTALLED:
+            return self._get_backend_class("obstore")
+        if scheme in self._fsspec_schemes and FSSPEC_INSTALLED:
+            return self._get_backend_class("fsspec")
+        if OBSTORE_INSTALLED:
+            return self._get_backend_class("obstore")
+        if FSSPEC_INSTALLED:
+            return self._get_backend_class("fsspec")
+        msg = f"No backend available for URI scheme '{scheme}'. Install obstore or fsspec."
+        raise ValueError(msg)
 
     def _get_backend_class(self, backend_type: str) -> type[ObjectStoreProtocol]:
         """Get backend class by type name.
@@ -250,28 +314,63 @@ class StorageRegistry:
         return backend_cls(uri)  # type: ignore[call-arg]
 
     # Utility methods
-    def is_registered(self, key: str) -> bool:
-        """Check if a backend key is registered."""
-        return key in self._backends
+    def is_alias_registered(self, alias: str) -> bool:
+        """Check if a named alias is registered."""
+        return alias in self._aliases
 
-    def list_keys(self) -> list[str]:
-        """List all registered backend keys."""
-        return list(self._backends.keys())
+    def list_aliases(self) -> list[str]:
+        """List all registered aliases."""
+        return list(self._aliases.keys())
 
-    def list_schemes(self) -> dict[str, str]:
-        """List all registered scheme mappings."""
-        return self._scheme_mapping.copy()
+    def get_scheme_preferences(self) -> dict[str, str]:
+        """Get current scheme preferences for debugging.
 
-    def clear_cache(self, key: Optional[str] = None) -> None:
+        Returns:
+            Dict mapping schemes to preferred backend types
+        """
+        preferences = {}
+        for scheme in self._obstore_schemes:
+            preferences[scheme] = "obstore" if OBSTORE_INSTALLED else "fsspec"
+        for scheme in self._fsspec_schemes:
+            preferences[scheme] = "fsspec"
+        for scheme in self._flexible_schemes:
+            if OBSTORE_INSTALLED:
+                preferences[scheme] = "obstore"
+            elif FSSPEC_INSTALLED:
+                preferences[scheme] = "fsspec"
+            else:
+                preferences[scheme] = "none"
+        return preferences
+
+    def clear_cache(self, uri_or_alias: Optional[str] = None) -> None:
         """Clear resolved backend cache.
 
         Args:
-            key: Specific key to clear, or None to clear all
+            uri_or_alias: Specific URI or alias to clear, or None to clear all
         """
-        if key:
-            self._instances.pop(key, None)
+        if uri_or_alias:
+            self._instances.pop(uri_or_alias, None)
         else:
             self._instances.clear()
+
+    def register_scheme(self, scheme: str, backend: str = "obstore") -> None:
+        """Register a custom scheme preference (mainly for testing).
+
+        Args:
+            scheme: URI scheme to register
+            backend: Backend preference ("obstore" or "fsspec")
+        """
+        if backend == "obstore":
+            self._obstore_schemes.add(scheme)
+            self._fsspec_schemes.discard(scheme)
+            self._flexible_schemes.discard(scheme)
+        elif backend == "fsspec":
+            self._fsspec_schemes.add(scheme)
+            self._obstore_schemes.discard(scheme)
+            self._flexible_schemes.discard(scheme)
+        else:
+            msg = f"Unknown backend type: {backend}. Use 'obstore' or 'fsspec'"
+            raise ValueError(msg)
 
 
 # Global registry instance

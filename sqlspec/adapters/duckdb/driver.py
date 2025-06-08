@@ -9,7 +9,7 @@ from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
 from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.logging import get_logger
@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.config import InstrumentationConfig
-    from sqlspec.statement.result import ArrowResult
 
 __all__ = ("DuckDBConnection", "DuckDBDriver")
 
@@ -63,24 +62,6 @@ class DuckDBDriver(
             instrumentation_config=instrumentation_config,
             default_row_type=default_row_type,
         )
-        # Auto-register storage backends from config
-        storage_config = getattr(config, "storage", None)
-        if storage_config and getattr(storage_config, "auto_register", True):
-            self._register_storage_backends(storage_config)
-
-    def _register_storage_backends(self, storage_config: Any) -> None:
-        for key, backend_config in getattr(storage_config, "backends", {}).items():
-            self._register_storage_backend_from_config(key, backend_config)
-
-    def _register_storage_backend_from_config(self, key: str, backend_config: Any) -> None:
-        from sqlspec.storage import storage_registry
-
-        logger = get_logger("adapters.duckdb")
-        # Intentionally catch per-backend errors to allow partial registration and robust startup.
-        try:
-            storage_registry.register(key, backend_config)  # pyright: ignore[reportCallIssue]
-        except Exception as e:
-            logger.warning("Failed to register storage backend '%s': %s", key, e)
 
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.QMARK
@@ -264,6 +245,42 @@ class DuckDBDriver(
                 rows_affected=rows_affected,
                 operation_type=operation_type,
             )
+
+    # ============================================================================
+    # DuckDB Native Arrow Support
+    # ============================================================================
+
+    def _fetch_arrow_table(
+        self,
+        sql_obj: SQL,
+        connection: "Optional[Any]" = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """DuckDB native Arrow table fetching.
+
+        DuckDB has excellent native Arrow support through execute().arrow()
+        This is much faster than fetching rows and converting to Arrow.
+
+        Args:
+            sql_obj: Processed SQL object
+            connection: Optional connection override
+            **kwargs: Additional options (e.g., batch_size for streaming)
+
+        Returns:
+            ArrowResult with native Arrow table
+        """
+
+        conn = self._connection(connection)
+
+        with wrap_exceptions():
+            # DuckDB native approach - execute and get Arrow directly
+            result = conn.execute(sql_obj.to_sql())
+            arrow_table = result.arrow()
+
+            if self.instrumentation_config.log_results_count:
+                logger.debug("Fetched Arrow table with %d rows", arrow_table.num_rows)
+
+            return ArrowResult(statement=sql_obj, data=arrow_table)
 
     # ============================================================================
     # DuckDB Native Storage Operations (Override base implementations)

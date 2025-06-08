@@ -30,13 +30,13 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from sqlspec.statement.parameters import ParameterStyle
 
-__all__ = ("CommonDriverAttributes",)
+__all__ = ("CommonDriverAttributesMixin",)
 
 
 logger = get_logger("driver")
 
 
-class CommonDriverAttributes(ABC, Generic[ConnectionT, RowT]):
+class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
     """Enhanced common attributes and methods for driver adapters with instrumentation."""
 
     dialect: "Any"  # DialectType
@@ -168,7 +168,7 @@ class CommonDriverAttributes(ABC, Generic[ConnectionT, RowT]):
             return True
         if isinstance(expression, exp.With) and expression.expressions:
             # Check the final expression in the WITH clause
-            return CommonDriverAttributes.returns_rows(expression.expressions[-1])
+            return CommonDriverAttributesMixin.returns_rows(expression.expressions[-1])
         if isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):  # Check for RETURNING
             return bool(expression.find(exp.Returning))
         return False

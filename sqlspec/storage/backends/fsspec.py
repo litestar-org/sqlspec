@@ -1,3 +1,4 @@
+# ruff: noqa: PLR0904
 import logging
 from typing import TYPE_CHECKING, Any, Union
 
@@ -386,9 +387,6 @@ class FSSpecBackend(ObjectStoreProtocol):
                 async for batch in self._stream_file_batches_async(obj_path):
                     yield batch
 
-        except ImportError:
-            msg = "pyarrow"
-            raise MissingDependencyError(msg)
         except Exception as exc:
             msg = f"Failed to stream Arrow data for pattern {pattern}"
             raise StorageOperationFailedError(msg) from exc

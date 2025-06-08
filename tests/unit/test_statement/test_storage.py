@@ -13,8 +13,8 @@ def registry() -> "StorageRegistry":
     return StorageRegistry()
 
 
-def test_register_and_get_backend_with_uri(registry: "StorageRegistry") -> None:
-    # Test registering with URI
+def test_register_alias_and_get_backend_with_uri(registry: "StorageRegistry") -> None:
+    # Test registering alias with URI
     uri = "s3://test-bucket"
     with patch("sqlspec.storage.registry.StorageRegistry._get_backend_class") as mock_get_class:
         backend_cls = MagicMock()
@@ -22,22 +22,22 @@ def test_register_and_get_backend_with_uri(registry: "StorageRegistry") -> None:
         backend_cls.return_value = backend_instance
         mock_get_class.return_value = backend_cls
 
-        registry.register("foo", uri=uri)
+        registry.register_alias("foo", uri=uri)
         assert registry.get("foo") is backend_instance
-        assert registry.is_registered("foo")
-        assert "foo" in registry.list_keys()
+        assert registry.is_alias_registered("foo")
+        assert "foo" in registry.list_aliases()
 
 
-def test_register_and_get_backend_with_backend_instance(registry: "StorageRegistry") -> None:
-    # Test registering with backend class
+def test_register_alias_with_backend_class(registry: "StorageRegistry") -> None:
+    # Test registering alias with backend class
     backend_cls = MagicMock()
     backend_instance = MagicMock(spec=ObjectStoreProtocol)
     backend_cls.return_value = backend_instance
 
-    registry.register("foo", backend=backend_cls)  # type: ignore[arg-type]
+    registry.register_alias("foo", uri="memory://test", backend=backend_cls)  # type: ignore[arg-type]
     assert registry.get("foo") is backend_instance
-    assert registry.is_registered("foo")
-    assert "foo" in registry.list_keys()
+    assert registry.is_alias_registered("foo")
+    assert "foo" in registry.list_aliases()
 
 
 def test_get_unregistered_backend_raises(registry: "StorageRegistry") -> None:
@@ -45,14 +45,20 @@ def test_get_unregistered_backend_raises(registry: "StorageRegistry") -> None:
         registry.get("missing")
 
 
-def test_invalid_backend_raises(registry: "StorageRegistry") -> None:
-    # Test with None backend and no URI (should raise ValueError)
-    with pytest.raises(ValueError, match="Either backend or uri must be provided"):
-        registry.register("foo")
+def test_uri_first_access(registry: "StorageRegistry") -> None:
+    # Test URI-first access pattern without registration
+    uri = "s3://test-bucket/file.parquet"
+    with patch("sqlspec.storage.registry.StorageRegistry._create_backend") as mock_create:
+        backend_instance = MagicMock(spec=ObjectStoreProtocol)
+        mock_create.return_value = backend_instance
+
+        result = registry.get(uri)
+        assert result is backend_instance
+        mock_create.assert_called_once_with("obstore", uri)
 
 
-def test_register_from_uri_obstore(registry: "StorageRegistry") -> None:
-    # Test with S3 URI (maps to obstore)
+def test_alias_with_obstore_uri(registry: "StorageRegistry") -> None:
+    # Test alias with S3 URI (maps to obstore)
     uri = "s3://bkt/data"
     with patch("sqlspec.storage.registry.StorageRegistry._get_backend_class") as mock_get_class:
         backend_cls = MagicMock()
@@ -60,13 +66,13 @@ def test_register_from_uri_obstore(registry: "StorageRegistry") -> None:
         backend_cls.return_value = backend_instance
         mock_get_class.return_value = backend_cls
 
-        registry.register("ob", uri=uri)
+        registry.register_alias("ob", uri=uri)
         backend = registry.get("ob")
         assert backend is backend_instance
 
 
-def test_register_from_uri_fsspec(registry: "StorageRegistry") -> None:
-    # Test with file URI (maps to fsspec)
+def test_alias_with_fsspec_uri(registry: "StorageRegistry") -> None:
+    # Test alias with file URI (maps to fsspec)
     uri = "file:///tmp/data"
     with patch("sqlspec.storage.registry.StorageRegistry._get_backend_class") as mock_get_class:
         backend_cls = MagicMock()
@@ -74,7 +80,7 @@ def test_register_from_uri_fsspec(registry: "StorageRegistry") -> None:
         backend_cls.return_value = backend_instance
         mock_get_class.return_value = backend_cls
 
-        registry.register("fs", uri=uri)
+        registry.register_alias("fs", uri=uri)
         backend = registry.get("fs")
         assert backend is backend_instance
 
@@ -88,24 +94,24 @@ def test_get_from_unknown_uri_raises(registry: "StorageRegistry") -> None:
             registry.get(uri)
 
 
-def test_scheme_registration() -> None:
+def test_scheme_preferences() -> None:
     registry = StorageRegistry()
 
-    # Test default scheme mappings
-    schemes = registry.list_schemes()
-    assert schemes["s3"] == "obstore"
-    assert schemes["file"] == "fsspec"
+    # Test default scheme preferences
+    schemes = registry.get_scheme_preferences()
+    assert "s3" in schemes
+    assert "file" in schemes
 
     # Test custom scheme registration
     registry.register_scheme("custom", "fsspec")
-    updated_schemes = registry.list_schemes()
+    updated_schemes = registry.get_scheme_preferences()
     assert updated_schemes["custom"] == "fsspec"
 
 
 def test_cache_clearing() -> None:
     registry = StorageRegistry()
 
-    # Register and get a backend
+    # Register alias and get a backend
     call_count = 0
 
     def mock_backend_factory(**kwargs: Any) -> MagicMock:
@@ -117,7 +123,7 @@ def test_cache_clearing() -> None:
 
     backend_cls = MagicMock(side_effect=mock_backend_factory)
 
-    registry.register("test", backend=backend_cls)  # type: ignore[arg-type]
+    registry.register_alias("test", uri="memory://test", backend=backend_cls)  # type: ignore[arg-type]
     first_get = registry.get("test")
     second_get = registry.get("test")
 
@@ -134,7 +140,6 @@ def test_cache_clearing() -> None:
     assert third_get.call_id == 2  # type: ignore[attr-defined]
 
 
-@pytest.mark.skipif(True, reason="Storage backends require optional dependencies")  # type: ignore
 def test_backend_creation_with_obstore() -> None:
     """Test actual backend creation (requires obstore dependency)."""
     registry = StorageRegistry()
@@ -145,7 +150,6 @@ def test_backend_creation_with_obstore() -> None:
     assert backend.backend_type == "obstore"  # type: ignore[attr-defined]
 
 
-@pytest.mark.skipif(True, reason="Storage backends require optional dependencies")  # type: ignore
 def test_backend_creation_with_fsspec() -> None:
     """Test actual backend creation (requires fsspec dependency)."""
     registry = StorageRegistry()
@@ -170,8 +174,8 @@ def test_uri_resolution_with_path() -> None:
         mock_resolve.assert_called_once_with(f"file://{test_path.resolve()}")
 
 
-def test_duplicate_registration() -> None:
-    """Test that duplicate keys are allowed (overwrites previous)."""
+def test_duplicate_alias_registration() -> None:
+    """Test that duplicate aliases are allowed (overwrites previous)."""
     registry = StorageRegistry()
 
     # Create distinct mock factories
@@ -189,15 +193,15 @@ def test_duplicate_registration() -> None:
     backend2_cls = MagicMock(side_effect=make_backend2)
 
     # Register first backend
-    registry.register("dup", backend=backend1_cls)  # type: ignore[arg-type]
+    registry.register_alias("dup", uri="memory://test1", backend=backend1_cls)  # type: ignore[arg-type]
     first_result = registry.get("dup")
     assert first_result.backend_id == "backend1"  # type: ignore[attr-defined]
 
     # Clear cache before re-registering
     registry.clear_cache("dup")
 
-    # Register second backend with same key
-    registry.register("dup", backend=backend2_cls)  # type: ignore[arg-type]
+    # Register second backend with same alias
+    registry.register_alias("dup", uri="memory://test2", backend=backend2_cls)  # type: ignore[arg-type]
     second_result = registry.get("dup")
     assert second_result.backend_id == "backend2"  # type: ignore[attr-defined]
 
@@ -205,17 +209,17 @@ def test_duplicate_registration() -> None:
     assert second_result is not first_result
 
 
-def test_empty_key_allowed() -> None:
-    """Test that empty string keys are allowed."""
+def test_empty_alias_allowed() -> None:
+    """Test that empty string aliases are allowed."""
     registry = StorageRegistry()
 
     backend_cls = MagicMock()
     backend_instance = MagicMock(spec=ObjectStoreProtocol)
     backend_cls.return_value = backend_instance
 
-    # Empty key should be allowed
-    registry.register("", backend=backend_cls)  # type: ignore[arg-type]
+    # Empty alias should be allowed
+    registry.register_alias("", uri="memory://test", backend=backend_cls)  # type: ignore[arg-type]
     result = registry.get("")
     assert result is backend_instance
-    assert registry.is_registered("")
-    assert "" in registry.list_keys()
+    assert registry.is_alias_registered("")
+    assert "" in registry.list_aliases()

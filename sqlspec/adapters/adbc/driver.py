@@ -17,6 +17,7 @@ from sqlspec.utils.telemetry import instrument_operation
 
 if TYPE_CHECKING:
     from sqlspec.config import InstrumentationConfig
+    from sqlspec.statement.result import ArrowResult
 
 __all__ = ("AdbcConnection", "AdbcDriver")
 
@@ -158,7 +159,14 @@ class AdbcDriver(
                 logger.debug("Query parameters: %s", parameters)
             # ADBC accepts various parameter formats based on backend
             cursor.execute(sql, parameters or [])
-            return cursor
+
+            if self.returns_rows(statement.expression):
+                fetched_data = cursor.fetchall()
+                column_names = [col[0] for col in cursor.description or []]
+                return {"data": fetched_data, "columns": column_names}
+
+            # For non-SELECT statements, return rowcount
+            return {"rowcount": cursor.rowcount}
 
     def _execute_many(
         self,
@@ -198,9 +206,8 @@ class AdbcDriver(
         **kwargs: Any,
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "adbc_wrap_select", "database"):
-            cursor = result
-            fetched_data = cursor.fetchall()
-            column_names = [col[0] for col in cursor.description or []]
+            fetched_data = result["data"]
+            column_names = result["columns"]
 
             rows_as_dicts: list[dict[str, Any]] = []
             if fetched_data:
@@ -246,28 +253,9 @@ class AdbcDriver(
                     metadata={"status_message": result},
                 )
 
-            cursor = result
-            try:
-                rows_affected = cursor.rowcount
-            except AttributeError:
-                rows_affected = -1
-
+            rows_affected = result["rowcount"]
             returned_data: list[dict[str, Any]] = []
             column_names_for_returning: list[str] = []
-
-            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
-                if cursor.description:
-                    try:
-                        fetched_returning_data = cursor.fetchall()
-                        if fetched_returning_data:
-                            column_names_for_returning = [col[0] for col in cursor.description or []]
-                            returned_data = [
-                                dict(zip(column_names_for_returning, row)) for row in fetched_returning_data
-                            ]
-                            if rows_affected == -1 and returned_data:
-                                rows_affected = len(returned_data)
-                    except Exception as e:  # pragma: no cover
-                        logger.debug("Could not fetch RETURNING data in ADBC _wrap_execute_result: %s", e)
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)
@@ -281,3 +269,45 @@ class AdbcDriver(
                 operation_type=operation_type,
                 column_names=column_names_for_returning,
             )
+
+    # ============================================================================
+    # ADBC Native Arrow Support
+    # ============================================================================
+
+    def _fetch_arrow_table(
+        self,
+        sql_obj: SQL,
+        connection: "Optional[Any]" = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """ADBC native Arrow table fetching.
+
+        ADBC has excellent native Arrow support through cursor.fetch_arrow_table()
+        This provides zero-copy data transfer for optimal performance.
+
+        Args:
+            sql_obj: Processed SQL object
+            connection: Optional connection override
+            **kwargs: Additional options (e.g., batch_size for streaming)
+
+        Returns:
+            ArrowResult with native Arrow table
+        """
+        from sqlspec.statement.result import ArrowResult
+
+        conn = self._connection(connection)
+
+        with wrap_exceptions(), self._get_cursor(conn) as cursor:
+            # Execute the query
+            cursor.execute(
+                sql_obj.to_sql(placeholder_style=self._get_placeholder_style()),
+                sql_obj.get_parameters(style=self._get_placeholder_style()) or [],
+            )
+
+            # Use ADBC's native Arrow fetch
+            arrow_table = cursor.fetch_arrow_table()
+
+            if self.instrumentation_config.log_results_count and arrow_table:
+                logger.debug("Fetched Arrow table with %d rows", arrow_table.num_rows)
+
+            return ArrowResult(statement=sql_obj, data=arrow_table)

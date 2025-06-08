@@ -691,9 +691,28 @@ def test_wrap_exceptions_context_manager_already_repository_error() -> None:
         with wrap_exceptions():
             raise original_error
 
-    # Should wrap even existing RepositoryErrors
-    assert isinstance(exc_info.value, RepositoryError)
-    assert isinstance(exc_info.value.__cause__, RepositoryError)
+    # Should NOT wrap existing SQLSpec exceptions - they pass through as-is
+    assert exc_info.value is original_error
+    assert exc_info.value.__cause__ is None
+
+
+def test_wrap_exceptions_context_manager_sqlspec_exceptions_pass_through() -> None:
+    """Test wrap_exceptions with various SQLSpec exceptions."""
+    sqlspec_exceptions = [
+        SQLValidationError("Validation error"),
+        ParameterError("Parameter error"),
+        MissingDependencyError("test"),
+        SQLInjectionError("Injection detected"),
+    ]
+
+    for original_error in sqlspec_exceptions:
+        with pytest.raises(type(original_error)) as exc_info:
+            with wrap_exceptions():
+                raise original_error
+
+        # Should NOT wrap existing SQLSpec exceptions - they pass through as-is
+        assert exc_info.value is original_error
+        assert exc_info.value.__cause__ is None
 
 
 @pytest.mark.parametrize(

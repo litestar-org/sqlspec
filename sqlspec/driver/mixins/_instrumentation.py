@@ -123,12 +123,10 @@ class BaseInstrumentationMixin:
             from opentelemetry.sdk.trace.export import BatchSpanProcessor  # pyright: ignore
 
             # Create resource with service name
-            resource = Resource.create(
-                {
-                    "service.name": config.service_name,
-                    **config.custom_tags,
-                }
-            )
+            resource = Resource.create({
+                "service.name": config.service_name,
+                **config.custom_tags,
+            })
 
             # Create tracer provider
             provider = TracerProvider(resource=resource)
@@ -291,7 +289,7 @@ class SyncInstrumentationMixin(BaseInstrumentationMixin):
             return
 
         # Build log entry
-        extra_fields = {
+        extra_fields: dict[str, Any] = {
             "query": self._truncate_query(query) if config.log_queries else "[hidden]",
             "correlation_id": CorrelationContext.get(),
         }

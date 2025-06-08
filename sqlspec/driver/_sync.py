@@ -10,7 +10,7 @@ from typing import (
     overload,
 )
 
-from sqlspec.driver._common import CommonDriverAttributes
+from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.driver.mixins import SyncInstrumentationMixin
 from sqlspec.statement.builder import (
     DeleteBuilder,
@@ -41,7 +41,7 @@ __all__ = ("SyncDriverAdapterProtocol",)
 EMPTY_FILTERS: "list[StatementFilter]" = []
 
 
-class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncInstrumentationMixin, ABC):
+class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], SyncInstrumentationMixin, ABC):
     def __init__(
         self,
         connection: "ConnectionT",
@@ -67,7 +67,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
 
     def _build_statement(
         self,
-        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
+        statement: "Union[  Statement, QueryBuilder[Any]]",
         parameters: "Optional[SQLParameterType]" = None,
         filters: "Optional[list[StatementFilter]]" = None,
         config: "Optional[SQLConfig]" = None,
@@ -107,7 +107,6 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
     ) -> "SQLResult[RowT]":
         raise NotImplementedError
 
-    # Type-safe overloads based on the refactor plan pattern
     @overload
     def execute(
         self,
@@ -146,7 +145,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
     @overload
     def execute(
         self,
-        statement: "Union[str, Any]",  # exp.Expression
+        statement: "Statement",
         parameters: "Optional[SQLParameterType]" = None,
         *filters: "StatementFilter",
         schema_type: "type[ModelDTOT]",
@@ -158,31 +157,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
     @overload
     def execute(
         self,
-        statement: "Union[str, Any]",  # exp.Expression
-        parameters: "Optional[SQLParameterType]" = None,
-        *filters: "StatementFilter",
-        schema_type: None = None,
-        connection: "Optional[ConnectionT]" = None,
-        config: "Optional[SQLConfig]" = None,
-        **kwargs: Any,
-    ) -> "SQLResult[RowT]": ...
-
-    @overload  # pyright: ignore[reportOverlappingOverload]
-    def execute(
-        self,
-        statement: "SQL",
-        parameters: "Optional[SQLParameterType]" = None,
-        *filters: "StatementFilter",
-        schema_type: "type[ModelDTOT]",
-        connection: "Optional[ConnectionT]" = None,
-        config: "Optional[SQLConfig]" = None,
-        **kwargs: Any,
-    ) -> "SQLResult[ModelDTOT]": ...
-
-    @overload  # pyright: ignore[reportOverlappingOverload]
-    def execute(
-        self,
-        statement: "SQL",
+        statement: "Union[str, SQL]",
         parameters: "Optional[SQLParameterType]" = None,
         *filters: "StatementFilter",
         schema_type: None = None,
@@ -210,7 +185,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributes[ConnectionT, RowT], SyncI
                 connection=self._connection(connection),
                 **kwargs,
             )
-            if CommonDriverAttributes.returns_rows(sql_statement.expression):
+            if self.returns_rows(sql_statement.expression):
                 return self._wrap_select_result(sql_statement, result, schema_type=schema_type, **kwargs)
             return self._wrap_execute_result(sql_statement, result, **kwargs)
 

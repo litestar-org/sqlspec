@@ -132,7 +132,7 @@ INSERT INTO users (username, email) VALUES (:username, :email);
         # Get SQL without parameters
         sql = loader.get_sql("get_user")
         assert isinstance(sql, SQL)
-        assert "SELECT * FROM users WHERE id = :user_id" in sql._sql
+        assert "SELECT * FROM users WHERE id = :user_id" in sql._sql  # pyright: ignore
 
         # Get SQL with parameters
         sql_with_params = loader.get_sql("create_user", username="alice", email="alice@example.com")

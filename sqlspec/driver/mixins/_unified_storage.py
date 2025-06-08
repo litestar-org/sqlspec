@@ -199,7 +199,11 @@ class SyncStorageMixin(StorageMixinBase):
                 pass
 
             # Fallback: execute regular query and convert to Arrow
-            result = self.execute(sql_obj, connection=connection)  # type: ignore[attr-defined]
+            result = (
+                self.execute(sql_obj, connection=connection)  # type: ignore[attr-defined]
+                if connection
+                else self.execute(sql_obj)  # type: ignore[attr-defined]
+            )
             arrow_table = self._rows_to_arrow_table(result.data or [], result.column_names or [])
             return ArrowResult(statement=sql_obj, data=arrow_table)
 
@@ -302,7 +306,6 @@ class SyncStorageMixin(StorageMixinBase):
         query: "Union[str, Statement]",
         destination_uri: str,
         format: "Optional[str]" = None,
-        storage_key: "Optional[str]" = None,
         **options: Any,
     ) -> int:
         """Export query results to storage with intelligent routing."""
@@ -322,7 +325,6 @@ class SyncStorageMixin(StorageMixinBase):
                 "operation": "export_to_storage",
                 "destination_uri": destination_uri,
                 "format": format,
-                "storage_key": storage_key,
             },
         )
 
@@ -334,7 +336,7 @@ class SyncStorageMixin(StorageMixinBase):
             return self._export_native(query_str, destination_uri, file_format, **options)
 
         # Use storage backend
-        backend, path = self._resolve_backend_and_path(destination_uri, storage_key)
+        backend, path = self._resolve_backend_and_path(destination_uri)
 
         with wrap_exceptions(suppress=(AttributeError,)):
             if file_format == "parquet":
@@ -352,7 +354,6 @@ class SyncStorageMixin(StorageMixinBase):
         source_uri: str,
         table_name: str,
         format: "Optional[str]" = None,
-        storage_key: "Optional[str]" = None,
         mode: str = "create",
         **options: Any,
     ) -> int:
@@ -365,7 +366,6 @@ class SyncStorageMixin(StorageMixinBase):
                 "source_uri": source_uri,
                 "table_name": table_name,
                 "format": format,
-                "storage_key": storage_key,
                 "mode": mode,
             },
         )
@@ -378,7 +378,7 @@ class SyncStorageMixin(StorageMixinBase):
             return self._import_native(source_uri, table_name, file_format, mode, **options)
 
         # Use storage backend
-        backend, path = self._resolve_backend_and_path(source_uri, storage_key)
+        backend, path = self._resolve_backend_and_path(source_uri)
 
         with wrap_exceptions():
             if file_format == "parquet":
@@ -396,36 +396,26 @@ class SyncStorageMixin(StorageMixinBase):
     # Helper Methods
     # ============================================================================
 
-    def _resolve_backend_and_path(
-        self, uri_or_key: str, storage_key: "Optional[str]" = None
-    ) -> "tuple[ObjectStoreProtocol, str]":
-        """Resolve backend and path from URI or key.
+    def _resolve_backend_and_path(self, uri: str) -> "tuple[ObjectStoreProtocol, str]":
+        """Resolve backend and path from URI with Phase 3 URI-first routing.
 
         Args:
-            uri_or_key: Either a URI (e.g., "s3://bucket/path") or a path to use with storage_key
-            storage_key: Optional storage backend key to use (overrides URI-based resolution)
+            uri: URI to resolve (e.g., "s3://bucket/path", "file:///local/path")
 
         Returns:
             Tuple of (backend, path) where path is relative to the backend's base path
         """
-        if storage_key:
-            # Use the specified storage key to get backend
-            backend = self._get_storage_backend(storage_key)
-            # uri_or_key is the path in this case
-            path = uri_or_key
-        else:
-            # Treat uri_or_key as either a registered key or a URI
-            original_path = uri_or_key
+        original_path = uri
 
-            # Convert absolute paths to file:// URIs if needed
-            if self._is_uri(uri_or_key) and "://" not in uri_or_key:
-                # It's an absolute path without scheme
-                uri_or_key = f"file://{uri_or_key}"
+        # Convert absolute paths to file:// URIs if needed
+        if self._is_uri(uri) and "://" not in uri:
+            # It's an absolute path without scheme
+            uri = f"file://{uri}"
 
-            backend = self._get_storage_backend(uri_or_key)
+        backend = self._get_storage_backend(uri)
 
-            # For file:// URIs, return just the path part for the backend
-            path = uri_or_key[7:] if uri_or_key.startswith("file://") else original_path
+        # For file:// URIs, return just the path part for the backend
+        path = uri[7:] if uri.startswith("file://") else original_path
 
         return backend, path
 
@@ -627,7 +617,11 @@ class AsyncStorageMixin(StorageMixinBase):
                 pass
 
             # Fallback: execute regular query and convert to Arrow
-            result = await self.execute(sql_obj)  # type: ignore[attr-defined]
+            result = (
+                await self.execute(sql_obj, connection=connection)  # type: ignore[attr-defined]
+                if connection
+                else await self.execute(sql_obj)  # type: ignore[attr-defined]
+            )
             arrow_table = self._rows_to_arrow_table(result.data or [], result.column_names or [])
             return ArrowResult(statement=sql_obj, data=arrow_table)
 
@@ -704,7 +698,6 @@ class AsyncStorageMixin(StorageMixinBase):
         query: "Union[str, Statement]",
         destination_uri: str,
         format: "Optional[str]" = None,
-        storage_key: "Optional[str]" = None,
         **options: Any,
     ) -> int:
         """Async version of export_to_storage."""
@@ -723,7 +716,7 @@ class AsyncStorageMixin(StorageMixinBase):
             return await self._export_native(query_str, destination_uri, file_format, **options)
 
         # Use storage backend
-        backend, path = self._resolve_backend_and_path(destination_uri, storage_key)
+        backend, path = self._resolve_backend_and_path(destination_uri)
 
         with wrap_exceptions(suppress=(AttributeError,)):
             if file_format == "parquet":
@@ -739,7 +732,6 @@ class AsyncStorageMixin(StorageMixinBase):
         source_uri: str,
         table_name: str,
         format: "Optional[str]" = None,
-        storage_key: "Optional[str]" = None,
         mode: str = "create",
         **options: Any,
     ) -> int:
@@ -752,7 +744,7 @@ class AsyncStorageMixin(StorageMixinBase):
             return await self._import_native(source_uri, table_name, file_format, mode, **options)
 
         # Use storage backend
-        backend, path = self._resolve_backend_and_path(source_uri, storage_key)
+        backend, path = self._resolve_backend_and_path(source_uri)
 
         with wrap_exceptions():
             if file_format == "parquet":
@@ -767,36 +759,26 @@ class AsyncStorageMixin(StorageMixinBase):
     # Async Helper Methods
     # ============================================================================
 
-    def _resolve_backend_and_path(
-        self, uri_or_key: str, storage_key: "Optional[str]" = None
-    ) -> "tuple[ObjectStoreProtocol, str]":
-        """Resolve backend and path from URI or key.
+    def _resolve_backend_and_path(self, uri: str) -> "tuple[ObjectStoreProtocol, str]":
+        """Resolve backend and path from URI with Phase 3 URI-first routing.
 
         Args:
-            uri_or_key: Either a URI (e.g., "s3://bucket/path") or a path to use with storage_key
-            storage_key: Optional storage backend key to use (overrides URI-based resolution)
+            uri: URI to resolve (e.g., "s3://bucket/path", "file:///local/path")
 
         Returns:
             Tuple of (backend, path) where path is relative to the backend's base path
         """
-        if storage_key:
-            # Use the specified storage key to get backend
-            backend = self._get_storage_backend(storage_key)
-            # uri_or_key is the path in this case
-            path = uri_or_key
-        else:
-            # Treat uri_or_key as either a registered key or a URI
-            original_path = uri_or_key
+        original_path = uri
 
-            # Convert absolute paths to file:// URIs if needed
-            if self._is_uri(uri_or_key) and "://" not in uri_or_key:
-                # It's an absolute path without scheme
-                uri_or_key = f"file://{uri_or_key}"
+        # Convert absolute paths to file:// URIs if needed
+        if self._is_uri(uri) and "://" not in uri:
+            # It's an absolute path without scheme
+            uri = f"file://{uri}"
 
-            backend = self._get_storage_backend(uri_or_key)
+        backend = self._get_storage_backend(uri)
 
-            # For file:// URIs, return just the path part for the backend
-            path = uri_or_key[7:] if uri_or_key.startswith("file://") else original_path
+        # For file:// URIs, return just the path part for the backend
+        path = uri[7:] if uri.startswith("file://") else original_path
 
         return backend, path
 

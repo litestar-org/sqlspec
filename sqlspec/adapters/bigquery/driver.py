@@ -26,7 +26,7 @@ from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
 from sqlspec.exceptions import SQLSpecError, wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, RowT
 
@@ -422,3 +422,58 @@ class BigQueryDriver(
     def _connection(self, connection: "Optional[Client]" = None) -> "Client":
         """Get the connection to use for the operation."""
         return connection or self.connection
+
+    # ============================================================================
+    # BigQuery Native Arrow Support
+    # ============================================================================
+
+    def _fetch_arrow_table(
+        self,
+        sql_obj: SQL,
+        connection: "Optional[Any]" = None,
+        **kwargs: Any,
+    ) -> "Any":
+        """BigQuery native Arrow table fetching.
+
+        BigQuery has native Arrow support through QueryJob.to_arrow()
+        This provides efficient columnar data transfer for analytics workloads.
+
+        Args:
+            sql_obj: Processed SQL object
+            connection: Optional connection override
+            **kwargs: Additional options (e.g., bq_job_timeout, use_bqstorage_api)
+
+        Returns:
+            ArrowResult with native Arrow table
+        """
+
+        # Execute the query and get the QueryJob
+        query_job = self._execute(
+            sql_obj.to_sql(placeholder_style=self._get_placeholder_style()),
+            sql_obj.get_parameters(style=self._get_placeholder_style()),
+            sql_obj,
+            connection=connection,
+            **kwargs,
+        )
+
+        if not isinstance(query_job, QueryJob):
+            # Fallback to generic conversion if not a QueryJob
+            return self._fetch_arrow_table_fallback(sql_obj, connection=connection, **kwargs)
+
+        with wrap_exceptions():
+            # Wait for the job to complete
+            timeout = kwargs.get("bq_job_timeout")
+            query_job.result(timeout=timeout)
+
+            # Use BigQuery's native to_arrow() method
+            # This supports the BigQuery Storage API for optimal performance
+            arrow_table = query_job.to_arrow(
+                # Pass through any BigQuery-specific options
+                create_bqstorage_client=kwargs.get("use_bqstorage_api", True),
+                # Additional options can be passed through
+            )
+
+            if self.instrumentation_config.log_results_count and arrow_table:
+                logger.debug("Fetched Arrow table with %d rows", arrow_table.num_rows)
+
+            return ArrowResult(statement=sql_obj, data=arrow_table)

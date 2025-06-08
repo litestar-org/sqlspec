@@ -11,14 +11,13 @@ _SLUGIFY_HYPHEN_COLLAPSE = re.compile(r"-+")
 
 # Compiled regex for snake_case
 # Insert underscore between lowercase/digit and uppercase letter
-_SNAKE_CASE_RE_LOWER_OR_DIGIT_TO_UPPER = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_SNAKE_CASE_LOWER_OR_DIGIT_TO_UPPER = re.compile(r"(?<=[a-z0-9])(?=[A-Z])", re.UNICODE)
 # Insert underscore between uppercase letter and uppercase followed by lowercase
-_SNAKE_CASE_RE_UPPER_TO_UPPER_LOWER = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])")
+_SNAKE_CASE_UPPER_TO_UPPER_LOWER = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])", re.UNICODE)
 # Replace hyphens and spaces with underscores for snake_case
-_SNAKE_CASE_RE_HYPHEN_SPACE = re.compile(r"[-\s]+")
+_SNAKE_CASE_HYPHEN_SPACE = re.compile(r"[.\s-]+", re.UNICODE)
 # Collapse multiple underscores
-_SNAKE_CASE_RE_MULTIPLE_UNDERSCORES = re.compile(r"__+")
-
+_SNAKE_CASE_MULTIPLE_UNDERSCORES = re.compile(r"__+", re.UNICODE)
 
 __all__ = (
     "camelize",
@@ -118,25 +117,25 @@ def snake_case(string: str) -> str:
     if not string:
         return ""
     # 1. Replace hyphens and spaces with underscores
-    s = _SNAKE_CASE_RE_HYPHEN_SPACE.sub("_", string)
+    s = _SNAKE_CASE_HYPHEN_SPACE.sub("_", string)
 
-    # 2. Insert an underscore between a lowercase/digit and an uppercase letter.
+    # 3. Insert an underscore between a lowercase/digit and an uppercase letter.
     #    e.g., "helloWorld" -> "hello_World"
     #    e.g., "Python3IsGreat" -> "Python3_IsGreat"
     #    Uses a positive lookbehind `(?<=[...])` and a positive lookahead `(?=[...])`
-    s = _SNAKE_CASE_RE_LOWER_OR_DIGIT_TO_UPPER.sub("_", s)
+    s = _SNAKE_CASE_LOWER_OR_DIGIT_TO_UPPER.sub("_", s)
 
-    # 3. Insert an underscore between an uppercase letter and another
+    # 4. Insert an underscore between an uppercase letter and another
     #    uppercase letter followed by a lowercase letter.
     #    e.g., "HTTPRequest" -> "HTTP_Request"
     #    This handles acronyms gracefully.
-    s = _SNAKE_CASE_RE_UPPER_TO_UPPER_LOWER.sub("_", s)
+    s = _SNAKE_CASE_UPPER_TO_UPPER_LOWER.sub("_", s)
 
-    # 4. Convert the entire string to lowercase.
+    # 5. Convert the entire string to lowercase.
     s = s.lower()
 
-    # 5. Remove any leading or trailing underscores that might have been created.
+    # 6. Remove any leading or trailing underscores that might have been created.
     s = s.strip("_")
 
-    # 6. Collapse multiple consecutive underscores into a single one.
-    return _SNAKE_CASE_RE_MULTIPLE_UNDERSCORES.sub("_", s)
+    # 7. Collapse multiple consecutive underscores into a single one.
+    return _SNAKE_CASE_MULTIPLE_UNDERSCORES.sub("_", s)
