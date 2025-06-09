@@ -1,4 +1,5 @@
 # ruff: noqa: PLR6301
+import contextlib
 import uuid
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
@@ -113,15 +114,15 @@ class DuckDBDriver(
         **kwargs: Any,
     ) -> Any:
         conn = self._connection(connection)
-        
+
         if self.instrumentation_config.log_queries:
             logger.debug("Executing SQL: %s", sql)
         if self.instrumentation_config.log_parameters and parameters:
             logger.debug("Query parameters: %s", parameters)
-        
+
         # Use connection.execute() which returns better result info for DuckDB
         result = conn.execute(sql, parameters or [])
-        
+
         if self.returns_rows(statement.expression):
             # For SELECT statements, fetch data and return with columns
             with self._get_cursor(conn) as cursor:
@@ -132,7 +133,7 @@ class DuckDBDriver(
         else:
             # For INSERT/UPDATE/DELETE, try to get row count from connection result
             rowcount = -1
-            
+
             # DuckDB connection.execute() returns a DuckDBPyResult
             # For DML operations, we can try to get the count
             try:
@@ -151,7 +152,7 @@ class DuckDBDriver(
                             rowcount = cursor.rowcount
                 except Exception:
                     pass
-            
+
             return {"rowcount": rowcount}
 
     def _execute_many(
@@ -168,7 +169,7 @@ class DuckDBDriver(
             logger.debug("Query parameters (batch): %s", param_list)
 
         total_rowcount = 0
-        
+
         # Convert parameter list to proper format for executemany
         if param_list and isinstance(param_list, Sequence):
             for param_set in param_list:
@@ -176,7 +177,7 @@ class DuckDBDriver(
                     result = conn.execute(sql, list(param_set))
                 else:
                     result = conn.execute(sql, [param_set])
-                
+
                 # Try to get row count from this execution
                 try:
                     if hasattr(result, "fetchone"):
@@ -570,9 +571,5 @@ class DuckDBDriver(
                         logger.debug("Wrote Arrow table with %d rows to %s", data.num_rows, destination_uri)
 
                 finally:
-                    # Clean up registration
-                    try:
+                    with contextlib.suppress(Exception):
                         connection.unregister(temp_name)
-                    except Exception:
-                        # Ignore cleanup errors
-                        pass

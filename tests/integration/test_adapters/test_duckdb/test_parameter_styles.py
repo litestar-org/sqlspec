@@ -30,10 +30,12 @@ def duckdb_params_session() -> "Generator[DuckDBDriver, None, None]":
         """)
         # Insert test data
         session.execute(
-            "INSERT INTO test_params (id, name, value, description) VALUES (?, ?, ?, ?)", (1, "test1", 100, "First test")
+            "INSERT INTO test_params (id, name, value, description) VALUES (?, ?, ?, ?)",
+            (1, "test1", 100, "First test"),
         )
         session.execute(
-            "INSERT INTO test_params (id, name, value, description) VALUES (?, ?, ?, ?)", (2, "test2", 200, "Second test")
+            "INSERT INTO test_params (id, name, value, description) VALUES (?, ?, ?, ?)",
+            (2, "test2", 200, "Second test"),
         )
         session.execute(
             "INSERT INTO test_params (id, name, value, description) VALUES (?, ?, ?, ?)", (3, "test3", 300, None)

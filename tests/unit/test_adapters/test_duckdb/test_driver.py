@@ -207,9 +207,7 @@ def test_duckdb_driver_fetch_arrow_table_with_sql_object(
     assert result.data is mock_arrow_table
 
     # Verify the native DuckDB path was used
-    mock_duckdb_connection.execute.assert_called_once_with(
-        "SELECT id, name FROM users WHERE active = ?", [True]
-    )
+    mock_duckdb_connection.execute.assert_called_once_with("SELECT id, name FROM users WHERE active = ?", [True])
     mock_execute_result.arrow.assert_called_once()
 
 
@@ -301,9 +299,7 @@ def test_duckdb_driver_returns_rows_method(duckdb_driver: DuckDBDriver) -> None:
     assert duckdb_driver.returns_rows(insert_stmt.expression) is False
 
 
-def test_duckdb_driver_fetch_arrow_table_streaming(
-    duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock
-) -> None:
+def test_duckdb_driver_fetch_arrow_table_streaming(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
     """Test DuckDB driver fetch_arrow_table with streaming mode."""
     # Skip this test - complex PyArrow mocking is difficult in unit tests
     # Integration tests better suited for this functionality
