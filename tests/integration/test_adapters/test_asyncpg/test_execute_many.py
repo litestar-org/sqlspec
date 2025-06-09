@@ -229,7 +229,7 @@ async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: Async
 
     sql_obj = SQL("INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)").as_many(parameters)
 
-    result = await asyncpg_batch_session.execute_statement(sql_obj)
+    result = await asyncpg_batch_session.execute(sql_obj)
 
     assert isinstance(result, SQLResult)
 
@@ -321,6 +321,8 @@ async def test_asyncpg_execute_many_with_arrays(asyncpg_batch_session: AsyncpgDr
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many_with_json(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with JSON data on AsyncPG."""
+    import json
+    
     # Create table with JSON column
     await asyncpg_batch_session.execute_script("""
         CREATE TABLE IF NOT EXISTS test_json (
@@ -330,10 +332,11 @@ async def test_asyncpg_execute_many_with_json(asyncpg_batch_session: AsyncpgDriv
         )
     """)
 
+    # AsyncPG expects JSON data to be serialized as strings
     parameters = [
-        ("JSON 1", {"type": "test", "value": 100, "active": True}),
-        ("JSON 2", {"type": "prod", "value": 200, "active": False}),
-        ("JSON 3", {"type": "test", "value": 300, "tags": ["a", "b"]}),
+        ("JSON 1", json.dumps({"type": "test", "value": 100, "active": True})),
+        ("JSON 2", json.dumps({"type": "prod", "value": 200, "active": False})),
+        ("JSON 3", json.dumps({"type": "test", "value": 300, "tags": ["a", "b"]})),
     ]
 
     result = await asyncpg_batch_session.execute_many(

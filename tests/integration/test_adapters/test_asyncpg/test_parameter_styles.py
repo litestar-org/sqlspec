@@ -336,7 +336,8 @@ async def test_asyncpg_parameter_with_json(asyncpg_params_session: AsyncpgDriver
             id SERIAL PRIMARY KEY,
             name TEXT,
             metadata JSONB
-        )
+        );
+        TRUNCATE TABLE test_json RESTART IDENTITY;
     """)
 
     import json
@@ -375,7 +376,8 @@ async def test_asyncpg_parameter_with_arrays(asyncpg_params_session: AsyncpgDriv
             name TEXT,
             tags TEXT[],
             scores INTEGER[]
-        )
+        );
+        TRUNCATE TABLE test_arrays RESTART IDENTITY;
     """)
 
     # Test inserting array data with parameters

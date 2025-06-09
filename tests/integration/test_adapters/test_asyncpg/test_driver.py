@@ -141,8 +141,9 @@ async def test_asyncpg_execute_script(asyncpg_session: AsyncpgDriver) -> None:
     """
 
     result = await asyncpg_session.execute_script(script)
-    # Script execution typically returns a status string
-    assert isinstance(result, str) or result is None  # type: ignore[unreachable]
+    # Script execution now returns SQLResult object
+    assert isinstance(result, SQLResult)
+    assert result.operation_type == "SCRIPT"
 
     # Verify script effects
     select_result = await asyncpg_session.execute(
@@ -205,6 +206,9 @@ async def test_asyncpg_error_handling(asyncpg_session: AsyncpgDriver) -> None:
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_data_types(asyncpg_session: AsyncpgDriver) -> None:
     """Test PostgreSQL data type handling."""
+    import datetime
+    import uuid
+    
     # Create table with various PostgreSQL data types
     await asyncpg_session.execute_script("""
         CREATE TABLE data_types_test (
@@ -221,7 +225,7 @@ async def test_asyncpg_data_types(asyncpg_session: AsyncpgDriver) -> None:
         )
     """)
 
-    # Insert data with various types
+    # Insert data with various types (using proper Python types for AsyncPG)
     await asyncpg_session.execute(
         """
         INSERT INTO data_types_test (
@@ -238,9 +242,9 @@ async def test_asyncpg_data_types(asyncpg_session: AsyncpgDriver) -> None:
             True,
             '{"key": "value"}',
             [1, 2, 3],
-            "2024-01-15",
-            "2024-01-15 10:30:00",
-            "550e8400-e29b-41d4-a716-446655440000",
+            datetime.date(2024, 1, 15),  # Python date object
+            datetime.datetime(2024, 1, 15, 10, 30, 0),  # Python datetime object
+            uuid.UUID("550e8400-e29b-41d4-a716-446655440000"),  # Python UUID object
         ),
     )
 
