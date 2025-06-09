@@ -1,7 +1,8 @@
 """Tests for InstrumentedObjectStore base class."""
 
 import logging
-from typing import Any, AsyncIterator, Iterator, Literal
+from collections.abc import AsyncIterator, Iterator
+from typing import Any, Literal
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -172,7 +173,7 @@ class TestInstrumentedObjectStore:
 
         assert result == b"test data"
         assert backend.call_count == 1
-        
+
         # Check debug log
         assert any("Reading bytes from test.txt" in record.message for record in caplog.records)
         # Check info log
@@ -187,7 +188,7 @@ class TestInstrumentedObjectStore:
             backend.write_bytes("test.txt", b"test data")
 
         assert backend.call_count == 1
-        
+
         # Check debug log
         assert any("Writing 9 bytes to test.txt" in record.message for record in caplog.records)
         # Check info log
@@ -209,7 +210,7 @@ class TestInstrumentedObjectStore:
         """Test that errors are properly logged and re-raised."""
         config = InstrumentationConfig(log_service_operations=True)
         backend = MockBackend(config)
-        
+
         # Mock to raise error
         backend._read_bytes = Mock(side_effect=ValueError("Test error"))
 
@@ -240,7 +241,7 @@ class TestInstrumentedObjectStore:
 
         assert result == b"async test data"
         assert backend.call_count == 1
-        
+
         # Check debug log
         assert any("Async reading bytes from async_test.txt" in record.message for record in caplog.records)
         # Check info log
@@ -256,7 +257,7 @@ class TestInstrumentedObjectStore:
             await backend.write_bytes_async("async_test.txt", b"async test data")
 
         assert backend.call_count == 1
-        
+
         # Check debug log
         assert any("Async writing 15 bytes to async_test.txt" in record.message for record in caplog.records)
         # Check info log
@@ -280,7 +281,7 @@ class TestInstrumentedObjectStore:
         """Test that async errors are properly logged and re-raised."""
         config = InstrumentationConfig(log_service_operations=True)
         backend = MockBackend(config)
-        
+
         # Mock to raise error
         backend._read_bytes_async = AsyncMock(side_effect=ValueError("Async test error"))
 
@@ -298,7 +299,7 @@ class TestInstrumentedObjectStore:
         # Test read_arrow
         with caplog.at_level(logging.INFO):
             table = backend.read_arrow("data.parquet")
-        
+
         assert table.num_rows == 10
         assert table.num_columns == 2
         assert any("Read Arrow table from data.parquet (10 rows)" in record.message for record in caplog.records)
@@ -309,16 +310,16 @@ class TestInstrumentedObjectStore:
         mock_table.num_columns = 5
         mock_table.__len__ = MagicMock(return_value=100)
         mock_table.columns = ["col1", "col2", "col3", "col4", "col5"]
-        
+
         with caplog.at_level(logging.INFO):
             backend.write_arrow("output.parquet", mock_table)
-        
+
         assert any("Wrote Arrow table to output.parquet (100 rows)" in record.message for record in caplog.records)
 
     def test_stream_arrow_operations(self) -> None:
         """Test Arrow streaming operations."""
         backend = MockBackend()
-        
+
         # Test sync streaming
         batches = list(backend.stream_arrow("*.parquet"))
         assert len(batches) == 2
@@ -328,27 +329,27 @@ class TestInstrumentedObjectStore:
     async def test_async_stream_arrow_operations(self) -> None:
         """Test async Arrow streaming operations."""
         backend = MockBackend()
-        
+
         # Test async streaming
         batches = []
         async for batch in backend.stream_arrow_async("*.parquet"):
             batches.append(batch)
-        
+
         assert len(batches) == 2
         assert backend.call_count == 1
 
     def test_metadata_operations(self) -> None:
         """Test metadata operations."""
         backend = MockBackend()
-        
+
         # Test get_metadata
         metadata = backend.get_metadata("file.txt")
         assert metadata["size"] == 1024
         assert metadata["exists"] is True
-        
+
         # Test exists
         assert backend.exists("file.txt") is True
-        
+
         # Test is_object and is_path
         assert backend.is_object("file.txt") is True
         assert backend.is_path("directory/") is False
@@ -356,15 +357,15 @@ class TestInstrumentedObjectStore:
     def test_file_operations(self) -> None:
         """Test file operations like copy, move, delete."""
         backend = MockBackend()
-        
+
         # Test copy
         backend.copy("source.txt", "dest.txt")
         assert backend.call_count == 1
-        
+
         # Test move
         backend.move("old.txt", "new.txt")
         assert backend.call_count == 2
-        
+
         # Test delete
         backend.delete("unwanted.txt")
         assert backend.call_count == 3
@@ -372,7 +373,7 @@ class TestInstrumentedObjectStore:
     def test_glob_operations(self) -> None:
         """Test glob pattern matching."""
         backend = MockBackend()
-        
+
         matches = backend.glob("*.txt")
         assert matches == ["match1.txt", "match2.txt"]
         assert backend.call_count == 1
@@ -380,12 +381,12 @@ class TestInstrumentedObjectStore:
     def test_signed_url_generation(self) -> None:
         """Test signed URL generation."""
         backend = MockBackend()
-        
+
         # Test read URL
         read_url = backend.get_signed_url("file.txt", operation="read", expires_in=7200)
         assert "file.txt" in read_url
         assert "op=read" in read_url
-        
+
         # Test write URL
         write_url = backend.get_signed_url("upload.txt", operation="write")
         assert "upload.txt" in write_url
@@ -394,18 +395,18 @@ class TestInstrumentedObjectStore:
     def test_telemetry_context(self) -> None:
         """Test that operations include telemetry context."""
         backend = MockBackend()
-        
+
         # Mock instrument_operation to verify it's called
         with patch("sqlspec.storage.backends.base.instrument_operation") as mock_instrument:
             backend.read_bytes("test.txt")
-            
+
             # Verify instrument_operation was called with correct parameters
             mock_instrument.assert_called_once()
             args = mock_instrument.call_args[0]
             assert args[0] == backend  # self
             assert args[1] == "storage.read_bytes"  # operation name
             assert args[2] == "storage"  # operation type
-            
+
             kwargs = mock_instrument.call_args[1]
             assert kwargs["path"] == "test.txt"
             assert kwargs["backend"] == "mock"
@@ -414,18 +415,22 @@ class TestInstrumentedObjectStore:
     async def test_async_telemetry_context(self) -> None:
         """Test that async operations include telemetry context."""
         backend = MockBackend()
-        
-        # Mock instrument_operation to verify it's called
-        with patch("sqlspec.storage.backends.base.instrument_operation") as mock_instrument:
+
+        # Mock instrument_operation_async to verify it's called (async methods use async instrumentation)
+        with patch("sqlspec.storage.backends.base.instrument_operation_async") as mock_instrument:
+            # Mock the async context manager
+            mock_context = AsyncMock()
+            mock_instrument.return_value = mock_context
+
             await backend.read_bytes_async("async_test.txt")
-            
-            # Verify instrument_operation was called with correct parameters
+
+            # Verify instrument_operation_async was called with correct parameters
             mock_instrument.assert_called_once()
             args = mock_instrument.call_args[0]
             assert args[0] == backend  # self
             assert args[1] == "storage.read_bytes_async"  # operation name
             assert args[2] == "storage"  # operation type
-            
+
             kwargs = mock_instrument.call_args[1]
             assert kwargs["path"] == "async_test.txt"
             assert kwargs["backend"] == "mock"
@@ -434,7 +439,7 @@ class TestInstrumentedObjectStore:
         """Test that backend_type is correctly derived from class name."""
         backend = MockBackend()
         assert backend.backend_type == "mock"
-        
+
         # Test with custom backend name
         backend.backend_name = "CustomStorage"
         # backend_type still uses class name
