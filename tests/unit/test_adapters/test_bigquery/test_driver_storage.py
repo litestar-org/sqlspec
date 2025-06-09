@@ -78,34 +78,33 @@ class TestBigQueryStorageOperations:
         mock_query_job.to_arrow.assert_called_once()
 
     def test_ingest_arrow_table(self, bigquery_driver: BigQueryDriver, mock_bigquery_client: MagicMock) -> None:
-        """Test ingest_arrow_table method using fallback."""
+        """Test ingest_arrow_table method using native BigQuery implementation."""
         # Create test Arrow table
         table = create_mock_arrow_table()
 
-        # Ensure BigQuery client doesn't have register method to force fallback
-        del mock_bigquery_client.register
-
-        # Mock execute_many result
-        mock_result = MagicMock()
-        mock_result.rows_affected = 2
-        bigquery_driver.execute_many = MagicMock(return_value=mock_result)
+        # Mock BigQuery client methods for native loading
+        mock_dataset = MagicMock()
+        mock_table_ref = MagicMock()
+        mock_dataset.table.return_value = mock_table_ref
+        mock_bigquery_client.dataset.return_value = mock_dataset
+        mock_bigquery_client.project = "test_project"
+        
+        # Mock load job
+        mock_load_job = MagicMock()
+        mock_load_job.result.return_value = None  # Successful completion
+        mock_bigquery_client.load_table_from_file.return_value = mock_load_job
 
         # Test ingest
-        result = bigquery_driver.ingest_arrow_table(table, "test_table")
+        result = bigquery_driver.ingest_arrow_table(table, "test_dataset.test_table")
 
         # Verify result
-        assert result == 2
+        assert result == 2  # Should return table.num_rows
 
-        # Verify execute_many was called with INSERT statement
-        bigquery_driver.execute_many.assert_called_once()
-        call_args = bigquery_driver.execute_many.call_args
-        sql_obj = call_args[0][0]
-        assert isinstance(sql_obj, SQL)
-        assert "INSERT INTO test_table" in sql_obj.to_sql()
-        assert sql_obj.is_many is True
-
-        # Check parameters were converted from Arrow table
-        assert sql_obj.parameters == [{"id": 1, "name": "name_1"}, {"id": 2, "name": "name_2"}]
+        # Verify BigQuery client was called correctly
+        mock_bigquery_client.dataset.assert_called_once_with("test_dataset", project="test_project")
+        mock_dataset.table.assert_called_once_with("test_table")
+        mock_bigquery_client.load_table_from_file.assert_called_once()
+        mock_load_job.result.assert_called_once()
 
     def test_export_to_storage_parquet_gcs(self, bigquery_driver: BigQueryDriver, tmp_path: Any) -> None:
         """Test export_to_storage with Parquet format to GCS."""
@@ -308,33 +307,40 @@ class TestBigQueryStorageOperations:
     def test_ingest_arrow_table_with_mode_replace(
         self, bigquery_driver: BigQueryDriver, mock_bigquery_client: MagicMock
     ) -> None:
-        """Test ingest_arrow_table with replace mode."""
+        """Test ingest_arrow_table with replace mode using native implementation."""
         # Create test Arrow table
         table = create_mock_arrow_table()
 
-        # Ensure BigQuery client doesn't have register method to force fallback
-        del mock_bigquery_client.register
-
-        # Mock execute for TRUNCATE
-        bigquery_driver.execute = MagicMock(return_value=MagicMock())
-
-        # Mock execute_many for INSERT
-        bigquery_driver.execute_many = MagicMock(return_value=MagicMock(rows_affected=2))
+        # Mock BigQuery client methods for native loading
+        mock_dataset = MagicMock()
+        mock_table_ref = MagicMock()
+        mock_dataset.table.return_value = mock_table_ref
+        mock_bigquery_client.dataset.return_value = mock_dataset
+        mock_bigquery_client.project = "test_project"
+        
+        # Mock load job
+        mock_load_job = MagicMock()
+        mock_load_job.result.return_value = None  # Successful completion
+        mock_bigquery_client.load_table_from_file.return_value = mock_load_job
 
         # Test ingest with replace mode
-        result = bigquery_driver.ingest_arrow_table(table, "test_table", mode="replace")
+        result = bigquery_driver.ingest_arrow_table(table, "test_dataset.test_table", mode="replace")
 
-        # Verify TRUNCATE was called
-        bigquery_driver.execute.assert_called_once()
-        truncate_call = bigquery_driver.execute.call_args
-        truncate_sql = truncate_call[0][0]
-        assert "TRUNCATE TABLE test_table" in truncate_sql.to_sql()
+        # Verify result
+        assert result == 2  # Should return table.num_rows
 
-        # Verify INSERT was called
-        bigquery_driver.execute_many.assert_called_once()
-
-        # Should return row count
-        assert result == 2
+        # Verify BigQuery client was called correctly
+        mock_bigquery_client.dataset.assert_called_once_with("test_dataset", project="test_project")
+        mock_dataset.table.assert_called_once_with("test_table")
+        mock_bigquery_client.load_table_from_file.assert_called_once()
+        
+        # Verify job config was set for replace mode (WRITE_TRUNCATE)
+        call_args = mock_bigquery_client.load_table_from_file.call_args
+        job_config = call_args[1]['job_config']
+        from google.cloud.bigquery import WriteDisposition
+        assert job_config.write_disposition == WriteDisposition.WRITE_TRUNCATE
+        
+        mock_load_job.result.assert_called_once()
 
     def test_arrow_table_conversion_with_nulls(
         self, bigquery_driver: BigQueryDriver, mock_bigquery_client: MagicMock

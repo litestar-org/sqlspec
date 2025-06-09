@@ -1,5 +1,9 @@
 """Unit tests for Psqlpy configuration."""
 
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from sqlspec.adapters.psqlpy import CONNECTION_FIELDS, POOL_FIELDS, PsqlpyConfig, PsqlpyDriver
 from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.sql import SQLConfig
@@ -115,17 +119,25 @@ def test_psqlpy_config_initialization() -> None:
     assert config.instrumentation.log_queries is True
 
 
-def test_psqlpy_config_provide_session() -> None:
+@pytest.mark.asyncio
+async def test_psqlpy_config_provide_session() -> None:
     """Test Psqlpy config provide_session context manager."""
     config = PsqlpyConfig(dsn="postgresql://test_user:test_password@localhost:5432/test_db")
 
-    # Test session context manager behavior
-    with config.provide_session() as session:
-        assert isinstance(session, PsqlpyDriver)
-        # Check that parameter styles were set
-        assert session.config.allowed_parameter_styles == ("numeric",)
-        assert session.config.target_parameter_style == "numeric"
-        assert session.instrumentation_config is config.instrumentation
+    # Mock the connection creation to avoid real database connection
+    with patch.object(config, "create_connection") as mock_create_conn:
+        mock_connection = AsyncMock()
+        # Make sure close() method is properly async
+        mock_connection.close = AsyncMock()
+        mock_create_conn.return_value = mock_connection
+        
+        # Test session context manager behavior
+        async with config.provide_session() as session:
+            assert isinstance(session, PsqlpyDriver)
+            # Check that parameter styles were set
+            assert session.config.allowed_parameter_styles == ("numeric",)
+            assert session.config.target_parameter_style == "numeric"
+            assert session.instrumentation_config is config.instrumentation
 
 
 def test_psqlpy_config_driver_type() -> None:
@@ -137,8 +149,8 @@ def test_psqlpy_config_driver_type() -> None:
 def test_psqlpy_config_is_async() -> None:
     """Test Psqlpy config __is_async__ attribute."""
     config = PsqlpyConfig(dsn="postgresql://test_user:test_password@localhost:5432/test_db")
-    assert config.__is_async__ is False
-    assert PsqlpyConfig.__is_async__ is False
+    assert config.__is_async__ is True
+    assert PsqlpyConfig.__is_async__ is True
 
 
 def test_psqlpy_config_supports_connection_pooling() -> None:
@@ -160,7 +172,9 @@ def test_psqlpy_config_from_pool_config() -> None:
     }
     config = PsqlpyConfig.from_pool_config(pool_config)
     # Add specific assertions based on fields
-    assert config.extras == {}
+    # 'user' is not a recognized PSQLPy parameter (should be 'username'), so it goes to extras
+    # 'ports' is a valid pool field
+    assert config.extras == {"user": "test_user"}
 
     # Test with extra parameters
     pool_config_with_extras = {

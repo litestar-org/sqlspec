@@ -267,11 +267,11 @@ def test_psycopg_config_connection_config_dict() -> None:
     assert pool_dict["row_factory"] is DictRow
 
 
-@patch("psycopg_pool.ConnectionPool")
+@patch("sqlspec.adapters.psycopg.config.ConnectionPool")
 def test_psycopg_sync_config_create_pool(mock_pool_class: Mock) -> None:
     """Test Psycopg sync config _create_pool method (mocked)."""
     mock_pool = Mock()
-    mock_pool_class.side_effect = lambda *args: mock_pool  # type: ignore
+    mock_pool_class.return_value = mock_pool  # type: ignore
     config = PsycopgSyncConfig(
         host="localhost",
         port=5432,
@@ -283,14 +283,16 @@ def test_psycopg_sync_config_create_pool(mock_pool_class: Mock) -> None:
     )
     pool = config._create_pool()
     assert pool is mock_pool
+    # Verify ConnectionPool was called with conninfo string
+    mock_pool_class.assert_called_once()
 
 
-@patch("psycopg_pool.AsyncConnectionPool")
+@patch("sqlspec.adapters.psycopg.config.AsyncConnectionPool")
 @pytest.mark.asyncio
 async def test_psycopg_async_config_create_pool(mock_pool_class: Mock) -> None:
     """Test Psycopg async config _create_pool method (mocked)."""
     mock_pool = AsyncMock()
-    mock_pool_class.side_effect = lambda *args: mock_pool  # type: ignore
+    mock_pool_class.return_value = mock_pool  # type: ignore
     config = PsycopgAsyncConfig(
         host="localhost",
         port=5432,
@@ -302,9 +304,11 @@ async def test_psycopg_async_config_create_pool(mock_pool_class: Mock) -> None:
     )
     pool = await config._create_pool()
     assert pool is mock_pool
+    # Verify AsyncConnectionPool was called with conninfo string
+    mock_pool_class.assert_called_once()
 
 
-@patch("psycopg.connect")
+@patch("sqlspec.adapters.psycopg.config.connect")
 def test_psycopg_sync_config_create_connection(mock_connect: Mock) -> None:
     """Test Psycopg sync config create_connection method (mocked)."""
     mock_connection = MagicMock()
@@ -322,7 +326,7 @@ def test_psycopg_sync_config_create_connection(mock_connect: Mock) -> None:
     assert connection is mock_connection
 
 
-@patch("psycopg.AsyncConnection.connect")
+@patch("sqlspec.adapters.psycopg.config.AsyncConnection.connect")
 @pytest.mark.asyncio
 async def test_psycopg_async_config_create_connection(mock_connect: Mock) -> None:
     """Test Psycopg async config create_connection method (mocked)."""
@@ -354,7 +358,7 @@ async def test_psycopg_async_config_create_connection(mock_connect: Mock) -> Non
     assert connection is mock_connection
 
 
-@patch("psycopg.connect")
+@patch("sqlspec.adapters.psycopg.config.connect")
 def test_psycopg_sync_config_provide_connection(mock_connect: Mock) -> None:
     """Test Psycopg sync config provide_connection context manager."""
     mock_connection = MagicMock()
@@ -377,7 +381,7 @@ def test_psycopg_sync_config_provide_connection(mock_connect: Mock) -> None:
     mock_connection.close.assert_called_once()
 
 
-@patch("psycopg.AsyncConnection.connect")
+@patch("sqlspec.adapters.psycopg.config.AsyncConnection.connect")
 @pytest.mark.asyncio
 async def test_psycopg_async_config_provide_connection(mock_connect: Mock) -> None:
     """Test Psycopg async config provide_connection context manager."""
@@ -402,7 +406,7 @@ async def test_psycopg_async_config_provide_connection(mock_connect: Mock) -> No
     mock_connection.close.assert_called_once()
 
 
-@patch("psycopg.connect")
+@patch("sqlspec.adapters.psycopg.config.connect")
 def test_psycopg_sync_config_provide_connection_error_handling(mock_connect: Mock) -> None:
     """Test Psycopg sync config provide_connection error handling."""
     mock_connection = MagicMock()
@@ -425,7 +429,7 @@ def test_psycopg_sync_config_provide_connection_error_handling(mock_connect: Moc
     mock_connection.close.assert_called_once()
 
 
-@patch("psycopg.AsyncConnection.connect")
+@patch("sqlspec.adapters.psycopg.config.AsyncConnection.connect")
 @pytest.mark.asyncio
 async def test_psycopg_async_config_provide_connection_error_handling(mock_connect: Mock) -> None:
     """Test Psycopg async config provide_connection error handling."""
@@ -450,7 +454,7 @@ async def test_psycopg_async_config_provide_connection_error_handling(mock_conne
     mock_connection.close.assert_called_once()
 
 
-@patch("psycopg.connect")
+@patch("sqlspec.adapters.psycopg.config.connect")
 def test_psycopg_sync_config_provide_session(mock_connect: Mock) -> None:
     """Test Psycopg sync config provide_session context manager."""
     mock_connection = MagicMock()
@@ -478,7 +482,7 @@ def test_psycopg_sync_config_provide_session(mock_connect: Mock) -> None:
     mock_connection.close.assert_called_once()
 
 
-@patch("psycopg.AsyncConnection.connect")
+@patch("sqlspec.adapters.psycopg.config.AsyncConnection.connect")
 @pytest.mark.asyncio
 async def test_psycopg_async_config_provide_session(mock_connect: Mock) -> None:
     """Test Psycopg async config provide_session context manager."""

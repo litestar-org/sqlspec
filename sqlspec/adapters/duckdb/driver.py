@@ -13,15 +13,15 @@ from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT, RowT
+from sqlspec.typing import ArrowTable, DictRow, ModelDTOT, RowT
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.telemetry import instrument_operation
 
 if TYPE_CHECKING:
-    from pyarrow import Table as ArrowTable
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.config import InstrumentationConfig
+    from sqlspec.typing import ArrowTable
 
 __all__ = ("DuckDBConnection", "DuckDBDriver")
 

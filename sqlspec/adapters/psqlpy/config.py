@@ -445,7 +445,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
                 yield conn
             finally:
                 if conn is not None:
-                    conn.close()
+                    await conn.close()
 
     @asynccontextmanager
     async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[PsqlpyDriver, None]:
