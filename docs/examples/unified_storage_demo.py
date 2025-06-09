@@ -10,9 +10,7 @@ import tempfile
 from pathlib import Path
 
 from sqlspec.adapters.duckdb import DuckDBConfig
-from sqlspec.adapters.duckdb.driver_unified import DuckDBDriverUnified
 from sqlspec.base import SQLSpec
-from sqlspec.config import StorageConfig
 from sqlspec.statement.sql import SQL
 
 __all__ = ("demo_unified_storage_architecture",)
@@ -24,29 +22,11 @@ def demo_unified_storage_architecture() -> None:
     print("🚀 SQLSpec Unified Storage Architecture Demo")
     print("=" * 50)
 
-    # Setup storage configuration with multiple backends
-    storage_config = StorageConfig(
-        default_storage_key="local_temp",
-        backends={
-            "local_temp": {"backend_type": "local", "base_path": "/tmp/sqlspec_demo"},
-            # Could also configure cloud storage:
-            # "s3_data": {
-            #     "backend_type": "fsspec",
-            #     "protocol": "s3",
-            #     "bucket": "my-data-bucket"
-            # }
-        },
-        auto_register=True,
-    )
-
-    # Create SQLSpec with unified storage
+    # Create SQLSpec with unified storage (no config needed - uses intelligent backend selection)
     sqlspec = SQLSpec()
-    config = sqlspec.add_config(DuckDBConfig(":memory:", storage_config=storage_config))
+    config = sqlspec.add_config(DuckDBConfig(":memory:"))
 
     with config.provide_session() as session:
-        # Cast to our unified driver for demo purposes
-        if hasattr(session, "__class__"):
-            session.__class__ = DuckDBDriverUnified
 
         print("\n📊 Creating sample data...")
 

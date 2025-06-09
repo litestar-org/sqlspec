@@ -8,7 +8,7 @@ from sqlglot import exp
 
 from sqlspec.base import SQLSpec
 from sqlspec.config import NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
-from sqlspec.driver.mixins import CommonDriverAttributesMixin
+from sqlspec.driver import CommonDriverAttributesMixin
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 

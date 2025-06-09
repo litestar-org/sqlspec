@@ -9,11 +9,7 @@ import pytest
 from sqlglot import exp
 
 from sqlspec.config import InstrumentationConfig
-from sqlspec.driver import (
-    AsyncDriverAdapterProtocol,
-    CommonDriverAttributes,
-    SyncDriverAdapterProtocol,
-)
+from sqlspec.driver import AsyncDriverAdapterProtocol, CommonDriverAttributesMixin, SyncDriverAdapterProtocol
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
@@ -201,7 +197,7 @@ def test_common_driver_attributes_default_values() -> None:
 
 
 def test_common_driver_attributes_setup_instrumentation() -> None:
-    """Test instrumentation setup in CommonDriverAttributes."""
+    """Test instrumentation setup in CommonDriverAttributesMixin."""
     connection = MockConnection()
     instrumentation_config = InstrumentationConfig(
         enable_opentelemetry=True,
@@ -286,7 +282,7 @@ def test_common_driver_attributes_setup_prometheus() -> None:
 )
 def test_common_driver_attributes_returns_rows(expression: exp.Expression | None, expected: bool) -> None:
     """Test returns_rows static method."""
-    result = CommonDriverAttributes.returns_rows(expression)
+    result = CommonDriverAttributesMixin.returns_rows(expression)
     assert result == expected
 
 
@@ -294,11 +290,11 @@ def test_common_driver_attributes_returns_rows_with_clause() -> None:
     """Test returns_rows with WITH clause."""
     # WITH clause with SELECT
     with_select = exp.With(expressions=[exp.Select()])
-    assert CommonDriverAttributes.returns_rows(with_select) is True
+    assert CommonDriverAttributesMixin.returns_rows(with_select) is True
 
     # WITH clause with INSERT
     with_insert = exp.With(expressions=[exp.Insert()])
-    assert CommonDriverAttributes.returns_rows(with_insert) is False
+    assert CommonDriverAttributesMixin.returns_rows(with_insert) is False
 
 
 def test_common_driver_attributes_returns_rows_returning_clause() -> None:
@@ -308,13 +304,13 @@ def test_common_driver_attributes_returns_rows_returning_clause() -> None:
     insert_returning.set("expressions", [exp.Returning()])
 
     with patch.object(insert_returning, "find", return_value=exp.Returning()):
-        assert CommonDriverAttributes.returns_rows(insert_returning) is True
+        assert CommonDriverAttributesMixin.returns_rows(insert_returning) is True
 
 
 def test_common_driver_attributes_check_not_found_success() -> None:
     """Test check_not_found with valid item."""
     item = "test_item"
-    result = CommonDriverAttributes.check_not_found(item)
+    result = CommonDriverAttributesMixin.check_not_found(item)
     assert result == item
 
 
@@ -323,7 +319,7 @@ def test_common_driver_attributes_check_not_found_none() -> None:
     from sqlspec.exceptions import NotFoundError
 
     with pytest.raises(NotFoundError, match="No result found"):
-        CommonDriverAttributes.check_not_found(None)
+        CommonDriverAttributesMixin.check_not_found(None)
 
 
 def test_common_driver_attributes_check_not_found_falsy() -> None:
@@ -332,18 +328,18 @@ def test_common_driver_attributes_check_not_found_falsy() -> None:
 
     # None should raise
     with pytest.raises(NotFoundError):
-        CommonDriverAttributes.check_not_found(None)
+        CommonDriverAttributesMixin.check_not_found(None)
 
     # Empty list should not raise (it's not None)
-    result: list[Any] = CommonDriverAttributes.check_not_found([])
+    result: list[Any] = CommonDriverAttributesMixin.check_not_found([])
     assert result == []
 
     # Empty string should not raise
-    result_str: str = CommonDriverAttributes.check_not_found("")
+    result_str: str = CommonDriverAttributesMixin.check_not_found("")
     assert result_str == ""
 
     # Zero should not raise
-    result_int: int = CommonDriverAttributes.check_not_found(0)
+    result_int: int = CommonDriverAttributesMixin.check_not_found(0)
     assert result_int == 0
 
 

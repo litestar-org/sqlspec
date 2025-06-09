@@ -844,51 +844,703 @@ class InstrumentedObjectStore(ABC):
 
     async def read_bytes_async(self, path: str, **kwargs: Any) -> bytes:
         """Async read bytes from storage."""
-        return await async_(self.read_bytes)(path, **kwargs)
+        correlation_id = CorrelationContext.get()
+
+        with instrument_operation(
+            self,
+            "storage.read_bytes_async",
+            "storage",
+            path=path,
+            backend=self.backend_type,
+        ):
+            if self.instrumentation_config.debug_mode:
+                self.logger.debug(
+                    "Async reading bytes from %s",
+                    path,
+                    extra={
+                        "path": path,
+                        "backend": self.backend_type,
+                        "correlation_id": correlation_id,
+                    },
+                )
+
+            try:
+                data = await self._read_bytes_async(path, **kwargs)
+            except Exception as e:
+                self.logger.exception(
+                    "Failed to async read from %s",
+                    path,
+                    extra={
+                        "path": path,
+                        "backend": self.backend_type,
+                        "error_type": type(e).__name__,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                raise
+            else:
+                if self.instrumentation_config.log_service_operations:
+                    self.logger.info(
+                        "Async read %d bytes from %s",
+                        len(data),
+                        path,
+                        extra={
+                            "path": path,
+                            "size_bytes": len(data),
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+                return data
 
     async def write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:
         """Async write bytes to storage."""
-        await async_(self.write_bytes)(path, data, **kwargs)
+        correlation_id = CorrelationContext.get()
+
+        with instrument_operation(
+            self,
+            "storage.write_bytes_async",
+            "storage",
+            path=path,
+            size_bytes=len(data),
+            backend=self.backend_type,
+        ):
+            if self.instrumentation_config.debug_mode:
+                self.logger.debug(
+                    "Async writing %d bytes to %s",
+                    len(data),
+                    path,
+                    extra={
+                        "path": path,
+                        "size_bytes": len(data),
+                        "backend": self.backend_type,
+                        "correlation_id": correlation_id,
+                    },
+                )
+
+            try:
+                await self._write_bytes_async(path, data, **kwargs)
+            except Exception as e:
+                self.logger.exception(
+                    "Failed to async write to %s",
+                    path,
+                    extra={
+                        "path": path,
+                        "size_bytes": len(data),
+                        "backend": self.backend_type,
+                        "error_type": type(e).__name__,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                raise
+            else:
+                if self.instrumentation_config.log_service_operations:
+                    self.logger.info(
+                        "Async wrote %d bytes to %s",
+                        len(data),
+                        path,
+                        extra={
+                            "path": path,
+                            "size_bytes": len(data),
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
 
     async def read_text_async(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Async read text from storage."""
-        return await async_(self.read_text)(path, encoding, **kwargs)
+        # Check if backend has native async implementation
+        if hasattr(self, "_read_text_async"):
+            correlation_id = CorrelationContext.get()
+
+            with instrument_operation(
+                self,
+                "storage.read_text_async",
+                "storage",
+                path=path,
+                encoding=encoding,
+                backend=self.backend_type,
+            ):
+                if self.instrumentation_config.debug_mode:
+                    self.logger.debug(
+                        "Async reading text from %s (encoding: %s)",
+                        path,
+                        encoding,
+                        extra={
+                            "path": path,
+                            "encoding": encoding,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+                try:
+                    text = await self._read_text_async(path, encoding, **kwargs)  # pyright: ignore
+                except Exception as e:
+                    self.logger.exception(
+                        "Failed to async read text from %s",
+                        path,
+                        extra={
+                            "path": path,
+                            "encoding": encoding,
+                            "backend": self.backend_type,
+                            "error_type": type(e).__name__,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+                    raise
+                else:
+                    if self.instrumentation_config.log_service_operations:
+                        self.logger.info(
+                            "Async read %d characters from %s",
+                            len(text),
+                            path,
+                            extra={
+                                "path": path,
+                                "encoding": encoding,
+                                "char_count": len(text),
+                                "backend": self.backend_type,
+                                "correlation_id": correlation_id,
+                            },
+                        )
+
+                    return text
+        else:
+            # Fallback to sync-to-async wrapper
+            return await async_(self.read_text)(path, encoding, **kwargs)
 
     async def write_text_async(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Async write text to storage."""
-        await async_(self.write_text)(path, data, encoding, **kwargs)
+        # Check if backend has native async implementation
+        if hasattr(self, "_write_text_async"):
+            correlation_id = CorrelationContext.get()
+
+            with instrument_operation(
+                self,
+                "storage.write_text_async",
+                "storage",
+                path=path,
+                char_count=len(data),
+                encoding=encoding,
+                backend=self.backend_type,
+            ):
+                if self.instrumentation_config.debug_mode:
+                    self.logger.debug(
+                        "Async writing %d characters to %s (encoding: %s)",
+                        len(data),
+                        path,
+                        encoding,
+                        extra={
+                            "path": path,
+                            "char_count": len(data),
+                            "encoding": encoding,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+                try:
+                    await self._write_text_async(path, data, encoding, **kwargs)  # pyright: ignore
+                except Exception as e:
+                    self.logger.exception(
+                        "Failed to async write text to %s",
+                        path,
+                        extra={
+                            "path": path,
+                            "char_count": len(data),
+                            "encoding": encoding,
+                            "backend": self.backend_type,
+                            "error_type": type(e).__name__,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+                    raise
+                else:
+                    if self.instrumentation_config.log_service_operations:
+                        self.logger.info(
+                            "Async wrote %d characters to %s",
+                            len(data),
+                            path,
+                            extra={
+                                "path": path,
+                                "char_count": len(data),
+                                "encoding": encoding,
+                                "backend": self.backend_type,
+                                "correlation_id": correlation_id,
+                            },
+                        )
+        else:
+            # Fallback to sync-to-async wrapper
+            await async_(self.write_text)(path, data, encoding, **kwargs)
 
     async def exists_async(self, path: str, **kwargs: Any) -> bool:
         """Async check if object exists."""
-        return await async_(self.exists)(path, **kwargs)
+        # Check if backend has native async implementation
+        if hasattr(self, "_exists_async"):
+            correlation_id = CorrelationContext.get()
+
+            with instrument_operation(
+                self,
+                "storage.exists_async",
+                "storage",
+                path=path,
+                backend=self.backend_type,
+            ):
+                if self.instrumentation_config.debug_mode:
+                    self.logger.debug(
+                        "Async checking existence of %s",
+                        path,
+                        extra={
+                            "path": path,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+                try:
+                    exists = await self._exists_async(path, **kwargs)  # pyright: ignore
+                except Exception as e:
+                    self.logger.exception(
+                        "Failed to async check existence of %s",
+                        path,
+                        extra={
+                            "path": path,
+                            "backend": self.backend_type,
+                            "error_type": type(e).__name__,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+                    raise
+                else:
+                    if self.instrumentation_config.log_service_operations:
+                        self.logger.info(
+                            "Async checked existence of %s: %s",
+                            path,
+                            exists,
+                            extra={
+                                "path": path,
+                                "exists": exists,
+                                "backend": self.backend_type,
+                                "correlation_id": correlation_id,
+                            },
+                        )
+
+                    return exists
+        else:
+            # Fallback to sync-to-async wrapper
+            return await async_(self.exists)(path, **kwargs)
 
     async def delete_async(self, path: str, **kwargs: Any) -> None:
         """Async delete object."""
-        await async_(self.delete)(path, **kwargs)
+        # Check if backend has native async implementation
+        if hasattr(self, "_delete_async"):
+            correlation_id = CorrelationContext.get()
+
+            with instrument_operation(
+                self,
+                "storage.delete_async",
+                "storage",
+                path=path,
+                backend=self.backend_type,
+            ):
+                if self.instrumentation_config.debug_mode:
+                    self.logger.debug(
+                        "Async deleting %s",
+                        path,
+                        extra={
+                            "path": path,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+                try:
+                    await self._delete_async(path, **kwargs)  # pyright: ignore
+                except Exception as e:
+                    self.logger.exception(
+                        "Failed to async delete %s",
+                        path,
+                        extra={
+                            "path": path,
+                            "backend": self.backend_type,
+                            "error_type": type(e).__name__,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+                    raise
+                else:
+                    if self.instrumentation_config.log_service_operations:
+                        self.logger.info(
+                            "Async deleted %s",
+                            path,
+                            extra={
+                                "path": path,
+                                "backend": self.backend_type,
+                                "correlation_id": correlation_id,
+                            },
+                        )
+        else:
+            # Fallback to sync-to-async wrapper
+            await async_(self.delete)(path, **kwargs)
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """Async list objects."""
-        return await async_(self.list_objects)(prefix, recursive, **kwargs)
+        # Check if backend has native async implementation
+        if hasattr(self, "_list_objects_async"):
+            correlation_id = CorrelationContext.get()
+
+            with instrument_operation(
+                self,
+                "storage.list_objects_async",
+                "storage",
+                prefix=prefix,
+                recursive=recursive,
+                backend=self.backend_type,
+            ):
+                if self.instrumentation_config.debug_mode:
+                    self.logger.debug(
+                        "Async listing objects with prefix '%s'",
+                        prefix,
+                        extra={
+                            "prefix": prefix,
+                            "recursive": recursive,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+                try:
+                    objects = await self._list_objects_async(prefix, recursive, **kwargs)  # pyright: ignore
+                except Exception as e:
+                    self.logger.exception(
+                        "Failed to async list objects with prefix '%s'",
+                        prefix,
+                        extra={
+                            "prefix": prefix,
+                            "recursive": recursive,
+                            "backend": self.backend_type,
+                            "error_type": type(e).__name__,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+                    raise
+                else:
+                    if self.instrumentation_config.log_service_operations:
+                        self.logger.info(
+                            "Async listed %d objects with prefix '%s'",
+                            len(objects),
+                            prefix,
+                            extra={
+                                "prefix": prefix,
+                                "recursive": recursive,
+                                "object_count": len(objects),
+                                "backend": self.backend_type,
+                                "correlation_id": correlation_id,
+                            },
+                        )
+
+                    return objects
+        else:
+            # Fallback to sync-to-async wrapper
+            return await async_(self.list_objects)(prefix, recursive, **kwargs)
 
     async def copy_async(self, source: str, destination: str, **kwargs: Any) -> None:
         """Async copy object."""
-        await async_(self.copy)(source, destination, **kwargs)
+        # Check if backend has native async implementation
+        if hasattr(self, "_copy_async"):
+            correlation_id = CorrelationContext.get()
+
+            with instrument_operation(
+                self,
+                "storage.copy_async",
+                "storage",
+                source=source,
+                destination=destination,
+                backend=self.backend_type,
+            ):
+                if self.instrumentation_config.debug_mode:
+                    self.logger.debug(
+                        "Async copying %s to %s",
+                        source,
+                        destination,
+                        extra={
+                            "source": source,
+                            "destination": destination,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+                try:
+                    await self._copy_async(source, destination, **kwargs)  # pyright: ignore
+                except Exception as e:
+                    self.logger.exception(
+                        "Failed to async copy %s to %s",
+                        source,
+                        destination,
+                        extra={
+                            "source": source,
+                            "destination": destination,
+                            "backend": self.backend_type,
+                            "error_type": type(e).__name__,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+                    raise
+                else:
+                    if self.instrumentation_config.log_service_operations:
+                        self.logger.info(
+                            "Async copied %s to %s",
+                            source,
+                            destination,
+                            extra={
+                                "source": source,
+                                "destination": destination,
+                                "backend": self.backend_type,
+                                "correlation_id": correlation_id,
+                            },
+                        )
+        else:
+            # Fallback to sync-to-async wrapper
+            await async_(self.copy)(source, destination, **kwargs)
 
     async def move_async(self, source: str, destination: str, **kwargs: Any) -> None:
         """Async move object."""
-        await async_(self.move)(source, destination, **kwargs)
+        # Check if backend has native async implementation
+        if hasattr(self, "_move_async"):
+            correlation_id = CorrelationContext.get()
+
+            with instrument_operation(
+                self,
+                "storage.move_async",
+                "storage",
+                source=source,
+                destination=destination,
+                backend=self.backend_type,
+            ):
+                if self.instrumentation_config.debug_mode:
+                    self.logger.debug(
+                        "Async moving %s to %s",
+                        source,
+                        destination,
+                        extra={
+                            "source": source,
+                            "destination": destination,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+                try:
+                    await self._move_async(source, destination, **kwargs)  # pyright: ignore
+                except Exception as e:
+                    self.logger.exception(
+                        "Failed to async move %s to %s",
+                        source,
+                        destination,
+                        extra={
+                            "source": source,
+                            "destination": destination,
+                            "backend": self.backend_type,
+                            "error_type": type(e).__name__,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+                    raise
+                else:
+                    if self.instrumentation_config.log_service_operations:
+                        self.logger.info(
+                            "Async moved %s to %s",
+                            source,
+                            destination,
+                            extra={
+                                "source": source,
+                                "destination": destination,
+                                "backend": self.backend_type,
+                                "correlation_id": correlation_id,
+                            },
+                        )
+        else:
+            # Fallback to sync-to-async wrapper
+            await async_(self.move)(source, destination, **kwargs)
 
     async def get_metadata_async(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Async get object metadata."""
-        return await async_(self.get_metadata)(path, **kwargs)
+        # Check if backend has native async implementation
+        if hasattr(self, "_get_metadata_async"):
+            correlation_id = CorrelationContext.get()
+
+            with instrument_operation(
+                self,
+                "storage.get_metadata_async",
+                "storage",
+                path=path,
+                backend=self.backend_type,
+            ):
+                if self.instrumentation_config.debug_mode:
+                    self.logger.debug(
+                        "Async getting metadata for %s",
+                        path,
+                        extra={
+                            "path": path,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+                try:
+                    metadata = await self._get_metadata_async(path, **kwargs)  # pyright: ignore
+                except Exception as e:
+                    self.logger.exception(
+                        "Failed to async get metadata for %s",
+                        path,
+                        extra={
+                            "path": path,
+                            "backend": self.backend_type,
+                            "error_type": type(e).__name__,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+                    raise
+                else:
+                    if self.instrumentation_config.log_service_operations:
+                        self.logger.info(
+                            "Async got metadata for %s",
+                            path,
+                            extra={
+                                "path": path,
+                                "metadata": metadata,
+                                "backend": self.backend_type,
+                                "correlation_id": correlation_id,
+                            },
+                        )
+
+                    return metadata
+        else:
+            # Fallback to sync-to-async wrapper
+            return await async_(self.get_metadata)(path, **kwargs)
 
     async def read_arrow_async(self, path: str, **kwargs: Any) -> ArrowTable:
         """Async read Arrow table."""
-        return await async_(self.read_arrow)(path, **kwargs)
+        # Check if backend has native async implementation
+        if hasattr(self, "_read_arrow_async"):
+            correlation_id = CorrelationContext.get()
+
+            with instrument_operation(
+                self,
+                "storage.read_arrow_async",
+                "storage",
+                path=path,
+                backend=self.backend_type,
+            ):
+                if self.instrumentation_config.debug_mode:
+                    self.logger.debug(
+                        "Async reading Arrow table from %s",
+                        path,
+                        extra={
+                            "path": path,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+                try:
+                    table = await self._read_arrow_async(path, **kwargs)  # pyright: ignore
+                except Exception as e:
+                    self.logger.exception(
+                        "Failed to async read Arrow table from %s",
+                        path,
+                        extra={
+                            "path": path,
+                            "backend": self.backend_type,
+                            "error_type": type(e).__name__,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+                    raise
+                else:
+                    if self.instrumentation_config.log_service_operations:
+                        self.logger.info(
+                            "Async read Arrow table with %d rows from %s",
+                            table.num_rows,
+                            path,
+                            extra={
+                                "path": path,
+                                "num_rows": table.num_rows,
+                                "num_columns": table.num_columns,
+                                "backend": self.backend_type,
+                                "correlation_id": correlation_id,
+                            },
+                        )
+
+                    return table
+        else:
+            # Fallback to sync-to-async wrapper
+            return await async_(self.read_arrow)(path, **kwargs)
 
     async def write_arrow_async(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
         """Async write Arrow table."""
-        await async_(self.write_arrow)(path, table, **kwargs)
+        # Check if backend has native async implementation
+        if hasattr(self, "_write_arrow_async"):
+            correlation_id = CorrelationContext.get()
+
+            with instrument_operation(
+                self,
+                "storage.write_arrow_async",
+                "storage",
+                path=path,
+                num_rows=table.num_rows,
+                num_columns=table.num_columns,
+                backend=self.backend_type,
+            ):
+                if self.instrumentation_config.debug_mode:
+                    self.logger.debug(
+                        "Async writing Arrow table with %d rows to %s",
+                        table.num_rows,
+                        path,
+                        extra={
+                            "path": path,
+                            "num_rows": table.num_rows,
+                            "num_columns": table.num_columns,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+
+                try:
+                    await self._write_arrow_async(path, table, **kwargs)  # pyright: ignore
+                except Exception as e:
+                    self.logger.exception(
+                        "Failed to async write Arrow table to %s",
+                        path,
+                        extra={
+                            "path": path,
+                            "num_rows": table.num_rows,
+                            "num_columns": table.num_columns,
+                            "backend": self.backend_type,
+                            "error_type": type(e).__name__,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+                    raise
+                else:
+                    if self.instrumentation_config.log_service_operations:
+                        self.logger.info(
+                            "Async wrote Arrow table with %d rows to %s",
+                            table.num_rows,
+                            path,
+                            extra={
+                                "path": path,
+                                "num_rows": table.num_rows,
+                                "num_columns": table.num_columns,
+                                "backend": self.backend_type,
+                                "correlation_id": correlation_id,
+                            },
+                        )
+        else:
+            # Fallback to sync-to-async wrapper
+            await async_(self.write_arrow)(path, table, **kwargs)
 
     async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
         """Async stream Arrow record batches.
@@ -900,9 +1552,55 @@ class InstrumentedObjectStore(ABC):
         Yields:
             AsyncIterator of Arrow record batches
         """
-        # Default implementation converts sync iterator to async
-        for batch in await async_(lambda: list(self.stream_arrow(pattern, **kwargs)))():
-            yield batch
+        # Check if backend has native async implementation
+        if hasattr(self, "_stream_arrow_async"):
+            correlation_id = CorrelationContext.get()
+
+            if self.instrumentation_config.debug_mode:
+                self.logger.debug(
+                    "Async streaming Arrow batches for pattern %s",
+                    pattern,
+                    extra={
+                        "pattern": pattern,
+                        "backend": self.backend_type,
+                        "correlation_id": correlation_id,
+                    },
+                )
+
+            try:
+                batch_count = 0
+                async for batch in self._stream_arrow_async(pattern, **kwargs):  # pyright: ignore
+                    batch_count += 1
+                    yield batch
+
+                if self.instrumentation_config.log_service_operations:
+                    self.logger.info(
+                        "Async streamed %d Arrow batches for pattern %s",
+                        batch_count,
+                        pattern,
+                        extra={
+                            "pattern": pattern,
+                            "batch_count": batch_count,
+                            "backend": self.backend_type,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+            except Exception as e:
+                self.logger.exception(
+                    "Failed to async stream Arrow batches for pattern %s",
+                    pattern,
+                    extra={
+                        "pattern": pattern,
+                        "backend": self.backend_type,
+                        "error_type": type(e).__name__,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                raise
+        else:
+            # Fallback to sync-to-async conversion
+            for batch in await async_(lambda: list(self.stream_arrow(pattern, **kwargs)))():
+                yield batch
 
     # Abstract methods that subclasses must implement
 
@@ -995,4 +1693,72 @@ class InstrumentedObjectStore(ABC):
     @abstractmethod
     def _stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator[ArrowRecordBatch]:
         """Actual implementation of stream_arrow in subclasses."""
+        raise NotImplementedError
+
+    # Abstract async methods that subclasses must implement
+    # Backends can either provide native async implementations or wrap sync methods
+
+    @abstractmethod
+    async def _read_bytes_async(self, path: str, **kwargs: Any) -> bytes:
+        """Actual async implementation of read_bytes in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def _write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:
+        """Actual async implementation of write_bytes in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def _read_text_async(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
+        """Actual async implementation of read_text in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def _write_text_async(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+        """Actual async implementation of write_text in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def _list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
+        """Actual async implementation of list_objects in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def _exists_async(self, path: str, **kwargs: Any) -> bool:
+        """Actual async implementation of exists in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def _delete_async(self, path: str, **kwargs: Any) -> None:
+        """Actual async implementation of delete in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def _copy_async(self, source: str, destination: str, **kwargs: Any) -> None:
+        """Actual async implementation of copy in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def _move_async(self, source: str, destination: str, **kwargs: Any) -> None:
+        """Actual async implementation of move in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def _get_metadata_async(self, path: str, **kwargs: Any) -> dict[str, Any]:
+        """Actual async implementation of get_metadata in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def _read_arrow_async(self, path: str, **kwargs: Any) -> ArrowTable:
+        """Actual async implementation of read_arrow in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def _write_arrow_async(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
+        """Actual async implementation of write_arrow in subclasses."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def _stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
+        """Actual async implementation of stream_arrow in subclasses."""
         raise NotImplementedError

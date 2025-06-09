@@ -12,7 +12,6 @@ class MockDriver(SyncStorageMixin):
     def __init__(self) -> None:
         self._connection = MagicMock()
         self.config = MagicMock()
-        self.config.storage = None
 
     def execute(self, sql: Any) -> Any:
         """Mock execute method."""
@@ -99,17 +98,6 @@ class TestSyncStorageMixin:
             # Only acceptable if pyarrow is not installed
             assert "pyarrow" in str(e).lower()
 
-    def test_storage_config_access(self) -> None:
-        """Test storage config access."""
-        driver = MockDriver()
-
-        # No storage config by default
-        assert driver._get_storage_config() is None
-
-        # With storage config
-        mock_storage = MagicMock()
-        driver.config.storage = mock_storage
-        assert driver._get_storage_config() is mock_storage
 
     def test_export_to_storage_format_detection(self) -> None:
         """Test that export_to_storage detects format correctly."""

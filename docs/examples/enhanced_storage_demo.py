@@ -4,7 +4,6 @@ This example shows how the new storage registry provides Advanced Alchemy-inspir
 patterns for flexible, lazy-loaded storage backend management.
 """
 
-from sqlspec.config import StorageConfig
 from sqlspec.storage import storage_registry
 from sqlspec.storage.backends.fsspec import FSSpecBackend
 
@@ -14,7 +13,6 @@ __all__ = (
     "demo_basic_registration",
     "demo_lazy_loading",
     "demo_scheme_mapping",
-    "demo_storage_config_integration",
     "need_faster_access",
 )
 
@@ -89,40 +87,6 @@ def demo_lazy_loading() -> None:
     storage_registry.get("analytics-s3")  # Re-instantiated
 
 
-def demo_storage_config_integration() -> None:
-    """Integration with SQLSpec's StorageConfig."""
-
-    # Create storage config with named backends
-    StorageConfig(
-        default_storage_key="primary",
-        backends={
-            "primary": {
-                "backend_type": "obstore",
-                "store_config": {"bucket": "primary-data"},
-            },  # could also be {"backend_type": "obstore", "uri": "s3://primary-data"} for obstore (or gcs or any other obstore supported protocol, they have URIs for all of them)
-            "archive": {
-                "backend_type": "fsspec",
-                "protocol": "s3",
-                "bucket": "archive-data",
-            },  # also allows something like this: {"backend_type": "fsspec", "uri": "s3://archive-data"}}, (or gcs or any other fsspec supported protocol, they have URIs for all of them
-            "local-dev": {"backend_type": "local", "base_path": "/tmp/dev-data"},
-        },
-        auto_register=True,
-    )
-
-    # Auto-registration happens when config is processed
-    # (typically in driver initialization)
-
-    # Now can access by key
-    storage_registry.get("primary-s3")
-    storage_registry.get("archive-s3")
-    storage_registry.get("local-dev")
-
-    backend = storage_registry.get("primary-s3")  # returns the default storage backend on sqlspec
-
-    backend.write_bytes(
-        b"example data", path="my_path_inthe_bucket_or_filestem/here", storage_key="primary"
-    )  # Example write operation # if storage key is not specified, it will use the default storage key from the StorageConfig, which is "primary" in this case.
 
 
 def demo_advanced_usage() -> None:
@@ -229,7 +193,6 @@ if __name__ == "__main__":
     demo_basic_registration()
     demo_scheme_mapping()
     demo_lazy_loading()
-    demo_storage_config_integration()
     demo_advanced_usage()
     demo_backend_type_scenarios()
 

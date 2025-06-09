@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError
 from sqlspec.storage.backends.base import InstrumentedObjectStore
 from sqlspec.typing import OBSTORE_INSTALLED, PYARROW_INSTALLED
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -396,10 +397,11 @@ class ObStoreBackend(InstrumentedObjectStore):
                 self.logger.warning("Failed to stream Arrow data from %s: %s", obj_path, e)
                 continue
 
-    # Async operation overrides (for native async support if available)
+    # Private async implementations for instrumentation support
+    # These are called by the base class async methods after instrumentation
 
-    async def read_bytes_async(self, path: str, **kwargs: Any) -> bytes:
-        """Async read bytes using native obstore async if available."""
+    async def _read_bytes_async(self, path: str, **kwargs: Any) -> bytes:
+        """Private async read bytes using native obstore async if available."""
         try:
             resolved_path = self._resolve_path(path)
             result = await self.store.get_async(resolved_path)  # type: ignore[misc]
@@ -408,8 +410,8 @@ class ObStoreBackend(InstrumentedObjectStore):
             msg = f"Failed to async read bytes from {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    async def write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:
-        """Async write bytes using native obstore async if available."""
+    async def _write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:
+        """Private async write bytes using native obstore async if available."""
         if hasattr(self.store, "put_async"):
             try:
                 resolved_path = self._resolve_path(path)
@@ -418,12 +420,11 @@ class ObStoreBackend(InstrumentedObjectStore):
                 msg = f"Failed to async write bytes to {path}"
                 raise StorageOperationFailedError(msg) from exc
         else:
-            # Fallback to sync-to-async
-            await super().write_bytes_async(path, data, **kwargs)
+            # Fallback to sync implementation
+            self._write_bytes(path, data, **kwargs)
 
-    async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
-        """Async list objects using native obstore async if available."""
-
+    async def _list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
+        """Private async list objects using native obstore async if available."""
         try:
             resolved_prefix = self._resolve_path(prefix) if prefix else self.base_path or ""
             objects = []
@@ -441,3 +442,205 @@ class ObStoreBackend(InstrumentedObjectStore):
         except Exception as exc:
             msg = f"Failed to async list objects with prefix '{prefix}'"
             raise StorageOperationFailedError(msg) from exc
+
+    # Implement all other required abstract async methods
+    # ObStore provides native async for most operations
+
+    async def _read_text_async(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
+        """Async read text using native obstore async."""
+        try:
+            data = await self._read_bytes_async(path, **kwargs)
+            # Handle obstore's Bytes object by converting to regular bytes first
+            if hasattr(data, 'to_bytes'):
+                data = data.to_bytes()
+            elif hasattr(data, '__bytes__'):
+                data = bytes(data)
+            return data.decode(encoding)
+        except Exception as exc:
+            msg = f"Failed to async read text from {path} with encoding {encoding}"
+            raise StorageOperationFailedError(msg) from exc
+
+    async def _write_text_async(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+        """Async write text using native obstore async."""
+        try:
+            encoded_data = data.encode(encoding)
+            await self._write_bytes_async(path, encoded_data, **kwargs)
+        except Exception as exc:
+            msg = f"Failed to async write text to {path} with encoding {encoding}"
+            raise StorageOperationFailedError(msg) from exc
+
+    async def _exists_async(self, path: str, **kwargs: Any) -> bool:
+        """Async check if object exists using native obstore async."""
+        try:
+            resolved_path = self._resolve_path(path)
+            # Use head_async to check existence efficiently
+            if hasattr(self.store, "head_async"):
+                await self.store.head_async(resolved_path)
+                return True
+            else:
+                # Fallback to sync implementation
+                return await async_(self._exists)(path, **kwargs)
+        except Exception:
+            return False
+
+    async def _delete_async(self, path: str, **kwargs: Any) -> None:
+        """Async delete object using native obstore async."""
+        try:
+            resolved_path = self._resolve_path(path)
+            if hasattr(self.store, "delete_async"):
+                await self.store.delete_async(resolved_path)
+            else:
+                # Fallback to sync implementation
+                await async_(self._delete)(path, **kwargs)
+        except Exception as exc:
+            msg = f"Failed to async delete {path}"
+            raise StorageOperationFailedError(msg) from exc
+
+    async def _copy_async(self, source: str, destination: str, **kwargs: Any) -> None:
+        """Async copy object using native obstore async."""
+        try:
+            source_path = self._resolve_path(source)
+            dest_path = self._resolve_path(destination)
+
+            # Check if obstore has native async copy support
+            if hasattr(self.store, "copy_async"):
+                await self.store.copy_async(source_path, dest_path)
+            else:
+                # Fallback to read/write async
+                data = await self._read_bytes_async(source, **kwargs)
+                await self._write_bytes_async(destination, data, **kwargs)
+        except Exception as exc:
+            msg = f"Failed to async copy {source} to {destination}"
+            raise StorageOperationFailedError(msg) from exc
+
+    async def _move_async(self, source: str, destination: str, **kwargs: Any) -> None:
+        """Async move object using native obstore async."""
+        try:
+            # Check if obstore has native async move/rename support
+            if hasattr(self.store, "rename_async"):
+                source_path = self._resolve_path(source)
+                dest_path = self._resolve_path(destination)
+                await self.store.rename_async(source_path, dest_path)
+            else:
+                # Fallback to copy + delete async
+                await self._copy_async(source, destination, **kwargs)
+                await self._delete_async(source, **kwargs)
+        except Exception as exc:
+            msg = f"Failed to async move {source} to {destination}"
+            raise StorageOperationFailedError(msg) from exc
+
+    async def _get_metadata_async(self, path: str, **kwargs: Any) -> dict[str, Any]:
+        """Async get object metadata using native obstore async."""
+        try:
+            resolved_path = self._resolve_path(path)
+            if hasattr(self.store, "head_async"):
+                metadata = await self.store.head_async(resolved_path)
+                # Convert obstore ObjectMeta to dict
+                result = {
+                    "path": resolved_path,
+                    "exists": True,
+                }
+                # Extract metadata attributes if available
+                for attr in ["size", "last_modified", "e_tag", "version"]:
+                    if hasattr(metadata, attr):
+                        result[attr] = getattr(metadata, attr)
+                # Include custom metadata if available
+                if hasattr(metadata, "metadata"):
+                    custom_metadata = getattr(metadata, "metadata", None)
+                    if custom_metadata:
+                        result["custom_metadata"] = custom_metadata
+                return result
+            else:
+                # Fallback to sync implementation
+                return await async_(self._get_metadata)(path, **kwargs)
+        except Exception as exc:
+            msg = f"Failed to async get metadata for {path}"
+            raise StorageOperationFailedError(msg) from exc
+
+    async def _read_arrow_async(self, path: str, **kwargs: Any) -> "ArrowTable":
+        """Async read Arrow table using native obstore async."""
+        try:
+            # Try native obstore async arrow support first
+            if self._has_native_arrow and hasattr(self.store, "read_arrow_async"):
+                resolved_path = self._resolve_path(path)
+                return await self.store.read_arrow_async(resolved_path, **kwargs)  # type: ignore[union-attr]
+
+            # Fallback to async bytes + PyArrow conversion
+            from io import BytesIO
+            import pyarrow.parquet as pq
+
+            data = await self._read_bytes_async(path, **kwargs)
+            return pq.read_table(BytesIO(data), **kwargs)
+
+        except ImportError as exc:
+            msg = "pyarrow is required for Arrow operations"
+            raise MissingDependencyError(msg) from exc
+        except Exception as exc:
+            msg = f"Failed to async read Arrow table from {path}"
+            raise StorageOperationFailedError(msg) from exc
+
+    async def _write_arrow_async(self, path: str, table: "ArrowTable", **kwargs: Any) -> None:
+        """Async write Arrow table using native obstore async."""
+        if not PYARROW_INSTALLED:
+            raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
+        try:
+            # Try native obstore async arrow support first
+            if self._has_native_arrow and hasattr(self.store, "write_arrow_async"):
+                resolved_path = self._resolve_path(path)
+                await self.store.write_arrow_async(resolved_path, table, **kwargs)  # type: ignore[union-attr]
+                return
+
+            # Fallback to PyArrow + async bytes
+            from io import BytesIO
+            import pyarrow.parquet as pq
+
+            buffer = BytesIO()
+            pq.write_table(table, buffer, **kwargs)
+            await self._write_bytes_async(path, buffer.getvalue())
+
+        except Exception as exc:
+            msg = f"Failed to async write Arrow table to {path}"
+            raise StorageOperationFailedError(msg) from exc
+
+    async def _stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
+        """Async stream Arrow record batches using native obstore async."""
+        if not PYARROW_INSTALLED:
+            raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
+        try:
+            # Try native obstore async streaming if available
+            if hasattr(self.store, "stream_arrow_async"):
+                resolved_pattern = self._resolve_path(pattern)
+                async for batch in self.store.stream_arrow_async(resolved_pattern, **kwargs):  # type: ignore[union-attr]
+                    yield batch
+                return
+
+            # Fallback to manual async streaming
+            from io import BytesIO
+            import pyarrow.parquet as pq
+
+            # Find all matching objects using async list
+            matching_objects = await self._list_objects_async()
+            filtered_objects = [obj for obj in matching_objects if self._matches_pattern(obj, pattern)]
+
+            # Stream each file as record batches
+            for obj_path in filtered_objects:
+                try:
+                    data = await self._read_bytes_async(obj_path)
+                    buffer = BytesIO(data)
+                    parquet_file = pq.ParquetFile(buffer)
+                    for batch in parquet_file.iter_batches():
+                        yield batch
+                except Exception as e:
+                    # Log but continue with other files
+                    self.logger.warning("Failed to async stream Arrow data from %s: %s", obj_path, e)
+                    continue
+
+        except Exception as exc:
+            msg = f"Failed to async stream Arrow data for pattern {pattern}"
+            raise StorageOperationFailedError(msg) from exc
+
+    def _matches_pattern(self, path: str, pattern: str) -> bool:
+        """Check if path matches glob pattern."""
+        import fnmatch
+        resolved_pattern = self._resolve_path(pattern)
+        return fnmatch.fnmatch(path, resolved_pattern)

@@ -47,33 +47,6 @@ class TestStorageMixins:
         assert not driver._is_uri("relative/path")
         assert not driver._is_uri("just_a_file.txt")
 
-    def test_storage_config_retrieval(self) -> None:
-        """Test storage config retrieval."""
-
-        class MockDriver(SyncStorageMixin):
-            def __init__(self) -> None:
-                self.config = MagicMock()
-                self.config.storage = MagicMock()
-                self._connection = MagicMock()
-
-        driver = MockDriver()
-        storage_config = driver._get_storage_config()
-        assert storage_config is not None
-
-    def test_storage_config_missing(self) -> None:
-        """Test behavior when storage config is missing."""
-
-        class MockDriver(SyncStorageMixin):
-            def __init__(self) -> None:
-                self.config = MagicMock()
-                # Simulate missing storage attribute by making it raise AttributeError
-                del self.config.storage
-                self._connection = MagicMock()
-
-        driver = MockDriver()
-        # Should not raise but return None
-        storage_config = driver._get_storage_config()
-        assert storage_config is None
 
 
 class TestMixinIntegration:

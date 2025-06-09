@@ -23,7 +23,6 @@ from sqlspec.storage import storage_registry
 from sqlspec.typing import ArrowTable, RowT, SQLParameterType
 
 if TYPE_CHECKING:
-    from sqlspec.config import StorageConfig
     from sqlspec.statement.filters import StatementFilter
     from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQLConfig, Statement
@@ -53,12 +52,6 @@ class StorageMixinBase:
         if not PYARROW_INSTALLED:
             msg = "pyarrow is required for Arrow operations. Install with: pip install pyarrow"
             raise MissingDependencyError(msg)
-
-    def _get_storage_config(self) -> "Optional[StorageConfig]":
-        """Get storage configuration from driver config."""
-        with wrap_exceptions(wrap_exceptions=True, suppress=(AttributeError, TypeError)):
-            return self.config.storage  # type: ignore[no-any-return]
-        return None
 
     @staticmethod
     def _get_storage_backend(uri_or_key: str) -> "ObjectStoreProtocol":
