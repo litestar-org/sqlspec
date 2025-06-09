@@ -24,7 +24,15 @@ ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 @pytest.fixture
 def bigquery_session(bigquery_service: BigQueryService) -> Generator[BigQueryDriver, None, None]:
     """Create a BigQuery session with test table."""
-    config = BigQueryConfig()
+    from google.api_core.client_options import ClientOptions
+    from google.auth.credentials import AnonymousCredentials
+    
+    config = BigQueryConfig(
+        project=bigquery_service.project,
+        dataset_id=bigquery_service.dataset,
+        client_options=ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
+        credentials=AnonymousCredentials(),  # type: ignore[no-untyped-call]
+    )
 
     with config.provide_session() as session:
         # Create test table

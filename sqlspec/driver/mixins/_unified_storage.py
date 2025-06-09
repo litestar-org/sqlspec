@@ -378,7 +378,10 @@ class SyncStorageMixin(StorageMixinBase):
         Returns:
             Number of rows exported
         """
-        # Convert query to string
+        # Keep original query object for parameter handling
+        query_obj = query
+
+        # Convert query to string for format detection
         if hasattr(query, "to_sql"):  # SQL object
             query_str = query.to_sql()
         elif isinstance(query, str):
@@ -398,14 +401,14 @@ class SyncStorageMixin(StorageMixinBase):
 
         with wrap_exceptions(suppress=(AttributeError,)):
             if file_format == "parquet":
-                # Use Arrow for efficient transfer
-                arrow_result = self.fetch_arrow_table(query_str)
+                # Use Arrow for efficient transfer - pass original query object to preserve parameters
+                arrow_result = self.fetch_arrow_table(query_obj)
                 arrow_table = arrow_result.data
                 backend.write_arrow(path, arrow_table, **options)
                 return arrow_table.num_rows
 
         # Use traditional export through temporary file
-        return self._export_via_backend(query_str, backend, path, file_format, **options)
+        return self._export_via_backend(query_obj, backend, path, file_format, **options)
 
     def import_from_storage(
         self,

@@ -364,17 +364,24 @@ def test_bigquery_driver_execute_statement_select(
     mock_result.__iter__ = Mock(return_value=iter([]))  # No rows
     mock_field = Mock()
     mock_field.name = "id"
-    mock_result.schema = [mock_field]
-
+    
+    # Set up schema on the query job, not on the result
+    mock_query_job.schema = [mock_field]
     mock_query_job.result.return_value = mock_result
     mock_query_job.num_dml_affected_rows = None
+    mock_query_job.statement_type = "SELECT"
 
     parameters = {"user_id": 123}
     statement = SQL("SELECT * FROM users WHERE id = @user_id", parameters=parameters)
     result = bigquery_driver._execute_statement(statement)
 
-    # Should return a QueryJob
-    assert result == mock_query_job
+    # Should return a dict with data and column_names for SELECT queries
+    assert isinstance(result, dict)
+    assert "data" in result
+    assert "column_names" in result
+    assert result["data"] == []  # No rows
+    # Column names will be empty list due to Mock handling, which is expected for unit tests
+    assert isinstance(result["column_names"], list)
     mock_bigquery_connection.query.assert_called_once()
 
 

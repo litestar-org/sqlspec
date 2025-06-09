@@ -203,6 +203,7 @@ class AsyncpgDriver(
             records = cast("list[Record]", result)
 
             if not records:
+                # TODO: use the parsed `SQL`
                 # AsyncPG limitation: cannot get column names from empty result sets
                 # This is a known limitation where schema information is not available
                 return SQLResult[RowT](

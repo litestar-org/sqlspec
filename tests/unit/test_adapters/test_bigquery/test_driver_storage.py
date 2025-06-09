@@ -55,12 +55,12 @@ class TestBigQueryStorageOperations:
         mock_query_job.to_arrow.return_value = mock_arrow_table
         mock_query_job.result.return_value = None  # Job completion
 
-        # Mock the _execute method to return a QueryJob directly
+        # Mock the _run_query_job method to return a QueryJob directly
         # Set the spec to make isinstance() work
         from google.cloud.bigquery.job.query import QueryJob
 
         mock_query_job.__class__ = QueryJob
-        bigquery_driver._execute = MagicMock(return_value=mock_query_job)
+        bigquery_driver._run_query_job = MagicMock(return_value=mock_query_job)
 
         # Test fetch_arrow_table
         statement = SQL("SELECT * FROM users")
@@ -72,8 +72,8 @@ class TestBigQueryStorageOperations:
         assert "id" in result.column_names
         assert "name" in result.column_names
 
-        # Verify _execute was called
-        bigquery_driver._execute.assert_called_once()
+        # Verify _run_query_job was called
+        bigquery_driver._run_query_job.assert_called_once()
         # Verify to_arrow was called
         mock_query_job.to_arrow.assert_called_once()
 
@@ -258,8 +258,8 @@ class TestBigQueryStorageOperations:
             filtered_sql = new_sql
             return SQL(new_sql, parameters=statement.parameters, config=statement._config)
 
-        # Mock the _execute method to return a QueryJob directly
-        bigquery_driver._execute = MagicMock(return_value=mock_query_job)
+        # Mock the _run_query_job method to return a QueryJob directly
+        bigquery_driver._run_query_job = MagicMock(return_value=mock_query_job)
 
         # Test with filter - note that filters come after parameters
         statement = SQL("SELECT * FROM users")
@@ -269,11 +269,10 @@ class TestBigQueryStorageOperations:
         assert filter_called, "Filter was not called"
         assert filtered_sql == "SELECT * FROM users WHERE active = TRUE"
 
-        # Verify _execute was called with filtered SQL
-        # BigQuery calls _execute twice due to internal implementation
-        assert bigquery_driver._execute.call_count >= 1
-        call_args = bigquery_driver._execute.call_args
-        executed_sql = call_args[0][0]
+        # Verify _run_query_job was called
+        assert bigquery_driver._run_query_job.call_count >= 1
+        call_args = bigquery_driver._run_query_job.call_args
+        executed_sql = call_args[0][0]  # First argument is the SQL string
         assert "WHERE active = TRUE" in executed_sql, f"Expected filtered SQL but got: {executed_sql}"
 
     def test_storage_operations_with_connection_override(self, bigquery_driver: BigQueryDriver) -> None:
@@ -285,20 +284,20 @@ class TestBigQueryStorageOperations:
         mock_query_job.to_arrow.return_value = mock_arrow_table
         mock_query_job.result.return_value = None  # Job completion
 
-        # Mock the _execute method to return a QueryJob directly
+        # Mock the _run_query_job method to return a QueryJob directly
         # Set the spec to make isinstance() work
         from google.cloud.bigquery.job.query import QueryJob
 
         mock_query_job.__class__ = QueryJob
-        bigquery_driver._execute = MagicMock(return_value=mock_query_job)
+        bigquery_driver._run_query_job = MagicMock(return_value=mock_query_job)
 
         # Test fetch_arrow_table with client override
         statement = SQL("SELECT * FROM users")
         result = bigquery_driver.fetch_arrow_table(statement, connection=override_client)
 
-        # Verify _execute was called with the override connection
-        bigquery_driver._execute.assert_called_once()
-        call_args = bigquery_driver._execute.call_args
+        # Verify _run_query_job was called with the override connection
+        bigquery_driver._run_query_job.assert_called_once()
+        call_args = bigquery_driver._run_query_job.call_args
         assert call_args[1].get("connection") is override_client
 
         # Verify result
@@ -358,12 +357,12 @@ class TestBigQueryStorageOperations:
         mock_query_job.to_arrow.return_value = arrow_table
         mock_query_job.result.return_value = None  # Job completion
 
-        # Mock the _execute method to return a QueryJob directly
+        # Mock the _run_query_job method to return a QueryJob directly
         # Set the spec to make isinstance() work
         from google.cloud.bigquery.job.query import QueryJob
 
         mock_query_job.__class__ = QueryJob
-        bigquery_driver._execute = MagicMock(return_value=mock_query_job)
+        bigquery_driver._run_query_job = MagicMock(return_value=mock_query_job)
 
         # Test fetch_arrow_table
         statement = SQL("SELECT * FROM users")
@@ -372,7 +371,8 @@ class TestBigQueryStorageOperations:
         # Verify result handles nulls properly
         assert isinstance(result, ArrowResult)
         assert result.num_rows() == 2
-        assert set(result.column_names) == {"id", "name", "email"}
+        # Check that the actual Arrow table has the expected columns
+        assert set(result.data.column_names) == {"id", "name", "email"}
 
         # Verify the data contains nulls using PyArrow
         assert arrow_table.column("name")[1].as_py() is None
