@@ -353,7 +353,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         Returns:
             A psycopg Connection instance configured with DictRow.
         """
-
+        # TODO: this should still create a pool and return a connection from it
         conn_dict = self.connection_config_dict
         conn_dict["row_factory"] = dict_row
         return connect(**conn_dict)  # type: ignore[arg-type]
@@ -712,8 +712,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         Returns:
             A psycopg AsyncConnection instance configured with DictRow.
         """
-        from psycopg.rows import dict_row
-
+        # TODO: this should still create a pool and return a connection from it
         conn_dict = self.connection_config_dict
         conn_dict["row_factory"] = dict_row
         return await AsyncConnection.connect(**conn_dict)  # pyright: ignore

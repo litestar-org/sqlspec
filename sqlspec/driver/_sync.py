@@ -80,7 +80,9 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
         if isinstance(statement, QueryBuilder):
             return statement.to_statement(config=config or self.config)
         sql_obj = SQL(statement, parameters, *filters or [], dialect=self.dialect, config=config or self.config)
-        logger.debug("Built SQL object: expression=%s, parameters=%s", sql_obj.expression, sql_obj.parameters)
+        # Don't access expression/parameters here as it triggers processing
+        # which may fail for execute_many when parameters=None
+        logger.debug("Built SQL object for statement")
         return sql_obj
 
     @abstractmethod

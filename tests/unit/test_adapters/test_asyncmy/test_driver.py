@@ -19,11 +19,8 @@ def mock_asyncmy_connection() -> AsyncMock:
     mock_connection = AsyncMock(spec=AsyncmyConnection)
     mock_cursor = AsyncMock()
 
-    # Make cursor() return an async function that returns the cursor
-    async def _cursor() -> AsyncMock:
-        return mock_cursor
-
-    mock_connection.cursor.side_effect = _cursor
+    # cursor() in asyncmy is synchronous and returns the cursor directly
+    mock_connection.cursor.return_value = mock_cursor
     mock_cursor.close.return_value = None
     mock_cursor.execute.return_value = None
     mock_cursor.executemany.return_value = None
@@ -103,11 +100,8 @@ async def test_asyncmy_driver_get_cursor(asyncmy_driver: AsyncmyDriver, mock_asy
     """Test Asyncmy driver _get_cursor context manager."""
     mock_cursor = AsyncMock()
 
-    # Make cursor() return an async function that returns the cursor
-    async def _cursor() -> AsyncMock:
-        return mock_cursor
-
-    mock_asyncmy_connection.cursor.side_effect = _cursor
+    # cursor() in asyncmy is synchronous and returns the cursor directly
+    mock_asyncmy_connection.cursor.return_value = mock_cursor
 
     async with asyncmy_driver._get_cursor(mock_asyncmy_connection) as cursor:
         assert cursor is mock_cursor
@@ -127,11 +121,8 @@ async def test_asyncmy_driver_execute_statement_select(
     mock_cursor.fetchall.return_value = [(1, "test")]
     mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
 
-    # Make cursor() return an async function that returns the cursor
-    async def _cursor() -> AsyncMock:
-        return mock_cursor
-
-    mock_asyncmy_connection.cursor.side_effect = _cursor
+    # cursor() in asyncmy is synchronous and returns the cursor directly
+    mock_asyncmy_connection.cursor.return_value = mock_cursor
 
     # Create SQL statement with parameters - use qmark style for unit test
     result = await asyncmy_driver.fetch_arrow_table(
@@ -158,11 +149,8 @@ async def test_asyncmy_driver_fetch_arrow_table_with_parameters(
     mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
     mock_cursor.fetchall.return_value = [(42, "Test User")]
 
-    # Make cursor() return an async function that returns the cursor
-    async def _cursor() -> AsyncMock:
-        return mock_cursor
-
-    mock_asyncmy_connection.cursor.side_effect = _cursor
+    # cursor() in asyncmy is synchronous and returns the cursor directly
+    mock_asyncmy_connection.cursor.return_value = mock_cursor
 
     # Create SQL statement with parameters
     # Use a SQL that can be parsed by sqlglot - the driver will convert to %s style
@@ -227,11 +215,8 @@ async def test_asyncmy_driver_to_parquet(
     mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
     mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
 
-    # Make cursor() return an async function that returns the cursor
-    async def _cursor() -> AsyncMock:
-        return mock_cursor
-
-    mock_asyncmy_connection.cursor.side_effect = _cursor
+    # cursor() in asyncmy is synchronous and returns the cursor directly
+    mock_asyncmy_connection.cursor.return_value = mock_cursor
     statement = SQL("SELECT id, name FROM users")
     called = {}
 

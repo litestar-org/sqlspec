@@ -172,7 +172,8 @@ async def test_asyncpg_driver_execute_statement_many(
     mock_asyncpg_connection.executemany.assert_called_once_with(
         "INSERT INTO users (name) VALUES ($1)", [("John",), ("Jane",), ("Bob",)]
     )
-    assert result is None  # asyncpg.executemany returns None
+    # Driver returns synthetic status message for executemany operations
+    assert result == "INSERT 0 3"
 
 
 @pytest.mark.asyncio
@@ -535,4 +536,5 @@ async def test_asyncpg_driver_dict_parameter_handling(
     result_val = await asyncpg_driver._execute_statement(statement=statement)
 
     mock_asyncpg_connection.executemany.assert_called_once()
-    assert result_val is None  # asyncpg.executemany returns None
+    # Driver returns synthetic status message for executemany operations
+    assert result_val == "INSERT 0 2"

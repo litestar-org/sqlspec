@@ -163,18 +163,22 @@ class SQLConfig:
         if self.transformers is not None:
             final_transformers.extend(self.transformers)
         elif self.processing_pipeline_components is not None:
-            final_transformers.extend([
-                p for p in self.processing_pipeline_components if not (hasattr(p, "validate") or hasattr(p, "analyze"))
-            ])
+            final_transformers.extend(
+                [
+                    p
+                    for p in self.processing_pipeline_components
+                    if not (hasattr(p, "validate") or hasattr(p, "analyze"))
+                ]
+            )
         elif self.enable_transformations:
             final_transformers.extend([CommentRemover(), ParameterizeLiterals()])
 
         if self.validators is not None:
             final_validators.extend(self.validators)
         elif self.processing_pipeline_components is not None:
-            final_validators.extend([
-                p for p in self.processing_pipeline_components if hasattr(p, "validate") and not hasattr(p, "analyze")
-            ])
+            final_validators.extend(
+                [p for p in self.processing_pipeline_components if hasattr(p, "validate") and not hasattr(p, "analyze")]
+            )
         elif self.enable_validation:
             final_validators.extend([SecurityValidator(), DMLSafetyValidator(), PerformanceValidator()])
 
@@ -1269,12 +1273,14 @@ class SQL:
         else:
             hashable_params = (self.parameters,)
 
-        return hash((
-            str(self._sql),
-            hashable_params,
-            self._dialect,
-            hash(str(self._config)),
-        ))
+        return hash(
+            (
+                str(self._sql),
+                hashable_params,
+                self._dialect,
+                hash(str(self._config)),
+            )
+        )
 
     def as_many(self, parameters: "Optional[SQLParameterType]" = None) -> "SQL":
         """Create a copy of this SQL statement marked for batch execution.
@@ -1288,11 +1294,13 @@ class SQL:
             A new SQL instance with is_many=True and the provided parameters.
 
         Example:
-            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many([
-            ...     ["John"],
-            ...     ["Jane"],
-            ...     ["Bob"],
-            ... ])
+            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many(
+            ...     [
+            ...         ["John"],
+            ...         ["Jane"],
+            ...         ["Bob"],
+            ...     ]
+            ... )
             >>> # This creates a statement ready for executemany with 3 parameter sets
         """
         # Use provided parameters or keep existing ones (use _raw_parameters to avoid validation)
