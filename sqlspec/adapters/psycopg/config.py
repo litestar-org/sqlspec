@@ -25,36 +25,40 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("sqlspec.adapters.psycopg")
 
-CONNECTION_FIELDS = frozenset({
-    "conninfo",
-    "host",
-    "port",
-    "user",
-    "password",
-    "dbname",
-    "connect_timeout",
-    "options",
-    "application_name",
-    "sslmode",
-    "sslcert",
-    "sslkey",
-    "sslrootcert",
-    "autocommit",
-})
+CONNECTION_FIELDS = frozenset(
+    {
+        "conninfo",
+        "host",
+        "port",
+        "user",
+        "password",
+        "dbname",
+        "connect_timeout",
+        "options",
+        "application_name",
+        "sslmode",
+        "sslcert",
+        "sslkey",
+        "sslrootcert",
+        "autocommit",
+    }
+)
 
-POOL_FIELDS = CONNECTION_FIELDS.union({
-    "min_size",
-    "max_size",
-    "name",
-    "timeout",
-    "max_waiting",
-    "max_lifetime",
-    "max_idle",
-    "reconnect_timeout",
-    "num_workers",
-    "configure",
-    "kwargs",
-})
+POOL_FIELDS = CONNECTION_FIELDS.union(
+    {
+        "min_size",
+        "max_size",
+        "name",
+        "timeout",
+        "max_waiting",
+        "max_lifetime",
+        "max_idle",
+        "reconnect_timeout",
+        "num_workers",
+        "configure",
+        "kwargs",
+    }
+)
 
 __all__ = (
     "CONNECTION_FIELDS",

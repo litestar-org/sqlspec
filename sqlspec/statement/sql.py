@@ -163,10 +163,9 @@ class SQLConfig:
         if self.transformers is not None:
             final_transformers.extend(self.transformers)
         elif self.processing_pipeline_components is not None:
-            # Filter from old list - this is for transition
             final_transformers.extend([
                 p for p in self.processing_pipeline_components if not (hasattr(p, "validate") or hasattr(p, "analyze"))
-            ])  # Basic heuristic
+            ])
         elif self.enable_transformations:
             final_transformers.extend([CommentRemover(), ParameterizeLiterals()])
 
@@ -175,21 +174,14 @@ class SQLConfig:
         elif self.processing_pipeline_components is not None:
             final_validators.extend([
                 p for p in self.processing_pipeline_components if hasattr(p, "validate") and not hasattr(p, "analyze")
-            ])  # Basic heuristic
-        elif self.enable_validation:
-            # Use the new consolidated validators
-            final_validators.extend([
-                SecurityValidator(),  # Replaces PreventInjection, TautologyConditions, and SuspiciousKeywords
-                DMLSafetyValidator(),  # Replaces RiskyDML and PreventDDL
-                PerformanceValidator(),  # Replaces CartesianProductDetector and ExcessiveJoins
             ])
+        elif self.enable_validation:
+            final_validators.extend([SecurityValidator(), DMLSafetyValidator(), PerformanceValidator()])
 
         if self.analyzers is not None:
             final_analyzers.extend(self.analyzers)
         elif self.processing_pipeline_components is not None:
-            final_analyzers.extend([
-                p for p in self.processing_pipeline_components if hasattr(p, "analyze")
-            ])  # Basic heuristic
+            final_analyzers.extend([p for p in self.processing_pipeline_components if hasattr(p, "analyze")])
         elif self.enable_analysis:
             final_analyzers.append(StatementAnalyzer(cache_size=self.analysis_cache_size))
 
