@@ -55,8 +55,6 @@ DriverT = TypeVar("DriverT", bound="Union[SyncDriverAdapterProtocol[Any], AsyncD
 logger = get_logger("config")
 
 
-
-
 @dataclass
 class InstrumentationConfig:
     """Configuration for built-in driver instrumentation.

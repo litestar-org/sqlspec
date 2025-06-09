@@ -5,6 +5,8 @@ context managers instead of blocking sync ones. This prevents event loop
 blocking bugs that were systematically fixed across the codebase.
 """
 
+from __future__ import annotations
+
 import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -233,9 +235,7 @@ class TestAsyncInstrumentationPatterns:
         mock_instrument_async.return_value = mock_context
 
         # Call the async streaming method
-        batches = []
-        async for batch in mock_backend.stream_arrow_async("*.parquet"):
-            batches.append(batch)
+        batches = [batch async for batch in mock_backend.stream_arrow_async("*.parquet")]
 
         # Verify async instrumentation was called
         mock_instrument_async.assert_called_once_with(

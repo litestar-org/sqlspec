@@ -98,7 +98,6 @@ class TestSyncStorageMixin:
             # Only acceptable if pyarrow is not installed
             assert "pyarrow" in str(e).lower()
 
-
     def test_export_to_storage_format_detection(self) -> None:
         """Test that export_to_storage detects format correctly."""
         driver = MockDriver()

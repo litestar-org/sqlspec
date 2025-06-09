@@ -69,18 +69,19 @@ class TestAsyncPGStorageOperations:
         # Create test Arrow table
         table = create_mock_arrow_table()
 
-        # Mock execute_many result
-        mock_result = MagicMock()
-        mock_result.rows_affected = 2
+        # Mock execute_many result for the generic batch insertion implementation
+        from types import SimpleNamespace
+
+        mock_result = SimpleNamespace(rows_affected=2)
         asyncpg_driver.execute_many = AsyncMock(return_value=mock_result)
 
-        # Test ingest
-        result = await asyncpg_driver.ingest_arrow_table(table, "test_table")
+        # Test ingest (using append mode which is now the default)
+        result = await asyncpg_driver.ingest_arrow_table(table, "test_table", mode="append")
 
         # Verify result
         assert result == 2
 
-        # Verify execute_many was called with INSERT statement
+        # Verify execute_many was called with INSERT statement (fallback path)
         asyncpg_driver.execute_many.assert_called_once()
         call_args = asyncpg_driver.execute_many.call_args
         sql_obj = call_args[0][0]

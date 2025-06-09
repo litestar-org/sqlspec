@@ -311,3 +311,51 @@ class AdbcDriver(
                 logger.debug("Fetched Arrow table with %d rows", arrow_table.num_rows)
 
             return ArrowResult(statement=sql_obj, data=arrow_table)
+
+    def _ingest_arrow_table(self, table: "Any", target_table: str, mode: str, **options: Any) -> int:
+        """ADBC-optimized Arrow table ingestion using native bulk insert.
+
+        ADBC drivers often support native Arrow table ingestion for high-performance
+        bulk loading operations.
+
+        Args:
+            table: Arrow table to ingest
+            target_table: Target database table name
+            mode: Ingestion mode ('append', 'replace', 'create')
+            **options: Additional ADBC-specific options
+
+        Returns:
+            Number of rows ingested
+        """
+        self._ensure_pyarrow_installed()
+
+        with wrap_exceptions():
+            conn = self._connection(None)
+
+            # Handle different modes
+            if mode == "replace":
+                # Truncate table first
+                from sqlspec.statement.sql import SQL
+
+                self.execute(SQL(f"DELETE FROM {target_table}"))  # type: ignore[attr-defined]
+            elif mode == "create":
+                # For create mode, we would need to infer schema and create table
+                # This is complex, so for now just treat as append
+                pass
+
+            # Try ADBC native bulk insert if available
+            if hasattr(conn, "adbc_ingest"):
+                try:
+                    # Use ADBC native ingestion
+                    rows_inserted = conn.adbc_ingest(target_table, table, mode=mode, **options)
+                except (AttributeError, NotImplementedError):
+                    # Fall back to generic implementation if native not available
+                    pass
+                else:
+                    if self.instrumentation_config.log_results_count:
+                        logger.debug("ADBC ingested %d rows into %s", rows_inserted, target_table)
+
+                    return rows_inserted
+
+            # Generic fallback using batch INSERT
+            return super()._ingest_arrow_table(table, target_table, mode, **options)

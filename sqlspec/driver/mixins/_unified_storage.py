@@ -11,7 +11,6 @@ and storage backend operations for optimal performance.
 
 import logging
 import tempfile
-import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from urllib.parse import urlparse
@@ -21,6 +20,7 @@ from sqlspec.statement.result import ArrowResult
 from sqlspec.statement.sql import SQL
 from sqlspec.storage import storage_registry
 from sqlspec.typing import ArrowTable, RowT, SQLParameterType
+from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
 
 if TYPE_CHECKING:
     from sqlspec.statement.filters import StatementFilter
@@ -222,95 +222,76 @@ class SyncStorageMixin(StorageMixinBase):
 
             return ArrowResult(statement=sql_obj, data=arrow_table)
 
-    def ingest_arrow_table(self, table: ArrowTable, target_table: str, mode: str = "create", **options: Any) -> int:
-        """Ingest Arrow table into database with intelligent routing."""
+    def ingest_arrow_table(self, table: ArrowTable, target_table: str, mode: str = "append", **options: Any) -> int:
+        """Ingest Arrow table into database table.
+
+        Provides instrumentation and delegates to _ingest_arrow_table() for driver-specific implementations.
+
+        Args:
+            table: Arrow table to ingest
+            target_table: Target database table name
+            mode: Ingestion mode ('append', 'replace', 'create')
+            **options: Additional driver-specific options
+
+        Returns:
+            Number of rows ingested
+        """
+        with instrument_operation(
+            self,
+            "ingest_arrow_table",
+            "database",
+            target_table=target_table,
+            mode=mode,
+            num_rows=table.num_rows,
+            num_columns=table.num_columns,
+        ):
+            return self._ingest_arrow_table(table, target_table, mode, **options)
+
+    def _ingest_arrow_table(self, table: ArrowTable, target_table: str, mode: str, **options: Any) -> int:
+        """Protected method for driver-specific Arrow table ingestion.
+
+        Generic implementation using batch INSERT. Drivers can override for optimized implementations.
+
+        Args:
+            table: Arrow table to ingest
+            target_table: Target database table name
+            mode: Ingestion mode ('append', 'replace', 'create')
+            **options: Additional driver-specific options
+
+        Returns:
+            Number of rows ingested
+        """
         self._ensure_pyarrow_installed()
 
         with wrap_exceptions():
-            # Try native Arrow ingestion first
-            try:
-                # DuckDB-style registration
-                temp_name = f"_arrow_temp_{uuid.uuid4().hex[:8]}"
-                # Use driver's connection method if available, otherwise direct access
-                conn = self._connection(None) if callable(self._connection) else self._connection
-                conn.register(temp_name, table)
-
-                try:
-                    if mode == "create":
-                        # Use sqlglot to build safe SQL
-                        from sqlglot import exp
-
-                        create = exp.Create(
-                            this=exp.Table(this=exp.Identifier(this=target_table)),
-                            expression=exp.Select().from_(temp_name).select("*"),
-                            kind="TABLE",
-                        )
-                        sql = create.sql()
-                    elif mode == "append":
-                        # Use sqlglot to build safe SQL
-                        from sqlglot import exp
-
-                        insert = exp.Insert(
-                            this=exp.Table(this=exp.Identifier(this=target_table)),
-                            expression=exp.Select().from_(temp_name).select("*"),
-                        )
-                        sql = insert.sql()
-                    elif mode == "replace":
-                        # Use sqlglot to build safe SQL - CREATE OR REPLACE
-                        from sqlglot import exp
-
-                        create = exp.Create(
-                            this=exp.Table(this=exp.Identifier(this=target_table)),
-                            expression=exp.Select().from_(temp_name).select("*"),
-                            kind="TABLE",
-                            replace=True,  # CREATE OR REPLACE TABLE
-                        )
-                        sql = create.sql()
-                    else:
-                        msg = f"Unsupported mode: {mode}"
-                        raise ValueError(msg)
-
-                    from sqlspec.statement.sql import SQL
-
-                    result = self.execute(SQL(sql))  # type: ignore[attr-defined]
-                    return result.rows_affected or table.num_rows
-                finally:
-                    conn.unregister(temp_name)
-            except AttributeError:
-                pass
-
-            try:
-                # ADBC native ingestion
-                return self._connection.adbc_ingest(target_table, table, mode=mode)  # type: ignore[no-any-return]
-            except AttributeError:
-                pass
-
-            # Fallback: Convert Arrow table to rows and use execute_many
+            # Convert Arrow table to rows for generic batch insertion
             rows = table.to_pylist()
             if not rows:
                 return 0
-            
+
             # Handle mode
             if mode == "replace":
                 # Truncate table first
                 from sqlspec.statement.sql import SQL
+
                 self.execute(SQL(f"TRUNCATE TABLE {target_table}"))  # type: ignore[attr-defined]
             elif mode == "create":
                 # For create mode, we would need to infer schema and create table
                 # This is complex, so for now just treat as append
                 pass
-            
+
             # Build INSERT statement
             columns = table.column_names
             placeholders = [f":{col}" for col in columns]
             insert_sql = f"INSERT INTO {target_table} ({', '.join(columns)}) VALUES ({', '.join(placeholders)})"
-            
+
             from sqlspec.statement.sql import SQL
+
             sql_obj = SQL(insert_sql, parameters=rows).as_many()
-            
+
             # Execute batch insert
             result = self.execute_many(sql_obj)  # type: ignore[attr-defined]
-            return result.rows_affected if hasattr(result, 'rows_affected') else len(rows)
+            return result.rows_affected if hasattr(result, "rows_affected") else len(rows)
 
     # ============================================================================
     # Native Database Operations
@@ -349,25 +330,53 @@ class SyncStorageMixin(StorageMixinBase):
         format: "Optional[str]" = None,
         **options: Any,
     ) -> int:
-        """Export query results to storage with intelligent routing."""
-        # Convert query to string
+        """Export query results to storage with intelligent routing.
 
+        Provides instrumentation and delegates to _export_to_storage() for consistent operation.
+
+        Args:
+            query: SQL query to execute and export
+            destination_uri: URI to export data to
+            format: Optional format override (auto-detected from URI if not provided)
+            **options: Additional export options
+
+        Returns:
+            Number of rows exported
+        """
+        with instrument_operation(
+            self,
+            "export_to_storage",
+            "storage",
+            destination_uri=destination_uri,
+            format=format,
+        ):
+            return self._export_to_storage(query, destination_uri, format, **options)
+
+    def _export_to_storage(
+        self,
+        query: "Union[str, Statement]",
+        destination_uri: str,
+        format: "Optional[str]" = None,
+        **options: Any,
+    ) -> int:
+        """Protected method for export operation implementation.
+
+        Args:
+            query: SQL query to execute and export
+            destination_uri: URI to export data to
+            format: Optional format override (auto-detected from URI if not provided)
+            **options: Additional export options
+
+        Returns:
+            Number of rows exported
+        """
+        # Convert query to string
         if hasattr(query, "to_sql"):  # SQL object
             query_str = query.to_sql()
         elif isinstance(query, str):
             query_str = query
         else:  # sqlglot Expression
             query_str = str(query)
-
-        # Log storage operation for instrumentation
-        logger.info(
-            "Exporting query results to storage",
-            extra={
-                "operation": "export_to_storage",
-                "destination_uri": destination_uri,
-                "format": format,
-            },
-        )
 
         # Auto-detect format if not provided
         file_format = format or self._detect_format(destination_uri)
@@ -398,19 +407,51 @@ class SyncStorageMixin(StorageMixinBase):
         mode: str = "create",
         **options: Any,
     ) -> int:
-        """Import data from storage with intelligent routing."""
-        # Log storage operation for instrumentation
-        logger.info(
-            "Importing data from storage",
-            extra={
-                "operation": "import_from_storage",
-                "source_uri": source_uri,
-                "table_name": table_name,
-                "format": format,
-                "mode": mode,
-            },
-        )
+        """Import data from storage with intelligent routing.
 
+        Provides instrumentation and delegates to _import_from_storage() for consistent operation.
+
+        Args:
+            source_uri: URI to import data from
+            table_name: Target table name
+            format: Optional format override (auto-detected from URI if not provided)
+            mode: Import mode ('create', 'append', 'replace')
+            **options: Additional import options
+
+        Returns:
+            Number of rows imported
+        """
+        with instrument_operation(
+            self,
+            "import_from_storage",
+            "storage",
+            source_uri=source_uri,
+            table_name=table_name,
+            format=format,
+            mode=mode,
+        ):
+            return self._import_from_storage(source_uri, table_name, format, mode, **options)
+
+    def _import_from_storage(
+        self,
+        source_uri: str,
+        table_name: str,
+        format: "Optional[str]" = None,
+        mode: str = "create",
+        **options: Any,
+    ) -> int:
+        """Protected method for import operation implementation.
+
+        Args:
+            source_uri: URI to import data from
+            table_name: Target table name
+            format: Optional format override (auto-detected from URI if not provided)
+            mode: Import mode ('create', 'append', 'replace')
+            **options: Additional import options
+
+        Returns:
+            Number of rows imported
+        """
         # Auto-detect format if not provided
         file_format = format or self._detect_format(source_uri)
 
@@ -691,94 +732,77 @@ class AsyncStorageMixin(StorageMixinBase):
             return ArrowResult(statement=sql_obj, data=arrow_table)
 
     async def ingest_arrow_table(
-        self, table: ArrowTable, target_table: str, mode: str = "create", **options: Any
+        self, table: ArrowTable, target_table: str, mode: str = "append", **options: Any
     ) -> int:
-        """Async version of ingest_arrow_table."""
+        """Async ingest Arrow table into database table.
+
+        Provides instrumentation and delegates to _ingest_arrow_table() for driver-specific implementations.
+
+        Args:
+            table: Arrow table to ingest
+            target_table: Target database table name
+            mode: Ingestion mode ('append', 'replace', 'create')
+            **options: Additional driver-specific options
+
+        Returns:
+            Number of rows ingested
+        """
+        async with instrument_operation_async(
+            self,
+            "ingest_arrow_table",
+            "database",
+            target_table=target_table,
+            mode=mode,
+            num_rows=table.num_rows,
+            num_columns=table.num_columns,
+        ):
+            return await self._ingest_arrow_table(table, target_table, mode, **options)
+
+    async def _ingest_arrow_table(self, table: ArrowTable, target_table: str, mode: str, **options: Any) -> int:
+        """Protected async method for driver-specific Arrow table ingestion.
+
+        Generic implementation using batch INSERT. Drivers can override for optimized implementations.
+
+        Args:
+            table: Arrow table to ingest
+            target_table: Target database table name
+            mode: Ingestion mode ('append', 'replace', 'create')
+            **options: Additional driver-specific options
+
+        Returns:
+            Number of rows ingested
+        """
         self._ensure_pyarrow_installed()
 
         with wrap_exceptions():
-            # Try native Arrow ingestion
-            try:
-                temp_name = f"_arrow_temp_{uuid.uuid4().hex[:8]}"
-                # Use driver's connection method if available, otherwise direct access
-                conn = self._connection(None) if callable(self._connection) else self._connection
-                await conn.register(temp_name, table)
-
-                try:
-                    if mode == "create":
-                        # Use sqlglot to build safe SQL
-                        from sqlglot import exp
-
-                        create = exp.Create(
-                            this=exp.Table(this=exp.Identifier(this=target_table)),
-                            expression=exp.Select().from_(temp_name).select("*"),
-                            kind="TABLE",
-                        )
-                        sql = create.sql()
-                    elif mode == "append":
-                        # Use sqlglot to build safe SQL
-                        from sqlglot import exp
-
-                        insert = exp.Insert(
-                            this=exp.Table(this=exp.Identifier(this=target_table)),
-                            expression=exp.Select().from_(temp_name).select("*"),
-                        )
-                        sql = insert.sql()
-                    elif mode == "replace":
-                        # Use sqlglot to build safe SQL - CREATE OR REPLACE
-                        from sqlglot import exp
-
-                        create = exp.Create(
-                            this=exp.Table(this=exp.Identifier(this=target_table)),
-                            expression=exp.Select().from_(temp_name).select("*"),
-                            kind="TABLE",
-                            replace=True,  # CREATE OR REPLACE TABLE
-                        )
-                        sql = create.sql()
-                    else:
-                        msg = f"Unsupported mode: {mode}"
-                        raise ValueError(msg)
-
-                    from sqlspec.statement.sql import SQL
-
-                    result = await self.execute(SQL(sql))  # type: ignore[attr-defined]
-                    return result.rows_affected or table.num_rows
-                finally:
-                    await conn.unregister(temp_name)
-            except AttributeError:
-                pass
-
-            try:
-                return await self._connection.adbc_ingest(target_table, table, mode=mode)  # type: ignore[no-any-return]
-            except AttributeError:
-                pass
-
-            # Fallback: Convert Arrow table to rows and use execute_many
+            # Convert Arrow table to rows for generic batch insertion
             rows = table.to_pylist()
             if not rows:
                 return 0
-            
+
             # Handle mode
             if mode == "replace":
                 # Truncate table first
                 from sqlspec.statement.sql import SQL
+
                 await self.execute(SQL(f"TRUNCATE TABLE {target_table}"))  # type: ignore[attr-defined]
             elif mode == "create":
                 # For create mode, we would need to infer schema and create table
                 # This is complex, so for now just treat as append
                 pass
-            
+
             # Build INSERT statement
             columns = table.column_names
             placeholders = [f":{col}" for col in columns]
             insert_sql = f"INSERT INTO {target_table} ({', '.join(columns)}) VALUES ({', '.join(placeholders)})"
-            
+
             from sqlspec.statement.sql import SQL
+
             sql_obj = SQL(insert_sql, parameters=rows).as_many()
-            
+
             # Execute batch insert
             result = await self.execute_many(sql_obj)  # type: ignore[attr-defined]
-            return result.rows_affected if hasattr(result, 'rows_affected') else len(rows)
+            return result.rows_affected if hasattr(result, "rows_affected") else len(rows)
 
     # ============================================================================
     # Storage Integration Operations (Async)
@@ -791,7 +815,46 @@ class AsyncStorageMixin(StorageMixinBase):
         format: "Optional[str]" = None,
         **options: Any,
     ) -> int:
-        """Async version of export_to_storage."""
+        """Async export query results to storage with intelligent routing.
+
+        Provides instrumentation and delegates to _export_to_storage() for consistent operation.
+
+        Args:
+            query: SQL query to execute and export
+            destination_uri: URI to export data to
+            format: Optional format override (auto-detected from URI if not provided)
+            **options: Additional export options
+
+        Returns:
+            Number of rows exported
+        """
+        async with instrument_operation_async(
+            self,
+            "export_to_storage",
+            "storage",
+            destination_uri=destination_uri,
+            format=format,
+        ):
+            return await self._export_to_storage(query, destination_uri, format, **options)
+
+    async def _export_to_storage(
+        self,
+        query: "Union[str, Statement]",
+        destination_uri: str,
+        format: "Optional[str]" = None,
+        **options: Any,
+    ) -> int:
+        """Protected async method for export operation implementation.
+
+        Args:
+            query: SQL query to execute and export
+            destination_uri: URI to export data to
+            format: Optional format override (auto-detected from URI if not provided)
+            **options: Additional export options
+
+        Returns:
+            Number of rows exported
+        """
         # Convert query to string
         if hasattr(query, "to_sql"):  # SQL object
             query_str = query.to_sql()
@@ -826,8 +889,51 @@ class AsyncStorageMixin(StorageMixinBase):
         mode: str = "create",
         **options: Any,
     ) -> int:
-        """Async version of import_from_storage."""
+        """Async import data from storage with intelligent routing.
 
+        Provides instrumentation and delegates to _import_from_storage() for consistent operation.
+
+        Args:
+            source_uri: URI to import data from
+            table_name: Target table name
+            format: Optional format override (auto-detected from URI if not provided)
+            mode: Import mode ('create', 'append', 'replace')
+            **options: Additional import options
+
+        Returns:
+            Number of rows imported
+        """
+        async with instrument_operation_async(
+            self,
+            "import_from_storage",
+            "storage",
+            source_uri=source_uri,
+            table_name=table_name,
+            format=format,
+            mode=mode,
+        ):
+            return await self._import_from_storage(source_uri, table_name, format, mode, **options)
+
+    async def _import_from_storage(
+        self,
+        source_uri: str,
+        table_name: str,
+        format: "Optional[str]" = None,
+        mode: str = "create",
+        **options: Any,
+    ) -> int:
+        """Protected async method for import operation implementation.
+
+        Args:
+            source_uri: URI to import data from
+            table_name: Target table name
+            format: Optional format override (auto-detected from URI if not provided)
+            mode: Import mode ('create', 'append', 'replace')
+            **options: Additional import options
+
+        Returns:
+            Number of rows imported
+        """
         file_format = format or self._detect_format(source_uri)
 
         # Try native database import first

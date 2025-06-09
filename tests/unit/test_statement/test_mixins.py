@@ -48,7 +48,6 @@ class TestStorageMixins:
         assert not driver._is_uri("just_a_file.txt")
 
 
-
 class TestMixinIntegration:
     """Test integration between different mixins."""
 

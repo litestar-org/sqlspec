@@ -573,3 +573,78 @@ class DuckDBDriver(
                 finally:
                     with contextlib.suppress(Exception):
                         connection.unregister(temp_name)
+
+    def _ingest_arrow_table(self, table: "ArrowTable", target_table: str, mode: str, **options: Any) -> int:
+        """DuckDB-optimized Arrow table ingestion using native registration.
+
+        DuckDB can directly register Arrow tables in memory and use them in SQL queries,
+        providing zero-copy data transfer for optimal performance.
+
+        Args:
+            table: Arrow table to ingest
+            target_table: Target database table name
+            mode: Ingestion mode ('append', 'replace', 'create')
+            **options: Additional options
+
+        Returns:
+            Number of rows ingested
+        """
+        self._ensure_pyarrow_installed()
+
+        with wrap_exceptions():
+            connection = self._connection(None)
+            temp_name = f"_arrow_temp_{uuid.uuid4().hex[:8]}"
+
+            try:
+                # Register Arrow table with DuckDB
+                connection.register(temp_name, table)
+
+                if mode == "create":
+                    # Use sqlglot to build safe SQL
+                    from sqlglot import exp
+
+                    create = exp.Create(
+                        this=exp.Table(this=exp.Identifier(this=target_table)),
+                        expression=exp.Select().from_(temp_name).select("*"),
+                        kind="TABLE",
+                    )
+                    sql = create.sql()
+                elif mode == "append":
+                    # Use sqlglot to build safe SQL
+                    from sqlglot import exp
+
+                    insert = exp.Insert(
+                        this=exp.Table(this=exp.Identifier(this=target_table)),
+                        expression=exp.Select().from_(temp_name).select("*"),
+                    )
+                    sql = insert.sql()
+                elif mode == "replace":
+                    # Use sqlglot to build safe SQL - CREATE OR REPLACE
+                    from sqlglot import exp
+
+                    create = exp.Create(
+                        this=exp.Table(this=exp.Identifier(this=target_table)),
+                        expression=exp.Select().from_(temp_name).select("*"),
+                        kind="TABLE",
+                        replace=True,  # CREATE OR REPLACE TABLE
+                    )
+                    sql = create.sql()
+                else:
+                    msg = f"Unsupported mode: {mode}"
+                    raise ValueError(msg)
+
+                if self.instrumentation_config.log_queries:
+                    logger.debug("DuckDB native Arrow ingest: %s", sql)
+
+                from sqlspec.statement.sql import SQL
+
+                result = self.execute(SQL(sql))  # type: ignore[attr-defined]
+
+                if self.instrumentation_config.log_results_count:
+                    logger.debug("Ingested %d rows into %s", table.num_rows, target_table)
+
+                return result.rows_affected or table.num_rows
+
+            finally:
+                with contextlib.suppress(Exception):
+                    connection.unregister(temp_name)

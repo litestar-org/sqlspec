@@ -280,15 +280,16 @@ def test_adbc_driver_get_cursor_exception_handling(adbc_driver: AdbcDriver) -> N
 
 def test_adbc_driver_execute_statement_select(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
     """Test AdbcDriver._execute_statement for SELECT statements."""
+    import pyarrow as pa
+
     mock_connection = adbc_driver.connection
     mock_connection.cursor = Mock(return_value=mock_cursor)
 
-    # Setup mock cursor for regular execution (fallback path)
-    mock_cursor.fetchall.return_value = [
-        (1, "John Doe", "john@example.com"),
-        (2, "Jane Smith", "jane@example.com"),
-    ]
-    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
+    # Setup mock cursor for ADBC native Arrow support
+    mock_arrow_table = pa.table(
+        {"id": [1, 2], "name": ["John Doe", "Jane Smith"], "email": ["john@example.com", "jane@example.com"]}
+    )
+    mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
     result = adbc_driver.fetch_arrow_table("SELECT * FROM users WHERE id = $1", parameters=[123])
 
@@ -297,31 +298,30 @@ def test_adbc_driver_execute_statement_select(adbc_driver: AdbcDriver, mock_curs
     assert result.statement.sql == "SELECT * FROM users WHERE id = $1"  # pyright: ignore
 
     # Check that it's an Arrow table with the expected data
-    import pyarrow as pa
-
     assert isinstance(result.data, pa.Table)
     assert result.data.num_rows == 2
     assert result.data.column_names == ["id", "name", "email"]
 
-    # Verify execute was called
+    # Verify execute and fetch_arrow_table were called
     mock_cursor.execute.assert_called_once()
+    mock_cursor.fetch_arrow_table.assert_called_once()
 
 
 def test_adbc_driver_fetch_arrow_table_with_parameters(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
     """Test AdbcDriver.fetch_arrow_table with query parameters."""
+    import pyarrow as pa
+
     mock_connection = adbc_driver.connection
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
-    # Setup mock cursor for regular execution (fallback path)
-    mock_cursor.fetchall.return_value = [(123, "Test User")]
-    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
+    # Setup mock cursor for ADBC native Arrow support
+    mock_arrow_table = pa.table({"id": [123], "name": ["Test User"], "email": ["test@example.com"]})
+    mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
     # Create SQL statement with parameters included
     result = adbc_driver.fetch_arrow_table("SELECT * FROM users WHERE id = $1", parameters=[123])
 
     assert isinstance(result, ArrowResult)
-    import pyarrow as pa
-
     assert isinstance(result.data, pa.Table)
 
     # Check parameters were passed correctly
@@ -331,19 +331,19 @@ def test_adbc_driver_fetch_arrow_table_with_parameters(adbc_driver: AdbcDriver, 
 
 def test_adbc_driver_fetch_arrow_table_non_query_statement(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
     """Test AdbcDriver.fetch_arrow_table works with non-query statements (returns empty table)."""
+    import pyarrow as pa
+
     mock_connection = adbc_driver.connection
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
-    # Setup mock cursor for INSERT statement (no rows returned)
-    mock_cursor.fetchall.return_value = []
-    mock_cursor.description = None  # No columns for INSERT
+    # Setup mock cursor for INSERT statement - ADBC should return empty Arrow table
+    empty_table = pa.table({})  # Empty table with no columns
+    mock_cursor.fetch_arrow_table.return_value = empty_table
 
     statement = SQL("INSERT INTO users (name) VALUES ('John')")
     result = adbc_driver.fetch_arrow_table(statement)
 
     assert isinstance(result, ArrowResult)
-    import pyarrow as pa
-
     assert isinstance(result.data, pa.Table)
     assert result.data.num_rows == 0
 
@@ -367,46 +367,53 @@ def test_adbc_driver_fetch_arrow_table_fetch_error(adbc_driver: AdbcDriver, mock
 
 def test_adbc_driver_fetch_arrow_table_list_parameters(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
     """Test AdbcDriver.fetch_arrow_table with list parameters."""
+    import pyarrow as pa
+
     mock_connection = adbc_driver.connection
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
-    # Setup mock cursor for regular execution (fallback path)
-    mock_cursor.fetchall.return_value = [(1, "User 1"), (2, "User 2")]
-    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
+    # Setup mock cursor for ADBC native Arrow support
+    mock_arrow_table = pa.table(
+        {"id": [1, 2], "name": ["User 1", "User 2"], "email": ["user1@example.com", "user2@example.com"]}
+    )
+    mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
     # Pass parameters directly as string SQL, since that's the more common pattern
     result = adbc_driver.fetch_arrow_table("SELECT * FROM users WHERE id IN ($1, $2)", parameters=[1, 2])
 
     assert isinstance(result, ArrowResult)
-    import pyarrow as pa
-
     assert isinstance(result.data, pa.Table)
+    assert result.data.num_rows == 2
 
 
 def test_adbc_driver_fetch_arrow_table_single_parameter(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
     """Test AdbcDriver.fetch_arrow_table with single parameter."""
+    import pyarrow as pa
+
     mock_connection = adbc_driver.connection
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
-    # Setup mock cursor for regular execution (fallback path)
-    mock_cursor.fetchall.return_value = [(123, "Test User")]
-    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
+    # Setup mock cursor for ADBC native Arrow support
+    mock_arrow_table = pa.table({"id": [123], "name": ["Test User"], "email": ["test@example.com"]})
+    mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
     # Pass parameters directly as string SQL
     result = adbc_driver.fetch_arrow_table("SELECT * FROM users WHERE id = $1", parameters=123)
 
     assert isinstance(result, ArrowResult)
-    import pyarrow as pa
-
     assert isinstance(result.data, pa.Table)
+    assert result.data.num_rows == 1
 
 
 def test_adbc_driver_fetch_arrow_table_with_connection_override(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
     """Test AdbcDriver.fetch_arrow_table with connection override."""
+    import pyarrow as pa
+
     # Create a separate mock cursor for the override connection
     override_cursor = Mock(spec=Cursor)
-    override_cursor.fetchall.return_value = [(1, "Test User")]
-    override_cursor.description = [("id",), ("name",), ("email",)]
+    # Setup mock cursor for ADBC native Arrow support
+    mock_arrow_table = pa.table({"id": [1], "name": ["Test User"], "email": ["test@example.com"]})
+    override_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
     override_connection = Mock(spec=Connection)
     override_connection.cursor.return_value = override_cursor
@@ -414,9 +421,8 @@ def test_adbc_driver_fetch_arrow_table_with_connection_override(adbc_driver: Adb
     result = adbc_driver.fetch_arrow_table("SELECT * FROM users", connection=override_connection)
 
     assert isinstance(result, ArrowResult)
-    import pyarrow as pa
-
     assert isinstance(result.data, pa.Table)
+    assert result.data.num_rows == 1
     override_connection.cursor.assert_called_once()
     # Original connection should not be used
     adbc_driver.connection.cursor.assert_not_called()  # pyright: ignore

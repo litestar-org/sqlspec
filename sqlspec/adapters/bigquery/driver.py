@@ -477,3 +477,77 @@ class BigQueryDriver(
                 logger.debug("Fetched Arrow table with %d rows", arrow_table.num_rows)
 
             return ArrowResult(statement=sql_obj, data=arrow_table)
+
+    def _ingest_arrow_table(self, table: "Any", target_table: str, mode: str, **options: Any) -> int:
+        """BigQuery-optimized Arrow table ingestion.
+
+        BigQuery can load Arrow tables directly via the load API for optimal performance.
+        This avoids the generic INSERT approach and uses BigQuery's native bulk loading.
+
+        Args:
+            table: Arrow table to ingest
+            target_table: Target BigQuery table name
+            mode: Ingestion mode ('append', 'replace', 'create')
+            **options: Additional BigQuery load job options
+
+        Returns:
+            Number of rows ingested
+        """
+        self._ensure_pyarrow_installed()
+
+        with wrap_exceptions():
+            connection = self._connection(None)
+
+            # Parse table name for BigQuery
+            from google.cloud.bigquery import LoadJobConfig, WriteDisposition
+
+            # Convert table name to BigQuery table reference
+            if "." in target_table:
+                parts = target_table.split(".")
+                if len(parts) == DATASET_TABLE_PARTS:
+                    dataset_id, table_id = parts
+                    project_id = connection.project
+                elif len(parts) == FULLY_QUALIFIED_PARTS:
+                    project_id, dataset_id, table_id = parts
+                else:
+                    msg = f"Invalid BigQuery table name format: {target_table}"
+                    raise ValueError(msg)
+            else:
+                # Assume default dataset
+                table_id = target_table
+                dataset_id = getattr(connection, "default_dataset", None)
+                project_id = connection.project
+                if not dataset_id:
+                    msg = "Must specify dataset for BigQuery table or set default_dataset"
+                    raise ValueError(msg)
+
+            table_ref = connection.dataset(dataset_id, project=project_id).table(table_id)
+
+            # Configure load job based on mode
+            job_config = LoadJobConfig(**options)
+
+            if mode == "append":
+                job_config.write_disposition = WriteDisposition.WRITE_APPEND
+            elif mode == "replace":
+                job_config.write_disposition = WriteDisposition.WRITE_TRUNCATE
+            elif mode == "create":
+                job_config.write_disposition = WriteDisposition.WRITE_EMPTY
+                job_config.autodetect = True  # Auto-detect schema from Arrow table
+            else:
+                msg = f"Unsupported mode for BigQuery: {mode}"
+                raise ValueError(msg)
+
+            # Use BigQuery's native Arrow loading
+            load_job = connection.load_table_from_dataframe(
+                table.to_pandas(),  # Convert Arrow to Pandas for BigQuery API
+                table_ref,
+                job_config=job_config,
+            )
+
+            # Wait for completion
+            load_job.result()
+
+            if self.instrumentation_config.log_results_count:
+                logger.debug("BigQuery loaded %d rows into %s", table.num_rows, target_table)
+
+            return table.num_rows

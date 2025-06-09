@@ -87,8 +87,6 @@ def demo_lazy_loading() -> None:
     storage_registry.get("analytics-s3")  # Re-instantiated
 
 
-
-
 def demo_advanced_usage() -> None:
     """Advanced usage patterns with backend type control."""
 

@@ -27,7 +27,6 @@ def demo_unified_storage_architecture() -> None:
     config = sqlspec.add_config(DuckDBConfig(":memory:"))
 
     with config.provide_session() as session:
-
         print("\n📊 Creating sample data...")
 
         # Create sample data
