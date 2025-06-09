@@ -51,10 +51,9 @@ class SQLSpec:
     def _get_config_name(obj: Any) -> str:
         """Get display name for configuration object."""
         with wrap_exceptions(suppress=AttributeError):
-            return obj.__name__
-        return str(
-            obj
-        )  # wrap exceptions just continues here instead of returning in the even t of an error.  This is actually reachable
+            return cast("str", obj.__name__)
+        # wrap exceptions just continues here instead of returning in the even t of an error.  This is actually reachable
+        return str(obj)
 
     def _cleanup_pools(self) -> None:
         """Clean up all registered connection pools."""

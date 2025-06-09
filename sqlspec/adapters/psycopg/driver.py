@@ -351,7 +351,7 @@ class PsycopgAsyncDriver(
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
-        with instrument_operation(self, "psycopg_wrap_select", "database"):
+        async with instrument_operation_async(self, "psycopg_wrap_select", "database"):
             cursor = result
             fetched_data: list[PsycopgDictRow] = await cursor.fetchall()
             column_names = [col.name for col in cursor.description or []]
@@ -383,7 +383,7 @@ class PsycopgAsyncDriver(
         result: Any,
         **kwargs: Any,
     ) -> SQLResult[RowT]:
-        with instrument_operation(self, "psycopg_wrap_execute", "database"):
+        async with instrument_operation_async(self, "psycopg_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
                 if statement.expression:
