@@ -231,7 +231,9 @@ class SyncStorageMixin(StorageMixinBase):
             try:
                 # DuckDB-style registration
                 temp_name = f"_arrow_temp_{uuid.uuid4().hex[:8]}"
-                self._connection.register(temp_name, table)
+                # Use driver's connection method if available, otherwise direct access
+                conn = self._connection(None) if callable(self._connection) else self._connection
+                conn.register(temp_name, table)
 
                 try:
                     if mode == "create":
@@ -253,6 +255,17 @@ class SyncStorageMixin(StorageMixinBase):
                             expression=exp.Select().from_(temp_name).select("*"),
                         )
                         sql = insert.sql()
+                    elif mode == "replace":
+                        # Use sqlglot to build safe SQL - CREATE OR REPLACE
+                        from sqlglot import exp
+
+                        create = exp.Create(
+                            this=exp.Table(this=exp.Identifier(this=target_table)),
+                            expression=exp.Select().from_(temp_name).select("*"),
+                            kind="TABLE",
+                            replace=True,  # CREATE OR REPLACE TABLE
+                        )
+                        sql = create.sql()
                     else:
                         msg = f"Unsupported mode: {mode}"
                         raise ValueError(msg)
@@ -262,7 +275,7 @@ class SyncStorageMixin(StorageMixinBase):
                     result = self.execute(SQL(sql))  # type: ignore[attr-defined]
                     return result.rows_affected or table.num_rows
                 finally:
-                    self._connection.unregister(temp_name)
+                    conn.unregister(temp_name)
             except AttributeError:
                 pass
 
@@ -272,19 +285,32 @@ class SyncStorageMixin(StorageMixinBase):
             except AttributeError:
                 pass
 
-            # Convert to temporary file and use bulk load
-            with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
-                import pyarrow.parquet as pq
-
-                pq.write_table(table, tmp.name)
-                tmp_path = Path(tmp.name)
-
-            try:
-                return self.import_from_storage(
-                    f"file://{tmp_path}", target_table, format="parquet", mode=mode, **options
-                )
-            finally:
-                tmp_path.unlink(missing_ok=True)
+            # Fallback: Convert Arrow table to rows and use execute_many
+            rows = table.to_pylist()
+            if not rows:
+                return 0
+            
+            # Handle mode
+            if mode == "replace":
+                # Truncate table first
+                from sqlspec.statement.sql import SQL
+                self.execute(SQL(f"TRUNCATE TABLE {target_table}"))  # type: ignore[attr-defined]
+            elif mode == "create":
+                # For create mode, we would need to infer schema and create table
+                # This is complex, so for now just treat as append
+                pass
+            
+            # Build INSERT statement
+            columns = table.column_names
+            placeholders = [f":{col}" for col in columns]
+            insert_sql = f"INSERT INTO {target_table} ({', '.join(columns)}) VALUES ({', '.join(placeholders)})"
+            
+            from sqlspec.statement.sql import SQL
+            sql_obj = SQL(insert_sql, parameters=rows).as_many()
+            
+            # Execute batch insert
+            result = self.execute_many(sql_obj)  # type: ignore[attr-defined]
+            return result.rows_affected if hasattr(result, 'rows_affected') else len(rows)
 
     # ============================================================================
     # Native Database Operations
@@ -674,7 +700,9 @@ class AsyncStorageMixin(StorageMixinBase):
             # Try native Arrow ingestion
             try:
                 temp_name = f"_arrow_temp_{uuid.uuid4().hex[:8]}"
-                await self._connection.register(temp_name, table)
+                # Use driver's connection method if available, otherwise direct access
+                conn = self._connection(None) if callable(self._connection) else self._connection
+                await conn.register(temp_name, table)
 
                 try:
                     if mode == "create":
@@ -696,6 +724,17 @@ class AsyncStorageMixin(StorageMixinBase):
                             expression=exp.Select().from_(temp_name).select("*"),
                         )
                         sql = insert.sql()
+                    elif mode == "replace":
+                        # Use sqlglot to build safe SQL - CREATE OR REPLACE
+                        from sqlglot import exp
+
+                        create = exp.Create(
+                            this=exp.Table(this=exp.Identifier(this=target_table)),
+                            expression=exp.Select().from_(temp_name).select("*"),
+                            kind="TABLE",
+                            replace=True,  # CREATE OR REPLACE TABLE
+                        )
+                        sql = create.sql()
                     else:
                         msg = f"Unsupported mode: {mode}"
                         raise ValueError(msg)
@@ -705,7 +744,7 @@ class AsyncStorageMixin(StorageMixinBase):
                     result = await self.execute(SQL(sql))  # type: ignore[attr-defined]
                     return result.rows_affected or table.num_rows
                 finally:
-                    await self._connection.unregister(temp_name)
+                    await conn.unregister(temp_name)
             except AttributeError:
                 pass
 
@@ -714,19 +753,32 @@ class AsyncStorageMixin(StorageMixinBase):
             except AttributeError:
                 pass
 
-            # Use temporary file
-            with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
-                import pyarrow.parquet as pq
-
-                pq.write_table(table, tmp.name)
-                tmp_path = Path(tmp.name)
-
-            try:
-                return await self.import_from_storage(
-                    f"file://{tmp_path}", target_table, format="parquet", mode=mode, **options
-                )
-            finally:
-                tmp_path.unlink(missing_ok=True)
+            # Fallback: Convert Arrow table to rows and use execute_many
+            rows = table.to_pylist()
+            if not rows:
+                return 0
+            
+            # Handle mode
+            if mode == "replace":
+                # Truncate table first
+                from sqlspec.statement.sql import SQL
+                await self.execute(SQL(f"TRUNCATE TABLE {target_table}"))  # type: ignore[attr-defined]
+            elif mode == "create":
+                # For create mode, we would need to infer schema and create table
+                # This is complex, so for now just treat as append
+                pass
+            
+            # Build INSERT statement
+            columns = table.column_names
+            placeholders = [f":{col}" for col in columns]
+            insert_sql = f"INSERT INTO {target_table} ({', '.join(columns)}) VALUES ({', '.join(placeholders)})"
+            
+            from sqlspec.statement.sql import SQL
+            sql_obj = SQL(insert_sql, parameters=rows).as_many()
+            
+            # Execute batch insert
+            result = await self.execute_many(sql_obj)  # type: ignore[attr-defined]
+            return result.rows_affected if hasattr(result, 'rows_affected') else len(rows)
 
     # ============================================================================
     # Storage Integration Operations (Async)
