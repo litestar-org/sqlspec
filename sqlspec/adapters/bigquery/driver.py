@@ -319,23 +319,23 @@ class BigQueryDriver(
         # Prepare BigQuery parameters
         bq_params = self._prepare_bq_query_parameters(parameters or {}) if parameters else []
         query_job = self._run_query_job(sql, bq_params, connection=connection)
-        
+
         # Wait for job to complete and get results
         try:
             job_result = query_job.result(timeout=kwargs.get("bq_job_timeout"))
-            
+
             # Check if the query returned data
             # BigQuery sets schema for SELECT queries even if they return no rows
             logger.debug("BigQuery job schema: %s", query_job.schema)
             logger.debug("BigQuery job statement_type: %s", query_job.statement_type)
-            
+
             # Try to get schema from job_result if available
             schema = None
-            if hasattr(job_result, 'schema') and job_result.schema:
+            if hasattr(job_result, "schema") and job_result.schema:
                 schema = job_result.schema
             elif query_job.schema:
                 schema = query_job.schema
-            
+
             # For SELECT statements, we should always return data format
             if query_job.statement_type and query_job.statement_type.upper() == "SELECT":
                 # Query returned data - fetch it
@@ -344,7 +344,7 @@ class BigQueryDriver(
                 except (TypeError, AttributeError):
                     # Handle Mock objects in unit tests
                     rows_list = []
-                    
+
                 column_names = []
                 if schema:
                     try:
@@ -354,14 +354,14 @@ class BigQueryDriver(
                         column_names = []
                 logger.debug("Returning SELECT result with %d rows", len(rows_list))
                 return {"data": rows_list, "column_names": column_names}
-            
+
             # Check both schema exists and has fields for other query types that might return data
             try:
                 has_schema_fields = schema is not None and len(schema) > 0
             except (TypeError, AttributeError):
                 # Handle Mock objects in unit tests that don't have len()
                 has_schema_fields = schema is not None
-            
+
             if has_schema_fields:
                 # Query returned data - fetch it
                 try:
@@ -369,7 +369,7 @@ class BigQueryDriver(
                 except (TypeError, AttributeError):
                     # Handle Mock objects in unit tests
                     rows_list = []
-                    
+
                 try:
                     column_names = [field.name for field in schema]
                 except (TypeError, AttributeError):
@@ -377,7 +377,7 @@ class BigQueryDriver(
                     column_names = []
                 logger.debug("Returning data result with %d rows", len(rows_list))
                 return {"data": rows_list, "column_names": column_names}
-            
+
             # For DML/DDL queries that don't return data
             return {
                 "rowcount": query_job.num_dml_affected_rows or 0,
@@ -385,7 +385,7 @@ class BigQueryDriver(
                 "total_bytes_processed": query_job.total_bytes_processed,
             }
         except Exception as e:
-            logger.error("BigQuery job failed: %s", str(e))
+            logger.exception("BigQuery job failed: %s", str(e))
             raise
 
     def _execute_many(
@@ -398,12 +398,12 @@ class BigQueryDriver(
         # For BigQuery, batch execution is not natively supported; run jobs in a loop
         total_rowcount = 0
         jobs = []
-        
+
         for params in param_list or []:
             bq_params = self._prepare_bq_query_parameters(params or {}) if isinstance(params, dict) else []
             job = self._run_query_job(sql, bq_params, connection=connection)
             jobs.append(job)
-            
+
             # Wait for job to complete and count affected rows
             try:
                 job.result(timeout=kwargs.get("bq_job_timeout"))
@@ -412,9 +412,9 @@ class BigQueryDriver(
                 else:
                     total_rowcount += 1  # Assume 1 row affected if not available
             except Exception as e:
-                logger.error("BigQuery batch job failed: %s", str(e))
+                logger.exception("BigQuery batch job failed: %s", str(e))
                 # Continue with other jobs
-        
+
         return {"rowcount": total_rowcount, "jobs": jobs}
 
     def _execute_script(
@@ -435,10 +435,10 @@ class BigQueryDriver(
             # Query returned data
             rows_list = result["data"]
             column_names = result.get("column_names", [])
-            
+
             if self.instrumentation_config.log_results_count:
                 logger.debug("Query returned %d rows", len(rows_list))
-            
+
             if schema_type:
                 converted_data_seq = self.to_schema(data=rows_list, schema_type=schema_type)
                 # Ensure data is a list for SQLResult
@@ -449,7 +449,7 @@ class BigQueryDriver(
                     column_names=column_names,
                     operation_type="SELECT",
                 )
-            
+
             return SQLResult[RowT](
                 statement=statement,
                 data=rows_list,
@@ -457,7 +457,7 @@ class BigQueryDriver(
                 operation_type="SELECT",
                 rows_affected=len(rows_list),
             )
-        
+
         # Legacy path for backward compatibility
         if isinstance(result, QueryJob):
             query_job: QueryJob = result
@@ -487,7 +487,7 @@ class BigQueryDriver(
                 operation_type="SELECT",
                 rows_affected=actual_rows_affected_or_returned,
             )
-            
+
         # Fallback for unexpected result types
         logger.warning("_wrap_select_result got unexpected type %s, value: %s", type(result), result)
         return SQLResult(statement=statement, data=[], column_names=[], operation_type="SELECT", rows_affected=-1)
@@ -540,10 +540,10 @@ class BigQueryDriver(
             metadata["error"] = f"Unexpected raw driver result type: {type(result)}"
 
         return SQLResult[RowT](
-            statement=statement, 
-            data=returned_data, 
-            rows_affected=rows_affected, 
-            operation_type=operation_type, 
+            statement=statement,
+            data=returned_data,
+            rows_affected=rows_affected,
+            operation_type=operation_type,
             metadata=metadata,
             column_names=column_names,
         )
@@ -577,7 +577,11 @@ class BigQueryDriver(
         """
 
         # Execute the query directly with BigQuery to get the QueryJob
-        bq_params = self._prepare_bq_query_parameters(sql_obj.get_parameters(style=self._get_placeholder_style()) or {}) if sql_obj.parameters else []
+        bq_params = (
+            self._prepare_bq_query_parameters(sql_obj.get_parameters(style=self._get_placeholder_style()) or {})
+            if sql_obj.parameters
+            else []
+        )
         query_job = self._run_query_job(
             sql_obj.to_sql(placeholder_style=self._get_placeholder_style()),
             bq_params,

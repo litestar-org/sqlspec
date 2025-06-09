@@ -26,7 +26,7 @@ def bigquery_session(bigquery_service: BigQueryService) -> Generator[BigQueryDri
     """Create a BigQuery session with test table."""
     from google.api_core.client_options import ClientOptions
     from google.auth.credentials import AnonymousCredentials
-    
+
     config = BigQueryConfig(
         project=bigquery_service.project,
         dataset_id=bigquery_service.dataset,

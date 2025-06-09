@@ -82,7 +82,13 @@ class InstrumentationConfig:
     log_service_operations: bool = True
     """Whether to log service layer operations."""
 
-    # Enhanced logging options
+    # Sampling configuration
+    trace_sample_rate: float = 1.0
+    """Sampling rate for traces (0.0 to 1.0)."""
+
+    log_sample_rate: float = 1.0
+    """Sampling rate for logs (0.0 to 1.0)."""
+
     debug_mode: bool = False
     """Enable debug-level logging with additional details."""
 

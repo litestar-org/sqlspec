@@ -364,7 +364,7 @@ def test_bigquery_driver_execute_statement_select(
     mock_result.__iter__ = Mock(return_value=iter([]))  # No rows
     mock_field = Mock()
     mock_field.name = "id"
-    
+
     # Set up schema on the query job, not on the result
     mock_query_job.schema = [mock_field]
     mock_query_job.result.return_value = mock_result

@@ -75,7 +75,7 @@ class ObStoreBackend(InstrumentedObjectStore):
                 # Use obstore's from_url for automatic URI parsing
                 from obstore.store import from_url
 
-                self.store = from_url(store_uri, **store_options)
+                self.store = from_url(store_uri, **store_options)  # type: ignore[assignment]
 
             if self.instrumentation_config.debug_mode:
                 self.logger.debug(
@@ -152,9 +152,9 @@ class ObStoreBackend(InstrumentedObjectStore):
                 for item in self.store.list_with_delimiter(resolved_prefix):
                     # Try path first, then key, then string representation
                     if hasattr(item, "path"):
-                        path = item.path
+                        path = item.path  # pyright: ignore
                     elif hasattr(item, "key"):
-                        path = item.key
+                        path = item.key  # pyright: ignore
                     else:
                         path = str(item)
                     objects.append(path)
@@ -491,7 +491,6 @@ class ObStoreBackend(InstrumentedObjectStore):
             raise StorageOperationFailedError(msg) from exc
 
     async def _stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
-        """Async stream Arrow record batches using native obstore async."""
         try:
             resolved_pattern = self._resolve_path(pattern)
             async for batch in self.store.stream_arrow_async(resolved_pattern, **kwargs):  # type: ignore[union-attr]

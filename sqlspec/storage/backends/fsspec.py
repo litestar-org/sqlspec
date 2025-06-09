@@ -1,5 +1,5 @@
 import logging
-from typing import TYPE_CHECKING, Any, Literal, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError, wrap_exceptions
 from sqlspec.storage.backends.base import InstrumentedObjectStore
@@ -49,7 +49,7 @@ class FSSpecBackend(InstrumentedObjectStore):
         self,
         fs: "Union[str, AbstractFileSystem]",
         base_path: str = "",
-        instrumentation_config: "InstrumentationConfig | None" = None,
+        instrumentation_config: "Optional[InstrumentationConfig]" = None,
     ) -> None:
         if not FSSPEC_INSTALLED:
             raise MissingDependencyError(package="fsspec", install_package="fsspec")
@@ -223,7 +223,7 @@ class FSSpecBackend(InstrumentedObjectStore):
             # Get all files (not directories)
             objects = [path for path in self.fs.glob(pattern) if not self.fs.isdir(path)]
 
-            return sorted(objects)
+            return sorted(objects)  # pyright: ignore
         except Exception as exc:
             msg = f"Failed to list objects with prefix {prefix}"
             raise StorageOperationFailedError(msg) from exc
@@ -234,7 +234,7 @@ class FSSpecBackend(InstrumentedObjectStore):
             resolved_pattern = self._resolve_path(pattern)
             # Use fsspec's native glob
             objects = [path for path in self.fs.glob(resolved_pattern) if not self.fs.isdir(path)]
-            return sorted(objects)
+            return sorted(objects)  # pyright: ignore
         except Exception as exc:
             msg = f"Failed to glob pattern {pattern}"
             raise StorageOperationFailedError(msg) from exc
@@ -304,7 +304,6 @@ class FSSpecBackend(InstrumentedObjectStore):
             return
 
     def _stream_arrow(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
-        """Stream Arrow record batches from matching objects."""
         if not FSSPEC_INSTALLED:
             raise MissingDependencyError(package="fsspec", install_package="fsspec")
         if not PYARROW_INSTALLED:
@@ -349,7 +348,6 @@ class FSSpecBackend(InstrumentedObjectStore):
         self._write_bytes(path, data, **kwargs)
 
     async def _stream_file_batches_async(self, obj_path: str) -> "AsyncIterator[ArrowRecordBatch]":
-        """Helper method to async stream batches from a single file."""
         try:
             from io import BytesIO
 
@@ -366,7 +364,6 @@ class FSSpecBackend(InstrumentedObjectStore):
             return
 
     async def _stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
-        """Async stream Arrow record batches from matching objects."""
         try:
             # Find all matching objects
             matching_objects = await self.list_objects_async()

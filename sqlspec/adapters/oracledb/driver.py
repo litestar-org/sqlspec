@@ -110,7 +110,15 @@ class OracleSyncDriver(
                     cursor.execute(sql)
                 else:
                     cursor.execute(sql, parameters)
-                return cursor
+
+                # For SELECT statements, extract data while cursor is open
+                if self.returns_rows(statement.expression):
+                    fetched_data = cursor.fetchall()
+                    column_names = [col[0] for col in cursor.description or []]
+                    return {"data": fetched_data, "column_names": column_names, "rowcount": cursor.rowcount}
+
+                # For non-SELECT statements, return rowcount
+                return cursor.rowcount
 
     def _execute_many(
         self,
@@ -127,7 +135,9 @@ class OracleSyncDriver(
                 logger.debug("Query parameters (batch): %s", param_list)
             with self._get_cursor(conn) as cursor:
                 cursor.executemany(sql, param_list or [])
-                return cursor
+                # executemany is typically used for INSERT/UPDATE/DELETE operations
+                # Return rowcount for these operations
+                return cursor.rowcount
 
     def _execute_script(
         self,
@@ -151,11 +161,23 @@ class OracleSyncDriver(
         **kwargs: Any,
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "oracle_wrap_select", "database"):
-            cursor = cast("Cursor", result)
-            if not cursor.description:
+            # result should be a dict with keys: data, column_names, rowcount
+            if isinstance(result, dict):
+                fetched_tuples = result.get("data", [])
+                column_names = result.get("column_names", [])
+            else:
+                # Fallback for backward compatibility - this shouldn't happen with the new implementation
+                cursor = cast("Cursor", result)
+                if not cursor.description:
+                    return SQLResult[RowT](statement=statement, data=[], column_names=[], operation_type="SELECT")
+                column_names = [col[0] for col in cursor.description]
+                fetched_tuples = cursor.fetchall()
+
+            # Handle empty results
+            if not column_names:
                 return SQLResult[RowT](statement=statement, data=[], column_names=[], operation_type="SELECT")
-            column_names = [col[0] for col in cursor.description]
-            fetched_tuples = cursor.fetchall()
+
+            # Convert tuples to dictionaries
             rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples]
 
             if self.instrumentation_config.log_results_count:
@@ -170,6 +192,7 @@ class OracleSyncDriver(
                     column_names=column_names,
                     operation_type="SELECT",
                 )
+
             return SQLResult[RowT](
                 statement=statement,
                 data=rows_as_dicts,
@@ -196,7 +219,11 @@ class OracleSyncDriver(
                 operation_type = "SCRIPT"
                 rows_affected = 0  # No specific row count for script success message
                 status_message = result
+            elif isinstance(result, int):
+                # New format: result is directly the rowcount
+                rows_affected = result
             else:
+                # Fallback for backward compatibility - shouldn't happen with new implementation
                 cursor = cast("Cursor", result)
                 with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
                     if cursor:

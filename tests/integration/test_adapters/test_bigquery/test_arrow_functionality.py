@@ -19,7 +19,7 @@ def bigquery_arrow_session(bigquery_service: BigQueryService) -> "Generator[BigQ
     """Create a BigQuery session for Arrow testing using real BigQuery service."""
     from google.api_core.client_options import ClientOptions
     from google.auth.credentials import AnonymousCredentials
-    
+
     config = BigQueryConfig(
         project=bigquery_service.project,
         dataset_id=bigquery_service.dataset,
@@ -30,10 +30,12 @@ def bigquery_arrow_session(bigquery_service: BigQueryService) -> "Generator[BigQ
 
     with config.provide_session() as session:
         # Create test dataset and table
-        
+
         # First drop the table if it exists
         try:
-            session.execute_script(f"DROP TABLE IF EXISTS `{bigquery_service.project}.{bigquery_service.dataset}.test_arrow`")
+            session.execute_script(
+                f"DROP TABLE IF EXISTS `{bigquery_service.project}.{bigquery_service.dataset}.test_arrow`"
+            )
         except Exception:
             pass  # Ignore errors if table doesn't exist
 
@@ -48,7 +50,7 @@ def bigquery_arrow_session(bigquery_service: BigQueryService) -> "Generator[BigQ
         """)
 
         session.execute_script(f"""
-            INSERT INTO `{bigquery_service.project}.{bigquery_service.dataset}.test_arrow` (id, name, value, price, is_active) VALUES 
+            INSERT INTO `{bigquery_service.project}.{bigquery_service.dataset}.test_arrow` (id, name, value, price, is_active) VALUES
                 (1, 'Product A', 100, 19.99, true),
                 (2, 'Product B', 200, 29.99, true),
                 (3, 'Product C', 300, 39.99, false),
@@ -63,7 +65,7 @@ def bigquery_arrow_session(bigquery_service: BigQueryService) -> "Generator[BigQ
 def test_bigquery_fetch_arrow_table(bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test fetch_arrow_table method with BigQuery."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_arrow`"
-    
+
     result = bigquery_arrow_session.fetch_arrow_table(f"SELECT * FROM {table_name} ORDER BY id")
 
     assert isinstance(result, ArrowResult)
@@ -107,7 +109,9 @@ def test_bigquery_to_parquet(bigquery_arrow_session: BigQueryDriver, bigquery_se
 
 
 @pytest.mark.xdist_group("bigquery")
-def test_bigquery_arrow_with_parameters(bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+def test_bigquery_arrow_with_parameters(
+    bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService
+) -> None:
     """Test fetch_arrow_table with parameters on BigQuery."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_arrow`"
     result = bigquery_arrow_session.fetch_arrow_table(
@@ -159,7 +163,9 @@ def test_bigquery_arrow_data_types(bigquery_arrow_session: BigQueryDriver, bigqu
 
 
 @pytest.mark.xdist_group("bigquery")
-def test_bigquery_to_arrow_with_sql_object(bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+def test_bigquery_to_arrow_with_sql_object(
+    bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService
+) -> None:
     """Test to_arrow with SQL object instead of string."""
     from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -182,7 +188,9 @@ def test_bigquery_to_arrow_with_sql_object(bigquery_arrow_session: BigQueryDrive
 
 
 @pytest.mark.xdist_group("bigquery")
-def test_bigquery_arrow_with_bigquery_functions(bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+def test_bigquery_arrow_with_bigquery_functions(
+    bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService
+) -> None:
     """Test Arrow functionality with BigQuery-specific functions."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_arrow`"
     result = bigquery_arrow_session.fetch_arrow_table(
@@ -213,7 +221,9 @@ def test_bigquery_arrow_with_bigquery_functions(bigquery_arrow_session: BigQuery
 
 
 @pytest.mark.xdist_group("bigquery")
-def test_bigquery_arrow_with_arrays_and_structs(bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+def test_bigquery_arrow_with_arrays_and_structs(
+    bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService
+) -> None:
     """Test Arrow functionality with BigQuery arrays and structs."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_arrow`"
     result = bigquery_arrow_session.fetch_arrow_table(
@@ -242,7 +252,9 @@ def test_bigquery_arrow_with_arrays_and_structs(bigquery_arrow_session: BigQuery
 
 
 @pytest.mark.xdist_group("bigquery")
-def test_bigquery_arrow_with_window_functions(bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+def test_bigquery_arrow_with_window_functions(
+    bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService
+) -> None:
     """Test Arrow functionality with BigQuery window functions."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_arrow`"
     result = bigquery_arrow_session.fetch_arrow_table(f"""
@@ -274,7 +286,9 @@ def test_bigquery_arrow_with_window_functions(bigquery_arrow_session: BigQueryDr
 
 @pytest.mark.xdist_group("bigquery")
 @pytest.mark.skip("BigQuery emulator has issues with parameter binding for computed columns")
-def test_bigquery_arrow_with_ml_functions(bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+def test_bigquery_arrow_with_ml_functions(
+    bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService
+) -> None:
     """Test Arrow functionality with BigQuery feature engineering."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_arrow`"
     result = bigquery_arrow_session.fetch_arrow_table(f"""
@@ -299,7 +313,9 @@ def test_bigquery_arrow_with_ml_functions(bigquery_arrow_session: BigQueryDriver
 
 
 @pytest.mark.xdist_group("bigquery")
-def test_bigquery_parquet_export_with_partitioning(bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+def test_bigquery_parquet_export_with_partitioning(
+    bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService
+) -> None:
     """Test Parquet export with BigQuery partitioning patterns."""
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir) / "partitioned_output.parquet"
@@ -307,7 +323,7 @@ def test_bigquery_parquet_export_with_partitioning(bigquery_arrow_session: BigQu
         table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_arrow`"
         # Export with partitioning-style query
         from sqlspec.statement.sql import SQL, SQLConfig
-        
+
         query = SQL(
             f"""
             SELECT
@@ -322,7 +338,7 @@ def test_bigquery_parquet_export_with_partitioning(bigquery_arrow_session: BigQu
             dialect="bigquery",
             config=SQLConfig(strict_mode=False),
         )
-        
+
         bigquery_arrow_session.export_to_storage(
             query,
             str(output_path),
