@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Union, cast
 from sqlglot import exp
 
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.statement.builder._parsing_utils import parse_order_expression
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder.protocols import BuilderProtocol
@@ -32,7 +33,7 @@ class OrderByClauseMixin:
 
         current_expr = builder._expression
         for item in items:
-            order_item = exp.column(item).asc() if isinstance(item, str) else item
+            order_item = parse_order_expression(item) if isinstance(item, str) else item
             current_expr = current_expr.order_by(order_item, copy=False)
         builder._expression = current_expr
         return builder

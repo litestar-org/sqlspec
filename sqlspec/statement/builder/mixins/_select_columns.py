@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Union, cast
 from sqlglot import exp
 
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.statement.builder._parsing_utils import parse_column_expression
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder.protocols import BuilderProtocol
@@ -29,9 +30,7 @@ class SelectColumnsMixin:
             msg = "Cannot add select columns to a non-SELECT expression."
             raise SQLBuilderError(msg)
         for column in columns:
-            builder._expression = builder._expression.select(
-                column if isinstance(column, exp.Expression) else exp.column(column), copy=False
-            )
+            builder._expression = builder._expression.select(parse_column_expression(column), copy=False)
         return builder
 
     def distinct(self, *columns: Union[str, exp.Expression]) -> Any:
@@ -55,8 +54,6 @@ class SelectColumnsMixin:
         if not columns:
             builder._expression.set("distinct", exp.Distinct())
         else:
-            distinct_columns = [
-                column if isinstance(column, exp.Expression) else exp.column(column) for column in columns
-            ]
+            distinct_columns = [parse_column_expression(column) for column in columns]
             builder._expression.set("distinct", exp.Distinct(expressions=distinct_columns))
         return builder

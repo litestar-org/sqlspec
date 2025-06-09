@@ -47,9 +47,14 @@ class SetOperationMixin:
                 while new_param_name in merged_params:
                     counter += 1
                     new_param_name = f"{param_name}_right_{counter}"
-                right_sql_updated = right_expr.sql(dialect=getattr(self, "dialect", None))
-                right_sql_updated = right_sql_updated.replace(f":{param_name}", f":{new_param_name}")
-                right_expr = exp.maybe_parse(right_sql_updated, dialect=getattr(self, "dialect", None))
+
+                # Use AST transformation instead of string manipulation
+                def rename_parameter(node: exp.Expression) -> exp.Expression:
+                    if isinstance(node, exp.Placeholder) and node.name == param_name:
+                        return exp.Placeholder(this=new_param_name)
+                    return node
+
+                right_expr = right_expr.transform(rename_parameter)
                 union_expr = exp.union(left_expr, right_expr, distinct=not all_)
                 new_builder._expression = union_expr
                 merged_params[new_param_name] = param_value

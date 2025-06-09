@@ -62,11 +62,8 @@ class PivotClauseMixin:
                 pivot_value_exprs.append(exp.Literal.string(str(val)))
 
         # Create the pivot expression with proper fields structure
-        in_expr = exp.In(
-            this=pivot_col_expr,
-            expressions=pivot_value_exprs
-        )
-        
+        in_expr = exp.In(this=pivot_col_expr, expressions=pivot_value_exprs)
+
         pivot_node = exp.Pivot(
             expressions=[pivot_agg_expr],
             fields=[in_expr],

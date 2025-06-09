@@ -66,6 +66,7 @@ class QueryBuilder(ABC, Generic[ResultT]):
 
     dialect: DialectType = field(default=None)
     instrumentation_config: Optional["InstrumentationConfig"] = field(default=None)
+    schema: Optional[dict[str, dict[str, str]]] = field(default=None)
     _expression: Optional[exp.Expression] = field(default=None, init=False, repr=False, compare=False, hash=False)
     # Internally, builders will use a dictionary for named parameters.
     _parameters: dict[str, Any] = field(default_factory=dict, init=False, repr=False, compare=False, hash=False)
@@ -371,18 +372,37 @@ class QueryBuilder(ABC, Generic[ResultT]):
         optimized = expression
 
         try:
-            # Apply optimizations in order
-            if self.simplify_expressions:
-                with self._debug_build_phase("simplify_expressions"):
-                    optimized = simplify(optimized.copy())
+            # Use SQLGlot's comprehensive optimizer if schema is available
+            if hasattr(self, "schema") and self.schema:
+                with self._debug_build_phase("comprehensive_optimization"):
+                    from sqlglot.optimizer import optimize
 
-            if self.optimize_predicates and isinstance(optimized, (exp.Select, exp.Update, exp.Delete)):
-                with self._debug_build_phase("pushdown_predicates"):
-                    optimized = pushdown_predicates(optimized.copy(), dialect=self.dialect_name)
+                    optimized = optimize(optimized.copy(), schema=self.schema, dialect=self.dialect_name)
+            else:
+                # Apply individual optimizations in order
+                if self.simplify_expressions:
+                    with self._debug_build_phase("simplify_expressions"):
+                        optimized = simplify(optimized.copy())
 
-            if self.optimize_joins and isinstance(optimized, exp.Select):
-                with self._debug_build_phase("optimize_joins"):
-                    optimized = optimize_joins(optimized.copy(), dialect=self.dialect_name)
+                if self.optimize_predicates and isinstance(optimized, (exp.Select, exp.Update, exp.Delete)):
+                    with self._debug_build_phase("pushdown_predicates"):
+                        optimized = pushdown_predicates(optimized.copy(), dialect=self.dialect_name)
+
+                if self.optimize_joins and isinstance(optimized, exp.Select):
+                    with self._debug_build_phase("optimize_joins"):
+                        optimized = optimize_joins(optimized.copy(), dialect=self.dialect_name)
+
+                # Apply additional SQLGlot optimizations
+                if isinstance(optimized, exp.Select):
+                    with self._debug_build_phase("eliminate_subqueries"):
+                        from sqlglot.optimizer.eliminate_subqueries import eliminate_subqueries
+
+                        optimized = eliminate_subqueries(optimized.copy())
+
+                    with self._debug_build_phase("unnest_subqueries"):
+                        from sqlglot.optimizer.unnest_subqueries import unnest_subqueries
+
+                        optimized = unnest_subqueries(optimized.copy())
 
         except Exception as e:
             # Log optimization failure but continue with unoptimized query

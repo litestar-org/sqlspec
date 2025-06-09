@@ -65,15 +65,14 @@ class WindowFunctionsMixin:
             if isinstance(order_by, str):
                 over_args["order"] = exp.column(order_by).asc()
             elif isinstance(order_by, list):
-                # For multiple order columns, create multiple ordered expressions
-                if len(order_by) == 1:
-                    col = order_by[0]
-                    over_args["order"] = exp.column(col).asc() if isinstance(col, str) else col
-                else:
-                    # For multiple columns, we need to handle this differently
-                    # SQLGlot expects a single order expression, so we'll use the first one
-                    col = order_by[0]
-                    over_args["order"] = exp.column(col).asc() if isinstance(col, str) else col
+                # Properly handle multiple ORDER BY columns using Order expression
+                order_expressions = []
+                for col in order_by:
+                    if isinstance(col, str):
+                        order_expressions.append(exp.column(col).asc())
+                    else:
+                        order_expressions.append(col)
+                over_args["order"] = exp.Order(expressions=order_expressions)
             elif isinstance(order_by, exp.Expression):
                 over_args["order"] = order_by
 

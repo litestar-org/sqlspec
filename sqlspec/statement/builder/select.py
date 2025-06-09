@@ -163,31 +163,54 @@ class SelectBuilder(
         # Call parent build method which handles CTEs and optimization
         safe_query = super().build()
 
-        # Inject statement-level hints as comments at the top of the SQL string
+        # Apply hints using SQLGlot's proper hint support (more robust than regex)
         if hasattr(self, "_hints") and self._hints:
-            sql = safe_query.sql
-            statement_hints = [h["hint"] for h in self._hints if h.get("location") == "statement"]
-            if statement_hints:
-                hint_comment = " ".join(f"/*+ {h} */" for h in statement_hints)
-                sql = f"{hint_comment}\n{sql}"
-            # Inject table-level hints as comments before table names in FROM/JOIN clauses
-            table_hints = [h for h in self._hints if h.get("location") == "table" and h.get("table")]
-            for th in table_hints:
-                table = str(th["table"])
-                hint = th["hint"]
-                # Regex to match FROM <table> or JOIN <table> (optionally with alias)
-                import re
+            modified_expr = self._expression.copy() if self._expression else None
 
-                # FROM <table> [AS] <alias> - handle quotes
-                pattern_from = rf'(FROM\s+)(["`]?{re.escape(table)}\b["`]?)'
-                # JOIN <table> [AS] <alias> - handle quotes
-                pattern_join = rf'(JOIN\s+)(["`]?{re.escape(table)}\b["`]?)'
-                # Replace in FROM clause
-                sql = re.sub(pattern_from, rf"\1/*+ {hint} */ \2", sql, flags=re.IGNORECASE)
-                # Replace in JOIN clause
-                sql = re.sub(pattern_join, rf"\1/*+ {hint} */ \2", sql, flags=re.IGNORECASE)
+            if modified_expr and isinstance(modified_expr, exp.Select):
+                # Apply statement-level hints using SQLGlot's Hint expression
+                statement_hints = [h["hint"] for h in self._hints if h.get("location") == "statement"]
+                if statement_hints:
+                    # Parse each hint and create proper hint expressions
+                    hint_expressions = []
+                    for hint in statement_hints:
+                        try:
+                            # Try to parse hint as an expression (e.g., "INDEX(users idx_name)")
+                            hint_expr = exp.maybe_parse(hint, dialect=self.dialect_name)
+                            if hint_expr:
+                                hint_expressions.append(hint_expr)
+                            else:
+                                # Create a raw identifier for unparsable hints
+                                hint_expressions.append(exp.Anonymous(this=hint))
+                        except Exception:
+                            hint_expressions.append(exp.Anonymous(this=hint))
 
-            # Return new SafeQuery with modified SQL
-            return SafeQuery(sql=sql, parameters=safe_query.parameters, dialect=safe_query.dialect)
+                    # Create a Hint node and attach to SELECT
+                    if hint_expressions:
+                        hint_node = exp.Hint(expressions=hint_expressions)
+                        modified_expr.set("hint", hint_node)
+
+                # For table-level hints, we'll fall back to comment injection in SQL
+                # since SQLGlot doesn't have a standard way to attach hints to individual tables
+                modified_sql = modified_expr.sql(dialect=self.dialect_name, pretty=True)
+
+                # Apply table-level hints via string manipulation (as fallback)
+                table_hints = [h for h in self._hints if h.get("location") == "table" and h.get("table")]
+                if table_hints:
+                    import re
+
+                    for th in table_hints:
+                        table = str(th["table"])
+                        hint = th["hint"]
+                        # More precise regex that captures the table and optional alias
+                        pattern = rf"\b{re.escape(table)}\b(\s+AS\s+\w+)?"
+
+                        def replacement_func(match) -> str:
+                            alias_part = match.group(1) if match.group(1) else ""
+                            return f"/*+ {hint} */ {table}{alias_part}"
+
+                        modified_sql = re.sub(pattern, replacement_func, modified_sql, flags=re.IGNORECASE, count=1)
+
+                return SafeQuery(sql=modified_sql, parameters=safe_query.parameters, dialect=safe_query.dialect)
 
         return safe_query

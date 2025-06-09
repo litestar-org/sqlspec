@@ -60,11 +60,8 @@ class UnpivotClauseMixin:
                 unpivot_cols_exprs.append(exp.column(str(col_name_or_expr)))
 
         # Create the unpivot expression (stored as Pivot with unpivot=True)
-        in_expr = exp.In(
-            this=name_col_ident,
-            expressions=unpivot_cols_exprs
-        )
-        
+        in_expr = exp.In(this=name_col_ident, expressions=unpivot_cols_exprs)
+
         unpivot_node = exp.Pivot(
             expressions=[value_col_ident],
             fields=[in_expr],
