@@ -14,8 +14,8 @@ _SLUGIFY_HYPHEN_COLLAPSE = re.compile(r"-+")
 _SNAKE_CASE_LOWER_OR_DIGIT_TO_UPPER = re.compile(r"(?<=[a-z0-9])(?=[A-Z])", re.UNICODE)
 # Insert underscore between uppercase letter and uppercase followed by lowercase
 _SNAKE_CASE_UPPER_TO_UPPER_LOWER = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])", re.UNICODE)
-# Replace hyphens and spaces with underscores for snake_case
-_SNAKE_CASE_HYPHEN_SPACE = re.compile(r"[.\s-]+", re.UNICODE)
+# Replace hyphens, spaces, dots, and @ symbols with underscores for snake_case
+_SNAKE_CASE_HYPHEN_SPACE = re.compile(r"[.\s@-]+", re.UNICODE)
 # Collapse multiple underscores
 _SNAKE_CASE_MULTIPLE_UNDERSCORES = re.compile(r"__+", re.UNICODE)
 

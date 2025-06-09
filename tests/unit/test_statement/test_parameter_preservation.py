@@ -38,27 +38,27 @@ def test_ctas_preserves_parameter_names() -> None:
 
 
 def test_ctas_handles_parameter_collision() -> None:
-    """Test that CTAS only adds suffix when there's a real collision."""
+    """Test that CTAS handles parameter name collisions by using the later value."""
     # Create a CTAS with a parameter
     ctas_builder = CreateTableAsSelectBuilder()
     ctas_builder.name("new_table")
     ctas_builder.add_parameter("initial_value", name="test_param")
 
-    # Add SELECT with same parameter name
+    # Add SELECT with same parameter name - this should override the previous value
     select_builder = SelectBuilder()
     select_builder.from_("users").where("name = :test_param")
     select_builder.add_parameter("select_value", name="test_param")
 
-    # This should create test_param_1 since test_param already exists
+    # The select parameter should override the CTAS parameter
     ctas_builder.as_select(select_builder)
 
     safe_query = ctas_builder.build()
 
-    # Should have both parameters
+    # Should have the parameter with the select value (override behavior)
     assert "test_param" in safe_query.parameters
-    assert "test_param_1" in safe_query.parameters
-    assert safe_query.parameters["test_param"] == "initial_value"
-    assert safe_query.parameters["test_param_1"] == "select_value"
+    assert safe_query.parameters["test_param"] == "select_value"
+    # No collision suffix should be created
+    assert "test_param_1" not in safe_query.parameters
 
 
 def test_mixed_parameter_style_normalization() -> None:

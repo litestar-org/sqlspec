@@ -61,15 +61,21 @@ class ObStoreBackend(InstrumentedObjectStore):
             raise MissingDependencyError(package="obstore", install_package="obstore")
 
         try:
-            from obstore.store import from_url
-
             self.store_uri = store_uri
             self.base_path = base_path.rstrip("/") if base_path else ""
             self.store_options = store_options
 
             # Initialize obstore instance
-            # Use obstore's from_url for automatic URI parsing
-            self.store = from_url(store_uri, **store_options)
+            if store_uri.startswith("memory://"):
+                # MemoryStore doesn't use from_url - create directly
+                from obstore.store import MemoryStore
+
+                self.store = MemoryStore()
+            else:
+                # Use obstore's from_url for automatic URI parsing
+                from obstore.store import from_url
+
+                self.store = from_url(store_uri, **store_options)
 
             if self.instrumentation_config.debug_mode:
                 self.logger.debug(

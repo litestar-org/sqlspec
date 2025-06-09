@@ -115,10 +115,12 @@ class MockSyncDriver(SyncDriverAdapterProtocol[MockConnection, DictRow], SyncIns
         result.last_insert_id = None
         return result  # type: ignore
 
-    def instrument_sync_operation(self, operation_name: str, operation_type: str, tags: dict[str, Any], func: Any, *args: Any, **kwargs: Any) -> Any:
+    def instrument_sync_operation(
+        self, operation_name: str, operation_type: str, tags: dict[str, Any], func: Any, *args: Any, **kwargs: Any
+    ) -> Any:
         """Mock implementation of sync instrumentation that uses the real telemetry."""
         from sqlspec.utils.telemetry import instrument_operation
-        
+
         with instrument_operation(self, operation_name, operation_type, **tags):
             return func(*args, **kwargs)
 
@@ -175,10 +177,12 @@ class MockAsyncDriver(AsyncDriverAdapterProtocol[MockAsyncConnection, DictRow], 
         mock_result.last_insert_id = None
         return mock_result  # type: ignore
 
-    async def instrument_async_operation(self, operation_name: str, operation_type: str, tags: dict[str, Any], func: Any, *args: Any, **kwargs: Any) -> Any:
+    async def instrument_async_operation(
+        self, operation_name: str, operation_type: str, tags: dict[str, Any], func: Any, *args: Any, **kwargs: Any
+    ) -> Any:
         """Mock implementation of async instrumentation that uses the real telemetry."""
         from sqlspec.utils.telemetry import instrument_operation_async
-        
+
         async with instrument_operation_async(self, operation_name, operation_type, **tags):
             return await func(*args, **kwargs)
 

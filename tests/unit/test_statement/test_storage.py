@@ -144,7 +144,7 @@ def test_backend_creation_with_obstore() -> None:
     """Test actual backend creation (requires obstore dependency)."""
     registry = StorageRegistry()
 
-    # This would require actual obstore installation
+    # This should now work with obstore MemoryStore
     uri = "memory://test"
     backend = registry.get(uri)
     assert backend.backend_type == "obstore"  # type: ignore[attr-defined]

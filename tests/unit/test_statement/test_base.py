@@ -355,8 +355,13 @@ def test_returns_rows_expression_types(driver_attributes: CommonDriverAttributes
     delete_with_returning = delete_with_returning.returning(exp.Returning())
     assert driver_attributes.returns_rows(delete_with_returning) is True, "Delete with RETURNING should return rows"
 
+    # Test empty WITH expression (should not return rows)
     with_expr = exp.With()
-    assert driver_attributes.returns_rows(with_expr) is True, "WITH expression should return rows"
+    assert driver_attributes.returns_rows(with_expr) is False, "Empty WITH expression should not return rows"
+
+    # Test WITH expression with SELECT (should return rows)
+    with_select = exp.With(expressions=[exp.Select()])
+    assert driver_attributes.returns_rows(with_select) is True, "WITH expression with SELECT should return rows"
 
     show_expr = exp.Show()
     assert driver_attributes.returns_rows(show_expr) is True, "SHOW expression should return rows"

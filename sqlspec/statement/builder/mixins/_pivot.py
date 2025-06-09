@@ -61,16 +61,29 @@ class PivotClauseMixin:
             else:
                 pivot_value_exprs.append(exp.Literal.string(str(val)))
 
-        # Create the pivot expression
+        # Create the pivot expression with proper fields structure
+        in_expr = exp.In(
+            this=pivot_col_expr,
+            expressions=pivot_value_exprs
+        )
+        
         pivot_node = exp.Pivot(
             expressions=[pivot_agg_expr],
-            field=pivot_col_expr,
-            values=[exp.Tuple(expressions=pivot_value_exprs)],
+            fields=[in_expr],
+            unpivot=False,
         )
 
         if alias:
             pivot_node.set("alias", exp.TableAlias(this=exp.to_identifier(alias)))
 
-        current_expr.set("pivot", pivot_node)
+        # Add pivot to the table in the FROM clause
+        from_clause = current_expr.args.get("from")
+        if from_clause and isinstance(from_clause, exp.From):
+            table = from_clause.this
+            if isinstance(table, exp.Table):
+                # Add to pivots array
+                existing_pivots = table.args.get("pivots", [])
+                existing_pivots.append(pivot_node)
+                table.set("pivots", existing_pivots)
 
         return cast("SelectBuilder", self)

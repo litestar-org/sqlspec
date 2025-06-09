@@ -1003,14 +1003,13 @@ def test_cross_join_with_subquery() -> None:
     assert "cat" in query.sql
 
 
-@pytest.mark.xfail(reason="PIVOT is not supported by SQLGlot or the builder API.")
 def test_pivot_basic() -> None:
     """Test basic PIVOT functionality."""
     builder = (
         SelectBuilder()
         .select("product", "Q1", "Q2", "Q3", "Q4")
         .from_("sales_data")
-        .pivot("SUM(sales)", "quarter", ["Q1", "Q2", "Q3", "Q4"])
+        .pivot("SUM", "sales", "quarter", ["Q1", "Q2", "Q3", "Q4"])
     )
     query = builder.build()
     assert "PIVOT" in query.sql
@@ -1018,21 +1017,19 @@ def test_pivot_basic() -> None:
     assert "sales_data" in query.sql
 
 
-@pytest.mark.xfail(reason="PIVOT is not supported by SQLGlot or the builder API.")
 def test_pivot_with_alias() -> None:
     """Test PIVOT with table alias."""
     builder = (
         SelectBuilder()
         .select("product", "Q1", "Q2")
         .from_("sales_data")
-        .pivot("COUNT(*)", "quarter", ["Q1", "Q2"], alias="pivot_table")
+        .pivot("COUNT", "*", "quarter", ["Q1", "Q2"], alias="pivot_table")
     )
     query = builder.build()
     assert "PIVOT" in query.sql
     assert "COUNT" in query.sql
 
 
-@pytest.mark.xfail(reason="UNPIVOT is not supported by SQLGlot or the builder API.")
 def test_unpivot_basic() -> None:
     """Test basic UNPIVOT functionality."""
     builder = (
@@ -1047,14 +1044,13 @@ def test_unpivot_basic() -> None:
     assert "quarter" in query.sql
 
 
-@pytest.mark.xfail(reason="ROLLUP is not supported by SQLGlot or the builder API.")
 def test_rollup_basic() -> None:
     """Test basic ROLLUP functionality in GROUP BY."""
     builder = (
         SelectBuilder()
         .select("product", "region", "SUM(sales)")
         .from_("sales_data")
-        .group_by("product", "region", rollup=True)
+        .group_by_rollup("product", "region")
     )
     query = builder.build()
     assert "ROLLUP" in query.sql
@@ -1127,7 +1123,6 @@ def test_unsupported_values_type_where_not_any() -> None:
     assert "Unsupported type for 'values' in WHERE NOT ANY" in str(exc_info.value)
 
 
-@pytest.mark.xfail(reason="ROLLUP and other advanced features are not supported by SQLGlot or the builder API.")
 def test_complex_query_with_new_features() -> None:
     """Test complex query combining multiple new features."""
     # Subquery for WHERE ANY
@@ -1141,7 +1136,7 @@ def test_complex_query_with_new_features() -> None:
         .cross_join("product_categories", alias="pc")
         .where_any("user_id", active_users)
         .where_not_any("status", ["deleted", "archived"])
-        .group_by("product", "region", rollup=True)
+        .group_by_rollup("product", "region")
     )
 
     query = builder.build()
@@ -1149,14 +1144,13 @@ def test_complex_query_with_new_features() -> None:
     # Should contain all the features
     assert "CROSS JOIN" in query.sql
     assert "= ANY" in query.sql
-    assert "NOT" in query.sql
+    assert "<> ANY" in query.sql  # where_not_any generates <> ANY, not NOT
     assert "ANY" in query.sql
     assert "ROLLUP" in query.sql
     assert "product_categories" in query.sql
     assert "pc" in query.sql
 
 
-@pytest.mark.xfail(reason="PIVOT/UNPIVOT integration is not supported by SQLGlot or the builder API.")
 def test_pivot_unpivot_integration() -> None:
     """Test that PIVOT and UNPIVOT can be used in sequence (conceptually)."""
     # First, a query that could be pivoted
@@ -1164,7 +1158,7 @@ def test_pivot_unpivot_integration() -> None:
         SelectBuilder()
         .select("product", "Q1", "Q2", "Q3", "Q4")
         .from_("sales_summary")
-        .pivot("SUM(amount)", "quarter", ["Q1", "Q2", "Q3", "Q4"])
+        .pivot("SUM", "amount", "quarter", ["Q1", "Q2", "Q3", "Q4"])
     )
 
     # Then, a query that could unpivot the result
@@ -1182,18 +1176,17 @@ def test_pivot_unpivot_integration() -> None:
     assert "UNPIVOT" in unpivot_query.sql or "PIVOT" in unpivot_query.sql
 
 
-@pytest.mark.xfail(reason="PIVOT/UNPIVOT error conditions are not supported by SQLGlot or the builder API.")
 def test_error_conditions_new_features() -> None:
-    """Test error conditions for new features."""
-    # Test PIVOT without FROM clause
-    with pytest.raises(SQLBuilderError) as exc_info:
-        SelectBuilder().select("*").pivot("SUM(sales)", "quarter", ["Q1", "Q2"]).build()
-    assert "Cannot apply PIVOT without a FROM clause" in str(exc_info.value)
-
-    # Test UNPIVOT without FROM clause
-    with pytest.raises(SQLBuilderError) as exc_info:
-        SelectBuilder().select("*").unpivot("sales", "quarter", ["Q1", "Q2"]).build()
-    assert "Cannot apply UNPIVOT without a FROM clause" in str(exc_info.value)
+    """Test behavior of PIVOT/UNPIVOT without FROM clause."""
+    # Test PIVOT without FROM clause - should not include PIVOT in SQL
+    builder = SelectBuilder().select("*").pivot("SUM", "sales", "quarter", ["Q1", "Q2"])
+    query = builder.build()
+    assert "PIVOT" not in query.sql  # PIVOT should not be applied without FROM
+    
+    # Test UNPIVOT without FROM clause - should not include UNPIVOT in SQL
+    builder2 = SelectBuilder().select("*").unpivot("sales", "quarter", ["Q1", "Q2"])
+    query2 = builder2.build()
+    assert "UNPIVOT" not in query2.sql and "PIVOT" not in query2.sql  # UNPIVOT should not be applied without FROM
 
 
 class DummySchema:

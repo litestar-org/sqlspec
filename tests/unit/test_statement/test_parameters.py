@@ -4,7 +4,7 @@ Tests the parameter handling system including parameter extraction, validation,
 conversion, and different parameter styles.
 """
 
-from typing import Any
+from typing import Any, Union
 from unittest.mock import patch
 
 import pytest
@@ -539,20 +539,23 @@ def test_parameter_conversion_error_handling() -> None:
 
 
 @pytest.mark.parametrize(
-    ("sql", "expected_error_type"),
+    ("sql", "provided_params", "expected_error_type"),
     [
-        ("SELECT * FROM users WHERE id = ?", MissingParameterError),
-        ("SELECT * FROM users WHERE name = :name", MissingParameterError),
+        ("SELECT * FROM users WHERE id = ?", [], MissingParameterError),  # Empty list for qmark style
+        ("SELECT * FROM users WHERE name = :name", {}, MissingParameterError),  # Empty dict for named style
     ],
     ids=["missing_qmark", "missing_named"],
 )
-def test_missing_parameter_errors(sql: str, expected_error_type: type[Exception]) -> None:
+def test_missing_parameter_errors(
+    sql: str, provided_params: Union[list, dict], expected_error_type: type[Exception]
+) -> None:
     """Test missing parameter error conditions."""
     validator = ParameterValidator()
     params = validator.extract_parameters(sql)
 
     with pytest.raises(expected_error_type):
-        validator.validate_parameters(params, None, sql)
+        # Use appropriate empty container type for each parameter style
+        validator.validate_parameters(params, provided_params, sql)
 
 
 def test_scalar_parameter_handling() -> None:

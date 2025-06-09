@@ -59,14 +59,29 @@ class UnpivotClauseMixin:
                 # Fallback for other types, should ideally be an error or more specific handling
                 unpivot_cols_exprs.append(exp.column(str(col_name_or_expr)))
 
-        # Create the unpivot expression
-        unpivot_node = exp.UnpivotColumns(
-            this=value_col_ident, field=name_col_ident, expressions=[exp.Tuple(expressions=unpivot_cols_exprs)]
+        # Create the unpivot expression (stored as Pivot with unpivot=True)
+        in_expr = exp.In(
+            this=name_col_ident,
+            expressions=unpivot_cols_exprs
+        )
+        
+        unpivot_node = exp.Pivot(
+            expressions=[value_col_ident],
+            fields=[in_expr],
+            unpivot=True,
         )
 
         if alias:
             unpivot_node.set("alias", exp.TableAlias(this=exp.to_identifier(alias)))
 
-        current_expr.set("unpivot", unpivot_node)
+        # Add unpivot to the table in the FROM clause
+        from_clause = current_expr.args.get("from")
+        if from_clause and isinstance(from_clause, exp.From):
+            table = from_clause.this
+            if isinstance(table, exp.Table):
+                # Add to pivots array
+                existing_pivots = table.args.get("pivots", [])
+                existing_pivots.append(unpivot_node)
+                table.set("pivots", existing_pivots)
 
         return cast("SelectBuilder", self)

@@ -127,18 +127,18 @@ class TestSubqueryDetection:
         """
         parsed = sqlglot.parse_one(sql, dialect="mysql")
 
-        # Current behavior: no Subquery nodes found
+        # Updated behavior: sqlglot now properly wraps subqueries in IN clauses
         subqueries = list(parsed.find_all(exp.Subquery))
-        assert len(subqueries) == 0, "Current sqlglot behavior: IN clause subqueries not wrapped"
+        assert len(subqueries) == 1, "Updated sqlglot behavior: IN clause subqueries are now wrapped"
 
-        # Current behavior: IN clause contains Select node directly
+        # Updated behavior: IN clause contains Subquery node that wraps Select
         in_clauses = list(parsed.find_all(exp.In))
         assert len(in_clauses) == 1
 
         in_clause = in_clauses[0]
         assert "query" in in_clause.args, "IN clause should have query in args"
         query_node = in_clause.args.get("query")
-        assert isinstance(query_node, exp.Select), "Query should be Select node"
+        assert isinstance(query_node, exp.Subquery), "Query should be Subquery node"
 
         # Our workaround successfully detects this
         analysis = analyzer.analyze_statement(sql, "mysql")

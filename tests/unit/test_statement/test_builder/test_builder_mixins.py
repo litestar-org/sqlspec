@@ -462,7 +462,9 @@ class _TestPivotMixin(DummyBuilder, PivotClauseMixin):
 
 
 def test_pivot_clause_basic() -> None:
-    builder = _TestPivotMixin(exp.Select())
+    # Create a Select with a FROM clause (required for PIVOT)
+    select_expr = exp.Select().from_("sales_data")
+    builder = _TestPivotMixin(select_expr)
     builder.pivot(
         aggregate_function="SUM",
         aggregate_column="sales",
@@ -471,11 +473,20 @@ def test_pivot_clause_basic() -> None:
         alias=None,
     )
     assert isinstance(builder._expression, exp.Select)
-    assert builder._expression.args.get("pivot") is not None
+    # PIVOT should be attached to the table in FROM clause
+    from_clause = builder._expression.args.get("from")
+    assert from_clause is not None
+    table = from_clause.this
+    assert isinstance(table, exp.Table)
+    pivots = table.args.get("pivots", [])
+    assert len(pivots) > 0
+    assert any(pivot.args.get("unpivot") is False for pivot in pivots)
 
 
 def test_pivot_clause_with_alias() -> None:
-    builder = _TestPivotMixin(exp.Select())
+    # Create a Select with a FROM clause (required for PIVOT)
+    select_expr = exp.Select().from_("sales_data")
+    builder = _TestPivotMixin(select_expr)
     builder.pivot(
         aggregate_function="SUM",
         aggregate_column="sales",
@@ -484,12 +495,15 @@ def test_pivot_clause_with_alias() -> None:
         alias="pivot_table",
     )
     assert builder._expression is not None
-    pivot_node = builder._expression.args.get("pivot")
-    assert pivot_node is not None
-    if hasattr(pivot_node, "args") and isinstance(pivot_node.args, dict) and "alias" in pivot_node.args:
-        alias_val = pivot_node.args["alias"]
-    else:
-        alias_val = None
+    # PIVOT should be attached to the table in FROM clause
+    from_clause = builder._expression.args.get("from")
+    assert from_clause is not None
+    table = from_clause.this
+    assert isinstance(table, exp.Table)
+    pivots = table.args.get("pivots", [])
+    assert len(pivots) > 0
+    pivot_node = pivots[0]
+    alias_val = pivot_node.args.get("alias")
     assert alias_val is not None
     assert "pivot_table" in str(alias_val)
 
@@ -517,7 +531,9 @@ class _TestUnpivotMixin(DummyBuilder, UnpivotClauseMixin):
 
 
 def test_unpivot_clause_basic() -> None:
-    builder = _TestUnpivotMixin(exp.Select())
+    # Create a Select with a FROM clause (required for UNPIVOT)
+    select_expr = exp.Select().from_("quarterly_sales")
+    builder = _TestUnpivotMixin(select_expr)
     builder.unpivot(
         value_column_name="sales",
         name_column_name="quarter",
@@ -525,11 +541,20 @@ def test_unpivot_clause_basic() -> None:
         alias=None,
     )
     assert isinstance(builder._expression, exp.Select)
-    assert builder._expression.args.get("unpivot") is not None
+    # UNPIVOT should be attached to the table in FROM clause as Pivot with unpivot=True
+    from_clause = builder._expression.args.get("from")
+    assert from_clause is not None
+    table = from_clause.this
+    assert isinstance(table, exp.Table)
+    pivots = table.args.get("pivots", [])
+    assert len(pivots) > 0
+    assert any(pivot.args.get("unpivot") is True for pivot in pivots)
 
 
 def test_unpivot_clause_with_alias() -> None:
-    builder = _TestUnpivotMixin(exp.Select())
+    # Create a Select with a FROM clause (required for UNPIVOT)
+    select_expr = exp.Select().from_("monthly_sales")
+    builder = _TestUnpivotMixin(select_expr)
     builder.unpivot(
         value_column_name="amount",
         name_column_name="month",
@@ -537,12 +562,16 @@ def test_unpivot_clause_with_alias() -> None:
         alias="unpivot_table",
     )
     assert builder._expression is not None
-    unpivot_node = builder._expression.args.get("unpivot")
-    assert unpivot_node is not None
-    if hasattr(unpivot_node, "args") and isinstance(unpivot_node.args, dict) and "alias" in unpivot_node.args:
-        alias_val = unpivot_node.args["alias"]
-    else:
-        alias_val = None
+    # UNPIVOT should be attached to the table in FROM clause as Pivot with unpivot=True
+    from_clause = builder._expression.args.get("from")
+    assert from_clause is not None
+    table = from_clause.this
+    assert isinstance(table, exp.Table)
+    pivots = table.args.get("pivots", [])
+    assert len(pivots) > 0
+    pivot_node = pivots[0]
+    assert pivot_node.args.get("unpivot") is True
+    alias_val = pivot_node.args.get("alias")
     assert alias_val is not None
     assert "unpivot_table" in str(alias_val)
 
