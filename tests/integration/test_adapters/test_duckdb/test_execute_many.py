@@ -130,7 +130,7 @@ def test_duckdb_execute_many_mixed_types(duckdb_batch_session: DuckDBDriver) -> 
         ("Float Item",),
     )
     assert len(float_result.data) == 1
-    assert float_result.data[0]["value"] == 78.5
+    assert float_result.data[0]["value"] == 78  # DuckDB converts float to int for INTEGER column
 
 
 def test_duckdb_execute_many_delete(duckdb_batch_session: DuckDBDriver) -> None:
@@ -212,7 +212,7 @@ def test_duckdb_execute_many_with_sql_object(duckdb_batch_session: DuckDBDriver)
 
     sql_obj = SQL("INSERT INTO test_batch (id, name, value, category) VALUES (?, ?, ?, ?)").as_many(parameters)
 
-    result = duckdb_batch_session.execute_statement(sql_obj)
+    result = duckdb_batch_session.execute(sql_obj)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3

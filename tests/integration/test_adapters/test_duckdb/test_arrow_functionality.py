@@ -313,3 +313,127 @@ def test_duckdb_arrow_with_parquet_integration(duckdb_arrow_session: DuckDBDrive
         original_values = [100, 200, 400]  # Active products A, B, D
         expected_doubled = [v * 2 for v in original_values]
         assert doubled_values == expected_doubled
+
+
+def test_duckdb_arrow_streaming_large_dataset(duckdb_arrow_session: DuckDBDriver) -> None:
+    """Test Arrow streaming functionality with batch processing."""
+    # Insert a larger dataset to test streaming
+    large_data = [(i, f"Item {i}", i * 10, float(i * 2.5), i % 2 == 0) for i in range(10000, 15000)]
+    
+    duckdb_arrow_session.execute_many(
+        "INSERT INTO test_arrow (id, name, value, price, is_active) VALUES (?, ?, ?, ?, ?)",
+        large_data,
+    )
+
+    # Test streaming with batch_size
+    result = duckdb_arrow_session.fetch_arrow_table(
+        "SELECT * FROM test_arrow WHERE id >= 10000 ORDER BY id",
+        batch_size=1000,
+    )
+
+    assert isinstance(result, ArrowResult)
+    assert result.num_rows() == 5000  # 5000 records added
+    
+    # Verify the data is correct
+    ids = result.data["id"].to_pylist()
+    assert ids[0] == 10000
+    assert ids[-1] == 14999
+
+
+def test_duckdb_enhanced_parquet_export_with_compression(duckdb_arrow_session: DuckDBDriver) -> None:
+    """Test enhanced Parquet export with compression options."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = Path(tmpdir) / "compressed_data.parquet"
+
+        # Export with compression and row group size options
+        rows_exported = duckdb_arrow_session.export_to_storage(
+            "SELECT * FROM test_arrow WHERE value <= 300",
+            str(output_path),
+            format="parquet",
+            compression="snappy",
+            row_group_size=100,
+        )
+
+        assert output_path.exists()
+        assert rows_exported == 3  # Products A, B, C
+
+        # Verify the file can be read back
+        import pyarrow.parquet as pq
+        table = pq.read_table(output_path)
+        assert table.num_rows == 3
+        
+        # Check that compression was applied (metadata should show it)
+        parquet_file = pq.ParquetFile(output_path)
+        # Most parquet files will have compression info in metadata
+        assert parquet_file.metadata.num_row_groups > 0
+
+
+def test_duckdb_enhanced_parquet_export_with_partitioning(duckdb_arrow_session: DuckDBDriver) -> None:
+    """Test enhanced Parquet export with partitioning."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = Path(tmpdir) / "partitioned_data"
+
+        # Export with partitioning by is_active column
+        rows_exported = duckdb_arrow_session.export_to_storage(
+            "SELECT * FROM test_arrow",
+            str(output_path),
+            format="parquet",
+            partition_by="is_active",
+        )
+
+        assert rows_exported == 5  # All products
+        
+        # Check that partitioned directories were created
+        # DuckDB creates directories for each partition value
+        partition_dirs = list(output_path.glob("is_active=*"))
+        assert len(partition_dirs) == 2  # true and false partitions
+
+
+def test_duckdb_enhanced_csv_export_with_options(duckdb_arrow_session: DuckDBDriver) -> None:
+    """Test enhanced CSV export with custom options."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = Path(tmpdir) / "custom_data.csv"
+
+        # Export CSV with custom delimiter and compression
+        rows_exported = duckdb_arrow_session.export_to_storage(
+            "SELECT name, value, price FROM test_arrow ORDER BY id",
+            str(output_path),
+            format="csv",
+            delimiter="|",
+            compression="gzip",
+        )
+
+        assert rows_exported == 5
+        
+        # The file should exist (possibly with .gz extension due to compression)
+        assert output_path.exists() or Path(f"{output_path}.gz").exists()
+
+
+def test_duckdb_multiple_parquet_files_reading(duckdb_arrow_session: DuckDBDriver) -> None:
+    """Test reading multiple Parquet files with enhanced reader."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create multiple Parquet files
+        file1 = Path(tmpdir) / "data1.parquet"
+        file2 = Path(tmpdir) / "data2.parquet"
+        
+        # Export different subsets to different files
+        duckdb_arrow_session.export_to_storage(
+            "SELECT * FROM test_arrow WHERE value <= 200",
+            str(file1),
+        )
+        
+        duckdb_arrow_session.export_to_storage(
+            "SELECT * FROM test_arrow WHERE value > 200",
+            str(file2),
+        )
+        
+        # Test reading with glob pattern
+        result = duckdb_arrow_session.fetch_arrow_table(f"""
+            SELECT COUNT(*) as total_count
+            FROM read_parquet('{tmpdir}/*.parquet')
+        """)
+        
+        assert isinstance(result, ArrowResult)
+        assert result.num_rows() == 1
+        total_count = result.data["total_count"].to_pylist()[0]
+        assert total_count == 5  # All records from both files

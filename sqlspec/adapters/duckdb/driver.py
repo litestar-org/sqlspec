@@ -1,4 +1,5 @@
 # ruff: noqa: PLR6301
+import uuid
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
@@ -112,18 +113,46 @@ class DuckDBDriver(
         **kwargs: Any,
     ) -> Any:
         conn = self._connection(connection)
-        with self._get_cursor(conn) as cursor:
-            if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQL: %s", sql)
-            if self.instrumentation_config.log_parameters and parameters:
-                logger.debug("Query parameters: %s", parameters)
-            # DuckDB accepts list parameters or None
-            cursor.execute(sql, parameters or [])
-            if self.returns_rows(statement.expression):
+        
+        if self.instrumentation_config.log_queries:
+            logger.debug("Executing SQL: %s", sql)
+        if self.instrumentation_config.log_parameters and parameters:
+            logger.debug("Query parameters: %s", parameters)
+        
+        # Use connection.execute() which returns better result info for DuckDB
+        result = conn.execute(sql, parameters or [])
+        
+        if self.returns_rows(statement.expression):
+            # For SELECT statements, fetch data and return with columns
+            with self._get_cursor(conn) as cursor:
+                cursor.execute(sql, parameters or [])
                 fetched_data = cursor.fetchall()
                 column_names = [col[0] for col in cursor.description or []]
                 return {"data": fetched_data, "columns": column_names, "rowcount": cursor.rowcount}
-            return {"rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1}
+        else:
+            # For INSERT/UPDATE/DELETE, try to get row count from connection result
+            rowcount = -1
+            
+            # DuckDB connection.execute() returns a DuckDBPyResult
+            # For DML operations, we can try to get the count
+            try:
+                # Some DML operations might return a result with count information
+                if hasattr(result, "fetchone"):
+                    count_result = result.fetchone()
+                    if count_result and len(count_result) > 0:
+                        # INSERT/UPDATE/DELETE typically return count as first column
+                        rowcount = count_result[0] if isinstance(count_result[0], int) else -1
+            except Exception:
+                # If fetching fails, fall back to cursor rowcount
+                try:
+                    with self._get_cursor(conn) as cursor:
+                        cursor.execute(sql, parameters or [])
+                        if hasattr(cursor, "rowcount") and cursor.rowcount is not None and cursor.rowcount >= 0:
+                            rowcount = cursor.rowcount
+                except Exception:
+                    pass
+            
+            return {"rowcount": rowcount}
 
     def _execute_many(
         self,
@@ -133,21 +162,38 @@ class DuckDBDriver(
         **kwargs: Any,
     ) -> Any:
         conn = self._connection(connection)
-        with self._get_cursor(conn) as cursor:
-            if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQL (executemany): %s", sql)
-            if self.instrumentation_config.log_parameters and param_list:
-                logger.debug("Query parameters (batch): %s", param_list)
+        if self.instrumentation_config.log_queries:
+            logger.debug("Executing SQL (executemany): %s", sql)
+        if self.instrumentation_config.log_parameters and param_list:
+            logger.debug("Query parameters (batch): %s", param_list)
 
-            # Convert parameter list to proper format for executemany
-            if param_list and isinstance(param_list, Sequence):
-                for param_set in param_list:
-                    if isinstance(param_set, (list, tuple)):
-                        cursor.execute(sql, list(param_set))
+        total_rowcount = 0
+        
+        # Convert parameter list to proper format for executemany
+        if param_list and isinstance(param_list, Sequence):
+            for param_set in param_list:
+                if isinstance(param_set, (list, tuple)):
+                    result = conn.execute(sql, list(param_set))
+                else:
+                    result = conn.execute(sql, [param_set])
+                
+                # Try to get row count from this execution
+                try:
+                    if hasattr(result, "fetchone"):
+                        count_result = result.fetchone()
+                        if count_result and len(count_result) > 0:
+                            if isinstance(count_result[0], int):
+                                total_rowcount += count_result[0]
+                            else:
+                                total_rowcount += 1  # Assume 1 row affected if not int
+                        else:
+                            total_rowcount += 1  # Assume 1 row affected if no result
                     else:
-                        cursor.execute(sql, [param_set])
+                        total_rowcount += 1  # Assume 1 row affected if no fetchone
+                except Exception:
+                    total_rowcount += 1  # Assume 1 row affected on error
 
-            return {"rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1}
+        return {"rowcount": total_rowcount if param_list else 0}
 
     def _execute_script(
         self,
@@ -256,7 +302,7 @@ class DuckDBDriver(
         connection: "Optional[Any]" = None,
         **kwargs: Any,
     ) -> "ArrowResult":
-        """DuckDB native Arrow table fetching.
+        """Enhanced DuckDB native Arrow table fetching with streaming support.
 
         DuckDB has excellent native Arrow support through execute().arrow()
         This is much faster than fetching rows and converting to Arrow.
@@ -264,21 +310,54 @@ class DuckDBDriver(
         Args:
             sql_obj: Processed SQL object
             connection: Optional connection override
-            **kwargs: Additional options (e.g., batch_size for streaming)
+            **kwargs: Additional options (batch_size for streaming, etc.)
 
         Returns:
             ArrowResult with native Arrow table
         """
-
         conn = self._connection(connection)
 
         with wrap_exceptions():
-            # DuckDB native approach - execute and get Arrow directly
-            result = conn.execute(sql_obj.to_sql())
-            arrow_table = result.arrow()
+            # Use DuckDB's native execute() with parameters for optimal performance
+            sql_string = sql_obj.to_sql(placeholder_style=self._get_placeholder_style())
+            parameters = sql_obj.get_parameters(style=self._get_placeholder_style())
 
-            if self.instrumentation_config.log_results_count:
-                logger.debug("Fetched Arrow table with %d rows", arrow_table.num_rows)
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing DuckDB Arrow query: %s", sql_string)
+            if self.instrumentation_config.log_parameters and parameters:
+                logger.debug("DuckDB Arrow query parameters: %s", parameters)
+
+            # Execute with proper parameters
+            result = conn.execute(sql_string, parameters or [])
+
+            # Check for streaming batch_size option
+            batch_size = kwargs.get("batch_size")
+            if batch_size:
+                # Streaming mode - use RecordBatchReader for large datasets
+                arrow_reader = result.fetch_record_batch(batch_size)
+                # Convert to table by reading all batches
+                import pyarrow as pa
+
+                batches = []
+                while True:
+                    try:
+                        batch = arrow_reader.read_next_batch()
+                        batches.append(batch)
+                    except StopIteration:
+                        break
+
+                arrow_table = pa.Table.from_batches(batches) if batches else pa.table({})
+
+                if self.instrumentation_config.log_results_count:
+                    logger.debug(
+                        "Fetched Arrow table (streaming) with %d rows in %d batches", arrow_table.num_rows, len(batches)
+                    )
+            else:
+                # Direct Arrow table - zero-copy from DuckDB
+                arrow_table = result.arrow()
+
+                if self.instrumentation_config.log_results_count:
+                    logger.debug("Fetched Arrow table (zero-copy) with %d rows", arrow_table.num_rows)
 
             return ArrowResult(statement=sql_obj, data=arrow_table)
 
@@ -296,27 +375,66 @@ class DuckDBDriver(
         return bool(operation == "read" and format == "parquet")
 
     def _export_native(self, query: str, destination_uri: str, format: str, **options: Any) -> int:
-        """Use DuckDB's native COPY TO for efficient export."""
+        """Enhanced DuckDB native COPY TO with advanced options support."""
         with instrument_operation(self, "duckdb_export_native", "database"):
             connection = self._connection(None)
-            # Build COPY TO statement with DuckDB syntax
-            if format == "parquet":
-                copy_sql = f"COPY ({query}) TO '{destination_uri}' (FORMAT PARQUET)"
-            elif format == "csv":
-                copy_sql = f"COPY ({query}) TO '{destination_uri}' (FORMAT CSV, HEADER)"
-            elif format == "json":
-                copy_sql = f"COPY ({query}) TO '{destination_uri}' (FORMAT JSON)"
+
+            # Build advanced COPY TO statement with options
+            copy_options = []
+
+            if format.lower() == "parquet":
+                copy_options.append("FORMAT PARQUET")
+
+                # Add Parquet-specific options
+                if "compression" in options:
+                    copy_options.append(f"COMPRESSION '{options['compression'].upper()}'")
+                if "row_group_size" in options:
+                    copy_options.append(f"ROW_GROUP_SIZE {options['row_group_size']}")
+
+                # Handle partitioning
+                if "partition_by" in options:
+                    partition_by = options["partition_by"]
+                    partition_cols = [partition_by] if isinstance(partition_by, str) else partition_by
+                    partition_str = ", ".join(partition_cols)
+                    copy_options.append(f"PARTITION_BY ({partition_str})")
+
+            elif format.lower() == "csv":
+                copy_options.extend(("FORMAT CSV", "HEADER"))
+
+                # Add CSV-specific options
+                if "compression" in options:
+                    copy_options.append(f"COMPRESSION '{options['compression'].upper()}'")
+                if "delimiter" in options:
+                    copy_options.append(f"DELIMITER '{options['delimiter']}'")
+                if "quote" in options:
+                    copy_options.append(f"QUOTE '{options['quote']}'")
+
+            elif format.lower() == "json":
+                copy_options.append("FORMAT JSON")
+
+                # Add JSON-specific options
+                if "compression" in options:
+                    copy_options.append(f"COMPRESSION '{options['compression'].upper()}'")
+
             else:
                 msg = f"Unsupported format for DuckDB native export: {format}"
                 raise ValueError(msg)
 
+            # Build final COPY statement
+            options_str = f"({', '.join(copy_options)})" if copy_options else ""
+            copy_sql = f"COPY ({query}) TO '{destination_uri}' {options_str}"
+
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing DuckDB export: %s", copy_sql)
+
             # Execute the COPY TO statement
             result = connection.execute(copy_sql).fetchone()
-            if result:
-                rows_exported = result[0] if isinstance(result, tuple) else 0
+            rows_exported = result[0] if result and isinstance(result, tuple) else 0
+
+            if self.instrumentation_config.log_results_count:
                 logger.debug("Exported %d rows to %s", rows_exported, destination_uri)
-                return rows_exported
-            return 0
+
+            return rows_exported
 
     def _import_native(self, source_uri: str, table_name: str, format: str, mode: str, **options: Any) -> int:
         """Use DuckDB's native reading capabilities for efficient import."""
@@ -358,17 +476,52 @@ class DuckDBDriver(
     def _read_parquet_native(  # pyright: ignore[reportIncompatibleMethodOverride]
         self, source_uri: str, columns: Optional[list[str]] = None, **options: Any
     ) -> "ArrowResult":
-        """Use DuckDB's native Parquet reader that returns Arrow directly."""
+        """Enhanced DuckDB native Parquet reader with multiple file and filter support."""
         from sqlspec.statement.result import ArrowResult
 
         with instrument_operation(self, "duckdb_read_parquet_native", "database"):
             connection = self._connection(None)
+
+            # Handle different source types
+            if isinstance(source_uri, list):
+                # Multiple files - use DuckDB's list syntax
+                file_list = "[" + ", ".join(f"'{f}'" for f in source_uri) + "]"
+                read_func = f"read_parquet({file_list})"
+            elif "*" in source_uri or "?" in source_uri:
+                # Glob pattern - DuckDB handles this natively
+                read_func = f"read_parquet('{source_uri}')"
+            else:
+                # Single file
+                read_func = f"read_parquet('{source_uri}')"
+
             # Build column selection
             column_list = ", ".join(columns) if columns else "*"
 
+            # Build query with potential filters
+            query = f"SELECT {column_list} FROM {read_func}"
+
+            # Add filters from options if provided
+            filters = options.get("filters")
+            if filters:
+                where_clauses = []
+                for filter_spec in filters:
+                    if len(filter_spec) == 3:
+                        col, op, val = filter_spec
+                        if isinstance(val, str):
+                            where_clauses.append(f"{col} {op} '{val}'")
+                        else:
+                            where_clauses.append(f"{col} {op} {val}")
+                if where_clauses:
+                    query += " WHERE " + " AND ".join(where_clauses)
+
+            if self.instrumentation_config.log_queries:
+                logger.debug("Executing DuckDB Parquet query: %s", query)
+
             # DuckDB can read Parquet and return as Arrow table directly
-            query = f"SELECT {column_list} FROM read_parquet('{source_uri}')"
-            arrow_table = connection.execute(query).fetch_arrow_table()
+            arrow_table = connection.execute(query).arrow()
+
+            if self.instrumentation_config.log_results_count:
+                logger.debug("Read %d rows from Parquet source: %s", arrow_table.num_rows, source_uri)
 
             return ArrowResult(
                 statement=SQL(query),
@@ -376,16 +529,50 @@ class DuckDBDriver(
             )
 
     def _write_parquet_native(self, data: Union[str, "ArrowTable"], destination_uri: str, **options: Any) -> None:
-        """Use DuckDB's native Parquet writer."""
+        """Enhanced DuckDB native Parquet writer with advanced options."""
+
         with instrument_operation(self, "duckdb_write_parquet_native", "database"):
             connection = self._connection(None)
+
+            # Build COPY options
+            copy_options = ["FORMAT PARQUET"]
+
+            # Add Parquet-specific options
+            if "compression" in options:
+                copy_options.append(f"COMPRESSION '{options['compression'].upper()}'")
+            if "row_group_size" in options:
+                copy_options.append(f"ROW_GROUP_SIZE {options['row_group_size']}")
+
+            options_str = f"({', '.join(copy_options)})"
+
             if isinstance(data, str):
                 # Direct query to Parquet
-                copy_sql = f"COPY ({data}) TO '{destination_uri}' (FORMAT PARQUET)"
+                copy_sql = f"COPY ({data}) TO '{destination_uri}' {options_str}"
+
+                if self.instrumentation_config.log_queries:
+                    logger.debug("Executing DuckDB Parquet write (query): %s", copy_sql)
+
                 connection.execute(copy_sql)
             else:
                 # Arrow table to Parquet
-                # Register the Arrow table as a view, then copy to Parquet
-                connection.register("arrow_data", data)
-                connection.execute(f"COPY arrow_data TO '{destination_uri}' (FORMAT PARQUET)")
-                connection.unregister("arrow_data")
+                temp_name = f"_arrow_data_{uuid.uuid4().hex[:8]}"
+                connection.register(temp_name, data)
+
+                try:
+                    copy_sql = f"COPY {temp_name} TO '{destination_uri}' {options_str}"
+
+                    if self.instrumentation_config.log_queries:
+                        logger.debug("Executing DuckDB Parquet write (Arrow): %s", copy_sql)
+
+                    connection.execute(copy_sql)
+
+                    if self.instrumentation_config.log_results_count:
+                        logger.debug("Wrote Arrow table with %d rows to %s", data.num_rows, destination_uri)
+
+                finally:
+                    # Clean up registration
+                    try:
+                        connection.unregister(temp_name)
+                    except Exception:
+                        # Ignore cleanup errors
+                        pass

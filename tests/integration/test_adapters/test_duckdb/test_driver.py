@@ -184,8 +184,8 @@ def test_select_arrow(duckdb_session: DuckDBDriver, params: Any, style: ParamSty
         assert isinstance(arrow_result, ArrowResult)
         arrow_table = arrow_result.data
         assert isinstance(arrow_table, pa.Table)
-        assert arrow_table.num_rows() == 1
-        assert arrow_table.num_columns() == 2
+        assert arrow_table.num_rows == 1
+        assert arrow_table.num_columns == 2
         assert arrow_table.column_names == ["name", "id"]
         assert arrow_table.column("name").to_pylist() == ["arrow_name"]
         assert arrow_table.column("id").to_pylist() == [1]
@@ -221,7 +221,7 @@ def test_execute_script(duckdb_session: DuckDBDriver) -> None:
     """
 
     result = duckdb_session.execute_script(script)
-    assert isinstance(result, str)
+    assert isinstance(result, SQLResult)
 
     # Verify script executed successfully
     select_result = duckdb_session.execute("SELECT COUNT(*) as count FROM test_table")
@@ -359,7 +359,7 @@ def test_duckdb_complex_queries(duckdb_session: DuckDBDriver) -> None:
     """
 
     result = duckdb_session.execute(complex_query)
-    assert result.num_rows() == 3
+    assert result.total_count == 3
 
     # Engineering should have highest average salary
     engineering_row = next(row for row in result.data if row["dept_name"] == "Engineering")
@@ -414,7 +414,7 @@ def test_duckdb_window_functions(duckdb_session: DuckDBDriver) -> None:
     """
 
     result = duckdb_session.execute(window_query)
-    assert result.num_rows() == 5
+    assert result.total_count == 5
 
     # Verify window function results
     product_a_rows = [row for row in result.data if row["product"] == "Product A"]
@@ -537,8 +537,8 @@ def test_duckdb_arrow_integration_comprehensive(duckdb_session: DuckDBDriver) ->
     assert isinstance(arrow_result, ArrowResult)
     arrow_table = arrow_result.data
     assert isinstance(arrow_table, pa.Table)
-    assert arrow_table.num_rows() == 3  # 3 active records
-    assert arrow_table.num_columns() == 3
+    assert arrow_table.num_rows == 3  # 3 active records
+    assert arrow_table.num_columns == 3
     assert arrow_table.column_names == ["id", "name", "value"]
 
     # Verify Arrow data
@@ -562,8 +562,8 @@ def test_duckdb_arrow_integration_comprehensive(duckdb_session: DuckDBDriver) ->
     """)
 
     agg_table = agg_arrow_result.data
-    assert agg_table.num_rows() == 2  # true and false groups
-    assert agg_table.num_columns() == 3
+    assert agg_table.num_rows == 2  # true and false groups
+    assert agg_table.num_columns == 3
 
     # Clean up
     duckdb_session.execute_script("DROP TABLE arrow_test")
@@ -631,7 +631,7 @@ def test_duckdb_with_schema_type_conversion(duckdb_session: DuckDBDriver) -> Non
     )
 
     assert isinstance(result, SQLResult)
-    assert result.num_rows() == 3
+    assert result.total_count == 3
 
     # Verify converted data types
     for i, record in enumerate(result.data, 1):

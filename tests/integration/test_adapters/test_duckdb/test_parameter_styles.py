@@ -30,13 +30,13 @@ def duckdb_params_session() -> "Generator[DuckDBDriver, None, None]":
         """)
         # Insert test data
         session.execute(
-            "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)", ("test1", 100, "First test")
+            "INSERT INTO test_params (id, name, value, description) VALUES (?, ?, ?, ?)", (1, "test1", 100, "First test")
         )
         session.execute(
-            "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)", ("test2", 200, "Second test")
+            "INSERT INTO test_params (id, name, value, description) VALUES (?, ?, ?, ?)", (2, "test2", 200, "Second test")
         )
         session.execute(
-            "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)", ("test3", 300, None)
+            "INSERT INTO test_params (id, name, value, description) VALUES (?, ?, ?, ?)", (3, "test3", 300, None)
         )  # NULL description
         yield session
 
@@ -129,8 +129,8 @@ def test_duckdb_null_parameters(duckdb_params_session: DuckDBDriver) -> None:
 
     # Test inserting NULL with parameters
     duckdb_params_session.execute(
-        "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)",
-        ("null_param_test", 400, None),
+        "INSERT INTO test_params (id, name, value, description) VALUES (?, ?, ?, ?)",
+        (4, "null_param_test", 400, None),
     )
 
     null_result = duckdb_params_session.execute(
@@ -184,11 +184,11 @@ def test_duckdb_parameter_with_in_clause(duckdb_params_session: DuckDBDriver) ->
     """Test parameters with IN clause."""
     # Insert additional test data
     duckdb_params_session.execute_many(
-        "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)",
+        "INSERT INTO test_params (id, name, value, description) VALUES (?, ?, ?, ?)",
         [
-            ("alpha", 10, "Alpha test"),
-            ("beta", 20, "Beta test"),
-            ("gamma", 30, "Gamma test"),
+            (5, "alpha", 10, "Alpha test"),
+            (6, "beta", 20, "Beta test"),
+            (7, "gamma", 30, "Gamma test"),
         ],
     )
 
@@ -212,7 +212,7 @@ def test_duckdb_parameter_with_sql_object(duckdb_params_session: DuckDBDriver) -
 
     # Test with qmark style
     sql_obj = SQL("SELECT * FROM test_params WHERE value > ?", parameters=[150])
-    result = duckdb_params_session.execute_statement(sql_obj)
+    result = duckdb_params_session.execute(sql_obj)
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -221,7 +221,7 @@ def test_duckdb_parameter_with_sql_object(duckdb_params_session: DuckDBDriver) -
 
     # Test with numeric style
     numeric_sql = SQL("SELECT * FROM test_params WHERE value < $1", parameters=[150])
-    numeric_result = duckdb_params_session.execute_statement(numeric_sql)
+    numeric_result = duckdb_params_session.execute(numeric_sql)
 
     assert isinstance(numeric_result, SQLResult)
     assert numeric_result.data is not None
@@ -256,9 +256,9 @@ def test_duckdb_parameter_data_types(duckdb_params_session: DuckDBDriver) -> Non
             data,
         )
 
-    # Verify data with parameters
+    # Verify data with parameters (using approximate comparison for float)
     result = duckdb_params_session.execute(
-        "SELECT * FROM test_types WHERE int_val = ? AND real_val = ?",
+        "SELECT * FROM test_types WHERE int_val = ? AND ABS(real_val - ?) < 0.001",
         (42, 3.14),
     )
 
@@ -272,8 +272,8 @@ def test_duckdb_parameter_edge_cases(duckdb_params_session: DuckDBDriver) -> Non
     """Test edge cases for DuckDB parameters."""
     # Empty string parameter
     duckdb_params_session.execute(
-        "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)",
-        ("", 999, "Empty name test"),
+        "INSERT INTO test_params (id, name, value, description) VALUES (?, ?, ?, ?)",
+        (8, "", 999, "Empty name test"),
     )
 
     empty_result = duckdb_params_session.execute(
@@ -286,8 +286,8 @@ def test_duckdb_parameter_edge_cases(duckdb_params_session: DuckDBDriver) -> Non
     # Very long string parameter
     long_string = "x" * 1000
     duckdb_params_session.execute(
-        "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)",
-        ("long_test", 1000, long_string),
+        "INSERT INTO test_params (id, name, value, description) VALUES (?, ?, ?, ?)",
+        (9, "long_test", 1000, long_string),
     )
 
     long_result = duckdb_params_session.execute(
@@ -302,13 +302,13 @@ def test_duckdb_parameter_with_analytics_functions(duckdb_params_session: DuckDB
     """Test parameters with DuckDB analytics functions."""
     # Insert time series data for analytics
     duckdb_params_session.execute_many(
-        "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)",
+        "INSERT INTO test_params (id, name, value, description) VALUES (?, ?, ?, ?)",
         [
-            ("analytics1", 10, "2023-01-01"),
-            ("analytics2", 20, "2023-01-02"),
-            ("analytics3", 30, "2023-01-03"),
-            ("analytics4", 40, "2023-01-04"),
-            ("analytics5", 50, "2023-01-05"),
+            (10, "analytics1", 10, "2023-01-01"),
+            (11, "analytics2", 20, "2023-01-02"),
+            (12, "analytics3", 30, "2023-01-03"),
+            (13, "analytics4", 40, "2023-01-04"),
+            (14, "analytics5", 50, "2023-01-05"),
         ],
     )
 
@@ -504,12 +504,12 @@ def test_duckdb_parameter_with_aggregate_functions(duckdb_params_session: DuckDB
     """Test parameters with DuckDB aggregate functions."""
     # Insert more test data for aggregation
     duckdb_params_session.execute_many(
-        "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)",
+        "INSERT INTO test_params (id, name, value, description) VALUES (?, ?, ?, ?)",
         [
-            ("agg1", 15, "Group A"),
-            ("agg2", 25, "Group A"),
-            ("agg3", 35, "Group B"),
-            ("agg4", 45, "Group B"),
+            (15, "agg1", 15, "Group A"),
+            (16, "agg2", 25, "Group A"),
+            (17, "agg3", 35, "Group B"),
+            (18, "agg4", 45, "Group B"),
         ],
     )
 
@@ -542,11 +542,11 @@ def test_duckdb_parameter_performance(duckdb_params_session: DuckDBDriver) -> No
     import time
 
     # Create larger dataset for performance testing
-    batch_data = [(f"Perf Item {i}", i, f"PERF{i % 5}") for i in range(1000)]
+    batch_data = [(i + 19, f"Perf Item {i}", i, f"PERF{i % 5}") for i in range(1000)]
 
     start_time = time.time()
     duckdb_params_session.execute_many(
-        "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)",
+        "INSERT INTO test_params (id, name, value, description) VALUES (?, ?, ?, ?)",
         batch_data,
     )
     end_time = time.time()
