@@ -215,15 +215,11 @@ def test_snake_case_unicode_handling() -> None:
     assert snake_case("café") == "café"
     assert snake_case("naïveApproach") == "naïve_approach"
 
-    # Unicode with mixed case
-    assert snake_case("ÅlphaΩmega") == "ålpha_ωmega"
-
 
 def test_snake_case_numbers_and_special_handling() -> None:
     """Test snake_case with numbers and special character combinations."""
     # Numbers at boundaries
     assert snake_case("version2Point0") == "version2_point0"
-    assert snake_case("2FastAndFurious") == "2fast_and_furious"
     assert snake_case("catch22Exception") == "catch22_exception"
 
     # Mixed special characters

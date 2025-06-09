@@ -8,7 +8,7 @@ from sqlglot import exp
 
 from sqlspec.base import SQLSpec
 from sqlspec.config import NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
-from sqlspec.driver import CommonDriverAttributes
+from sqlspec.driver import CommonDriverAttributesMixin
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -190,14 +190,14 @@ def async_non_pool_config() -> MockAsyncNonPoolConfig:
 
 
 @pytest.fixture(scope="session")
-def driver_attributes() -> CommonDriverAttributes[Any]:
+def driver_attributes() -> CommonDriverAttributesMixin[Any]:
     """Create a CommonDriverAttributes instance for testing the SQL detection.
 
     Returns:
         A CommonDriverAttributes instance.
     """
 
-    class TestDriverAttributes(CommonDriverAttributes[Any]):
+    class TestDriverAttributes(CommonDriverAttributesMixin[Any]):
         def __init__(self) -> None:
             # Create a mock connection for the test
             mock_connection = MockConnection()
@@ -283,7 +283,7 @@ STATEMENT_RETURNS_ROWS_TEST_CASES = [
 
 @pytest.mark.parametrize(("sql", "expected_returns_rows", "description"), STATEMENT_RETURNS_ROWS_TEST_CASES)
 def test_returns_rows(
-    driver_attributes: CommonDriverAttributes[Any], sql: str, expected_returns_rows: bool, description: str
+    driver_attributes: CommonDriverAttributesMixin[Any], sql: str, expected_returns_rows: bool, description: str
 ) -> None:
     """Test the robust SQL statement detection method.
 
@@ -307,7 +307,7 @@ def test_returns_rows(
         pytest.fail(f"{description}: Failed to parse SQL '{sql}': {e}")
 
 
-def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAttributes[Any]) -> None:
+def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAttributesMixin[Any]) -> None:
     """Test that returns_rows handles invalid expressions gracefully."""
     # Test with None expression
     result = driver_attributes.returns_rows(None)
@@ -326,7 +326,7 @@ def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAtt
         pass
 
 
-def test_returns_rows_expression_types(driver_attributes: CommonDriverAttributes[Any]) -> None:
+def test_returns_rows_expression_types(driver_attributes: CommonDriverAttributesMixin[Any]) -> None:
     """Test specific sqlglot expression types to ensure comprehensive coverage."""
     select_expr = exp.Select()
     assert driver_attributes.returns_rows(select_expr) is True, "Select expression should return rows"

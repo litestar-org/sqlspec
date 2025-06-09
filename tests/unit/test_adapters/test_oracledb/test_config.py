@@ -53,16 +53,16 @@ def test_oracledb_field_constants() -> None:
 def test_oracledb_config_basic_creation() -> None:
     """Test OracleDB config creation with basic parameters."""
     # Test minimal config creation
-    config = OracleSyncConfig(dsn="localhost:1521/XEPDB1", user="test_user", password="test_password")
-    assert config.dsn == "localhost:1521/XEPDB1"
+    config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
+    assert config.dsn == "localhost:1521/freepdb1"
     assert config.user == "test_user"
     assert config.password == "test_password"
 
     # Test with all parameters
     config_full = OracleSyncConfig(
-        dsn="localhost:1521/XEPDB1", user="test_user", password="test_password", extras={"custom": "value"}
+        dsn="localhost:1521/freepdb1", user="test_user", password="test_password", extras={"custom": "value"}
     )
-    assert config.dsn == "localhost:1521/XEPDB1"
+    assert config.dsn == "localhost:1521/freepdb1"
     assert config.user == "test_user"
     assert config.password == "test_password"
     assert config_full.extras["custom"] == "value"
@@ -72,7 +72,7 @@ def test_oracledb_config_extras_handling() -> None:
     """Test OracleDB config extras parameter handling."""
     # Test with explicit extras
     config = OracleSyncConfig(
-        dsn="localhost:1521/XEPDB1",
+        dsn="localhost:1521/freepdb1",
         user="test_user",
         password="test_password",
         extras={"custom_param": "value", "debug": True},
@@ -82,7 +82,11 @@ def test_oracledb_config_extras_handling() -> None:
 
     # Test with kwargs going to extras
     config2 = OracleSyncConfig(
-        dsn="localhost:1521/XEPDB1", user="test_user", password="test_password", unknown_param="test", another_param=42
+        dsn="localhost:1521/freepdb1",
+        user="test_user",
+        password="test_password",
+        unknown_param="test",
+        another_param=42,
     )
     assert config2.extras["unknown_param"] == "test"
     assert config2.extras["another_param"] == 42
@@ -91,7 +95,7 @@ def test_oracledb_config_extras_handling() -> None:
 def test_oracledb_config_initialization() -> None:
     """Test OracleDB config initialization."""
     # Test with default parameters
-    config = OracleSyncConfig(dsn="localhost:1521/XEPDB1", user="test_user", password="test_password")
+    config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
     assert isinstance(config.statement_config, SQLConfig)
     assert isinstance(config.instrumentation, InstrumentationConfig)
 
@@ -100,7 +104,7 @@ def test_oracledb_config_initialization() -> None:
     custom_instrumentation = InstrumentationConfig(log_queries=True)
 
     config = OracleSyncConfig(
-        dsn="localhost:1521/XEPDB1",
+        dsn="localhost:1521/freepdb1",
         user="test_user",
         password="test_password",
         statement_config=custom_statement_config,
@@ -112,7 +116,7 @@ def test_oracledb_config_initialization() -> None:
 
 def test_oracledb_config_provide_session() -> None:
     """Test OracleDB config provide_session context manager."""
-    config = OracleSyncConfig(dsn="localhost:1521/XEPDB1", user="test_user", password="test_password")
+    config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
 
     # Test session context manager behavior
     with config.provide_session() as session:
@@ -125,20 +129,20 @@ def test_oracledb_config_provide_session() -> None:
 
 def test_oracledb_config_driver_type() -> None:
     """Test OracleDB config driver_type property."""
-    config = OracleSyncConfig(dsn="localhost:1521/XEPDB1", user="test_user", password="test_password")
+    config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
     assert config.driver_type is OracleSyncDriver
 
 
 def test_oracledb_config_is_async() -> None:
     """Test OracleDB config __is_async__ attribute."""
-    config = OracleSyncConfig(dsn="localhost:1521/XEPDB1", user="test_user", password="test_password")
+    config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
     assert config.__is_async__ is False
     assert OracleSyncConfig.__is_async__ is False
 
 
 def test_oracledb_config_supports_connection_pooling() -> None:
     """Test OracleDB config __supports_connection_pooling__ attribute."""
-    config = OracleSyncConfig(dsn="localhost:1521/XEPDB1", user="test_user", password="test_password")
+    config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
     assert config.__supports_connection_pooling__ is True
     assert OracleSyncConfig.__supports_connection_pooling__ is True
 
