@@ -22,7 +22,7 @@ async def asyncmy_arrow_session(mysql_service: MySQLService) -> "AsyncGenerator[
         port=mysql_service.port,
         user=mysql_service.user,
         password=mysql_service.password,
-        database=mysql_service.database,
+        database=mysql_service.db,
         statement_config=SQLConfig(strict_mode=False),
     )
 

@@ -18,22 +18,14 @@ from sqlspec.statement.sql import SQLConfig
 def bigquery_arrow_session(bigquery_service: BigQueryService) -> "Generator[BigQueryDriver, None, None]":
     """Create a BigQuery session for Arrow testing using real BigQuery service."""
     config = BigQueryConfig(
-        project=bigquery_service.project_id,
-        location=bigquery_service.location,
         statement_config=SQLConfig(strict_mode=False),
     )
 
     with config.provide_session() as session:
         # Create test dataset and table
-        dataset_id = "test_arrow_dataset.test_arrow_data_dataset"
-        table_id = "test_arrow_dataset.test_arrow_data_data"
 
-        session.execute_script(f"""
-            CREATE SCHEMA IF NOT EXISTS `{bigquery_service.project_id}.{dataset_id}`
-        """)
-
-        session.execute_script(f"""
-            CREATE OR REPLACE TABLE `{bigquery_service.project_id}.{dataset_id}.{table_id}` (
+        session.execute_script("""
+            CREATE OR REPLACE TABLE test_arrow (
                 id INT64,
                 name STRING,
                 value INT64,
@@ -42,8 +34,8 @@ def bigquery_arrow_session(bigquery_service: BigQueryService) -> "Generator[BigQ
             )
         """)
 
-        session.execute_script(f"""
-            INSERT INTO `{bigquery_service.project_id}.{dataset_id}.{table_id}` VALUES
+        session.execute_script("""
+            INSERT INTO test_arrow VALUES
                 (1, 'Product A', 100, 19.99, true),
                 (2, 'Product B', 200, 29.99, true),
                 (3, 'Product C', 300, 39.99, false),
@@ -55,9 +47,9 @@ def bigquery_arrow_session(bigquery_service: BigQueryService) -> "Generator[BigQ
 
 
 @pytest.mark.xdist_group("bigquery")
-def test_bigquery_fetch_arrow_table(bigquery_arrow_session: BigQueryDriver) -> None:
+def test_bigquery_fetch_arrow_table(bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test fetch_arrow_table method with BigQuery."""
-    result = bigquery_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow_dataset.test_arrow_data ORDER BY id")
+    result = bigquery_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow ORDER BY id")
 
     assert isinstance(result, ArrowResult)
     assert isinstance(result, ArrowResult)
@@ -82,7 +74,7 @@ def test_bigquery_to_parquet(bigquery_arrow_session: BigQueryDriver) -> None:
         output_path = Path(tmpdir) / "test_output.parquet"
 
         bigquery_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow_dataset.test_arrow_data WHERE is_active = true",
+            "SELECT * FROM test_arrow WHERE is_active = true",
             str(output_path),
         )
 
@@ -102,7 +94,7 @@ def test_bigquery_to_parquet(bigquery_arrow_session: BigQueryDriver) -> None:
 def test_bigquery_arrow_with_parameters(bigquery_arrow_session: BigQueryDriver) -> None:
     """Test fetch_arrow_table with parameters on BigQuery."""
     result = bigquery_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow_dataset.test_arrow_data WHERE value >= @min_value AND value <= @max_value ORDER BY value",
+        "SELECT * FROM test_arrow WHERE value >= @min_value AND value <= @max_value ORDER BY value",
         {"min_value": 200, "max_value": 400},
     )
 
@@ -116,7 +108,7 @@ def test_bigquery_arrow_with_parameters(bigquery_arrow_session: BigQueryDriver) 
 def test_bigquery_arrow_empty_result(bigquery_arrow_session: BigQueryDriver) -> None:
     """Test fetch_arrow_table with empty result on BigQuery."""
     result = bigquery_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow_dataset.test_arrow_data WHERE value > @threshold",
+        "SELECT * FROM test_arrow WHERE value > @threshold",
         {"threshold": 1000},
     )
 
@@ -128,7 +120,7 @@ def test_bigquery_arrow_empty_result(bigquery_arrow_session: BigQueryDriver) -> 
 @pytest.mark.xdist_group("bigquery")
 def test_bigquery_arrow_data_types(bigquery_arrow_session: BigQueryDriver) -> None:
     """Test Arrow data type mapping for BigQuery."""
-    result = bigquery_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow_dataset.test_arrow_data LIMIT 1")
+    result = bigquery_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow LIMIT 1")
 
     assert isinstance(result, ArrowResult)
 
@@ -153,7 +145,7 @@ def test_bigquery_to_arrow_with_sql_object(bigquery_arrow_session: BigQueryDrive
     from sqlspec.statement.sql import SQL
 
     sql_obj = SQL(
-        "SELECT name, value FROM test_arrow_dataset.test_arrow_data WHERE is_active = @active",
+        "SELECT name, value FROM test_arrow WHERE is_active = @active",
         parameters={"active": True},
     )
     result = bigquery_arrow_session.fetch_arrow_table(sql_obj)
@@ -179,7 +171,7 @@ def test_bigquery_arrow_with_bigquery_functions(bigquery_arrow_session: BigQuery
             CONCAT('Product: ', name) as formatted_name,
             ROUND(price * 1.1, 2) as price_with_tax,
             CURRENT_TIMESTAMP() as query_time
-        FROM test_arrow_dataset.test_arrow_data
+        FROM test_arrow
         WHERE value BETWEEN @min_val AND @max_val
         ORDER BY value
     """,
@@ -207,7 +199,7 @@ def test_bigquery_arrow_with_arrays_and_structs(bigquery_arrow_session: BigQuery
             value,
             [name, CAST(value AS STRING)] as name_value_array,
             STRUCT(name as product_name, value as product_value) as product_struct
-        FROM test_arrow_dataset.test_arrow_data
+        FROM test_arrow
         WHERE is_active = @active
         ORDER BY value
     """,
@@ -236,7 +228,7 @@ def test_bigquery_arrow_with_window_functions(bigquery_arrow_session: BigQueryDr
             ROW_NUMBER() OVER (ORDER BY value DESC) as rank_by_value,
             LAG(value) OVER (ORDER BY id) as prev_value,
             SUM(value) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as running_total
-        FROM test_arrow_dataset.test_arrow_data
+        FROM test_arrow
         ORDER BY id
     """)
 
@@ -269,7 +261,7 @@ def test_bigquery_arrow_with_ml_functions(bigquery_arrow_session: BigQueryDriver
                 WHEN value > 300 THEN 'high_value'
                 ELSE 'low_value'
             END as value_category
-        FROM test_arrow_dataset.test_arrow_data
+        FROM test_arrow
         ORDER BY value
     """)
 
@@ -298,7 +290,7 @@ def test_bigquery_parquet_export_with_partitioning(bigquery_arrow_session: BigQu
                 value,
                 is_active,
                 DATE(created_at) as partition_date
-            FROM test_arrow_dataset.test_arrow_data
+            FROM test_arrow
             WHERE is_active = @active
             """,
             str(output_path),

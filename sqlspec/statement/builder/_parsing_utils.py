@@ -45,7 +45,9 @@ def parse_column_expression(column_input: Union[str, exp.Expression]) -> exp.Exp
     return exp.column(column_input)
 
 
-def parse_table_expression(table_input: Union[str, exp.Expression], explicit_alias: Optional[str] = None) -> exp.Expression:
+def parse_table_expression(
+    table_input: Union[str, exp.Expression], explicit_alias: Optional[str] = None
+) -> exp.Expression:
     """Parse a table input that may contain an alias.
 
     Handles cases like:
@@ -76,6 +78,7 @@ def parse_table_expression(table_input: Union[str, exp.Expression], explicit_ali
     # Use SQLGlot's parser to handle table expressions with aliases
     try:
         import sqlglot
+
         # Parse as FROM clause and extract the table
         parsed = sqlglot.parse_one(f"FROM {table_input}")
         table_expr = parsed.find(exp.Table)
@@ -113,6 +116,7 @@ def parse_order_expression(order_input: Union[str, exp.Expression]) -> exp.Expre
     try:
         # Parse as ORDER BY clause and extract the expression
         import sqlglot
+
         parsed = sqlglot.parse_one(f"SELECT * FROM t ORDER BY {order_input}")
         select_expr = parsed.find(exp.Select)
         if select_expr and select_expr.args.get("order"):

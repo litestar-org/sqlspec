@@ -58,7 +58,7 @@ class PsycopgSyncDriver(
         )
 
     def _get_placeholder_style(self) -> ParameterStyle:
-        return ParameterStyle.PYFORMAT_NAMED
+        return ParameterStyle.PYFORMAT_POSITIONAL
 
     @staticmethod
     @contextmanager
@@ -88,7 +88,7 @@ class PsycopgSyncDriver(
 
         return self._execute(
             statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.get_parameters(style=self._get_placeholder_style()),
+            statement.parameters,  # Use raw merged parameters
             statement,
             connection=connection,
             **kwargs,
@@ -106,12 +106,59 @@ class PsycopgSyncDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            if self.instrumentation_config.log_parameters and parameters:
-                logger.debug("Query parameters: %s", parameters)
+            # TODO: why do we need this? we should use the normal parameter handling
+            # Debug logging for parameters
+            logger.debug("Raw parameters received: %s (type: %s)", parameters, type(parameters))
+
+            # Convert parameters to the format Psycopg expects
+            psycopg_params: Any = None
+            if parameters is not None:
+                if isinstance(parameters, dict):
+                    if not parameters:  # Empty dict
+                        psycopg_params = None
+                    elif all(key.startswith("param_") and key[6:].isdigit() for key in parameters):
+                        # Convert to positional list based on param indices
+                        param_list = []
+                        for i in range(len(parameters)):
+                            param_key = f"param_{i}"
+                            if param_key in parameters:
+                                param_list.append(parameters[param_key])
+                        psycopg_params = param_list
+                    else:
+                        # Use dict as-is for named parameters
+                        psycopg_params = parameters
+                elif isinstance(parameters, (list, tuple)):
+                    psycopg_params = parameters or None
+                else:
+                    psycopg_params = [parameters]
+
+            if self.instrumentation_config.log_parameters and psycopg_params:
+                logger.debug("Query parameters: %s", psycopg_params)
+
+            # Always log final params for debugging
+            logger.debug("Final psycopg_params: %s (type: %s)", psycopg_params, type(psycopg_params))
+
             with self._get_cursor(conn) as cursor:
-                # Psycopg accepts dict or None for parameters
-                cursor.execute(sql, parameters)
-                return cursor
+                # Psycopg accepts tuple, list, dict or None for parameters
+                cursor.execute(sql, psycopg_params)
+
+                # For SELECT queries, fetch data while cursor is still open
+                is_select = self.returns_rows(statement.expression)
+                # If expression is None (parsing disabled or failed), check SQL string
+                if not is_select and statement.expression is None:
+                    sql_upper = sql.strip().upper()
+                    is_select = any(sql_upper.startswith(prefix) for prefix in ["SELECT", "WITH", "VALUES", "TABLE"])
+
+                if is_select:
+                    fetched_data = cursor.fetchall()
+                    column_names = [col.name for col in cursor.description or []]
+                    return {"data": fetched_data, "column_names": column_names}
+                # For DML/DDL queries, extract cursor info while it's still valid
+                return {
+                    "rowcount": cursor.rowcount,
+                    "statusmessage": cursor.statusmessage,
+                    "description": cursor.description,
+                }
 
     def _execute_many(
         self,
@@ -129,7 +176,11 @@ class PsycopgSyncDriver(
             with self._get_cursor(conn) as cursor:
                 # Psycopg expects a list of parameter dicts for executemany
                 cursor.executemany(sql, param_list or [])
-                return cursor
+                return {
+                    "rowcount": cursor.rowcount,
+                    "statusmessage": cursor.statusmessage,
+                    "description": cursor.description,
+                }
 
     def _execute_script(
         self,
@@ -142,7 +193,8 @@ class PsycopgSyncDriver(
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL script: %s", script)
             with self._get_cursor(conn) as cursor:
-                cursor.execute(script_sql=script)
+                cursor.execute(script)
+                # For scripts, return the status message string so base driver can wrap it
                 return cursor.statusmessage or "SCRIPT EXECUTED"
 
     def _wrap_select_result(  # pyright: ignore
@@ -153,9 +205,9 @@ class PsycopgSyncDriver(
         **kwargs: Any,
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "psycopg_wrap_select", "database"):
-            cursor = result
-            fetched_data: list[PsycopgDictRow] = cursor.fetchall()
-            column_names = [col.name for col in cursor.description or []]
+            # Result is now a dict with 'data' and 'column_names'
+            fetched_data: list[PsycopgDictRow] = result["data"]
+            column_names = result["column_names"]
             rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
 
             if self.instrumentation_config.log_results_count:
@@ -199,10 +251,34 @@ class PsycopgSyncDriver(
                     metadata={"status_message": result},
                 )
 
+            # Handle dict result from _execute (DML/DDL operations)
+            if isinstance(result, dict) and "rowcount" in result:
+                rows_affected = result["rowcount"]
+                statusmessage = result.get("statusmessage", "")
+
+                # Handle RETURNING clause data
+                returned_data: list[dict[str, Any]] = []
+                if result.get("description"):
+                    # This means there was a RETURNING clause, but we can't fetch the data
+                    # because the cursor is already closed. This is a limitation.
+                    logger.debug("RETURNING clause detected but data not available")
+
+                if self.instrumentation_config.log_results_count:
+                    logger.debug("Execute operation affected %d rows", rows_affected)
+
+                return SQLResult[RowT](
+                    statement=statement,
+                    data=returned_data,
+                    rows_affected=rows_affected,
+                    operation_type=operation_type,
+                    metadata={"status_message": statusmessage},
+                )
+
+            # Handle cursor object (legacy path, should not be reached with new code)
             cursor = result
             rows_affected = getattr(cursor, "rowcount", -1)
 
-            returned_data: list[dict[str, Any]] = []
+            returned_data = []
             with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
                 if cursor.description:
                     try:
@@ -255,7 +331,7 @@ class PsycopgAsyncDriver(
         )
 
     def _get_placeholder_style(self) -> ParameterStyle:
-        return ParameterStyle.PYFORMAT_NAMED
+        return ParameterStyle.PYFORMAT_POSITIONAL
 
     @staticmethod
     @asynccontextmanager
@@ -285,7 +361,7 @@ class PsycopgAsyncDriver(
 
         return await self._execute(
             statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.get_parameters(style=self._get_placeholder_style()),
+            statement.parameters,  # Use raw merged parameters
             statement,
             connection=connection,
             **kwargs,
@@ -303,12 +379,54 @@ class PsycopgAsyncDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            if self.instrumentation_config.log_parameters and parameters:
-                logger.debug("Query parameters: %s", parameters)
+
+            # Convert parameters to the format Psycopg expects
+            # TODO: improve this.  why can't use just use parameter parsing?
+            psycopg_params: Any = None
+            if parameters is not None:
+                if isinstance(parameters, dict):
+                    if not parameters:  # Empty dict
+                        psycopg_params = None
+                    elif all(key.startswith("param_") and key[6:].isdigit() for key in parameters):
+                        # Convert to positional list based on param indices
+                        param_list = []
+                        for i in range(len(parameters)):
+                            param_key = f"param_{i}"
+                            if param_key in parameters:
+                                param_list.append(parameters[param_key])
+                        psycopg_params = param_list
+                    else:
+                        # Use dict as-is for named parameters
+                        psycopg_params = parameters
+                elif isinstance(parameters, (list, tuple)):
+                    psycopg_params = parameters or None
+                else:
+                    psycopg_params = [parameters]
+
+            if self.instrumentation_config.log_parameters and psycopg_params:
+                logger.debug("Query parameters: %s", psycopg_params)
+
             async with self._get_cursor(conn) as cursor:
-                # Psycopg accepts dict or None for parameters
-                await cursor.execute(sql, parameters)
-                return cursor
+                # Psycopg accepts tuple, list, dict or None for parameters
+                await cursor.execute(sql, psycopg_params)
+
+                # For SELECT queries, fetch data while cursor is still open
+                is_select = self.returns_rows(statement.expression)
+                # If expression is None (parsing disabled or failed), check SQL string
+                if not is_select and statement.expression is None:
+                    sql_upper = sql.strip().upper()
+                    is_select = any(sql_upper.startswith(prefix) for prefix in ["SELECT", "WITH", "VALUES", "TABLE"])
+
+                if is_select:
+                    fetched_data = await cursor.fetchall()
+                    column_names = [col.name for col in cursor.description or []]
+                    return {"data": fetched_data, "column_names": column_names}
+                # For DML/DDL queries, extract cursor info while it's still valid
+                return {
+                    "rowcount": cursor.rowcount,
+                    "statusmessage": cursor.statusmessage,
+                    "description": cursor.description,
+                }
 
     async def _execute_many(
         self,
@@ -326,7 +444,11 @@ class PsycopgAsyncDriver(
             async with self._get_cursor(conn) as cursor:
                 # Psycopg expects a list of parameter dicts for executemany
                 await cursor.executemany(sql, param_list or [])
-                return cursor
+                return {
+                    "rowcount": cursor.rowcount,
+                    "statusmessage": cursor.statusmessage,
+                    "description": cursor.description,
+                }
 
     async def _execute_script(
         self,
@@ -339,10 +461,9 @@ class PsycopgAsyncDriver(
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL script: %s", script)
             async with self._get_cursor(conn) as cursor:
-                await cursor.execute(script_sql=script)
-                with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
-                    return cursor.statusmessage
-                return "SCRIPT EXECUTED"
+                await cursor.execute(script)
+                # For scripts, return the status message string so base driver can wrap it
+                return cursor.statusmessage or "SCRIPT EXECUTED"
 
     async def _wrap_select_result(  # pyright: ignore
         self,
@@ -352,9 +473,9 @@ class PsycopgAsyncDriver(
         **kwargs: Any,
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         async with instrument_operation_async(self, "psycopg_wrap_select", "database"):
-            cursor = result
-            fetched_data: list[PsycopgDictRow] = await cursor.fetchall()
-            column_names = [col.name for col in cursor.description or []]
+            # Result is now a dict with 'data' and 'column_names'
+            fetched_data: list[PsycopgDictRow] = result["data"]
+            column_names = result["column_names"]
             rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
 
             if self.instrumentation_config.log_results_count:
@@ -398,10 +519,34 @@ class PsycopgAsyncDriver(
                     metadata={"status_message": result},
                 )
 
+            # Handle dict result from _execute (DML/DDL operations)
+            if isinstance(result, dict) and "rowcount" in result:
+                rows_affected = result["rowcount"]
+                statusmessage = result.get("statusmessage", "")
+
+                # Handle RETURNING clause data
+                returned_data: list[dict[str, Any]] = []
+                if result.get("description"):
+                    # This means there was a RETURNING clause, but we can't fetch the data
+                    # because the cursor is already closed. This is a limitation.
+                    logger.debug("RETURNING clause detected but data not available")
+
+                if self.instrumentation_config.log_results_count:
+                    logger.debug("Execute operation affected %d rows", rows_affected)
+
+                return SQLResult[RowT](
+                    statement=statement,
+                    data=returned_data,
+                    rows_affected=rows_affected,
+                    operation_type=operation_type,
+                    metadata={"status_message": statusmessage},
+                )
+
+            # Handle cursor object (legacy path, should not be reached with new code)
             cursor = result
             rows_affected = getattr(cursor, "rowcount", -1)
 
-            returned_data: list[dict[str, Any]] = []
+            returned_data = []
             with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
                 if cursor.description:
                     try:

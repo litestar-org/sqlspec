@@ -322,7 +322,7 @@ async def test_asyncpg_execute_many_with_arrays(asyncpg_batch_session: AsyncpgDr
 async def test_asyncpg_execute_many_with_json(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with JSON data on AsyncPG."""
     import json
-    
+
     # Create table with JSON column
     await asyncpg_batch_session.execute_script("""
         CREATE TABLE IF NOT EXISTS test_json (

@@ -161,9 +161,9 @@ class AsyncpgDriver(
                 logger.debug("Executing SQL (executemany): %s", sql)
             if self.instrumentation_config.log_parameters and params_list:
                 logger.debug("Query parameters (batch): %s", params_list)
-            
+
             result = await conn.executemany(sql, params_list)
-            
+
             # AsyncPG's executemany returns None, not a status string
             # We need to return information that _wrap_execute_result can use
             # Return a synthetic status message with the batch count
@@ -172,9 +172,8 @@ class AsyncpgDriver(
                 # This is the typical case for INSERT/UPDATE/DELETE operations
                 batch_size = len(params_list)
                 # Create a synthetic status message that our parser can understand
-                synthetic_status = f"INSERT 0 {batch_size}"  # Standard PostgreSQL format
-                return synthetic_status
-            
+                return f"INSERT 0 {batch_size}"  # Standard PostgreSQL format
+
             return result
 
     async def _execute_script(
@@ -252,12 +251,9 @@ class AsyncpgDriver(
                     operation_type = str(statement.expression.key).upper()
 
             rows_affected = 0  # Default
-            
+
             # Handle None result case gracefully
-            if result is None:
-                status_message = "UNKNOWN"
-            else:
-                status_message = str(result)  # Ensure it's a string
+            status_message = "UNKNOWN" if result is None else str(result)
 
             match = ASYNC_PG_STATUS_REGEX.match(status_message)
             if match:

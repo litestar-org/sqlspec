@@ -312,7 +312,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             try:
                 yield connection
             finally:
-                await connection.close()
+                connection.close()
 
     @asynccontextmanager
     async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncmyDriver, None]:

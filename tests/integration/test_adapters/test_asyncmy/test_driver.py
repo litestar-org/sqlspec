@@ -108,7 +108,7 @@ async def test_asyncmy_parameter_styles(asyncmy_session: AsyncmyDriver, params: 
     result = await asyncmy_session.execute(sql, params)
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.num_rows() == 1
+    assert len(result) == 1
     assert result.data[0]["name"] == "test_value"
 
 
@@ -146,8 +146,9 @@ async def test_asyncmy_execute_script(asyncmy_session: AsyncmyDriver) -> None:
     """
 
     result = await asyncmy_session.execute_script(script)
-    # Script execution typically returns a status string
-    assert isinstance(result, str) or result is None  # type: ignore[unreachable]
+    # Script execution returns a SQLResult
+    assert isinstance(result, SQLResult)
+    assert result.operation_type == "SCRIPT"
 
     # Verify script effects
     select_result = await asyncmy_session.execute(
@@ -261,7 +262,7 @@ async def test_asyncmy_data_types(asyncmy_session: AsyncmyDriver) -> None:
     assert row["text_col"] == "text_value"
     assert row["varchar_col"] == "varchar_value"
     assert row["int_col"] == 42
-    assert row["boolean_col"] is True
+    assert row["boolean_col"] == 1  # MySQL returns boolean as 1/0
 
     # Clean up
     await asyncmy_session.execute_script("DROP TABLE data_types_test")
@@ -385,7 +386,7 @@ async def test_asyncmy_column_names_and_metadata(asyncmy_session: AsyncmyDriver)
     assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
     assert result.data is not None
-    assert result.rows_affected == 1
+    assert len(result) == 1
 
     # Test that we can access data by column name
     row = result.data[0]
@@ -416,7 +417,7 @@ async def test_asyncmy_with_schema_type(asyncmy_session: AsyncmyDriver) -> None:
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.rows_affected == 1
+    assert len(result) == 1
 
     # The data should be converted to the schema type by the ResultConverter
     assert result.column_names == ["id", "name", "value"]
@@ -523,7 +524,7 @@ async def test_asyncmy_json_operations(asyncmy_session: AsyncmyDriver) -> None:
     assert isinstance(json_result, SQLResult)
     assert json_result.data is not None
     assert json_result.data[0]["name"] == '"test"'  # JSON_EXTRACT returns quoted strings
-    assert json_result.data[0]["age"] == 30
+    assert json_result.data[0]["age"] == "30"  # JSON_EXTRACT returns strings
     assert json_result.data[0]["tag_count"] == 2
 
     # Clean up
@@ -563,11 +564,9 @@ async def test_asyncmy_fetch_arrow_table(asyncmy_session: AsyncmyDriver) -> None
     statement = SQL("SELECT name, value FROM test_table ORDER BY name")
     result = await asyncmy_session.fetch_arrow_table(statement)
     assert isinstance(result, ArrowResult)
-    table = result.data
-    assert isinstance(table, ArrowResult)
-    assert table.num_rows == 2
-    assert set(table.column_names) == {"name", "value"}
-    names = table.column("name").to_pylist()
+    assert result.num_rows() == 2
+    assert set(result.column_names) == {"name", "value"}
+    names = result.data["name"].to_pylist()
     assert "arrow1" in names and "arrow2" in names
 
 
@@ -578,7 +577,7 @@ async def test_asyncmy_to_parquet(asyncmy_session: AsyncmyDriver) -> None:
     await asyncmy_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("pq2", 2))
     statement = SQL("SELECT name, value FROM test_table ORDER BY name")
     with tempfile.NamedTemporaryFile() as tmp:
-        await asyncmy_session.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
+        await asyncmy_session.export_to_storage(statement, tmp.name, format="parquet")  # type: ignore[attr-defined]
         table = pq.read_table(tmp.name)
         assert table.num_rows == 2
         assert set(table.column_names) == {"name", "value"}

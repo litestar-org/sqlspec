@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from psycopg import AsyncConnection, Connection, connect
 from psycopg.rows import DictRow as PsycopgDictRow
+from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
 from sqlspec.adapters.psycopg.driver import (
@@ -24,40 +25,36 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("sqlspec.adapters.psycopg")
 
-CONNECTION_FIELDS = frozenset(
-    {
-        "conninfo",
-        "host",
-        "port",
-        "user",
-        "password",
-        "dbname",
-        "connect_timeout",
-        "options",
-        "application_name",
-        "sslmode",
-        "sslcert",
-        "sslkey",
-        "sslrootcert",
-        "autocommit",
-    }
-)
+CONNECTION_FIELDS = frozenset({
+    "conninfo",
+    "host",
+    "port",
+    "user",
+    "password",
+    "dbname",
+    "connect_timeout",
+    "options",
+    "application_name",
+    "sslmode",
+    "sslcert",
+    "sslkey",
+    "sslrootcert",
+    "autocommit",
+})
 
-POOL_FIELDS = CONNECTION_FIELDS.union(
-    {
-        "min_size",
-        "max_size",
-        "name",
-        "timeout",
-        "max_waiting",
-        "max_lifetime",
-        "max_idle",
-        "reconnect_timeout",
-        "num_workers",
-        "configure",
-        "kwargs",
-    }
-)
+POOL_FIELDS = CONNECTION_FIELDS.union({
+    "min_size",
+    "max_size",
+    "name",
+    "timeout",
+    "max_waiting",
+    "max_lifetime",
+    "max_idle",
+    "reconnect_timeout",
+    "num_workers",
+    "configure",
+    "kwargs",
+})
 
 __all__ = (
     "CONNECTION_FIELDS",
@@ -352,7 +349,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         Returns:
             A psycopg Connection instance configured with DictRow.
         """
+
         conn_dict = self.connection_config_dict
+        conn_dict["row_factory"] = dict_row
         return connect(**conn_dict)  # type: ignore[arg-type]
 
     @contextlib.contextmanager
@@ -709,7 +708,10 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         Returns:
             A psycopg AsyncConnection instance configured with DictRow.
         """
+        from psycopg.rows import dict_row
+
         conn_dict = self.connection_config_dict
+        conn_dict["row_factory"] = dict_row
         return await AsyncConnection.connect(**conn_dict)  # pyright: ignore
 
     @asynccontextmanager

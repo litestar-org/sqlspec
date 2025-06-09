@@ -18,7 +18,7 @@ async def asyncmy_batch_session(mysql_service: MySQLService) -> "AsyncGenerator[
         port=mysql_service.port,
         user=mysql_service.user,
         password=mysql_service.password,
-        database=mysql_service.database,
+        database=mysql_service.db,
         statement_config=SQLConfig(strict_mode=False),
     )
 
@@ -233,7 +233,7 @@ async def test_asyncmy_execute_many_with_sql_object(asyncmy_batch_session: Async
 
     sql_obj = SQL("INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)").as_many(parameters)
 
-    result = await asyncmy_batch_session.execute_statement(sql_obj)
+    result = await asyncmy_batch_session.execute(sql_obj)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3

@@ -34,9 +34,9 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
         assert conn is not None
         # Test basic query
         async with conn.cursor() as cur:
-            await cur.execute("SELECT 1")
+            await cur.execute("SELECT 1 AS value")
             result = await cur.fetchone()
-            assert result == (1,)  # type: ignore[comparison-overlap]
+            assert result == {"value": 1}  # type: ignore[comparison-overlap]
     await another_config.close_pool()
 
 

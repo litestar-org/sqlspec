@@ -208,7 +208,7 @@ async def test_asyncpg_data_types(asyncpg_session: AsyncpgDriver) -> None:
     """Test PostgreSQL data type handling."""
     import datetime
     import uuid
-    
+
     # Create table with various PostgreSQL data types
     await asyncpg_session.execute_script("""
         CREATE TABLE data_types_test (

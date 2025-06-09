@@ -27,7 +27,10 @@ from sqlspec.typing import (
     RowT,
     SQLParameterType,
 )
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.telemetry import instrument_operation
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -76,7 +79,9 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
             return statement
         if isinstance(statement, QueryBuilder):
             return statement.to_statement(config=config or self.config)
-        return SQL(statement, parameters, *filters or [], dialect=self.dialect, config=config or self.config)
+        sql_obj = SQL(statement, parameters, *filters or [], dialect=self.dialect, config=config or self.config)
+        logger.debug("Built SQL object: expression=%s, parameters=%s", sql_obj.expression, sql_obj.parameters)
+        return sql_obj
 
     @abstractmethod
     def _execute_statement(
@@ -185,7 +190,14 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
                 connection=self._connection(connection),
                 **kwargs,
             )
-            if self.returns_rows(sql_statement.expression):
+            is_select = self.returns_rows(sql_statement.expression)
+            # If expression is None (parsing disabled or failed), check SQL string
+            # TODO: improve this.  why can't use just use parameter parsing?
+            if not is_select and sql_statement.expression is None:
+                sql_upper = sql_statement.sql.strip().upper()
+                is_select = any(sql_upper.startswith(prefix) for prefix in ["SELECT", "WITH", "VALUES", "TABLE"])
+            logger.debug("Is SELECT query: %s (expression: %s)", is_select, sql_statement.expression)
+            if is_select:
                 return self._wrap_select_result(sql_statement, result, schema_type=schema_type, **kwargs)
             return self._wrap_execute_result(sql_statement, result, **kwargs)
 

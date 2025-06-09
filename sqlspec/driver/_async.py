@@ -209,7 +209,13 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
                 connection=self._connection(connection),
                 **kwargs,
             )
-            if self.returns_rows(sql_statement.expression):
+            is_select = self.returns_rows(sql_statement.expression)
+            # TODO: improve this.  why can't use just use parameter parsing?
+            # If expression is None (parsing disabled or failed), check SQL string
+            if not is_select and sql_statement.expression is None:
+                sql_upper = sql_statement.sql.strip().upper()
+                is_select = any(sql_upper.startswith(prefix) for prefix in ["SELECT", "WITH", "VALUES", "TABLE"])
+            if is_select:
                 return await self._wrap_select_result(sql_statement, result, schema_type=schema_type, **kwargs)
             return await self._wrap_execute_result(sql_statement, result, **kwargs)
 

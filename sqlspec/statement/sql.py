@@ -164,38 +164,32 @@ class SQLConfig:
             final_transformers.extend(self.transformers)
         elif self.processing_pipeline_components is not None:
             # Filter from old list - this is for transition
-            final_transformers.extend(
-                [
-                    p
-                    for p in self.processing_pipeline_components
-                    if not (hasattr(p, "validate") or hasattr(p, "analyze"))
-                ]
-            )  # Basic heuristic
+            final_transformers.extend([
+                p for p in self.processing_pipeline_components if not (hasattr(p, "validate") or hasattr(p, "analyze"))
+            ])  # Basic heuristic
         elif self.enable_transformations:
             final_transformers.extend([CommentRemover(), ParameterizeLiterals()])
 
         if self.validators is not None:
             final_validators.extend(self.validators)
         elif self.processing_pipeline_components is not None:
-            final_validators.extend(
-                [p for p in self.processing_pipeline_components if hasattr(p, "validate") and not hasattr(p, "analyze")]
-            )  # Basic heuristic
+            final_validators.extend([
+                p for p in self.processing_pipeline_components if hasattr(p, "validate") and not hasattr(p, "analyze")
+            ])  # Basic heuristic
         elif self.enable_validation:
             # Use the new consolidated validators
-            final_validators.extend(
-                [
-                    SecurityValidator(),  # Replaces PreventInjection, TautologyConditions, and SuspiciousKeywords
-                    DMLSafetyValidator(),  # Replaces RiskyDML and PreventDDL
-                    PerformanceValidator(),  # Replaces CartesianProductDetector and ExcessiveJoins
-                ]
-            )
+            final_validators.extend([
+                SecurityValidator(),  # Replaces PreventInjection, TautologyConditions, and SuspiciousKeywords
+                DMLSafetyValidator(),  # Replaces RiskyDML and PreventDDL
+                PerformanceValidator(),  # Replaces CartesianProductDetector and ExcessiveJoins
+            ])
 
         if self.analyzers is not None:
             final_analyzers.extend(self.analyzers)
         elif self.processing_pipeline_components is not None:
-            final_analyzers.extend(
-                [p for p in self.processing_pipeline_components if hasattr(p, "analyze")]
-            )  # Basic heuristic
+            final_analyzers.extend([
+                p for p in self.processing_pipeline_components if hasattr(p, "analyze")
+            ])  # Basic heuristic
         elif self.enable_analysis:
             final_analyzers.append(StatementAnalyzer(cache_size=self.analysis_cache_size))
 
@@ -1283,14 +1277,12 @@ class SQL:
         else:
             hashable_params = (self.parameters,)
 
-        return hash(
-            (
-                str(self._sql),
-                hashable_params,
-                self._dialect,
-                hash(str(self._config)),
-            )
-        )
+        return hash((
+            str(self._sql),
+            hashable_params,
+            self._dialect,
+            hash(str(self._config)),
+        ))
 
     def as_many(self, parameters: "Optional[SQLParameterType]" = None) -> "SQL":
         """Create a copy of this SQL statement marked for batch execution.
@@ -1304,13 +1296,11 @@ class SQL:
             A new SQL instance with is_many=True and the provided parameters.
 
         Example:
-            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many(
-            ...     [
-            ...         ["John"],
-            ...         ["Jane"],
-            ...         ["Bob"],
-            ...     ]
-            ... )
+            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many([
+            ...     ["John"],
+            ...     ["Jane"],
+            ...     ["Bob"],
+            ... ])
             >>> # This creates a statement ready for executemany with 3 parameter sets
         """
         # Use provided parameters or keep existing ones (use _raw_parameters to avoid validation)
@@ -1455,6 +1445,20 @@ class SQL:
             if existing_params_info:
                 context.input_sql_had_placeholders = True
                 self._config.input_sql_had_placeholders = True
+
+                # Check if we have database-specific placeholders that sqlglot can't parse
+                # (e.g., %s for PYFORMAT_POSITIONAL which sqlglot interprets as modulo)
+
+                problematic_styles = {
+                    ParameterStyle.PYFORMAT_POSITIONAL,  # %s
+                    ParameterStyle.PYFORMAT_NAMED,  # %(name)s
+                }
+
+                if any(param.style in problematic_styles for param in existing_params_info):
+                    # Disable parsing AND validation to avoid sqlglot errors on database-specific placeholders
+                    # The validation also tries to parse the SQL which will fail on %s placeholders
+                    self._config = replace(self._config, enable_parsing=False, enable_validation=False)
+                    context.config = self._config
 
     def _process_parameters(
         self, context: "SQLProcessingContext", raw_sql_input: str, raw_parameters_input: "SQLParameterType"

@@ -104,7 +104,7 @@ def test_psycopg_parameter_styles(psycopg_session: PsycopgSyncDriver, params: An
     result = psycopg_session.execute(sql, params)
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.num_rows() == 1
+    assert len(result) == 1
     assert result.data[0]["name"] == "test_value"
 
 
@@ -142,8 +142,9 @@ def test_psycopg_execute_script(psycopg_session: PsycopgSyncDriver) -> None:
     """
 
     result = psycopg_session.execute_script(script)
-    # Script execution typically returns a status string
-    assert isinstance(result, str) or result is None
+    # Script execution returns a SQLResult
+    assert isinstance(result, SQLResult)
+    assert result.operation_type == "SCRIPT"
 
     # Verify script effects
     select_result = psycopg_session.execute(
@@ -377,7 +378,7 @@ def test_psycopg_column_names_and_metadata(psycopg_session: PsycopgSyncDriver) -
     assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
     assert result.data is not None
-    assert result.num_rows() == 1
+    assert len(result) == 1
 
     # Test that we can access data by column name
     row = result.data[0]
@@ -408,7 +409,7 @@ def test_psycopg_with_schema_type(psycopg_session: PsycopgSyncDriver) -> None:
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.num_rows() == 1
+    assert len(result) == 1
 
     # The data should be converted to the schema type by the ResultConverter
     assert result.column_names == ["id", "name", "value"]
@@ -547,11 +548,9 @@ def test_psycopg_fetch_arrow_table(psycopg_session: PsycopgSyncDriver) -> None:
     statement = SQL("SELECT name, value FROM test_table ORDER BY name")
     result = psycopg_session.fetch_arrow_table(statement)
     assert isinstance(result, ArrowResult)
-    table = result.data
-    assert isinstance(table, ArrowResult)
-    assert table.num_rows() == 2
-    assert set(table.column_names) == {"name", "value"}
-    names = table.column("name").to_pylist()
+    assert result.num_rows() == 2
+    assert set(result.column_names) == {"name", "value"}
+    names = result.data["name"].to_pylist()
     assert "arrow1" in names and "arrow2" in names
 
 

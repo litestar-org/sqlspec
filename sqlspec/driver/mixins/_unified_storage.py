@@ -63,6 +63,9 @@ class StorageMixinBase:
         """Check if input is a URI rather than a relative path."""
         cloud_schemes = {"s3", "gs", "gcs", "az", "azure", "abfs", "abfss", "file", "http", "https"}
 
+        # Convert Path objects to string
+        path_or_uri = str(path_or_uri)
+
         if "://" in path_or_uri:
             scheme = path_or_uri.split("://", maxsplit=1)[0].lower()
             return scheme in cloud_schemes
@@ -487,6 +490,8 @@ class SyncStorageMixin(StorageMixinBase):
         Returns:
             Tuple of (backend, path) where path is relative to the backend's base path
         """
+        # Convert Path objects to string
+        uri = str(uri)
         original_path = uri
 
         # Convert absolute paths to file:// URIs if needed
@@ -965,6 +970,8 @@ class AsyncStorageMixin(StorageMixinBase):
         Returns:
             Tuple of (backend, path) where path is relative to the backend's base path
         """
+        # Convert Path objects to string
+        uri = str(uri)
         original_path = uri
 
         # Convert absolute paths to file:// URIs if needed

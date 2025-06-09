@@ -1,3 +1,4 @@
+# ruff: noqa: PLR0904
 """SQL statement result classes for handling different types of SQL operations."""
 
 from abc import ABC, abstractmethod
@@ -259,7 +260,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
 
     def __len__(self) -> int:
         """Get the number of rows in the result set.
-        
+
         Returns:
             Number of rows in the data.
         """
@@ -267,15 +268,14 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
 
     def __getitem__(self, index: int) -> "RowT":
         """Get a row by index.
-        
+
         Args:
             index: Row index
-            
+
         Returns:
             The row at the specified index
-            
+
         Raises:
-            IndexError: If index is out of range
             TypeError: If data is None
         """
         if self.data is None:
