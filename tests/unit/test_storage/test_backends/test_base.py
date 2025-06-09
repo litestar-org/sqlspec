@@ -333,9 +333,7 @@ class TestInstrumentedObjectStore:
         backend = MockBackend()
 
         # Test async streaming
-        batches = []
-        async for batch in backend.stream_arrow_async("*.parquet"):
-            batches.append(batch)
+        batches = [batch async for batch in backend.stream_arrow_async("*.parquet")]
 
         assert len(batches) == 2
         assert backend.call_count == 1

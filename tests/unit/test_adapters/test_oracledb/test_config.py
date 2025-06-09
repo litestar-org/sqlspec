@@ -124,7 +124,7 @@ def test_oracledb_config_provide_session() -> None:
     with patch.object(config, "create_connection") as mock_create_conn:
         mock_connection = MagicMock()
         mock_create_conn.return_value = mock_connection
-        
+
         # Test session context manager behavior
         with config.provide_session() as session:
             assert isinstance(session, OracleSyncDriver)

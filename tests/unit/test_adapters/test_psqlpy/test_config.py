@@ -130,7 +130,7 @@ async def test_psqlpy_config_provide_session() -> None:
         # Make sure close() method is properly async
         mock_connection.close = AsyncMock()
         mock_create_conn.return_value = mock_connection
-        
+
         # Test session context manager behavior
         async with config.provide_session() as session:
             assert isinstance(session, PsqlpyDriver)

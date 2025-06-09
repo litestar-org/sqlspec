@@ -128,14 +128,6 @@ class InstrumentationConfig:
 
     prometheus_latency_buckets: Optional[list[float]] = None
     """Custom latency buckets for Prometheus histograms."""
-
-    # Sampling configuration
-    trace_sample_rate: float = 1.0
-    """Sampling rate for traces (0.0 to 1.0)."""
-
-    log_sample_rate: float = 1.0
-    """Sampling rate for logs (0.0 to 1.0)."""
-
     # Resource limits
     max_query_log_length: int = 1000
     """Maximum length of queries to log (truncate if longer)."""
@@ -154,15 +146,6 @@ class InstrumentationConfig:
         """Ensure custom_tags is properly isolated and validate configuration."""
         if self.custom_tags is not None:
             self.custom_tags = dict(self.custom_tags)
-
-        # Validate sample rates
-        if not 0.0 <= self.trace_sample_rate <= 1.0:
-            msg = f"trace_sample_rate must be between 0.0 and 1.0, got {self.trace_sample_rate}"
-            raise ValueError(msg)
-
-        if not 0.0 <= self.log_sample_rate <= 1.0:
-            msg = f"log_sample_rate must be between 0.0 and 1.0, got {self.log_sample_rate}"
-            raise ValueError(msg)
 
         # Auto-enable structured logging if format is structured
         if self.log_format == "structured":

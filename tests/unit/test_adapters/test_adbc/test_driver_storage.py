@@ -8,7 +8,7 @@ import pytest
 
 from sqlspec.adapters.adbc import AdbcDriver
 from sqlspec.config import InstrumentationConfig
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.result import ArrowResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from tests.unit.test_adapters.storage_test_helpers import (
     create_mock_arrow_result,
@@ -128,9 +128,7 @@ class TestADBCStorageOperations:
         mock_backend.write_arrow = MagicMock()
 
         # Patch the _resolve_backend_and_path method to return our mock
-        adbc_driver._resolve_backend_and_path = MagicMock(
-            return_value=(mock_backend, str(tmp_path / "output.parquet"))
-        )
+        adbc_driver._resolve_backend_and_path = MagicMock(return_value=(mock_backend, str(tmp_path / "output.parquet")))
 
         # Test export
         output_path = tmp_path / "output.parquet"
@@ -196,9 +194,7 @@ class TestADBCStorageOperations:
         adbc_driver.ingest_arrow_table = MagicMock(return_value=2)
 
         # Patch the _resolve_backend_and_path method to return our mock
-        adbc_driver._resolve_backend_and_path = MagicMock(
-            return_value=(mock_backend, str(tmp_path / "input.parquet"))
-        )
+        adbc_driver._resolve_backend_and_path = MagicMock(return_value=(mock_backend, str(tmp_path / "input.parquet")))
 
         # Test import
         input_path = tmp_path / "input.parquet"
@@ -315,16 +311,9 @@ class TestADBCStorageOperations:
         """Test Arrow table conversion with null values using native implementation."""
         # Create Arrow table with nulls
         import pyarrow as pa
-        schema = pa.schema([
-            pa.field("id", pa.int64()),
-            pa.field("name", pa.string()),
-            pa.field("email", pa.string())
-        ])
-        data = pa.table([
-            [1, 2],
-            ["test1", None],
-            [None, "test@example.com"]
-        ], schema=schema)
+
+        schema = pa.schema([pa.field("id", pa.int64()), pa.field("name", pa.string()), pa.field("email", pa.string())])
+        data = pa.table([[1, 2], ["test1", None], [None, "test@example.com"]], schema=schema)
 
         # Mock the cursor's fetch_arrow_table method
         mock_cursor = mock_adbc_connection.cursor.return_value

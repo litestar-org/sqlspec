@@ -540,16 +540,17 @@ class BigQueryDriver(
             # Use BigQuery's native Arrow loading
             # Convert Arrow table to bytes for direct loading
             import io
+
             import pyarrow.parquet as pq
-            
+
             # Write Arrow table to Parquet format in memory
             buffer = io.BytesIO()
             pq.write_table(table, buffer)
             buffer.seek(0)
-            
+
             # Configure for Parquet loading
             job_config.source_format = "PARQUET"
-            
+
             # Load from the Parquet bytes
             load_job = connection.load_table_from_file(
                 buffer,

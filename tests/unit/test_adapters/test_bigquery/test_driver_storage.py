@@ -88,7 +88,7 @@ class TestBigQueryStorageOperations:
         mock_dataset.table.return_value = mock_table_ref
         mock_bigquery_client.dataset.return_value = mock_dataset
         mock_bigquery_client.project = "test_project"
-        
+
         # Mock load job
         mock_load_job = MagicMock()
         mock_load_job.result.return_value = None  # Successful completion
@@ -317,7 +317,7 @@ class TestBigQueryStorageOperations:
         mock_dataset.table.return_value = mock_table_ref
         mock_bigquery_client.dataset.return_value = mock_dataset
         mock_bigquery_client.project = "test_project"
-        
+
         # Mock load job
         mock_load_job = MagicMock()
         mock_load_job.result.return_value = None  # Successful completion
@@ -333,13 +333,14 @@ class TestBigQueryStorageOperations:
         mock_bigquery_client.dataset.assert_called_once_with("test_dataset", project="test_project")
         mock_dataset.table.assert_called_once_with("test_table")
         mock_bigquery_client.load_table_from_file.assert_called_once()
-        
+
         # Verify job config was set for replace mode (WRITE_TRUNCATE)
         call_args = mock_bigquery_client.load_table_from_file.call_args
-        job_config = call_args[1]['job_config']
+        job_config = call_args[1]["job_config"]
         from google.cloud.bigquery import WriteDisposition
+
         assert job_config.write_disposition == WriteDisposition.WRITE_TRUNCATE
-        
+
         mock_load_job.result.assert_called_once()
 
     def test_arrow_table_conversion_with_nulls(
