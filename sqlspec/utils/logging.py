@@ -169,7 +169,7 @@ def configure_logging(
         else:
             format_string = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
-        formatter = logging.Formatter(format_string)
+        formatter = logging.Formatter(format_string)  # type: ignore
 
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)

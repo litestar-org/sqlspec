@@ -257,6 +257,32 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         """Check if this was a DELETE operation."""
         return self.operation_type.upper() == "DELETE"
 
+    def __len__(self) -> int:
+        """Get the number of rows in the result set.
+        
+        Returns:
+            Number of rows in the data.
+        """
+        return len(self.data) if self.data is not None else 0
+
+    def __getitem__(self, index: int) -> "RowT":
+        """Get a row by index.
+        
+        Args:
+            index: Row index
+            
+        Returns:
+            The row at the specified index
+            
+        Raises:
+            IndexError: If index is out of range
+            TypeError: If data is None
+        """
+        if self.data is None:
+            msg = "No data available"
+            raise TypeError(msg)
+        return self.data[index]
+
 
 @dataclass
 class ArrowResult(StatementResult[ArrowTable]):

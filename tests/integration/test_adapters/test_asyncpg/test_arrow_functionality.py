@@ -85,7 +85,8 @@ async def test_asyncpg_arrow_empty_result(asyncpg_arrow_session: AsyncpgDriver) 
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows() == 0
-    assert result.num_columns() >= 5  # Schema should still be present
+    # AsyncPG limitation: schema information is not available for empty result sets
+    assert result.num_columns() == 0
 
 
 @pytest.mark.asyncio

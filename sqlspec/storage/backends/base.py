@@ -1523,7 +1523,7 @@ class InstrumentedObjectStore(ABC):
 
             try:
                 batch_count = 0
-                async for batch in self._stream_arrow_async(pattern, **kwargs):
+                async for batch in self._stream_arrow_async(pattern, **kwargs):  # type: ignore
                     batch_count += 1
                     yield batch
 

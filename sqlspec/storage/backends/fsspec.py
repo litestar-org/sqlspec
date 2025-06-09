@@ -1,4 +1,3 @@
-# ruff: noqa: PLR0904
 import logging
 from typing import TYPE_CHECKING, Any, Literal, Union
 
@@ -105,7 +104,7 @@ class FSSpecBackend(InstrumentedObjectStore):
         """Read bytes from an object."""
         try:
             resolved_path = self._resolve_path(path)
-            return self.fs.cat(resolved_path)
+            return self.fs.cat(resolved_path)  # type: ignore
         except Exception as exc:
             msg = f"Failed to read bytes from {path}"
             raise StorageOperationFailedError(msg) from exc

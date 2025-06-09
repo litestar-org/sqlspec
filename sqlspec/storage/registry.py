@@ -288,11 +288,11 @@ class StorageRegistry:
                 msg = "obstore"
                 raise MissingDependencyError(msg) from e
             else:
-                return ObStoreBackend
+                return ObStoreBackend  # type: ignore
         elif backend_type == "fsspec":
             from sqlspec.storage.backends.fsspec import FSSpecBackend
 
-            return FSSpecBackend
+            return FSSpecBackend  # type: ignore
         else:
             msg = f"Unknown backend type: {backend_type}. Supported types: 'obstore', 'fsspec'"
             raise ValueError(msg)

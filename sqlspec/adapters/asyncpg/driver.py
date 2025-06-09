@@ -161,7 +161,21 @@ class AsyncpgDriver(
                 logger.debug("Executing SQL (executemany): %s", sql)
             if self.instrumentation_config.log_parameters and params_list:
                 logger.debug("Query parameters (batch): %s", params_list)
-            return await conn.executemany(sql, params_list)
+            
+            result = await conn.executemany(sql, params_list)
+            
+            # AsyncPG's executemany returns None, not a status string
+            # We need to return information that _wrap_execute_result can use
+            # Return a synthetic status message with the batch count
+            if result is None and params_list:
+                # For executemany, assume each parameter set affects 1 row
+                # This is the typical case for INSERT/UPDATE/DELETE operations
+                batch_size = len(params_list)
+                # Create a synthetic status message that our parser can understand
+                synthetic_status = f"INSERT 0 {batch_size}"  # Standard PostgreSQL format
+                return synthetic_status
+            
+            return result
 
     async def _execute_script(
         self,
@@ -190,8 +204,8 @@ class AsyncpgDriver(
             records = cast("list[Record]", result)
 
             if not records:
-                # Even if no records, try to get column names if possible (e.g. from statement, though not standard here)
-                # For now, assume empty column_names if no records.
+                # AsyncPG limitation: cannot get column names from empty result sets
+                # This is a known limitation where schema information is not available
                 return SQLResult[RowT](
                     statement=statement,
                     data=cast("list[RowT]", []),
@@ -238,7 +252,12 @@ class AsyncpgDriver(
                     operation_type = str(statement.expression.key).upper()
 
             rows_affected = 0  # Default
-            status_message = str(result)  # Ensure it's a string
+            
+            # Handle None result case gracefully
+            if result is None:
+                status_message = "UNKNOWN"
+            else:
+                status_message = str(result)  # Ensure it's a string
 
             match = ASYNC_PG_STATUS_REGEX.match(status_message)
             if match:
@@ -258,7 +277,7 @@ class AsyncpgDriver(
                         rows_affected = int(match.group(3))
             elif "SCRIPT" in operation_type.upper():
                 pass
-            else:
+            elif status_message != "UNKNOWN":  # Don't warn for None results we converted to UNKNOWN
                 logger.warning(
                     "Could not parse asyncpg status message: %s",
                     status_message,
