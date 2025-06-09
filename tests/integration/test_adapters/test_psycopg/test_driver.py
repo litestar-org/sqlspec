@@ -39,8 +39,19 @@ def psycopg_session(postgres_service: PostgresService) -> Generator[PsycopgSyncD
             )
         """)
         yield session
-        # Cleanup
-        session.execute_script("DROP TABLE IF EXISTS test_table")
+        # Cleanup - handle potential transaction errors
+        try:
+            session.execute_script("DROP TABLE IF EXISTS test_table")
+        except Exception:
+            # If the transaction is in an error state, rollback first
+            if hasattr(session.connection, "rollback"):
+                session.connection.rollback()
+            # Try again after rollback
+            try:
+                session.execute_script("DROP TABLE IF EXISTS test_table")
+            except Exception:
+                # If it still fails, ignore - table might not exist
+                pass
 
 
 @pytest.mark.xdist_group("postgres")
@@ -560,10 +571,15 @@ def test_psycopg_to_parquet(psycopg_session: PsycopgSyncDriver) -> None:
     psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("pq1", 123))
     psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("pq2", 456))
     statement = SQL("SELECT name, value FROM test_table ORDER BY name")
-    with tempfile.NamedTemporaryFile() as tmp:
-        psycopg_session.export_to_storage(statement, tmp.name)
-        table = pq.read_table(tmp.name)
-        assert table.num_rows() == 2
-        assert set(table.column_names) == {"name", "value"}
-        names = table.column("name").to_pylist()
-        assert "pq1" in names and "pq2" in names
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
+        try:
+            psycopg_session.export_to_storage(statement, tmp.name, format="parquet")
+            table = pq.read_table(tmp.name)
+            assert table.num_rows == 2
+            assert set(table.column_names) == {"name", "value"}
+            names = table.column("name").to_pylist()
+            assert "pq1" in names and "pq2" in names
+        finally:
+            import os
+
+            os.unlink(tmp.name)

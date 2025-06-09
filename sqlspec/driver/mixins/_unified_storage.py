@@ -158,15 +158,20 @@ class SyncStorageMixin(StorageMixinBase):
         self._ensure_pyarrow_installed()
 
         # Convert to SQL object for processing
+        # Get the driver's dialect if available
+        driver_dialect = getattr(self, "dialect", None)
+
         if isinstance(statement, str):
-            sql_obj = SQL(statement, parameters=parameters, config=config or self.config)
+            sql_obj = SQL(statement, parameters=parameters, config=config or self.config, dialect=driver_dialect)
         elif hasattr(statement, "to_sql"):  # SQL object
             sql_obj = statement
             if parameters is not None:
                 # Create a new SQL object with the provided parameters
-                sql_obj = SQL(statement.sql, parameters=parameters, config=config or sql_obj._config)
+                sql_obj = SQL(
+                    statement.sql, parameters=parameters, config=config or sql_obj._config, dialect=driver_dialect
+                )
         else:  # sqlglot Expression
-            sql_obj = SQL(statement, parameters=parameters, config=config or self.config)
+            sql_obj = SQL(statement, parameters=parameters, config=config or self.config, dialect=driver_dialect)
 
         # Apply filters
         for filter_func in filters:
@@ -667,15 +672,20 @@ class AsyncStorageMixin(StorageMixinBase):
         from sqlspec.statement.sql import SQL
 
         # Convert to SQL object for processing
+        # Get the driver's dialect if available
+        driver_dialect = getattr(self, "dialect", None)
+
         if isinstance(statement, str):
-            sql_obj = SQL(statement, parameters=parameters, config=config or self.config)
+            sql_obj = SQL(statement, parameters=parameters, config=config or self.config, dialect=driver_dialect)
         elif hasattr(statement, "to_sql"):  # SQL object
             sql_obj = statement
             if parameters is not None:
                 # Create a new SQL object with the provided parameters
-                sql_obj = SQL(statement.sql, parameters=parameters, config=config or sql_obj._config)
+                sql_obj = SQL(
+                    statement.sql, parameters=parameters, config=config or sql_obj._config, dialect=driver_dialect
+                )
         else:  # sqlglot Expression
-            sql_obj = SQL(statement, parameters=parameters, config=config or self.config)
+            sql_obj = SQL(statement, parameters=parameters, config=config or self.config, dialect=driver_dialect)
 
         # Apply filters
         for filter_func in filters:

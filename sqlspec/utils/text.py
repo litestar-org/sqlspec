@@ -120,8 +120,9 @@ def snake_case(string: str) -> str:
     s = _SNAKE_CASE_HYPHEN_SPACE.sub("_", string)
 
     # 2. Remove all non-alphanumeric characters except underscores
+    # TODO: move to a compiled regex at the top of the file
     s = re.sub(r"[^\w]+", "", s, flags=re.UNICODE)
-    
+
     # 3. Insert an underscore between a lowercase/digit and an uppercase letter.
     #    e.g., "helloWorld" -> "hello_World"
     #    e.g., "Python3IsGreat" -> "Python3_IsGreat"

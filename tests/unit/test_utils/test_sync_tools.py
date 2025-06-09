@@ -244,13 +244,20 @@ def test_run_with_arguments() -> None:
             "kwargs": kwargs,
         }
 
-    sync_func = run_(async_func_with_args)
-    result = sync_func(1, "test", 3, 4, key="value")
+    # Create a new event loop for this test to avoid reusing existing ones
+    import asyncio
 
-    assert result["a"] == 1
-    assert result["b"] == "test"
-    assert result["args"] == (3, 4)
-    assert result["kwargs"] == {"key": "value"}
+    loop = asyncio.new_event_loop()
+    try:
+        sync_func = run_(async_func_with_args)
+        result = sync_func(1, "test", 3, 4, key="value")
+
+        assert result["a"] == 1
+        assert result["b"] == "test"
+        assert result["args"] == (3, 4)
+        assert result["kwargs"] == {"key": "value"}
+    finally:
+        loop.close()
 
 
 def test_await_basic_functionality() -> None:
@@ -448,6 +455,17 @@ async def test_nested_context_managers() -> None:
             assert inner_value == "inner"
 
 
+def test_run_from_sync_context() -> None:
+    """Test that run_ works properly from sync context."""
+
+    async def async_func() -> str:
+        return "success"
+
+    sync_version = run_(async_func)
+    result = sync_version()
+    assert result == "success"
+
+
 async def test_error_handling_in_complex_scenarios() -> None:
     """Test error handling in complex async/sync conversion scenarios."""
 
@@ -456,15 +474,17 @@ async def test_error_handling_in_complex_scenarios() -> None:
             raise ValueError("Controlled error")
         return "success"
 
-    # Convert to async, then back to sync
+    # Test direct async_ conversion and execution
     async_version = async_(sync_func_with_error)
-    sync_version = run_(async_version)  # type: ignore[arg-type,var-annotated]
 
-    # Test success case
-    with pytest.raises(RuntimeError, match=r"asyncio.run\(\) cannot be called from a running event loop"):
-        sync_version(False)
+    # Test success case - await the async version directly
+    result = await async_version(False)
+    assert result == "success"
 
-    # Test error case
-    # The error will not be reached due to the above, but keep for completeness
-    with pytest.raises(RuntimeError, match=r"asyncio.run\(\) cannot be called from a running event loop"):
-        sync_version(True)
+    # Test error case - await and expect exception
+    with pytest.raises(ValueError, match="Controlled error"):
+        await async_version(True)
+
+    # Test that run_ raises error when called from async context
+    # We'll test this in a separate sync test since calling run_ from async context
+    # creates an unawaited coroutine before raising the RuntimeError

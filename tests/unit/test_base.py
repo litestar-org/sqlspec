@@ -86,11 +86,19 @@ class MockAsyncConfig(NoPoolAsyncConfig[Any, Any]):
     async def create_connection(self) -> Mock:
         return self.connection_instance
 
-    def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncMock:
-        return AsyncMock()
+    def provide_connection(self, *args: Any, **kwargs: Any) -> Mock:
+        # Return a Mock object that can be used as an async context manager
+        mock = Mock()
+        mock.__aenter__ = AsyncMock(return_value=mock)
+        mock.__aexit__ = AsyncMock(return_value=None)
+        return mock
 
-    def provide_session(self, *args: Any, **kwargs: Any) -> AsyncMock:
-        return AsyncMock()
+    def provide_session(self, *args: Any, **kwargs: Any) -> Mock:
+        # Return a Mock object that can be used as an async context manager
+        mock = Mock()
+        mock.__aenter__ = AsyncMock(return_value=mock)
+        mock.__aexit__ = AsyncMock(return_value=None)
+        return mock
 
 
 class MockSyncPoolConfig(SyncDatabaseConfig[Any, Any, Any]):
@@ -142,11 +150,19 @@ class MockAsyncPoolConfig(AsyncDatabaseConfig[Any, Any, Any]):
     async def create_connection(self) -> Mock:
         return self.connection_instance
 
-    def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncMock:
-        return AsyncMock()
+    def provide_connection(self, *args: Any, **kwargs: Any) -> Mock:
+        # Return a Mock object that can be used as an async context manager
+        mock = Mock()
+        mock.__aenter__ = AsyncMock(return_value=mock)
+        mock.__aexit__ = AsyncMock(return_value=None)
+        return mock
 
-    def provide_session(self, *args: Any, **kwargs: Any) -> AsyncMock:
-        return AsyncMock()
+    def provide_session(self, *args: Any, **kwargs: Any) -> Mock:
+        # Return a Mock object that can be used as an async context manager
+        mock = Mock()
+        mock.__aenter__ = AsyncMock(return_value=mock)
+        mock.__aexit__ = AsyncMock(return_value=None)
+        return mock
 
     async def _create_pool(self) -> Mock:
         return self.pool_instance or Mock()  # Ensure we always return a Mock
@@ -573,12 +589,10 @@ async def test_close_pool_async_with_pool() -> None:
     config = MockAsyncPoolConfig("test")  # pyright: ignore
     sqlspec.add_config(config)
 
-    # Create a proper coroutine function that returns None
-    async def mock_close_pool() -> None:
-        return None
+    # Create a proper async mock that doesn't return a coroutine
+    mock_close = AsyncMock()
 
-    with patch.object(config, "close_pool") as mock_close:
-        mock_close.return_value = mock_close_pool()
+    with patch.object(config, "close_pool", mock_close):
         result_awaitable = sqlspec.close_pool(MockAsyncPoolConfig)
         await result_awaitable
         mock_close.assert_called_once()
@@ -618,14 +632,31 @@ def test_cleanup_pools_async_configs() -> None:
     config = MockAsyncPoolConfig("test")  # pyright: ignore
     sqlspec.add_config(config)
 
-    async_mock = AsyncMock()
-    with patch.object(config, "close_pool", return_value=async_mock):
-        with patch("asyncio.run") as mock_run:
+    # Track calls
+    close_pool_called = False
+
+    async def mock_close_pool() -> None:
+        nonlocal close_pool_called
+        close_pool_called = True
+
+    # Mock close_pool to return our coroutine function (not the coroutine itself)
+    with patch.object(config, "close_pool", mock_close_pool):
+        # Mock asyncio.run to actually run the coroutine
+        def mock_run_impl(coro: Any) -> Any:
+            # Create a new event loop and run the coroutine
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(coro)
+            finally:
+                loop.close()
+
+        with patch("asyncio.run", side_effect=mock_run_impl) as mock_run:
             with patch("asyncio.get_running_loop") as mock_get_loop:
                 mock_get_loop.side_effect = RuntimeError("No running loop")
 
                 sqlspec._cleanup_pools()
                 mock_run.assert_called_once()
+                assert close_pool_called
 
 
 def test_cleanup_pools_exception_handling() -> None:
@@ -883,10 +914,9 @@ def test_atexit_cleanup_integration() -> None:
         # Manually trigger cleanup (simulating atexit)
         cleanup_func = mock_register.call_args[0][0]
 
-        with patch.object(config1, "close_pool") as mock_close1:
-            with patch.object(config2, "close_pool") as mock_close2:
-                with patch("asyncio.run"):
-                    cleanup_func()
+        with patch.object(config1, "close_pool") as mock_close1, patch.object(config2, "close_pool") as mock_close2:
+            with patch("asyncio.run"):
+                cleanup_func()
 
-                    mock_close1.assert_called_once()
-                    mock_close2.assert_called_once()
+                mock_close1.assert_called_once()
+                mock_close2.assert_called_once()

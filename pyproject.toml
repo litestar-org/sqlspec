@@ -272,6 +272,8 @@ module = [
   "prometheus_client.*",
   "aiosql",
   "aiosql.*",
+  "fsspec",
+  "fsspec.*",
 ]
 
 [[tool.mypy.overrides]]

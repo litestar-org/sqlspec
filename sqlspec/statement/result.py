@@ -281,7 +281,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         if self.data is None:
             msg = "No data available"
             raise TypeError(msg)
-        return self.data[index]
+        return cast("RowT", self.data[index])
 
 
 @dataclass

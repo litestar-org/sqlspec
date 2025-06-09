@@ -226,7 +226,7 @@ def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgSync
 
     sql_obj = SQL("INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)").as_many(parameters)
 
-    result = psycopg_batch_session.execute_statement(sql_obj)
+    result = psycopg_batch_session.execute(sql_obj)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
@@ -317,6 +317,8 @@ def test_psycopg_execute_many_with_arrays(psycopg_batch_session: PsycopgSyncDriv
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_with_json(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with JSON data on Psycopg."""
+    import json
+
     # Create table with JSON column
     psycopg_batch_session.execute_script("""
         CREATE TABLE IF NOT EXISTS test_json (
@@ -327,9 +329,9 @@ def test_psycopg_execute_many_with_json(psycopg_batch_session: PsycopgSyncDriver
     """)
 
     parameters = [
-        ("JSON 1", {"type": "test", "value": 100, "active": True}),
-        ("JSON 2", {"type": "prod", "value": 200, "active": False}),
-        ("JSON 3", {"type": "test", "value": 300, "tags": ["a", "b"]}),
+        ("JSON 1", json.dumps({"type": "test", "value": 100, "active": True})),
+        ("JSON 2", json.dumps({"type": "prod", "value": 200, "active": False})),
+        ("JSON 3", json.dumps({"type": "test", "value": 300, "tags": ["a", "b"]})),
     ]
 
     result = psycopg_batch_session.execute_many(

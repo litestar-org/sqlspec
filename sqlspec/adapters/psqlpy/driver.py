@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 """Psqlpy Driver Implementation."""
 
 import logging
@@ -62,6 +61,20 @@ class PsqlpyDriver(
         )
 
     def _get_placeholder_style(self) -> ParameterStyle:
+        # Use the target parameter style from config if specified
+        if self.config and hasattr(self.config, "target_parameter_style") and self.config.target_parameter_style:
+            style_map = {
+                "qmark": ParameterStyle.QMARK,
+                "named": ParameterStyle.NAMED_COLON,
+                "named_colon": ParameterStyle.NAMED_COLON,
+                "named_at": ParameterStyle.NAMED_AT,
+                "named_dollar": ParameterStyle.NAMED_DOLLAR,
+                "numeric": ParameterStyle.NUMERIC,
+                "pyformat_named": ParameterStyle.PYFORMAT_NAMED,
+                "pyformat_positional": ParameterStyle.PYFORMAT_POSITIONAL,
+            }
+            return style_map.get(self.config.target_parameter_style, ParameterStyle.NUMERIC)
+        # Default to numeric for psqlpy
         return ParameterStyle.NUMERIC
 
     async def _execute_statement(
@@ -77,8 +90,16 @@ class PsqlpyDriver(
                 **kwargs,
             )
         if statement.is_many:
+            # For execute_many, we need to convert placeholders even if parsing is disabled
+            # Get the SQL with proper placeholder conversion
+            if statement._config.enable_parsing or statement.expression is not None:
+                converted_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
+            else:
+                # Manually convert placeholders when parsing is disabled
+                converted_sql = self.convert_placeholders_in_raw_sql(str(statement._sql), self._get_placeholder_style())
+
             return await self._execute_many(
-                statement.to_sql(placeholder_style=self._get_placeholder_style()),
+                converted_sql,
                 statement.parameters,
                 connection=connection,
                 **kwargs,
@@ -123,23 +144,29 @@ class PsqlpyDriver(
     ) -> BatchResult:
         async with instrument_operation_async(self, "psqlpy_execute_many", "database"):
             conn = self._connection(connection)
-            total_affected = 0
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing psqlpy SQL (executemany): %s", sql)
             if self.instrumentation_config.log_parameters and param_list:
                 logger.debug("Psqlpy query parameters (batch): %s", param_list)
 
-            # Convert parameter list to proper format for execute_many
+            # Convert parameter list to proper format for psqlpy's native execute_many
             if param_list and isinstance(param_list, list):
+                # Ensure each parameter set is a list
+                formatted_params = []
                 for param_set in param_list:
-                    current_param_list = list(param_set) if isinstance(param_set, (list, tuple)) else [param_set]
-                    result = await conn.execute(sql, parameters=current_param_list)
-                    affected = getattr(result, "affected_rows", None) or getattr(result, "rowcount", 0)
-                    if affected and affected != -1:
-                        total_affected += affected
-                    elif not self.returns_rows(None):
-                        total_affected += 1
-            return BatchResult(total_affected)
+                    if isinstance(param_set, (list, tuple)):
+                        formatted_params.append(list(param_set))
+                    else:
+                        formatted_params.append([param_set])
+
+                # Use psqlpy's native execute_many method
+                await conn.execute_many(sql, formatted_params)
+
+                # PSQLPy's execute_many doesn't return affected rows count
+                # Return the number of parameter sets as a reasonable estimate
+                return BatchResult(len(formatted_params))
+
+            return BatchResult(0)
 
     async def _execute_script(
         self,
@@ -164,7 +191,19 @@ class PsqlpyDriver(
         async with instrument_operation_async(self, "psqlpy_wrap_select", "database"):
             query_result = cast("QueryResult", result)
             dict_rows: list[dict[str, Any]] = query_result.result()
-            column_names = list(dict_rows[0].keys()) if dict_rows else []
+
+            if not dict_rows:
+                # TODO: Use the parsed SQL here
+                # PSQLPy limitation: cannot get column names from empty result sets
+                # This is a known limitation where schema information is not available
+                return SQLResult[RowT](
+                    statement=statement,
+                    data=cast("list[RowT]", []),
+                    column_names=[],
+                    operation_type="SELECT",
+                )
+
+            column_names = list(dict_rows[0].keys())
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Psqlpy query returned %d rows", len(dict_rows))
@@ -180,7 +219,7 @@ class PsqlpyDriver(
                 )
             return SQLResult[RowT](
                 statement=statement,
-                data=dict_rows,
+                data=cast("list[RowT]", dict_rows),
                 column_names=column_names,
                 operation_type="SELECT",
             )
@@ -207,9 +246,23 @@ class PsqlpyDriver(
             elif isinstance(result, BatchResult):
                 rows_affected = result.affected_rows
             elif isinstance(result, QueryResult):
-                rows_affected = getattr(result, "affected_rows", -1)
-                if rows_affected == -1:
-                    rows_affected = getattr(result, "rowcount", -1)
+                # Try to get result data to see if it contains row count info
+                try:
+                    result_data = result.result()
+                    # For DML operations, psqlpy returns an empty list but we still affected rows
+                    if isinstance(result_data, list) and operation_type in {"INSERT", "UPDATE", "DELETE"}:
+                        # psqlpy doesn't provide row count for DML operations
+                        # We'll need to assume success if no exception was raised
+                        rows_affected = 1  # Default to 1 for single row operations
+                    else:
+                        rows_affected = getattr(result, "affected_rows", -1)
+                        if rows_affected == -1:
+                            rows_affected = getattr(result, "rowcount", -1)
+                except Exception:
+                    # If we can't get result data, try attributes
+                    rows_affected = getattr(result, "affected_rows", -1)
+                    if rows_affected == -1:
+                        rows_affected = getattr(result, "rowcount", -1)
             else:
                 logger.warning("Psqlpy _wrap_execute_result: Unexpected result type: %s", type(result))
 

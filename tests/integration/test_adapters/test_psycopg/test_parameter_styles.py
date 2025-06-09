@@ -231,7 +231,7 @@ def test_psycopg_parameter_with_sql_object(psycopg_params_session: PsycopgSyncDr
 
     # Test with pyformat style
     sql_obj = SQL("SELECT * FROM test_params WHERE value > %s", parameters=[150])
-    result = psycopg_params_session.execute_statement(sql_obj)
+    result = psycopg_params_session.execute(sql_obj)
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -240,7 +240,7 @@ def test_psycopg_parameter_with_sql_object(psycopg_params_session: PsycopgSyncDr
 
     # Test with named style
     named_sql = SQL("SELECT * FROM test_params WHERE value < %(max_value)s", parameters={"max_value": 150})
-    named_result = psycopg_params_session.execute_statement(named_sql)
+    named_result = psycopg_params_session.execute(named_sql)
 
     assert isinstance(named_result, SQLResult)
     assert named_result.data is not None
@@ -277,15 +277,21 @@ def test_psycopg_parameter_data_types(psycopg_params_session: PsycopgSyncDriver)
         )
 
     # Verify data with parameters
+    # First check if data was inserted
+    all_data_result = psycopg_params_session.execute("SELECT * FROM test_types")
+    assert len(all_data_result.data) == 3  # We inserted 3 rows
+
+    # Now test with specific parameters - use int comparison only to avoid float precision issues
     result = psycopg_params_session.execute(
-        "SELECT * FROM test_types WHERE int_val = %s AND real_val = %s",
-        (42, 3.14),
+        "SELECT * FROM test_types WHERE int_val = %s",
+        (42,),
     )
 
     assert len(result.data) == 1
     assert result.data[0]["text_val"] == "hello"
     assert result.data[0]["bool_val"] is True
     assert result.data[0]["array_val"] == [1, 2, 3]
+    assert abs(result.data[0]["real_val"] - 3.14) < 0.001  # Use approximate comparison for float
 
 
 @pytest.mark.xdist_group("postgres")
@@ -335,7 +341,7 @@ def test_psycopg_parameter_with_postgresql_functions(psycopg_params_session: Psy
 
     # Test with math functions and named parameters
     math_result = psycopg_params_session.execute(
-        "SELECT name, value, ROUND(value * %(multiplier)s, 2) as multiplied FROM test_params WHERE value >= %(min_val)s",
+        "SELECT name, value, ROUND(CAST(value * %(multiplier)s AS NUMERIC), 2) as multiplied FROM test_params WHERE value >= %(min_val)s",
         {"multiplier": 1.5, "min_val": 100},
     )
     assert len(math_result.data) >= 3

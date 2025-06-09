@@ -71,7 +71,7 @@ async def test_insert_returning_param_styles(psqlpy_config: PsqlpyConfig, params
         result = await driver.execute(sql, params)
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.num_rows() == 1
+        assert len(result.data) == 1
         assert result.data[0]["name"] == "test_name"
         assert result.data[0]["id"] is not None
 
@@ -161,7 +161,7 @@ async def test_select_methods(psqlpy_config: PsqlpyConfig) -> None:
     """Test various select methods and result handling."""
     async with psqlpy_config.provide_session() as driver:
         # Insert multiple records using execute_many
-        insert_sql = "INSERT INTO test_table (name) VALUES (?)"
+        insert_sql = "INSERT INTO test_table (name) VALUES ($1)"
         params_list = [("name1",), ("name2",)]
         many_result = await driver.execute_many(insert_sql, params_list)
         assert isinstance(many_result, SQLResult)
@@ -214,10 +214,14 @@ async def test_execute_script(psqlpy_config: PsqlpyConfig) -> None:
     """Test execute_script method for non-query operations."""
     sql = "SELECT 1;"  # Simple script
     async with psqlpy_config.provide_session() as driver:
-        status = await driver.execute_script(sql)
-        # psqlpy execute returns a status string, exact content might vary
-        assert isinstance(status, str)
-        # We don't assert exact status content as it might change, just that it runs
+        result = await driver.execute_script(sql)
+        # execute_script returns a SQLResult with operation_type='SCRIPT'
+        assert isinstance(result, SQLResult)
+        assert result.operation_type == "SCRIPT"
+        assert result.is_success()
+        # For scripts, we track statement counts
+        assert result.total_statements == 1
+        assert result.successful_statements == 1
 
 
 async def test_multiple_positional_parameters(psqlpy_config: PsqlpyConfig) -> None:
@@ -294,7 +298,7 @@ async def test_question_mark_in_edge_cases(psqlpy_config: PsqlpyConfig) -> None:
         result = await driver.execute("SELECT * FROM test_table WHERE name = ? AND '?' = '?'", "edge_case_test")
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.num_rows() == 1
+        assert len(result.data) == 1
         assert result.data[0]["name"] == "edge_case_test"
 
         # Test question mark in a comment - should not be treated as a parameter
@@ -303,7 +307,7 @@ async def test_question_mark_in_edge_cases(psqlpy_config: PsqlpyConfig) -> None:
         )
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.num_rows() == 1
+        assert len(result.data) == 1
         assert result.data[0]["name"] == "edge_case_test"
 
         # Test question mark in a block comment - should not be treated as a parameter
@@ -313,7 +317,7 @@ async def test_question_mark_in_edge_cases(psqlpy_config: PsqlpyConfig) -> None:
         )
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.num_rows() == 1
+        assert len(result.data) == 1
         assert result.data[0]["name"] == "edge_case_test"
 
         # Test with mixed parameter styles and multiple question marks
@@ -322,7 +326,7 @@ async def test_question_mark_in_edge_cases(psqlpy_config: PsqlpyConfig) -> None:
         )
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.num_rows() == 1
+        assert len(result.data) == 1
         assert result.data[0]["name"] == "edge_case_test"
 
         # Test a complex query with multiple question marks in different contexts
@@ -338,7 +342,7 @@ async def test_question_mark_in_edge_cases(psqlpy_config: PsqlpyConfig) -> None:
         )
         assert isinstance(result, SQLResult)
         assert result.data is not None
-        assert result.num_rows() == 1
+        assert len(result.data) == 1
         assert result.data[0]["name"] == "edge_case_test"
 
 
@@ -463,8 +467,7 @@ async def test_psqlpy_fetch_arrow_table(psqlpy_config: PsqlpyConfig) -> None:
         result = await driver.fetch_arrow_table(statement)
         assert isinstance(result, ArrowResult)
         table = result.data
-        assert isinstance(table, ArrowResult)
-        assert table.num_rows() == 2
+        assert table.num_rows == 2
         assert set(table.column_names) == {"name"}
         names = table.column("name").to_pylist()
         assert "arrow1" in names and "arrow2" in names
@@ -477,10 +480,10 @@ async def test_psqlpy_to_parquet(psqlpy_config: PsqlpyConfig) -> None:
         await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("pq1",))
         await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("pq2",))
         statement = SQL("SELECT name FROM test_table ORDER BY name")
-        with tempfile.NamedTemporaryFile() as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
             await driver.export_to_storage(statement, tmp.name)
             table = pq.read_table(tmp.name)
-            assert table.num_rows() == 2
+            assert table.num_rows == 2
             assert set(table.column_names) == {"name"}
             names = table.column("name").to_pylist()
             assert "pq1" in names and "pq2" in names

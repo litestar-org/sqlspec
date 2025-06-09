@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
-from psqlpy import Connection, ConnectionPool
+from psqlpy import ConnectionPool
 
 from sqlspec.adapters.psqlpy.driver import PsqlpyConnection, PsqlpyDriver
 from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig
@@ -188,7 +188,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         # Pool parameters
         conn_recycling_method: Optional[str] = None,
         max_db_pool_size: Optional[int] = None,
-        configure: Optional["Callable[[Connection], None]"] = None,
+        configure: Optional["Callable[[ConnectionPool], None]"] = None,
         # User-defined extras
         extras: Optional[dict[str, Any]] = None,
         **kwargs: Any,
@@ -305,7 +305,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     @property
     def connection_type(self) -> type[PsqlpyConnection]:  # type: ignore[override]
         """Return the connection type."""
-        return Connection
+        return ConnectionPool
 
     @property
     def driver_type(self) -> type[PsqlpyDriver]:  # type: ignore[override]
@@ -421,9 +421,12 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         Returns:
             A psqlpy Connection instance.
         """
-        conn_dict = self.connection_config_dict
-        # psqlpy Connection constructor is synchronous, not async
-        return Connection(**conn_dict)
+        # Ensure pool exists
+        if not self.pool_instance:
+            self.pool_instance = await self._create_pool()
+
+        # Get connection from pool
+        return await self.pool_instance.connection()
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[PsqlpyConnection, None]:
@@ -436,16 +439,12 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         Yields:
             A psqlpy Connection instance.
         """
-        if self.pool_instance:
-            async with self.pool_instance.acquire() as conn:
-                yield conn
-        else:
-            conn = await self.create_connection()
-            try:
-                yield conn
-            finally:
-                if conn is not None:
-                    await conn.close()
+        # Ensure pool exists
+        if not self.pool_instance:
+            self.pool_instance = await self._create_pool()
+
+        async with self.pool_instance.acquire() as conn:
+            yield conn
 
     @asynccontextmanager
     async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[PsqlpyDriver, None]:

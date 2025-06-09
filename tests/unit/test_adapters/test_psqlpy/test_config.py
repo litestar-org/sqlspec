@@ -1,6 +1,6 @@
 """Unit tests for Psqlpy configuration."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -124,12 +124,21 @@ async def test_psqlpy_config_provide_session() -> None:
     """Test Psqlpy config provide_session context manager."""
     config = PsqlpyConfig(dsn="postgresql://test_user:test_password@localhost:5432/test_db")
 
-    # Mock the connection creation to avoid real database connection
-    with patch.object(config, "create_connection") as mock_create_conn:
+    # Mock the pool creation to avoid real database connection
+    with patch.object(config, "_create_pool") as mock_create_pool:
+        # Create a mock pool with acquire context manager
+        mock_pool = MagicMock()
         mock_connection = AsyncMock()
-        # Make sure close() method is properly async
         mock_connection.close = AsyncMock()
-        mock_create_conn.return_value = mock_connection
+
+        # Set up the acquire method to return an async context manager
+        mock_pool.acquire = MagicMock()
+        mock_acquire_cm = AsyncMock()
+        mock_acquire_cm.__aenter__ = AsyncMock(return_value=mock_connection)
+        mock_acquire_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_pool.acquire.return_value = mock_acquire_cm
+
+        mock_create_pool.return_value = mock_pool
 
         # Test session context manager behavior
         async with config.provide_session() as session:

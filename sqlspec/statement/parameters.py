@@ -300,7 +300,8 @@ class ParameterValidator:
         if (
             len(parameters_info) == 1
             and provided_params is not None
-            and not isinstance(provided_params, (dict, list, tuple, Mapping, Sequence))
+            and not isinstance(provided_params, (dict, list, tuple, Mapping))
+            and (not isinstance(provided_params, Sequence) or isinstance(provided_params, (str, bytes)))
         ):
             return
 
