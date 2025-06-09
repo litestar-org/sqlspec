@@ -44,16 +44,17 @@ _PARAMETER_REGEX: Final = re.compile(
     # Specific non-parameter tokens that resemble parameters or contain parameter-like chars
     # These are matched to prevent them from being identified as parameters.
     (?P<pg_q_operator>\?\?|\?\||\?&) |                         # Group 7: PostgreSQL JSON operators ??, ?|, ?&
+    (?P<pg_cast>::(?P<cast_type>\w+)) |                        # Group 8: PostgreSQL ::type casting (cast_type is Group 9)
 
     # Parameter Placeholders (order can matter if syntax overlaps)
-    (?P<pyformat_named>%\((?P<pyformat_name>\w+)\)s) |          # Group 8: %(name)s (pyformat_name is Group 9)
-    (?P<pyformat_pos>%s) |                                      # Group 10: %s
-    (?P<named_colon>:(?P<colon_name>\w+)) |                     # Group 11: :name (colon_name is Group 12)
-    (?P<named_at>@(?P<at_name>\w+)) |                           # Group 13: @name (at_name is Group 14)
-    # Group 15: $name or $1 (dollar_param_name is Group 16)
+    (?P<pyformat_named>%\((?P<pyformat_name>\w+)\)s) |          # Group 10: %(name)s (pyformat_name is Group 11)
+    (?P<pyformat_pos>%s) |                                      # Group 12: %s
+    (?P<named_colon>:(?P<colon_name>\w+)) |                     # Group 13: :name (colon_name is Group 14)
+    (?P<named_at>@(?P<at_name>\w+)) |                           # Group 15: @name (at_name is Group 16)
+    # Group 17: $name or $1 (dollar_param_name is Group 18)
     # Differentiation between $name and $1 is handled in Python code using isdigit()
     (?P<named_dollar_param>\$(?P<dollar_param_name>\w+)) |
-    (?P<qmark>\?)                                              # Group 17: ? (now safer due to pg_q_operator rule above)
+    (?P<qmark>\?)                                              # Group 19: ? (now safer due to pg_q_operator rule above)
     """,
     re.VERBOSE | re.IGNORECASE | re.MULTILINE | re.DOTALL,
 )
@@ -118,6 +119,7 @@ class ParameterValidator:
             or match.group("line_comment")
             or match.group("block_comment")
             or match.group("pg_q_operator")
+            or match.group("pg_cast")
         ):
             return None
 
