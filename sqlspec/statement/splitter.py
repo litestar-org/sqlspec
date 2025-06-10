@@ -14,6 +14,9 @@ from typing import Callable, Optional, Union
 
 from sqlspec.utils.logging import get_logger
 
+__all__ = ("DialectConfig", "OracleDialectConfig", "PostgreSQLDialectConfig", "StatementSplitter", "TSQLDialectConfig", "Token", "TokenType", "split_sql_script", )
+
+
 logger = get_logger(__name__)
 
 
@@ -107,10 +110,12 @@ class DialectConfig(ABC):
             patterns.append((TokenType.TERMINATOR, "|".join(re.escape(t) for t in all_terminators)))
 
         # 5. Add low-precedence patterns
-        patterns.extend([
-            (TokenType.WHITESPACE, r"\s+"),
-            (TokenType.OTHER, r"."),  # Fallback for any other character
-        ])
+        patterns.extend(
+            [
+                (TokenType.WHITESPACE, r"\s+"),
+                (TokenType.OTHER, r"."),  # Fallback for any other character
+            ]
+        )
 
         return patterns
 

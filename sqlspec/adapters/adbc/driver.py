@@ -118,30 +118,30 @@ class AdbcDriver(
 
     def _convert_sql_parameter_style(self, sql: str, target_style: ParameterStyle) -> str:
         """Convert SQL parameter placeholders to the target style.
-        
+
         Args:
             sql: SQL string with placeholders
             target_style: Target parameter style for the database
-            
+
         Returns:
             SQL string with converted placeholders
         """
         from sqlspec.statement.parameters import ParameterValidator
-        
+
         # Extract parameters from the SQL
         validator = ParameterValidator()
         param_info_list = validator.extract_parameters(sql)
-        
+
         if not param_info_list:
             # No parameters to convert
             return sql
-            
+
         # Check if conversion is needed
         current_styles = {p.style for p in param_info_list if p.style}
         if len(current_styles) == 1 and target_style in current_styles:
             # SQL already uses the target style
             return sql
-            
+
         # Convert placeholders from end to start to preserve positions
         result_sql = sql
         for param_info in reversed(param_info_list):
@@ -149,63 +149,60 @@ class AdbcDriver(
             end_pos = start_pos + len(param_info.placeholder_text)
             new_placeholder = self._get_placeholder_for_style(target_style, param_info)
             result_sql = result_sql[:start_pos] + new_placeholder + result_sql[end_pos:]
-            
+
         return result_sql
-    
+
     def _convert_date_time_parameters(self, parameters: Any) -> Any:
         """Convert string date/time parameters to proper Python objects for PostgreSQL.
-        
+
         Args:
             parameters: Parameters in any format
-            
+
         Returns:
             Parameters with date/time strings converted to Python objects
         """
         if parameters is None or self.dialect != "postgres":
             return parameters
-            
+
         import datetime
-        from collections.abc import Mapping, Sequence
-        
+
         def convert_value(value: Any) -> Any:
             """Convert individual value if it's a date/time string."""
             if not isinstance(value, str):
                 return value
-                
+
             # Try to parse as date (YYYY-MM-DD)
-            if len(value) == 10 and value[4] == '-' and value[7] == '-':
+            if len(value) == 10 and value[4] == "-" and value[7] == "-":
                 try:
                     return datetime.date.fromisoformat(value)
                 except ValueError:
                     pass
-                    
+
             # Try to parse as time (HH:MM:SS)
-            if len(value) == 8 and value[2] == ':' and value[5] == ':':
+            if len(value) == 8 and value[2] == ":" and value[5] == ":":
                 try:
                     return datetime.time.fromisoformat(value)
                 except ValueError:
                     pass
-                    
+
             # Try to parse as datetime (YYYY-MM-DD HH:MM:SS)
-            if len(value) >= 19 and value[4] == '-' and value[7] == '-' and value[10] == ' ':
+            if len(value) >= 19 and value[4] == "-" and value[7] == "-" and value[10] == " ":
                 try:
                     # Handle with or without timezone
-                    if '+' in value or value.endswith('Z'):
-                        return datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
-                    else:
-                        return datetime.datetime.fromisoformat(value)
+                    if "+" in value or value.endswith("Z"):
+                        return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    return datetime.datetime.fromisoformat(value)
                 except ValueError:
                     pass
-                    
+
             return value
-        
+
         # Convert based on parameter type
         if isinstance(parameters, (list, tuple)):
             return type(parameters)(convert_value(v) for v in parameters)
-        elif isinstance(parameters, dict):
+        if isinstance(parameters, dict):
             return {k: convert_value(v) for k, v in parameters.items()}
-        else:
-            return convert_value(parameters)
+        return convert_value(parameters)
 
     @staticmethod
     def _get_placeholder_for_style(target_style: ParameterStyle, param_info: "ParameterInfo") -> str:
@@ -269,7 +266,7 @@ class AdbcDriver(
             # Convert SQL to the target parameter style if needed
             target_style = self._get_placeholder_style()
             converted_sql = self._convert_sql_parameter_style(sql, target_style)
-            
+
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", converted_sql)
 
@@ -277,7 +274,7 @@ class AdbcDriver(
             converted_params = self._convert_parameters_to_driver_format(
                 converted_sql, parameters, target_style=target_style
             )
-            
+
             # Convert date/time strings to Python objects for PostgreSQL
             converted_params = self._convert_date_time_parameters(converted_params)
 
@@ -314,14 +311,14 @@ class AdbcDriver(
             # Convert SQL to the target parameter style if needed
             target_style = self._get_placeholder_style()
             converted_sql = self._convert_sql_parameter_style(sql, target_style)
-            
+
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL (executemany): %s", converted_sql)
-                
+
             # Convert date/time strings to Python objects for PostgreSQL
             if param_list and self.dialect == "postgres":
                 param_list = [self._convert_date_time_parameters(params) for params in param_list]
-                
+
             if self.instrumentation_config.log_parameters and param_list:
                 logger.debug("Query parameters (batch): %s", param_list)
             # ADBC expects list of parameter sets

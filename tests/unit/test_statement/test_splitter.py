@@ -1,4 +1,5 @@
 """Tests for the SQL statement splitter."""
+
 import pytest
 
 from sqlspec.statement.splitter import (

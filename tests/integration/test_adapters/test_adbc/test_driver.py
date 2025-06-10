@@ -416,9 +416,11 @@ def test_adbc_duckdb_performance_bulk_operations(adbc_duckdb_session: AdbcDriver
 
     # Bulk insert (DuckDB ADBC doesn't support executemany yet)
     for i, (name, value) in enumerate(bulk_data):
-        result = adbc_duckdb_session.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (20 + i, name, value))
+        result = adbc_duckdb_session.execute(
+            "INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (20 + i, name, value)
+        )
         assert isinstance(result, SQLResult)
-    
+
     # Verify all insertions by counting
     count_result = adbc_duckdb_session.execute("SELECT COUNT(*) as count FROM test_table WHERE name LIKE 'bulk_user_%'")
     assert isinstance(count_result, SQLResult)

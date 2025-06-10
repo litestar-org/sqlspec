@@ -180,8 +180,8 @@ class OracleSyncDriver(
                         if statement:
                             # Oracle doesn't like trailing semicolons in execute() for regular SQL
                             # But PL/SQL blocks (BEGIN...END) need to keep their structure
-                            if not statement.upper().startswith('BEGIN'):
-                                statement = statement.rstrip(';')
+                            if not statement.upper().startswith("BEGIN"):
+                                statement = statement.rstrip(";")
                             if self.instrumentation_config.log_queries:
                                 logger.debug("Executing statement: %s", statement)
                             cursor.execute(statement)
@@ -432,8 +432,8 @@ class OracleAsyncDriver(
                         if statement:
                             # Oracle doesn't like trailing semicolons in execute() for regular SQL
                             # But PL/SQL blocks (BEGIN...END) need to keep their structure
-                            if not statement.upper().startswith('BEGIN'):
-                                statement = statement.rstrip(';')
+                            if not statement.upper().startswith("BEGIN"):
+                                statement = statement.rstrip(";")
                             if self.instrumentation_config.log_queries:
                                 logger.debug("Executing statement: %s", statement)
                             await cursor.execute(statement)

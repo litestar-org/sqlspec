@@ -62,7 +62,9 @@ def test_connection() -> None:
 def test_basic_crud(adbc_duckdb_session: AdbcDriver) -> None:
     """Test basic CRUD operations with ADBC DuckDB."""
     # INSERT
-    insert_result = adbc_duckdb_session.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "test_name", 42))
+    insert_result = adbc_duckdb_session.execute(
+        "INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "test_name", 42)
+    )
     assert isinstance(insert_result, SQLResult)
     # ADBC drivers may not support rowcount and return -1 or 0
     assert insert_result.rows_affected in (-1, 0, 1)
@@ -267,7 +269,7 @@ def test_performance_bulk_operations(adbc_duckdb_session: AdbcDriver) -> None:
             total_inserted += result.rows_affected
         else:
             total_inserted += 1  # Assume success if rowcount not supported
-    
+
     # Verify total insertions by counting rows
     count_result = adbc_duckdb_session.execute("SELECT COUNT(*) as count FROM test_table WHERE name LIKE 'bulk_user_%'")
     assert isinstance(count_result, SQLResult)
