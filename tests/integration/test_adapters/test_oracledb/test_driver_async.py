@@ -199,11 +199,12 @@ async def test_async_select_arrow(oracle_async_session: OracleAsyncConfig) -> No
             select_sql = "SELECT name, id FROM test_table WHERE name = ?"
             arrow_result = await driver.fetch_arrow_table(select_sql, ("arrow_name",))
 
-            assert hasattr(arrow_result, "arrow_table")
+            # ArrowResult stores the table in the 'data' attribute, not 'arrow_table'
+            assert hasattr(arrow_result, "data")
             arrow_table = arrow_result.data
             assert isinstance(arrow_table, pa.Table)
-            assert arrow_table.num_rows() == 1
-            assert arrow_table.num_columns() == 2
+            assert arrow_table.num_rows == 1
+            assert arrow_table.num_columns == 2
             # Oracle returns uppercase column names by default
             assert arrow_table.column_names == ["NAME", "ID"]
             assert arrow_table.column("NAME").to_pylist() == ["arrow_name"]

@@ -201,8 +201,8 @@ def test_sync_select_arrow(oracle_sync_session: OracleSyncConfig) -> None:
             assert hasattr(arrow_result, "data")
             arrow_table = arrow_result.data
             assert isinstance(arrow_table, pa.Table)
-            assert arrow_table.num_rows() == 1
-            assert arrow_table.num_columns() == 2
+            assert arrow_table.num_rows == 1
+            assert arrow_table.num_columns == 2
             # Oracle returns uppercase column names by default
             assert arrow_table.column_names == ["NAME", "ID"]
             assert arrow_table.column("NAME").to_pylist() == ["arrow_name"]

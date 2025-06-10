@@ -267,6 +267,22 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
                 return result
 
         elif not driver_expects_dict and isinstance(parameters, (dict, Mapping)):
+            # Special case: If target style is ORACLE_NUMERIC but current params are named dict
+            # We need to check if the SQL actually has :1, :2 style placeholders
+            if target_style == ParameterStyle.ORACLE_NUMERIC:
+                # Check if all parameter names in SQL are numeric
+                if all(p.name and p.name.isdigit() for p in param_info_list):
+                    # SQL has :1, :2 style - convert dict to match
+                    result = {}
+                    for param_info in param_info_list:
+                        if param_info.name and param_info.name.isdigit():
+                            # Try to find the value by ordinal position
+                            # This handles the case where we have {"min_val": 200, "max_val": 400}
+                            # but SQL has :1, :2
+                            param_values = list(parameters.values())
+                            if param_info.ordinal < len(param_values):
+                                result[param_info.name] = param_values[param_info.ordinal]
+                    return result
             # Convert dict to positional
             if all(key.startswith("param_") and key[6:].isdigit() for key in parameters):
                 # Already in param_N format, extract values in order
@@ -292,6 +308,22 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
                     if param_info.ordinal < len(param_values):
                         result.append(param_values[param_info.ordinal])
             return result if result else list(parameters.values())
+
+        # Special case: Both driver expects dict and parameters are dict
+        # But we need to check if conversion is needed for ORACLE_NUMERIC style
+        if driver_expects_dict and isinstance(parameters, (dict, Mapping)):
+            if target_style == ParameterStyle.ORACLE_NUMERIC:
+                # Check if all parameter names in SQL are numeric
+                if all(p.name and p.name.isdigit() for p in param_info_list):
+                    # SQL has :1, :2 style - convert dict keys to match
+                    result = {}
+                    for param_info in param_info_list:
+                        if param_info.name and param_info.name.isdigit():
+                            # Try to find the value by ordinal position
+                            param_values = list(parameters.values())
+                            if param_info.ordinal < len(param_values):
+                                result[param_info.name] = param_values[param_info.ordinal]
+                    return result
 
         # Parameters are already in the expected format
         return parameters

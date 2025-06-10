@@ -24,7 +24,10 @@ def oracledb_arrow_session(oracle_23ai_service: OracleService) -> "Generator[Ora
         service_name=oracle_23ai_service.service_name,
         user=oracle_23ai_service.user,
         password=oracle_23ai_service.password,
-        statement_config=SQLConfig(strict_mode=False),
+        statement_config=SQLConfig(
+            strict_mode=False,
+            enable_transformations=False,  # Disable literal parameterization
+        ),
     )
 
     with config.provide_session() as session:

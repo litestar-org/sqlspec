@@ -53,7 +53,7 @@ class OracleSyncDriver(
 
     def _get_placeholder_style(self) -> ParameterStyle:
         """Return the placeholder style for the driver."""
-        return ParameterStyle.NAMED_COLON
+        return ParameterStyle.ORACLE_NUMERIC
 
     @contextmanager
     def _get_cursor(self, connection: Optional[OracleSyncConnection] = None) -> Generator[Cursor, None, None]:
@@ -84,8 +84,9 @@ class OracleSyncDriver(
                 **kwargs,
             )
 
+        sql_to_execute = statement.to_sql(placeholder_style=self._get_placeholder_style())
         return self._execute(
-            statement.to_sql(placeholder_style=self._get_placeholder_style()),
+            sql_to_execute,
             statement.parameters,  # Use raw merged parameters
             statement,
             connection=connection,
@@ -102,11 +103,21 @@ class OracleSyncDriver(
     ) -> Any:
         with instrument_operation(self, "oracle_execute", "database"):
             conn = self._connection(connection)
+            
+            # Debug logging
+            logger.debug("DEBUG Oracle _execute: SQL received: %s", sql)
+            logger.debug("DEBUG Oracle _execute: Parameters received: %s", parameters)
+            
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
             
             # Convert parameters to the format Oracle expects
-            converted_params = self._convert_parameters_to_driver_format(sql, parameters)
+            # Pass the target style to help with conversion
+            converted_params = self._convert_parameters_to_driver_format(
+                sql, parameters, target_style=self._get_placeholder_style()
+            )
+            
+            logger.debug("DEBUG Oracle _execute: Converted parameters: %s", converted_params)
             
             if self.instrumentation_config.log_parameters and converted_params:
                 logger.debug("Query parameters: %s", converted_params)
@@ -284,7 +295,7 @@ class OracleAsyncDriver(
 
     def _get_placeholder_style(self) -> ParameterStyle:
         """Return the placeholder style for the driver."""
-        return ParameterStyle.NAMED_COLON
+        return ParameterStyle.ORACLE_NUMERIC
 
     @asynccontextmanager
     async def _get_cursor(
@@ -339,7 +350,10 @@ class OracleAsyncDriver(
                 logger.debug("Executing SQL: %s", sql)
             
             # Convert parameters to the format Oracle expects
-            converted_params = self._convert_parameters_to_driver_format(sql, parameters)
+            # Pass the target style to help with conversion
+            converted_params = self._convert_parameters_to_driver_format(
+                sql, parameters, target_style=self._get_placeholder_style()
+            )
             
             if self.instrumentation_config.log_parameters and converted_params:
                 logger.debug("Query parameters: %s", converted_params)
