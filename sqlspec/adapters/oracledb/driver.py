@@ -52,6 +52,7 @@ class OracleSyncDriver(
         )
 
     def _get_placeholder_style(self) -> ParameterStyle:
+        """Return the placeholder style for the driver."""
         return ParameterStyle.NAMED_COLON
 
     @contextmanager
@@ -85,7 +86,7 @@ class OracleSyncDriver(
 
         return self._execute(
             statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.get_parameters(style=self._get_placeholder_style()),
+            statement.parameters,  # Use raw merged parameters
             statement,
             connection=connection,
             **kwargs,
@@ -103,13 +104,17 @@ class OracleSyncDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            if self.instrumentation_config.log_parameters and parameters:
-                logger.debug("Query parameters: %s", parameters)
+            
+            # Convert parameters to the format Oracle expects
+            converted_params = self._convert_parameters_to_driver_format(sql, parameters)
+            
+            if self.instrumentation_config.log_parameters and converted_params:
+                logger.debug("Query parameters: %s", converted_params)
             with self._get_cursor(conn) as cursor:
-                if parameters is None:
+                if converted_params is None:
                     cursor.execute(sql)
                 else:
-                    cursor.execute(sql, parameters)
+                    cursor.execute(sql, converted_params)
 
                 # For SELECT statements, extract data while cursor is open
                 if self.returns_rows(statement.expression):
@@ -135,9 +140,12 @@ class OracleSyncDriver(
                 logger.debug("Query parameters (batch): %s", param_list)
             with self._get_cursor(conn) as cursor:
                 cursor.executemany(sql, param_list or [])
-                # executemany is typically used for INSERT/UPDATE/DELETE operations
-                # Return rowcount for these operations
-                return cursor.rowcount
+                # Return consistent dict format like _execute
+                return {
+                    "rowcount": cursor.rowcount,
+                    "data": [],  # executemany doesn't return data
+                    "columns": [],
+                }
 
     def _execute_script(
         self,
@@ -219,6 +227,9 @@ class OracleSyncDriver(
                 operation_type = "SCRIPT"
                 rows_affected = 0  # No specific row count for script success message
                 status_message = result
+            elif isinstance(result, dict):
+                # New format from _execute_many: result is a dict
+                rows_affected = result.get("rowcount", -1)
             elif isinstance(result, int):
                 # New format: result is directly the rowcount
                 rows_affected = result
@@ -272,6 +283,7 @@ class OracleAsyncDriver(
         )
 
     def _get_placeholder_style(self) -> ParameterStyle:
+        """Return the placeholder style for the driver."""
         return ParameterStyle.NAMED_COLON
 
     @asynccontextmanager
@@ -307,7 +319,7 @@ class OracleAsyncDriver(
 
         return await self._execute(
             statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.get_parameters(style=self._get_placeholder_style()),
+            statement.parameters,  # Use raw merged parameters
             statement,
             connection=connection,
             **kwargs,
@@ -325,14 +337,26 @@ class OracleAsyncDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            if self.instrumentation_config.log_parameters and parameters:
-                logger.debug("Query parameters: %s", parameters)
+            
+            # Convert parameters to the format Oracle expects
+            converted_params = self._convert_parameters_to_driver_format(sql, parameters)
+            
+            if self.instrumentation_config.log_parameters and converted_params:
+                logger.debug("Query parameters: %s", converted_params)
             async with self._get_cursor(conn) as cursor:
-                if parameters is None:
+                if converted_params is None:
                     await cursor.execute(sql)
                 else:
-                    await cursor.execute(sql, parameters)
-                return cursor
+                    await cursor.execute(sql, converted_params)
+                
+                # For SELECT statements, extract data while cursor is open
+                if self.returns_rows(statement.expression):
+                    fetched_data = await cursor.fetchall()
+                    column_names = [col[0] for col in cursor.description or []]
+                    return {"data": fetched_data, "column_names": column_names, "rowcount": cursor.rowcount}
+                
+                # For non-SELECT statements, return rowcount
+                return cursor.rowcount
 
     async def _execute_many(
         self,
@@ -349,7 +373,12 @@ class OracleAsyncDriver(
                 logger.debug("Query parameters (batch): %s", param_list)
             async with self._get_cursor(conn) as cursor:
                 await cursor.executemany(sql, param_list or [])
-                return cursor
+                # Return consistent dict format like _execute
+                return {
+                    "rowcount": cursor.rowcount,
+                    "data": [],  # executemany doesn't return data
+                    "columns": [],
+                }
 
     async def _execute_script(
         self,
@@ -373,12 +402,14 @@ class OracleAsyncDriver(
         **kwargs: Any,
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         async with instrument_operation_async(self, "oracle_async_wrap_select", "database"):
-            cursor = cast("AsyncCursor", result)
-            if not cursor.description:
+            # Handle the new dict format from _execute
+            if isinstance(result, dict) and "data" in result:
+                fetched_tuples = result["data"]
+                column_names = result["column_names"]
+                rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples]
+            else:
+                # This shouldn't happen with the new _execute implementation
                 return SQLResult[RowT](statement=statement, data=[], column_names=[], operation_type="SELECT")
-            column_names = [col[0] for col in cursor.description]
-            fetched_tuples = await cursor.fetchall()
-            rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples]
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Query returned %d rows", len(rows_as_dicts))
@@ -418,7 +449,14 @@ class OracleAsyncDriver(
                 operation_type = "SCRIPT"
                 rows_affected = 0
                 status_message = result
+            elif isinstance(result, dict):
+                # New format from _execute_many: result is a dict
+                rows_affected = result.get("rowcount", -1)
+            elif isinstance(result, int):
+                # New format: result is directly the rowcount
+                rows_affected = result
             else:
+                # Fallback for backward compatibility - shouldn't happen with new implementation
                 cursor = cast("AsyncCursor", result)
                 with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
                     if cursor:

@@ -118,7 +118,7 @@ def test_parameter_styles(adbc_sqlite_session: AdbcDriver) -> None:
     result = adbc_sqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_value",))
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.num_rows() == 1
+    assert result.get_count() == 1
     assert result.data[0]["name"] == "test_value"
     assert result.data[0]["value"] == 42
 
@@ -148,7 +148,7 @@ def test_multiple_parameters(adbc_sqlite_session: AdbcDriver) -> None:
     )
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.num_rows() == 2
+    assert result.get_count() == 2
     assert result.data[0]["name"] == "Alice"
     assert result.data[1]["name"] == "Bob"
 
@@ -345,7 +345,7 @@ def test_basic_types(adbc_sqlite_session: AdbcDriver) -> None:
     result = adbc_sqlite_session.execute("SELECT * FROM basic_types_test")
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.num_rows() == 1
+    assert result.get_count() == 1
 
     row = result.data[0]
     assert row["int_col"] == 42
@@ -383,7 +383,7 @@ def test_blob_type(adbc_sqlite_session: AdbcDriver) -> None:
     result = adbc_sqlite_session.execute("SELECT id, data FROM blob_test ORDER BY id")
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.num_rows() == 3
+    assert result.get_count() == 3
 
     for i, expected_blob in enumerate(test_blobs):
         assert result.data[i]["data"] == expected_blob
@@ -422,9 +422,9 @@ def test_fetch_arrow_table(adbc_sqlite_session: AdbcDriver) -> None:
     assert result.column_names == ["name", "age", "salary"]
 
     # Verify data content
-    names = result.column("name").to_pylist()
-    ages = result.column("age").to_pylist()
-    salaries = result.column("salary").to_pylist()
+    names = result.data.column("name").to_pylist()
+    ages = result.data.column("age").to_pylist()
+    salaries = result.data.column("salary").to_pylist()
 
     assert names == ["Alice", "Bob", "Charlie"]
     assert ages == [25, 30, 35]
@@ -448,7 +448,7 @@ def test_to_parquet(adbc_sqlite_session: AdbcDriver) -> None:
 
         # Read back the Parquet file
         table = pq.read_table(tmp.name)
-        assert table.num_rows() == 2
+        assert table.num_rows == 2
         assert set(table.column_names) >= {"id", "name", "value"}
 
         # Verify data
@@ -468,7 +468,7 @@ def test_multiple_backends_consistency(adbc_sqlite_session: AdbcDriver) -> None:
     result = adbc_sqlite_session.execute("SELECT name, value FROM test_table ORDER BY name")
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.num_rows() == 2
+    assert result.get_count() == 2
     assert result.data[0]["name"] == "backend_test1"
     assert result.data[0]["value"] == 100
 
@@ -500,7 +500,7 @@ def test_insert_returning(adbc_sqlite_session: AdbcDriver) -> None:
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.num_rows() == 1
+    assert result.get_count() == 1
     assert result.data[0]["name"] == "returning_test"
     assert result.data[0]["value"] == 999
     assert result.data[0]["id"] is not None

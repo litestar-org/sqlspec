@@ -35,44 +35,40 @@ __all__ = (
 
 logger = logging.getLogger(__name__)
 
-CONNECTION_FIELDS = frozenset(
-    {
-        "dsn",
-        "user",
-        "password",
-        "host",
-        "port",
-        "service_name",
-        "sid",
-        "wallet_location",
-        "wallet_password",
-        "config_dir",
-        "tcp_connect_timeout",
-        "retry_count",
-        "retry_delay",
-        "mode",
-        "events",
-        "edition",
-    }
-)
+CONNECTION_FIELDS = frozenset({
+    "dsn",
+    "user",
+    "password",
+    "host",
+    "port",
+    "service_name",
+    "sid",
+    "wallet_location",
+    "wallet_password",
+    "config_dir",
+    "tcp_connect_timeout",
+    "retry_count",
+    "retry_delay",
+    "mode",
+    "events",
+    "edition",
+})
 
-POOL_FIELDS = CONNECTION_FIELDS.union(
-    {
-        "min",
-        "max",
-        "increment",
-        "threaded",
-        "getmode",
-        "homogeneous",
-        "timeout",
-        "wait_timeout",
-        "max_lifetime_session",
-        "session_callback",
-        "max_sessions_per_shard",
-        "soda_metadata_cache",
-        "ping_interval",
-    }
-)
+POOL_FIELDS = CONNECTION_FIELDS.union({
+    "min",
+    "max",
+    "increment",
+    "threaded",
+    "getmode",
+    "homogeneous",
+    "timeout",
+    "wait_timeout",
+    "max_lifetime_session",
+    "session_callback",
+    "max_sessions_per_shard",
+    "soda_metadata_cache",
+    "ping_interval",
+})
 
 
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool", OracleSyncDriver]):
@@ -668,7 +664,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
     async def _create_pool(self) -> "AsyncConnectionPool":
         """Create the actual async connection pool."""
 
-        # Note: oracledb.create_pool_async returns a pool directly, not a coroutine
         return oracledb.create_pool_async(**self.pool_config_dict)
 
     async def _close_pool(self) -> None:

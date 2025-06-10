@@ -117,22 +117,18 @@ class AsyncpgDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
+            
+            # Convert parameters to the format AsyncPG expects (positional list)
+            converted_params = self._convert_parameters_to_driver_format(sql, parameters)
+            
+            # AsyncPG expects parameters as *args, not a single list
             args_for_driver: list[Any] = []
-            if parameters is not None:
-                if isinstance(parameters, (list, tuple)):
-                    args_for_driver.extend(parameters)
-                elif isinstance(parameters, dict):
-                    # Don't add empty dicts as parameters
-                    if parameters:
-                        # AsyncPG expects positional params, not a dict
-                        # This shouldn't happen after our conversion in _execute_statement
-                        logger.warning(
-                            "Unexpected dict parameters in AsyncPG execute: %s",
-                            parameters,
-                        )
-                        args_for_driver.append(parameters)
+            if converted_params is not None:
+                if isinstance(converted_params, (list, tuple)):
+                    args_for_driver.extend(converted_params)
                 else:
-                    args_for_driver.append(parameters)
+                    args_for_driver.append(converted_params)
+            
             if self.instrumentation_config.log_parameters and args_for_driver:
                 logger.debug("Query parameters: %s", args_for_driver)
             if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
@@ -164,17 +160,23 @@ class AsyncpgDriver(
 
             result = await conn.executemany(sql, params_list)
 
-            # AsyncPG's executemany returns None, not a status string
-            # We need to return information that _wrap_execute_result can use
-            # Return a synthetic status message with the batch count
-            if result is None and params_list:
-                # For executemany, assume each parameter set affects 1 row
-                # This is the typical case for INSERT/UPDATE/DELETE operations
-                batch_size = len(params_list)
-                # Create a synthetic status message that our parser can understand
-                return f"INSERT 0 {batch_size}"  # Standard PostgreSQL format
+            # Return consistent dict format like _execute
+            # AsyncPG's executemany returns a status string or None
+            batch_size = len(params_list) if params_list else 0
 
-            return result
+            # Try to extract rowcount from result if available
+            rowcount = batch_size  # Default to batch size
+            if result and isinstance(result, str):
+                # Parse PostgreSQL status like "INSERT 0 5"
+                parts = result.split()
+                if len(parts) >= 3 and parts[-1].isdigit():
+                    rowcount = int(parts[-1])
+
+            return {
+                "rowcount": rowcount,
+                "data": [],  # executemany doesn't return data
+                "columns": [],
+            }
 
     async def _execute_script(
         self,
@@ -252,33 +254,39 @@ class AsyncpgDriver(
                     operation_type = str(statement.expression.key).upper()
 
             rows_affected = 0  # Default
+            status_message = "UNKNOWN"
 
-            # Handle None result case gracefully
-            status_message = "UNKNOWN" if result is None else str(result)
+            # Handle dict result from _execute_many
+            if isinstance(result, dict):
+                rows_affected = result.get("rowcount", 0)
+                status_message = f"BATCH {rows_affected}"
+            else:
+                # Handle None result case gracefully
+                status_message = "UNKNOWN" if result is None else str(result)
 
-            match = ASYNC_PG_STATUS_REGEX.match(status_message)
-            if match:
-                command_tag = match.group(1).upper()
-                if command_tag in {"INSERT", "UPDATE", "DELETE", "MERGE"}:
-                    try:
-                        rows_affected = int(match.group(3))  # group(3) is the row count
-                    except (IndexError, ValueError):
-                        logger.warning(
-                            "Could not parse row count from asyncpg status: %s",
-                            status_message,
-                        )
-                elif (
-                    command_tag == "SELECT" and len(match.groups()) >= EXPECTED_REGEX_GROUPS
-                ):  # SELECT count (from SELECT INTO?)
-                    with contextlib.suppress(IndexError, ValueError):
-                        rows_affected = int(match.group(3))
-            elif "SCRIPT" in operation_type.upper():
-                pass
-            elif status_message != "UNKNOWN":  # Don't warn for None results we converted to UNKNOWN
-                logger.warning(
-                    "Could not parse asyncpg status message: %s",
-                    status_message,
-                )
+                match = ASYNC_PG_STATUS_REGEX.match(status_message)
+                if match:
+                    command_tag = match.group(1).upper()
+                    if command_tag in {"INSERT", "UPDATE", "DELETE", "MERGE"}:
+                        try:
+                            rows_affected = int(match.group(3))  # group(3) is the row count
+                        except (IndexError, ValueError):
+                            logger.warning(
+                                "Could not parse row count from asyncpg status: %s",
+                                status_message,
+                            )
+                    elif (
+                        command_tag == "SELECT" and len(match.groups()) >= EXPECTED_REGEX_GROUPS
+                    ):  # SELECT count (from SELECT INTO?)
+                        with contextlib.suppress(IndexError, ValueError):
+                            rows_affected = int(match.group(3))
+                elif "SCRIPT" in operation_type.upper():
+                    pass
+                elif status_message != "UNKNOWN":  # Don't warn for None results we converted to UNKNOWN
+                    logger.warning(
+                        "Could not parse asyncpg status message: %s",
+                        status_message,
+                    )
 
             if self.instrumentation_config.log_results_count:
                 logger.debug(

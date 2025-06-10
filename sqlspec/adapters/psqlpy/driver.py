@@ -141,7 +141,7 @@ class PsqlpyDriver(
         param_list: Any,
         connection: Optional[PsqlpyConnection] = None,
         **kwargs: Any,
-    ) -> BatchResult:
+    ) -> Any:
         async with instrument_operation_async(self, "psqlpy_execute_many", "database"):
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
@@ -162,11 +162,16 @@ class PsqlpyDriver(
                 # Use psqlpy's native execute_many method
                 await conn.execute_many(sql, formatted_params)
 
+                # Return consistent dict format like _execute
                 # PSQLPy's execute_many doesn't return affected rows count
-                # Return the number of parameter sets as a reasonable estimate
-                return BatchResult(len(formatted_params))
+                # Use the number of parameter sets as a reasonable estimate
+                return {
+                    "rowcount": len(formatted_params),
+                    "data": [],  # executemany doesn't return data
+                    "columns": [],
+                }
 
-            return BatchResult(0)
+            return {"rowcount": 0, "data": [], "columns": []}
 
     async def _execute_script(
         self,
@@ -243,6 +248,9 @@ class PsqlpyDriver(
                 operation_type = "SCRIPT"
                 rows_affected = 0
                 status_message = result
+            elif isinstance(result, dict):
+                # New format from _execute_many: result is a dict
+                rows_affected = result.get("rowcount", -1)
             elif isinstance(result, BatchResult):
                 rows_affected = result.affected_rows
             elif isinstance(result, QueryResult):

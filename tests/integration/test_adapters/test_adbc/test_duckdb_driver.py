@@ -199,7 +199,7 @@ def test_complex_queries(adbc_duckdb_session: AdbcDriver) -> None:
     result = adbc_duckdb_session.execute(complex_query)
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.num_rows() == 3
+    assert result.get_count() == 3
 
     # Engineering should have highest average salary
     engineering_row = next(row for row in result.data if row["dept_name"] == "Engineering")

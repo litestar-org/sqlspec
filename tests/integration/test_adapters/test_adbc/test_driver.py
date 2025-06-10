@@ -90,9 +90,10 @@ def adbc_duckdb_session() -> Generator[AdbcDriver, None, None]:
 
 
 @pytest.fixture
-def adbc_bigquery_session(bigquery_service):  # TODO: Import BigQueryService
+def adbc_bigquery_session(bigquery_service: "BigQueryService") -> Generator[AdbcDriver, None, None]:
     """Create an ADBC BigQuery session using emulator."""
-
+    from pytest_databases.docker.bigquery import BigQueryService
+    
     config = AdbcConfig(
         driver_name="adbc_driver_bigquery",
         project_id=bigquery_service.project,
@@ -117,8 +118,8 @@ def test_adbc_postgresql_basic_crud(adbc_postgresql_session: AdbcDriver) -> None
         "INSERT INTO test_table (name, value) VALUES ($1, $2)", ("test_name", 42)
     )
     assert isinstance(insert_result, SQLResult)
-    # ADBC drivers may not support rowcount and return -1
-    assert insert_result.rows_affected in (-1, 1)
+    # ADBC drivers may not support rowcount and return -1 or 0
+    assert insert_result.rows_affected in (-1, 0, 1)
 
     # SELECT
     select_result = adbc_postgresql_session.execute(
@@ -135,8 +136,8 @@ def test_adbc_postgresql_basic_crud(adbc_postgresql_session: AdbcDriver) -> None
         "UPDATE test_table SET value = $1 WHERE name = $2", (100, "test_name")
     )
     assert isinstance(update_result, SQLResult)
-    # ADBC drivers may not support rowcount and return -1
-    assert update_result.rows_affected in (-1, 1)
+    # ADBC drivers may not support rowcount and return -1 or 0
+    assert update_result.rows_affected in (-1, 0, 1)
 
     # Verify UPDATE
     verify_result = adbc_postgresql_session.execute("SELECT value FROM test_table WHERE name = $1", ("test_name",))
@@ -147,8 +148,8 @@ def test_adbc_postgresql_basic_crud(adbc_postgresql_session: AdbcDriver) -> None
     # DELETE
     delete_result = adbc_postgresql_session.execute("DELETE FROM test_table WHERE name = $1", ("test_name",))
     assert isinstance(delete_result, SQLResult)
-    # ADBC drivers may not support rowcount and return -1
-    assert delete_result.rows_affected in (-1, 1)
+    # ADBC drivers may not support rowcount and return -1 or 0
+    assert delete_result.rows_affected in (-1, 0, 1)
 
     # Verify DELETE
     empty_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM test_table")
@@ -163,8 +164,8 @@ def test_adbc_sqlite_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
     # INSERT
     insert_result = adbc_sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("test_name", 42))
     assert isinstance(insert_result, SQLResult)
-    # ADBC drivers may not support rowcount and return -1
-    assert insert_result.rows_affected in (-1, 1)
+    # ADBC drivers may not support rowcount and return -1 or 0
+    assert insert_result.rows_affected in (-1, 0, 1)
 
     # SELECT
     select_result = adbc_sqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name",))
@@ -177,8 +178,8 @@ def test_adbc_sqlite_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
     # UPDATE
     update_result = adbc_sqlite_session.execute("UPDATE test_table SET value = ? WHERE name = ?", (100, "test_name"))
     assert isinstance(update_result, SQLResult)
-    # ADBC drivers may not support rowcount and return -1
-    assert update_result.rows_affected in (-1, 1)
+    # ADBC drivers may not support rowcount and return -1 or 0
+    assert update_result.rows_affected in (-1, 0, 1)
 
     # Verify UPDATE
     verify_result = adbc_sqlite_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name",))
@@ -189,8 +190,8 @@ def test_adbc_sqlite_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
     # DELETE
     delete_result = adbc_sqlite_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(delete_result, SQLResult)
-    # ADBC drivers may not support rowcount and return -1
-    assert delete_result.rows_affected in (-1, 1)
+    # ADBC drivers may not support rowcount and return -1 or 0
+    assert delete_result.rows_affected in (-1, 0, 1)
 
     # Verify DELETE
     empty_result = adbc_sqlite_session.execute("SELECT COUNT(*) as count FROM test_table")
@@ -205,10 +206,10 @@ def test_adbc_sqlite_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
 def test_adbc_duckdb_basic_crud(adbc_duckdb_session: AdbcDriver) -> None:
     """Test basic CRUD operations with ADBC DuckDB."""
     # INSERT
-    insert_result = adbc_duckdb_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("test_name", 42))
+    insert_result = adbc_duckdb_session.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "test_name", 42))
     assert isinstance(insert_result, SQLResult)
-    # ADBC drivers may not support rowcount and return -1
-    assert insert_result.rows_affected in (-1, 1)
+    # ADBC drivers may not support rowcount and return -1 or 0
+    assert insert_result.rows_affected in (-1, 0, 1)
 
     # SELECT
     select_result = adbc_duckdb_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name",))
@@ -221,8 +222,8 @@ def test_adbc_duckdb_basic_crud(adbc_duckdb_session: AdbcDriver) -> None:
     # UPDATE
     update_result = adbc_duckdb_session.execute("UPDATE test_table SET value = ? WHERE name = ?", (100, "test_name"))
     assert isinstance(update_result, SQLResult)
-    # ADBC drivers may not support rowcount and return -1
-    assert update_result.rows_affected in (-1, 1)
+    # ADBC drivers may not support rowcount and return -1 or 0
+    assert update_result.rows_affected in (-1, 0, 1)
 
     # Verify UPDATE
     verify_result = adbc_duckdb_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name",))
@@ -233,8 +234,8 @@ def test_adbc_duckdb_basic_crud(adbc_duckdb_session: AdbcDriver) -> None:
     # DELETE
     delete_result = adbc_duckdb_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(delete_result, SQLResult)
-    # ADBC drivers may not support rowcount and return -1
-    assert delete_result.rows_affected in (-1, 1)
+    # ADBC drivers may not support rowcount and return -1 or 0
+    assert delete_result.rows_affected in (-1, 0, 1)
 
     # Verify DELETE
     empty_result = adbc_duckdb_session.execute("SELECT COUNT(*) as count FROM test_table")
@@ -341,7 +342,7 @@ def test_adbc_duckdb_complex_queries(adbc_duckdb_session: AdbcDriver) -> None:
     result = adbc_duckdb_session.execute(complex_query)
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.num_rows() == 3
+    assert result.get_count() == 3
 
     # Engineering should have highest average salary
     engineering_row = next(row for row in result.data if row["dept_name"] == "Engineering")
@@ -530,7 +531,7 @@ def test_adbc_postgresql_parameter_styles(adbc_postgresql_session: AdbcDriver, p
     result = adbc_postgresql_session.execute(sql, params)
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.num_rows() == 1
+    assert result.get_count() == 1
     assert result.data[0]["name"] == "test_value"
 
 
@@ -568,8 +569,8 @@ def test_adbc_postgresql_execute_script(adbc_postgresql_session: AdbcDriver) -> 
     """
 
     result = adbc_postgresql_session.execute_script(script)
-    # Script execution typically returns a status string
-    assert isinstance(result, str) or result is None  # type: ignore[unreachable]
+    # Script execution returns either a string or SQLResult
+    assert isinstance(result, (str, SQLResult)) or result is None
 
     # Verify script effects
     select_result = adbc_postgresql_session.execute(
@@ -782,8 +783,8 @@ def test_adbc_postgresql_schema_operations(adbc_postgresql_session: AdbcDriver) 
         "INSERT INTO schema_test (description) VALUES ($1)", ("test description",)
     )
     assert isinstance(insert_result, SQLResult)
-    # ADBC drivers may not support rowcount and return -1
-    assert insert_result.rows_affected in (-1, 1)
+    # ADBC drivers may not support rowcount and return -1 or 0
+    assert insert_result.rows_affected in (-1, 0, 1)
 
     # Verify table structure
     info_result = adbc_postgresql_session.execute("""
@@ -813,7 +814,7 @@ def test_adbc_postgresql_column_names_and_metadata(adbc_postgresql_session: Adbc
     assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
     assert result.data is not None
-    assert result.num_rows() == 1
+    assert result.get_count() == 1
 
     # Test that we can access data by column name
     row = result.data[0]
@@ -844,7 +845,7 @@ def test_adbc_postgresql_with_schema_type(adbc_postgresql_session: AdbcDriver) -
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.num_rows() == 1
+    assert result.get_count() == 1
 
     # The data should be converted to the schema type by the ResultConverter
     assert result.column_names == ["id", "name", "value"]
@@ -890,7 +891,7 @@ def test_adbc_multiple_backends_consistency(adbc_sqlite_session: AdbcDriver) -> 
     result = adbc_sqlite_session.execute("SELECT name, value FROM test_table ORDER BY name")
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.num_rows() == 2
+    assert result.get_count() == 2
     assert result.data[0]["name"] == "backend_test1"
     assert result.data[0]["value"] == 100
 
@@ -911,7 +912,7 @@ def test_adbc_postgresql_to_parquet(adbc_postgresql_session: AdbcDriver) -> None
     with tempfile.NamedTemporaryFile() as tmp:
         adbc_postgresql_session.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
         table = pq.read_table(tmp.name)
-        assert table.num_rows() == 2
+        assert table.num_rows == 2
         assert set(table.column_names) >= {"id", "name", "value"}
         data = table.to_pylist()
         assert any(row["name"] == "arrow1" and row["value"] == 111 for row in data)

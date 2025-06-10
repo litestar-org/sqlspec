@@ -183,7 +183,12 @@ class AdbcDriver(
                 logger.debug("Query parameters (batch): %s", param_list)
             # ADBC expects list of parameter sets
             cursor.executemany(sql, param_list or [])
-            return cursor
+            # Return consistent dict format like _execute
+            return {
+                "rowcount": cursor.rowcount,
+                "data": [],  # executemany doesn't return data
+                "columns": [],
+            }
 
     def _execute_script(
         self,
@@ -194,8 +199,26 @@ class AdbcDriver(
         conn = self._connection(connection)
         if self.instrumentation_config.log_queries:
             logger.debug("Executing SQL script: %s", script)
+        
+        # ADBC drivers don't support multiple statements in a single execute
+        # Split the script and execute each statement individually
+        import sqlglot
+        
+        statements = []
+        try:
+            # Parse the script to get individual statements
+            for stmt in sqlglot.parse(script, dialect=self._get_dialect()):
+                if stmt:
+                    statements.append(stmt.sql(dialect=self._get_dialect()))
+        except Exception:
+            # If parsing fails, fall back to simple semicolon split
+            statements = [s.strip() for s in script.split(';') if s.strip()]
+        
         with self._get_cursor(conn) as cursor:
-            cursor.execute(script)
+            for statement in statements:
+                if statement:
+                    cursor.execute(statement)
+        
         return "SCRIPT EXECUTED"
 
     def _wrap_select_result(  # pyright ignore

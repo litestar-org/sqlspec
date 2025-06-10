@@ -74,6 +74,10 @@ class SqliteDriver(
         if not isinstance(connection.row_factory, type(sqlite3.Row)):
             connection.row_factory = sqlite3.Row
 
+    def _get_placeholder_style(self) -> ParameterStyle:
+        """Return the parameter style for SQLite."""
+        return ParameterStyle.QMARK
+
     @staticmethod
     @contextmanager
     def _get_cursor(connection: SqliteConnection) -> Iterator[sqlite3.Cursor]:
@@ -131,11 +135,15 @@ class SqliteDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQLite SQL: %s", sql)
-            if self.instrumentation_config.log_parameters and parameters:
-                logger.debug("SQLite query parameters: %s", parameters)
+            
+            # Convert parameters to the format SQLite expects
+            sqlite_params = self._convert_parameters_to_driver_format(sql, parameters)
+            
+            if self.instrumentation_config.log_parameters and sqlite_params:
+                logger.debug("SQLite query parameters: %s", sqlite_params)
             with self._get_cursor(conn) as cursor:
-                # SQLite handles both dict and tuple parameters
-                cursor.execute(sql, parameters or ())
+                # SQLite expects tuple or dict parameters
+                cursor.execute(sql, sqlite_params or ())
                 if self.returns_rows(statement.expression):
                     fetched_data: list[sqlite3.Row] = cursor.fetchall()
                     column_names = [col[0] for col in cursor.description or []]
@@ -148,7 +156,7 @@ class SqliteDriver(
         param_list: Any,
         connection: Optional[SqliteConnection] = None,
         **kwargs: Any,
-    ) -> int:
+    ) -> Any:
         """Execute a statement many times with a list of parameter tuples."""
         with instrument_operation(self, "sqlite_execute_many", "database"):
             conn = self._connection(connection)
@@ -171,7 +179,12 @@ class SqliteDriver(
 
             with self._get_cursor(conn) as cursor:
                 cursor.executemany(sql, formatted_params)
-                return cursor.rowcount
+                # Return consistent dict format like _execute
+                return {
+                    "rowcount": cursor.rowcount,
+                    "data": [],  # executemany doesn't return data
+                    "columns": [],
+                }
 
     def _execute_script(
         self,
@@ -255,8 +268,12 @@ class SqliteDriver(
                     metadata={"status_message": result},
                 )
 
+            # result is a dict from _execute_many
+            if isinstance(result, dict):
+                rows_affected = result.get("rowcount", -1)
+                last_inserted_id = None
             # result is an integer (rowcount) for DML operations
-            if isinstance(result, int):
+            elif isinstance(result, int):
                 rows_affected = result
                 last_inserted_id = None
             else:

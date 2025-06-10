@@ -163,22 +163,18 @@ class SQLConfig:
         if self.transformers is not None:
             final_transformers.extend(self.transformers)
         elif self.processing_pipeline_components is not None:
-            final_transformers.extend(
-                [
-                    p
-                    for p in self.processing_pipeline_components
-                    if not (hasattr(p, "validate") or hasattr(p, "analyze"))
-                ]
-            )
+            final_transformers.extend([
+                p for p in self.processing_pipeline_components if not (hasattr(p, "validate") or hasattr(p, "analyze"))
+            ])
         elif self.enable_transformations:
             final_transformers.extend([CommentRemover(), ParameterizeLiterals()])
 
         if self.validators is not None:
             final_validators.extend(self.validators)
         elif self.processing_pipeline_components is not None:
-            final_validators.extend(
-                [p for p in self.processing_pipeline_components if hasattr(p, "validate") and not hasattr(p, "analyze")]
-            )
+            final_validators.extend([
+                p for p in self.processing_pipeline_components if hasattr(p, "validate") and not hasattr(p, "analyze")
+            ])
         elif self.enable_validation:
             final_validators.extend([SecurityValidator(), DMLSafetyValidator(), PerformanceValidator()])
 
@@ -239,6 +235,7 @@ class SQL:
         "_dialect",
         "_is_many",
         "_is_script",
+        "_normalization_info",
         "_processed_state",
         "_raw_kwargs",
         "_raw_parameters",
@@ -300,6 +297,7 @@ class SQL:
         self._is_many: bool = _existing_statement_data.get("_is_many", False)
         self._is_script: bool = _existing_statement_data.get("_is_script", False)
         self._processed_state: Optional[_ProcessedState] = None
+        self._normalization_info: dict[str, Any] = _existing_statement_data.get("_normalization_info", {})
         self._raw_parameters = actual_parameters
         self._raw_kwargs = dict(kwargs) if kwargs is not None else {}
 
@@ -322,6 +320,7 @@ class SQL:
         self._is_many = existing._is_many
         self._is_script = existing._is_script
         self._processed_state = None
+        self._normalization_info = existing._normalization_info.copy() if existing._normalization_info else {}
         # Use provided parameters or copy from existing
         self._raw_parameters = parameters if parameters is not None else existing._raw_parameters
         self._raw_kwargs = dict(kwargs) if kwargs is not None else {}
@@ -530,6 +529,9 @@ class SQL:
         target_dialect = dialect if dialect is not None else self._dialect
         sql: str
 
+        # Check if we need to denormalize (only if normalization occurred)
+        was_normalized = getattr(self, "_normalization_info", {}).get("was_normalized", False)
+
         if not self._config.enable_parsing and self.expression is None:
             sql = str(self._sql)
             if include_statement_separator and not sql.rstrip().endswith(statement_separator):
@@ -570,6 +572,18 @@ class SQL:
         else:
             sql = str(self._sql)
 
+        # Apply denormalization if needed
+        if was_normalized and placeholder_style is not None:
+            # Convert back to original style using denormalization
+            processed = self._ensure_processed()
+            if processed.final_parameter_info:
+                target_style = (
+                    ParameterStyle(placeholder_style) if isinstance(placeholder_style, str) else placeholder_style
+                )
+                sql = self._config.parameter_converter._denormalize_sql(
+                    sql, processed.final_parameter_info, target_style
+                )
+
         if include_statement_separator and not sql.rstrip().endswith(statement_separator):
             sql = sql.rstrip() + statement_separator
 
@@ -604,8 +618,17 @@ class SQL:
                 return tuple(params) if isinstance(params, list) else params
 
         if isinstance(style, ParameterStyle):
+            # Handle Oracle numeric style specially
+            if style == ParameterStyle.ORACLE_NUMERIC:
+                params = self.parameters
+                if isinstance(params, (list, tuple)):
+                    # Convert positional to Oracle's :1, :2 format
+                    return {str(i + 1): value for i, value in enumerate(params)}
+                if isinstance(params, dict):
+                    return params
             if style in {
                 ParameterStyle.NAMED_COLON,
+                ParameterStyle.ORACLE_NUMERIC,
                 ParameterStyle.NAMED_AT,
                 ParameterStyle.NAMED_DOLLAR,
                 ParameterStyle.PYFORMAT_NAMED,
@@ -716,6 +739,7 @@ class SQL:
                 "named_at": ParameterStyle.NAMED_AT,
                 "named_dollar": ParameterStyle.NAMED_DOLLAR,
                 "numeric": ParameterStyle.NUMERIC,
+                "oracle_numeric": ParameterStyle.ORACLE_NUMERIC,
                 "pyformat_named": ParameterStyle.PYFORMAT_NAMED,
                 "pyformat_positional": ParameterStyle.PYFORMAT_POSITIONAL,
                 "static": ParameterStyle.STATIC,
@@ -792,6 +816,9 @@ class SQL:
             return "?"
         if target_style == ParameterStyle.NAMED_COLON:
             return f":{param_info.name}" if param_info.name else f":param_{param_info.ordinal}"
+        if target_style == ParameterStyle.ORACLE_NUMERIC:
+            # Oracle numeric uses :1, :2 format based on ordinal position
+            return f":{param_info.ordinal + 1}"
         if target_style == ParameterStyle.NAMED_DOLLAR:
             return f"${param_info.name}" if param_info.name else f"$param_{param_info.ordinal}"
         if target_style == ParameterStyle.NUMERIC:
@@ -1273,14 +1300,12 @@ class SQL:
         else:
             hashable_params = (self.parameters,)
 
-        return hash(
-            (
-                str(self._sql),
-                hashable_params,
-                self._dialect,
-                hash(str(self._config)),
-            )
-        )
+        return hash((
+            str(self._sql),
+            hashable_params,
+            self._dialect,
+            hash(str(self._config)),
+        ))
 
     def as_many(self, parameters: "Optional[SQLParameterType]" = None) -> "SQL":
         """Create a copy of this SQL statement marked for batch execution.
@@ -1294,13 +1319,11 @@ class SQL:
             A new SQL instance with is_many=True and the provided parameters.
 
         Example:
-            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many(
-            ...     [
-            ...         ["John"],
-            ...         ["Jane"],
-            ...         ["Bob"],
-            ...     ]
-            ... )
+            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many([
+            ...     ["John"],
+            ...     ["Jane"],
+            ...     ["Bob"],
+            ... ])
             >>> # This creates a statement ready for executemany with 3 parameter sets
         """
         # Use provided parameters or keep existing ones (use _raw_parameters to avoid validation)
@@ -1477,13 +1500,25 @@ class SQL:
                 args = parameters if isinstance(parameters, (list, tuple)) else [parameters]
                 merged = self._config.parameter_converter._merge_mixed_parameters(param_info, args, kwargs)
                 context.parameter_info, context.merged_parameters = param_info, merged
+                # Store normalization state in context
+                setattr(context, "extra_info", {"was_normalized": False})
                 return
 
             convert_result = self._config.parameter_converter.convert_parameters(
                 raw_sql_input, parameters, None, kwargs, validate=self._config.enable_validation
             )
+            # Unpack the enhanced result (transformed_sql, param_info, merged_params, extra_info)
+            transformed_sql = convert_result[0]
             context.parameter_info = convert_result[1]
             context.merged_parameters = convert_result[2]
+            extra_info = convert_result[3]
+
+            # Store extra info in context for later use
+            setattr(context, "extra_info", extra_info)
+
+            # If normalization occurred, update the SQL for parsing
+            if extra_info.get("was_normalized", False):
+                setattr(context, "normalized_sql", transformed_sql)
 
         # Fallback for parameter processing errors
         if not hasattr(context, "parameter_info"):
@@ -1491,6 +1526,7 @@ class SQL:
                 [],
                 self._config.parameter_converter.merge_parameters(raw_parameters_input, None, None),
             )
+            setattr(context, "extra_info", {"was_normalized": False})
 
     def _parse_initial_expression(self, context: "SQLProcessingContext") -> "Optional[Expression]":
         """Parse the initial SQL expression with SQLGlot normalization if parsing is enabled."""
@@ -1500,10 +1536,11 @@ class SQL:
 
         try:
             with wrap_exceptions():
+                # Use normalized SQL if available, otherwise use original
+                sql_to_parse = getattr(context, "normalized_sql", context.initial_sql_string)
+
                 # Parse the initial expression
-                initial_expression = self.to_expression(
-                    context.initial_sql_string, self._dialect, getattr(self, "_is_script", False)
-                )
+                initial_expression = self.to_expression(sql_to_parse, self._dialect, getattr(self, "_is_script", False))
 
                 # Apply SQLGlot normalization if enabled
                 if self._config.enable_normalization and initial_expression is not None:
@@ -1632,7 +1669,7 @@ class SQL:
                 issues=["Pipeline returned None validation result."],
             )
 
-        return _ProcessedState(
+        processed_state = _ProcessedState(
             raw_sql_input=context.initial_sql_string,
             raw_parameters_input=context.initial_parameters,
             initial_expression=getattr(context, "current_expression", None),
@@ -1644,3 +1681,11 @@ class SQL:
             input_had_placeholders=context.input_sql_had_placeholders,
             config_snapshot=self._config,
         )
+
+        # Store extra_info as a separate attribute on the SQL instance
+        if hasattr(context, "extra_info"):
+            self._normalization_info = context.extra_info
+        else:
+            self._normalization_info = {"was_normalized": False}
+
+        return processed_state

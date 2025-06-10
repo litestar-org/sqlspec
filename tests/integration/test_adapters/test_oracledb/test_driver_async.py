@@ -10,13 +10,6 @@ import pytest
 from pytest_databases.docker.oracle import OracleService
 
 from sqlspec.adapters.oracledb import OracleAsyncConfig
-
-# TODO: Import OraclePoolConfig when it becomes available
-try:
-    from sqlspec.adapters.oracledb.config import OraclePoolConfig
-except ImportError:
-    # Placeholder for missing OraclePoolConfig
-    OraclePoolConfig = dict
 from sqlspec.statement.result import SQLResult
 
 ParamStyle = Literal["positional_binds", "dict_binds"]
@@ -30,13 +23,13 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 def oracle_async_session(oracle_23ai_service: OracleService) -> OracleAsyncConfig:
     """Create an Oracle asynchronous session."""
     return OracleAsyncConfig(
-        pool_config=OraclePoolConfig(
-            host=oracle_23ai_service.host,
-            port=oracle_23ai_service.port,
-            service_name=oracle_23ai_service.service_name,
-            user=oracle_23ai_service.user,
-            password=oracle_23ai_service.password,
-        )
+        host=oracle_23ai_service.host,
+        port=oracle_23ai_service.port,
+        service_name=oracle_23ai_service.service_name,
+        user=oracle_23ai_service.user,
+        password=oracle_23ai_service.password,
+        min=1,
+        max=5,
     )
 
 
@@ -171,7 +164,7 @@ async def test_async_select_value(oracle_async_session: OracleAsyncConfig, param
         assert len(value_result.data) == 1
 
         # Extract single value using column name
-        value = value_result.data[0][value_result.column_names()[0]]
+        value = value_result.data[0][value_result.column_names[0]]
         assert value == "test_value"
 
         await driver.execute_script(
@@ -244,7 +237,7 @@ async def test_execute_many_insert(oracle_async_session: OracleAsyncConfig) -> N
         """
         await driver.execute_script(sql_create)
 
-        insert_sql = "INSERT INTO test_many_table (name) VALUES (?)"
+        insert_sql = "INSERT INTO test_many_table (name) VALUES (:1)"
         params_list = [("name1",), ("name2",), ("name3",)]
 
         result = await driver.execute_many(insert_sql, params_list)

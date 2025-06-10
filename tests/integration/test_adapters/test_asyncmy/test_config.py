@@ -118,10 +118,18 @@ def test_asyncmy_config_initialization() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="This test requires a real MySQL server connection - should be in integration tests")
-async def test_asyncmy_config_provide_session() -> None:
+@pytest.mark.xdist_group("mysql")
+async def test_asyncmy_config_provide_session(mysql_service) -> None:
     """Test Asyncmy config provide_session context manager."""
-    config = AsyncmyConfig(host="localhost", port=3306, user="test_user", password="test_password", database="test_db")
+    from pytest_databases.docker.mysql import MySQLService
+    
+    config = AsyncmyConfig(
+        host=mysql_service.host,
+        port=mysql_service.port,
+        user=mysql_service.user,
+        password=mysql_service.password,
+        database=mysql_service.db,
+    )
 
     # Test session context manager behavior
     async with config.provide_session() as session:

@@ -129,7 +129,7 @@ class AiosqliteDriver(
         param_list: Any,
         connection: Optional[AiosqliteConnection] = None,
         **kwargs: Any,
-    ) -> int:
+    ) -> Any:
         async with instrument_operation_async(self, "aiosqlite_execute_many", "database"):
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
@@ -150,7 +150,13 @@ class AiosqliteDriver(
 
             async with self._get_cursor(conn) as cursor:
                 await cursor.executemany(sql, params_list)
-                return len(params_list) if params_list else 0
+                # Return consistent dict format like _execute
+                # Note: aiosqlite doesn't provide rowcount for executemany
+                return {
+                    "rowcount": len(params_list) if params_list else 0,
+                    "data": [],  # executemany doesn't return data
+                    "columns": [],
+                }
 
     async def _execute_script(
         self,
@@ -221,8 +227,12 @@ class AiosqliteDriver(
                     metadata={"status_message": result},
                 )
 
+            # result is a dict from _execute_many
+            if isinstance(result, dict):
+                rows_affected = result.get("rowcount", -1)
+                last_inserted_id = None
             # result is an integer (rowcount) for execute_many operations
-            if isinstance(result, int):
+            elif isinstance(result, int):
                 rows_affected = result
                 last_inserted_id = None
             else:

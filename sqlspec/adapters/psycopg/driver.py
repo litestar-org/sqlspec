@@ -128,37 +128,12 @@ class PsycopgSyncDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            # TODO: why do we need this? we should use the normal parameter handling
-            # Debug logging for parameters
-            logger.debug("Raw parameters received: %s (type: %s)", parameters, type(parameters))
 
             # Convert parameters to the format Psycopg expects
-            psycopg_params: Any = None
-            if parameters is not None:
-                if isinstance(parameters, dict):
-                    if not parameters:  # Empty dict
-                        psycopg_params = None
-                    elif all(key.startswith("param_") and key[6:].isdigit() for key in parameters):
-                        # Convert to positional list based on param indices
-                        param_list = []
-                        for i in range(len(parameters)):
-                            param_key = f"param_{i}"
-                            if param_key in parameters:
-                                param_list.append(parameters[param_key])
-                        psycopg_params = param_list
-                    else:
-                        # Use dict as-is for named parameters
-                        psycopg_params = parameters
-                elif isinstance(parameters, (list, tuple)):
-                    psycopg_params = parameters or None
-                else:
-                    psycopg_params = [parameters]
+            psycopg_params = self._convert_parameters_to_driver_format(sql, parameters)
 
             if self.instrumentation_config.log_parameters and psycopg_params:
                 logger.debug("Query parameters: %s", psycopg_params)
-
-            # Always log final params for debugging
-            logger.debug("Final psycopg_params: %s (type: %s)", psycopg_params, type(psycopg_params))
 
             with self._get_cursor(conn) as cursor:
                 # Psycopg accepts tuple, list, dict or None for parameters
@@ -431,27 +406,7 @@ class PsycopgAsyncDriver(
                 logger.debug("Executing SQL: %s", sql)
 
             # Convert parameters to the format Psycopg expects
-            # TODO: improve this.  why can't use just use parameter parsing?
-            psycopg_params: Any = None
-            if parameters is not None:
-                if isinstance(parameters, dict):
-                    if not parameters:  # Empty dict
-                        psycopg_params = None
-                    elif all(key.startswith("param_") and key[6:].isdigit() for key in parameters):
-                        # Convert to positional list based on param indices
-                        param_list = []
-                        for i in range(len(parameters)):
-                            param_key = f"param_{i}"
-                            if param_key in parameters:
-                                param_list.append(parameters[param_key])
-                        psycopg_params = param_list
-                    else:
-                        # Use dict as-is for named parameters
-                        psycopg_params = parameters
-                elif isinstance(parameters, (list, tuple)):
-                    psycopg_params = parameters or None
-                else:
-                    psycopg_params = [parameters]
+            psycopg_params = self._convert_parameters_to_driver_format(sql, parameters)
 
             if self.instrumentation_config.log_parameters and psycopg_params:
                 logger.debug("Query parameters: %s", psycopg_params)
