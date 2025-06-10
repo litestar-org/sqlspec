@@ -14,7 +14,16 @@ from typing import Callable, Optional, Union
 
 from sqlspec.utils.logging import get_logger
 
-__all__ = ("DialectConfig", "OracleDialectConfig", "PostgreSQLDialectConfig", "StatementSplitter", "TSQLDialectConfig", "Token", "TokenType", "split_sql_script", )
+__all__ = (
+    "DialectConfig",
+    "OracleDialectConfig",
+    "PostgreSQLDialectConfig",
+    "StatementSplitter",
+    "TSQLDialectConfig",
+    "Token",
+    "TokenType",
+    "split_sql_script",
+)
 
 
 logger = get_logger(__name__)

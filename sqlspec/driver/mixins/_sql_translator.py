@@ -75,15 +75,19 @@ class SQLTranslatorMixin:
             elif target_style == ParameterStyle.PYFORMAT_POSITIONAL:
                 new_placeholder = "%s"
             elif target_style == ParameterStyle.PYFORMAT_NAMED:
-                new_placeholder = f"%({param_info.name})s"
+                param_name = param_info.name or f"param_{param_info.ordinal}"
+                new_placeholder = f"%({param_name})s"
             elif target_style == ParameterStyle.QMARK:
                 new_placeholder = "?"
             elif target_style == ParameterStyle.NAMED_COLON:
-                new_placeholder = f":{param_info.name}"
+                param_name = param_info.name or f"param_{param_info.ordinal}"
+                new_placeholder = f":{param_name}"
             elif target_style == ParameterStyle.NAMED_AT:
-                new_placeholder = f"@{param_info.name}"
+                param_name = param_info.name or f"param_{param_info.ordinal}"
+                new_placeholder = f"@{param_name}"
             elif target_style == ParameterStyle.NAMED_DOLLAR:
-                new_placeholder = f"${param_info.name}"
+                param_name = param_info.name or f"param_{param_info.ordinal}"
+                new_placeholder = f"${param_name}"
             else:
                 # Keep the original placeholder if we don't know how to convert
                 new_placeholder = param_info.placeholder_text
