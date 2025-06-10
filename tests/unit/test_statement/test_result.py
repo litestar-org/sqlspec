@@ -508,26 +508,26 @@ def test_arrow_result_column_names(basic_arrow_result: ArrowResult) -> None:
 
 def test_arrow_result_num_rows(basic_arrow_result: ArrowResult) -> None:
     """Test num_rows method."""
-    rows = basic_arrow_result.num_rows()
+    rows = basic_arrow_result.num_rows
     assert rows == 100  # From mock_arrow_table.num_rows
 
     # Test with None data
     none_result = ArrowResult(statement="SELECT * FROM users", data=basic_arrow_result.data)
     none_result.data = None  # type: ignore[assignment]
     with pytest.raises(ValueError, match="No Arrow table available"):
-        none_result.num_rows()
+        none_result.num_rows
 
 
 def test_arrow_result_num_columns(basic_arrow_result: ArrowResult) -> None:
     """Test num_columns method."""
-    columns = basic_arrow_result.num_columns()
+    columns = basic_arrow_result.num_columns
     assert columns == 3  # From mock_arrow_table.num_columns
 
     # Test with None data
     none_result = ArrowResult(statement="SELECT * FROM users", data=basic_arrow_result.data)
     none_result.data = None  # type: ignore[assignment]
     with pytest.raises(ValueError, match="No Arrow table available"):
-        none_result.num_columns()
+        none_result.num_columns
 
 
 @pytest.mark.parametrize(

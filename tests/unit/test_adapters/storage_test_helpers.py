@@ -89,7 +89,7 @@ class StorageTestMixin:
 
         # Verify result
         assert isinstance(result, ArrowResult)
-        assert result.num_rows() == 2
+        assert result.num_rows == 2
         assert "id" in result.column_names
         assert "name" in result.column_names
 

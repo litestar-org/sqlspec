@@ -481,7 +481,7 @@ async def test_aiosqlite_fetch_arrow_table(aiosqlite_session: AiosqliteDriver) -
     statement = SQL("SELECT name, value FROM test_table ORDER BY name")
     result = await aiosqlite_session.fetch_arrow_table(statement)
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 2
+    assert result.num_rows == 2
     assert set(result.column_names) == {"name", "value"}
     table = result.data
     names = table["name"].to_pylist()

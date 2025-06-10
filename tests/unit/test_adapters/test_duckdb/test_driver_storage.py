@@ -64,7 +64,7 @@ class TestDuckDBStorageOperations:
 
         # Verify result
         assert isinstance(result, ArrowResult)
-        assert result.num_rows() == 2
+        assert result.num_rows == 2
         assert "id" in result.column_names
         assert "name" in result.column_names
 
@@ -283,7 +283,7 @@ class TestDuckDBStorageOperations:
         # Verify override connection was used
         override_conn.execute.assert_called_once()
         # The default connection should not have been used
-        assert result.num_rows() == 2
+        assert result.num_rows == 2
 
     def test_ingest_arrow_table_with_mode_replace(
         self, duckdb_driver: DuckDBDriver, mock_duckdb_connection: MagicMock
@@ -339,7 +339,7 @@ class TestDuckDBStorageOperations:
 
         # Verify result handles nulls properly
         assert isinstance(result, ArrowResult)
-        assert result.num_rows() == 2
+        assert result.num_rows == 2
         assert set(result.column_names) == {"id", "name", "email"}
 
         # Verify the data contains nulls using PyArrow

@@ -68,7 +68,7 @@ class TestBigQueryStorageOperations:
 
         # Verify result
         assert isinstance(result, ArrowResult)
-        assert result.num_rows() == 2
+        assert result.num_rows == 2
         assert "id" in result.column_names
         assert "name" in result.column_names
 
@@ -301,7 +301,7 @@ class TestBigQueryStorageOperations:
         assert call_args[1].get("connection") is override_client
 
         # Verify result
-        assert result.num_rows() == 2
+        assert result.num_rows == 2
 
     def test_ingest_arrow_table_with_mode_replace(
         self, bigquery_driver: BigQueryDriver, mock_bigquery_client: MagicMock
@@ -370,7 +370,7 @@ class TestBigQueryStorageOperations:
 
         # Verify result handles nulls properly
         assert isinstance(result, ArrowResult)
-        assert result.num_rows() == 2
+        assert result.num_rows == 2
         # Check that the actual Arrow table has the expected columns
         assert set(result.data.column_names) == {"id", "name", "email"}
 

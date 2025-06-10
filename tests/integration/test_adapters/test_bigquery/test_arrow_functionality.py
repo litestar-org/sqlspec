@@ -70,7 +70,7 @@ def test_bigquery_fetch_arrow_table(bigquery_arrow_session: BigQueryDriver, bigq
 
     assert isinstance(result, ArrowResult)
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 5
+    assert result.num_rows == 5
     assert result.data.num_columns >= 5  # id, name, value, price, is_active
 
     # Check column names
@@ -120,7 +120,7 @@ def test_bigquery_arrow_with_parameters(
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3
+    assert result.num_rows == 3
     values = result.data["value"].to_pylist()
     assert values == [200, 300, 400]
 
@@ -135,7 +135,7 @@ def test_bigquery_arrow_empty_result(bigquery_arrow_session: BigQueryDriver, big
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 0
+    assert result.num_rows == 0
     assert result.data.num_columns >= 5  # Schema should still be present
 
 
@@ -179,7 +179,7 @@ def test_bigquery_to_arrow_with_sql_object(
     result = bigquery_arrow_session.fetch_arrow_table(sql_obj)
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3
+    assert result.num_rows == 3
     assert result.data.num_columns == 2  # Only name and value columns
 
     names = result.data["name"].to_pylist()
@@ -210,7 +210,7 @@ def test_bigquery_arrow_with_bigquery_functions(
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3  # Products B, C, D
+    assert result.num_rows == 3  # Products B, C, D
     assert "formatted_name" in result.column_names
     assert "price_with_tax" in result.column_names
     assert "status" in result.column_names
@@ -241,7 +241,7 @@ def test_bigquery_arrow_with_arrays_and_structs(
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3  # Only active products
+    assert result.num_rows == 3  # Only active products
     assert "name_value_array" in result.column_names
     assert "product_struct" in result.column_names
 
@@ -270,7 +270,7 @@ def test_bigquery_arrow_with_window_functions(
     """)
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 5
+    assert result.num_rows == 5
     assert "rank_by_value" in result.column_names
     assert "prev_value" in result.column_names
     assert "running_total" in result.column_names
@@ -304,7 +304,7 @@ def test_bigquery_arrow_with_ml_functions(
     """)
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 5
+    assert result.num_rows == 5
     assert "feature_interaction" in result.column_names
     assert "process_status" in result.column_names
 

@@ -205,6 +205,15 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         # For single statement execution
         return self.rows_affected or 0
 
+    @property
+    def num_rows(self) -> int:
+        return self.get_total_rows_affected()
+
+    @property
+    def num_columns(self) -> int:
+        """Get the number of columns in the result data."""
+        return len(self.column_names) if self.column_names else 0
+
     def get_errors(self) -> "list[str]":
         """Get all errors from script execution."""
         return self.errors.copy()
@@ -359,9 +368,6 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
 
         Returns:
             The scalar value from first column of first row, or None
-
-        Raises:
-            ValueError: If more than one result
         """
         row = self.one_or_none()
         if row is None:
@@ -439,6 +445,7 @@ class ArrowResult(StatementResult[ArrowTable]):
 
         return self.data.column_names
 
+    @property
     def num_rows(self) -> int:
         """Get the number of rows in the Arrow table.
 
@@ -454,6 +461,7 @@ class ArrowResult(StatementResult[ArrowTable]):
 
         return self.data.num_rows
 
+    @property
     def num_columns(self) -> int:
         """Get the number of columns in the Arrow table.
 

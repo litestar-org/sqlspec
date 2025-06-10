@@ -433,7 +433,7 @@ def test_sqlite_fetch_arrow_table(sqlite_session: SqliteDriver) -> None:
     # fetch_arrow_table expects a SQL string, not a SQL object
     result = sqlite_session.fetch_arrow_table("SELECT name, value FROM test_table ORDER BY name")
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 2
+    assert result.num_rows == 2
     assert result.column_names == ["name", "value"]
     assert result.data.column("name").to_pylist() == ["arrow1", "arrow2"]
     assert result.data.column("value").to_pylist() == [111, 222]

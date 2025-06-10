@@ -78,7 +78,7 @@ def test_psycopg_fetch_arrow_table(psycopg_arrow_session: PsycopgSyncDriver) -> 
 
     assert isinstance(result, ArrowResult)
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 5
+    assert result.num_rows == 5
     assert result.data.num_columns >= 5  # id, name, value, price, is_active, created_at
 
     # Check column names
@@ -124,7 +124,7 @@ def test_psycopg_arrow_with_parameters(psycopg_arrow_session: PsycopgSyncDriver)
     """Test fetch_arrow_table with parameters on Psycopg."""
     # First check what data is in the table
     all_data = psycopg_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow ORDER BY value")
-    if all_data.num_rows() > 0:
+    if all_data.num_rows > 0:
         pass
 
     # Let's test without parameters first
@@ -166,7 +166,7 @@ def test_psycopg_arrow_with_parameters(psycopg_arrow_session: PsycopgSyncDriver)
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3
+    assert result.num_rows == 3
     values = result.data["value"].to_pylist()
     assert values == [200, 300, 400]
 
@@ -180,7 +180,7 @@ def test_psycopg_arrow_empty_result(psycopg_arrow_session: PsycopgSyncDriver) ->
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 0
+    assert result.num_rows == 0
     assert result.data.num_columns >= 5  # Schema should still be present
 
 
@@ -215,7 +215,7 @@ def test_psycopg_to_arrow_with_sql_object(psycopg_arrow_session: PsycopgSyncDriv
     result = psycopg_arrow_session.fetch_arrow_table(sql_obj)
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3
+    assert result.num_rows == 3
     assert result.data.num_columns == 2  # Only name and value columns
 
     names = result.data["name"].to_pylist()
@@ -237,7 +237,7 @@ def test_psycopg_arrow_large_dataset(psycopg_arrow_session: PsycopgSyncDriver) -
     result = psycopg_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 1
+    assert result.num_rows == 1
     total_count = result.data["total"].to_pylist()[0]
     assert total_count == 905  # 5 original + 900 new records
 
@@ -285,7 +285,7 @@ def test_psycopg_arrow_complex_query(psycopg_arrow_session: PsycopgSyncDriver) -
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 4  # Products B, C, D, E
+    assert result.num_rows == 4  # Products B, C, D, E
     assert "status" in result.column_names
     assert "total_value" in result.column_names
 
@@ -321,7 +321,7 @@ def test_psycopg_arrow_with_copy_operations(psycopg_arrow_session: PsycopgSyncDr
             )
 
             assert isinstance(result, ArrowResult)
-            assert result.num_rows() >= 2  # At least the bulk records
+            assert result.num_rows >= 2  # At least the bulk records
 
         except (AttributeError, NotImplementedError):
             # COPY operations may not be implemented for all drivers

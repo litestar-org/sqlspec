@@ -208,9 +208,11 @@ class ArrowTableResult(Protocol):
     def to_batches(self, batch_size: int) -> Any:
         return None
 
+    @property
     def num_rows(self) -> int:
         return 0
 
+    @property
     def num_columns(self) -> int:
         return 0
 

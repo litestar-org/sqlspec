@@ -56,7 +56,7 @@ class TestAsyncPGStorageOperations:
 
         # Verify result
         assert isinstance(result, ArrowResult)
-        assert result.num_rows() == 2
+        assert result.num_rows == 2
         assert "id" in result.column_names
         assert "name" in result.column_names
 
@@ -330,5 +330,5 @@ class TestAsyncPGStorageOperations:
 
         # Verify result handles nulls properly
         assert isinstance(result, ArrowResult)
-        assert result.num_rows() == 2
+        assert result.num_rows == 2
         assert result.column_names == ["id", "name", "email"]

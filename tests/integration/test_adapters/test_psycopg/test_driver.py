@@ -559,7 +559,7 @@ def test_psycopg_fetch_arrow_table(psycopg_session: PsycopgSyncDriver) -> None:
     statement = SQL("SELECT name, value FROM test_table ORDER BY name")
     result = psycopg_session.fetch_arrow_table(statement)
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 2
+    assert result.num_rows == 2
     assert set(result.column_names) == {"name", "value"}
     names = result.data["name"].to_pylist()
     assert "arrow1" in names and "arrow2" in names

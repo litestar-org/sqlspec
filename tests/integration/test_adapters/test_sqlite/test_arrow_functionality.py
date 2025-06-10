@@ -51,8 +51,8 @@ def test_sqlite_fetch_arrow_table(sqlite_arrow_session: SqliteDriver) -> None:
     result = sqlite_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow ORDER BY id")
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 5
-    assert result.num_columns() >= 5  # id, name, value, price, is_active, created_at
+    assert result.num_rows == 5
+    assert result.num_columns >= 5  # id, name, value, price, is_active, created_at
 
     # Check column names
     expected_columns = {"id", "name", "value", "price", "is_active"}
@@ -99,7 +99,7 @@ def test_sqlite_arrow_with_parameters(sqlite_arrow_session: SqliteDriver) -> Non
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3
+    assert result.num_rows == 3
     values = result.data["value"].to_pylist()
     assert values == [200, 300, 400]
 
@@ -110,8 +110,8 @@ def test_sqlite_arrow_empty_result(sqlite_arrow_session: SqliteDriver) -> None:
     result = sqlite_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow WHERE value > 1000")
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 0
-    assert result.num_columns() >= 5  # Schema should still be present
+    assert result.num_rows == 0
+    assert result.num_columns >= 5  # Schema should still be present
 
 
 def test_sqlite_arrow_data_types(sqlite_arrow_session: SqliteDriver) -> None:
@@ -138,8 +138,8 @@ def test_sqlite_to_arrow_with_sql_object(sqlite_arrow_session: SqliteDriver) -> 
     result = sqlite_arrow_session.fetch_arrow_table(sql_obj)
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3
-    assert result.num_columns() == 2  # Only name and value columns
+    assert result.num_rows == 3
+    assert result.num_columns == 2  # Only name and value columns
 
     names = result.data["name"].to_pylist()
     assert "Product A" in names
@@ -159,7 +159,7 @@ def test_sqlite_arrow_large_dataset(sqlite_arrow_session: SqliteDriver) -> None:
     result = sqlite_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 1
+    assert result.num_rows == 1
     total_count = result.data["total"].to_pylist()[0]
     assert total_count == 905  # 5 original + 900 new records
 

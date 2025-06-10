@@ -176,7 +176,7 @@ async def test_asyncmy_driver_fetch_arrow_table_non_query_error(asyncmy_driver: 
     # Verify result
     assert isinstance(result, ArrowResult)
     # Should create empty Arrow table
-    assert result.num_rows() == 0
+    assert result.num_rows == 0
 
 
 @pytest.mark.asyncio
@@ -201,7 +201,7 @@ async def test_asyncmy_driver_fetch_arrow_table_with_connection_override(asyncmy
     result = await asyncmy_driver.fetch_arrow_table("SELECT id, name FROM users", connection=override_connection)
     assert isinstance(result, ArrowResult)
     assert isinstance(result.data, pa.Table)
-    assert result.num_rows() == 2
+    assert result.num_rows == 2
     assert set(result.column_names) == {"id", "name"}
     mock_cursor.close.assert_called_once()
 

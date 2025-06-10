@@ -67,7 +67,7 @@ async def test_psqlpy_fetch_arrow_table(psqlpy_arrow_session: PsqlpyDriver) -> N
 
     assert isinstance(result, ArrowResult)
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 5
+    assert result.num_rows == 5
     assert result.data.num_columns >= 5  # id, name, value, price, is_active, created_at
 
     # Check column names
@@ -120,7 +120,7 @@ async def test_psqlpy_arrow_with_parameters(psqlpy_arrow_session: PsqlpyDriver) 
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3
+    assert result.num_rows == 3
     values = result.data["value"].to_pylist()
     assert values == [200, 300, 400]
 
@@ -135,7 +135,7 @@ async def test_psqlpy_arrow_empty_result(psqlpy_arrow_session: PsqlpyDriver) -> 
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 0
+    assert result.num_rows == 0
     # PSQLPy limitation: empty results don't include schema information
     assert result.data.num_columns == 0
 
@@ -173,7 +173,7 @@ async def test_psqlpy_to_arrow_with_sql_object(psqlpy_arrow_session: PsqlpyDrive
     result = await psqlpy_arrow_session.fetch_arrow_table(sql_obj)
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3
+    assert result.num_rows == 3
     assert result.data.num_columns == 2  # Only name and value columns
 
     names = result.data["name"].to_pylist()
@@ -196,7 +196,7 @@ async def test_psqlpy_arrow_large_dataset(psqlpy_arrow_session: PsqlpyDriver) ->
     result = await psqlpy_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 1
+    assert result.num_rows == 1
     total_count = result.data["total"].to_pylist()[0]
     assert total_count == 905  # 5 original + 900 new records
 
@@ -259,7 +259,7 @@ async def test_psqlpy_arrow_with_postgresql_arrays(psqlpy_arrow_session: PsqlpyD
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3
+    assert result.num_rows == 3
     assert "tags" in result.column_names
     assert "scores" in result.column_names
     assert "tag_count" in result.column_names
@@ -317,7 +317,7 @@ async def test_psqlpy_arrow_with_json_operations(psqlpy_arrow_session: PsqlpyDri
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 2  # Only electronics products
+    assert result.num_rows == 2  # Only electronics products
     assert "product_name" in result.column_names
     assert "category" in result.column_names
     assert "theme" in result.column_names
@@ -350,7 +350,7 @@ async def test_psqlpy_arrow_with_window_functions(psqlpy_arrow_session: PsqlpyDr
     """)
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 5
+    assert result.num_rows == 5
     assert "value_rank" in result.column_names
     assert "price_rank" in result.column_names
     assert "prev_value" in result.column_names

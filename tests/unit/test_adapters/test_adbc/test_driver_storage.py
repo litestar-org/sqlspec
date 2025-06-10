@@ -62,7 +62,7 @@ class TestADBCStorageOperations:
 
         # Verify result
         assert isinstance(result, ArrowResult)
-        assert result.num_rows() == 2
+        assert result.num_rows == 2
         assert "id" in result.column_names
         assert "name" in result.column_names
 
@@ -325,7 +325,7 @@ class TestADBCStorageOperations:
 
         # Verify result handles nulls properly
         assert isinstance(result, ArrowResult)
-        assert result.num_rows() == 2
+        assert result.num_rows == 2
         assert set(result.column_names) == {"id", "name", "email"}
 
     def test_fetch_arrow_table_native_capability_detection(self, adbc_driver: AdbcDriver) -> None:

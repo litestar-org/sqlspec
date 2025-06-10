@@ -123,7 +123,7 @@ async def test_psqlpy_driver_fetch_arrow_table_non_query_error(psqlpy_driver: Ps
     # Verify result
     assert isinstance(result, ArrowResult)
     # Should create empty Arrow table
-    assert result.num_rows() == 0
+    assert result.num_rows == 0
 
 
 @pytest.mark.asyncio

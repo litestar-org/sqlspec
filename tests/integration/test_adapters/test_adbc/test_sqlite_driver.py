@@ -417,7 +417,7 @@ def test_fetch_arrow_table(adbc_sqlite_session: AdbcDriver) -> None:
 
     assert isinstance(result, ArrowResult)
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3
+    assert result.num_rows == 3
     assert result.data.num_columns == 3
     assert result.column_names == ["name", "age", "salary"]
 

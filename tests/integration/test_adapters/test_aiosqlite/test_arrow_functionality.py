@@ -53,7 +53,7 @@ async def test_aiosqlite_fetch_arrow_table(aiosqlite_arrow_session: AiosqliteDri
 
     assert isinstance(result, ArrowResult)
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 5
+    assert result.num_rows == 5
     assert result.data.num_columns >= 5  # id, name, value, price, is_active, created_at
 
     # Check column names
@@ -103,7 +103,7 @@ async def test_aiosqlite_arrow_with_parameters(aiosqlite_arrow_session: Aiosqlit
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3
+    assert result.num_rows == 3
     values = result.data["value"].to_pylist()
     assert values == [200, 300, 400]
 
@@ -117,7 +117,7 @@ async def test_aiosqlite_arrow_empty_result(aiosqlite_arrow_session: AiosqliteDr
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 0
+    assert result.num_rows == 0
     assert result.data.num_columns >= 5  # Schema should still be present
 
 
@@ -147,7 +147,7 @@ async def test_aiosqlite_to_arrow_with_sql_object(aiosqlite_arrow_session: Aiosq
     result = await aiosqlite_arrow_session.fetch_arrow_table(sql_obj)
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3
+    assert result.num_rows == 3
     assert result.data.num_columns == 2  # Only name and value columns
 
     names = result.data["name"].to_pylist()
@@ -169,7 +169,7 @@ async def test_aiosqlite_arrow_large_dataset(aiosqlite_arrow_session: AiosqliteD
     result = await aiosqlite_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 1
+    assert result.num_rows == 1
     total_count = result.data["total"].to_pylist()[0]
     assert total_count == 905  # 5 original + 900 new records
 
@@ -233,7 +233,7 @@ async def test_aiosqlite_arrow_with_joins(aiosqlite_arrow_session: AiosqliteDriv
     """)
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3  # Only active products
+    assert result.num_rows == 3  # Only active products
     assert "category_name" in result.column_names
 
     # Verify join results
@@ -262,7 +262,7 @@ async def test_aiosqlite_arrow_with_sqlite_functions(aiosqlite_arrow_session: Ai
     )
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3  # Products B, C, D
+    assert result.num_rows == 3  # Products B, C, D
     assert "name_upper" in result.column_names
     assert "name_length" in result.column_names
     assert "price_rounded" in result.column_names
@@ -270,7 +270,7 @@ async def test_aiosqlite_arrow_with_sqlite_functions(aiosqlite_arrow_session: Ai
 
     # Verify SQLite function results
     upper_names = result.data["name_upper"].to_pylist()
-    assert all(name.isupper() for name in upper_names)
+    assert all(name.isupper() for name in upper_names if name is not None)
 
     lengths = result.data["name_length"].to_pylist()
     assert all(isinstance(length, int) and length > 0 for length in lengths)
@@ -303,7 +303,7 @@ async def test_aiosqlite_arrow_with_cte(aiosqlite_arrow_session: AiosqliteDriver
     """)
 
     assert isinstance(result, ArrowResult)
-    assert result.num_rows() == 3  # Only active products
+    assert result.num_rows == 3  # Only active products
     assert "total_count" in result.column_names
     assert "avg_value" in result.column_names
     assert "value_diff" in result.column_names

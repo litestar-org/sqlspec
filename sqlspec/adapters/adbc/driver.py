@@ -26,6 +26,11 @@ logger = logging.getLogger("sqlspec")
 
 AdbcConnection = Connection
 
+# Date/time format constants
+DATE_FORMAT_LENGTH = 10  # YYYY-MM-DD
+TIME_FORMAT_LENGTH = 8  # HH:MM:SS
+DATETIME_FORMAT_MIN_LENGTH = 19  # YYYY-MM-DD HH:MM:SS
+
 
 class AdbcDriver(
     SyncDriverAdapterProtocol["AdbcConnection", RowT], SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
@@ -172,21 +177,21 @@ class AdbcDriver(
                 return value
 
             # Try to parse as date (YYYY-MM-DD)
-            if len(value) == 10 and value[4] == "-" and value[7] == "-":
+            if len(value) == DATE_FORMAT_LENGTH and value[4] == "-" and value[7] == "-":
                 try:
                     return datetime.date.fromisoformat(value)
                 except ValueError:
                     pass
 
             # Try to parse as time (HH:MM:SS)
-            if len(value) == 8 and value[2] == ":" and value[5] == ":":
+            if len(value) == TIME_FORMAT_LENGTH and value[2] == ":" and value[5] == ":":
                 try:
                     return datetime.time.fromisoformat(value)
                 except ValueError:
                     pass
 
             # Try to parse as datetime (YYYY-MM-DD HH:MM:SS)
-            if len(value) >= 19 and value[4] == "-" and value[7] == "-" and value[10] == " ":
+            if len(value) >= DATETIME_FORMAT_MIN_LENGTH and value[4] == "-" and value[7] == "-" and value[10] == " ":
                 try:
                     # Handle with or without timezone
                     if "+" in value or value.endswith("Z"):
