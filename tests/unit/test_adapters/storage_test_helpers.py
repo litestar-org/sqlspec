@@ -1,6 +1,6 @@
 """Helper functions and fixtures for driver storage tests."""
 
-from typing import Any, Optional
+from typing import Any, Optional, cast
 from unittest.mock import MagicMock, Mock, patch
 
 import pyarrow as pa
@@ -71,7 +71,7 @@ def create_mock_arrow_result(table: Optional[pa.Table] = None, statement: Option
 class StorageTestMixin:
     """Mixin class providing common storage test methods."""
 
-    driver_class: type[DriverT]
+    driver_class: type[DriverT]  # pyright: ignore
     mock_connection_fixture: str  # Name of the fixture providing mock connection
 
     def test_fetch_arrow_table(self, request: pytest.FixtureRequest) -> None:
@@ -119,7 +119,7 @@ class StorageTestMixin:
         sql_obj = call_args[0][0]
         assert "INSERT INTO test_table" in sql_obj.to_sql()
 
-    def test_export_to_storage_parquet(self, request: pytest.FixtureRequest, tmp_path) -> None:
+    def test_export_to_storage_parquet(self, request: pytest.FixtureRequest, tmp_path: Any) -> None:
         """Test export_to_storage with Parquet format."""
         mock_connection = request.getfixturevalue(self.mock_connection_fixture)
         driver = self._create_driver(mock_connection)
@@ -268,12 +268,15 @@ class StorageTestMixin:
                 "gs://bucket/output.parquet", table, compression="snappy"
             )
 
-    def _create_driver(self, mock_connection: Mock) -> DriverT:
+    def _create_driver(self, mock_connection: Mock) -> DriverT:  # pyright: ignore
         """Create driver instance with mocked connection."""
         config = SQLConfig()
         instrumentation_config = InstrumentationConfig()
-        return self.driver_class(
-            connection=mock_connection,
-            config=config,
-            instrumentation_config=instrumentation_config,
+        return cast(
+            "DriverT",
+            self.driver_class(
+                connection=mock_connection,
+                config=config,
+                instrumentation_config=instrumentation_config,
+            ),
         )

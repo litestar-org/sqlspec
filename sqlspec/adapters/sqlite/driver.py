@@ -135,10 +135,10 @@ class SqliteDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQLite SQL: %s", sql)
-            
+
             # Convert parameters to the format SQLite expects
             sqlite_params = self._convert_parameters_to_driver_format(sql, parameters)
-            
+
             if self.instrumentation_config.log_parameters and sqlite_params:
                 logger.debug("SQLite query parameters: %s", sqlite_params)
             with self._get_cursor(conn) as cursor:
@@ -298,6 +298,3 @@ class SqliteDriver(
                 operation_type=operation_type,
                 last_inserted_id=last_inserted_id,
             )
-
-    def _get_placeholder_style(self) -> ParameterStyle:
-        return ParameterStyle.QMARK

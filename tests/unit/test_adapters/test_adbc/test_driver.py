@@ -287,7 +287,11 @@ def test_adbc_driver_execute_statement_select(adbc_driver: AdbcDriver, mock_curs
 
     # Setup mock cursor for ADBC native Arrow support
     mock_arrow_table = pa.table(
-        {"id": [1, 2], "name": ["John Doe", "Jane Smith"], "email": ["john@example.com", "jane@example.com"]}
+        {
+            "id": [1, 2],
+            "name": ["John Doe", "Jane Smith"],
+            "email": ["john@example.com", "jane@example.com"],
+        }
     )
     mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
@@ -374,7 +378,11 @@ def test_adbc_driver_fetch_arrow_table_list_parameters(adbc_driver: AdbcDriver, 
 
     # Setup mock cursor for ADBC native Arrow support
     mock_arrow_table = pa.table(
-        {"id": [1, 2], "name": ["User 1", "User 2"], "email": ["user1@example.com", "user2@example.com"]}
+        {
+            "id": [1, 2],
+            "name": ["User 1", "User 2"],
+            "email": ["user1@example.com", "user2@example.com"],
+        }
     )
     mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
@@ -549,7 +557,7 @@ def test_adbc_driver_fetch_arrow_table_native(adbc_driver: AdbcDriver, mock_curs
 def test_adbc_driver_to_parquet(adbc_driver: AdbcDriver, mock_cursor: Mock, monkeypatch: "pytest.MonkeyPatch") -> None:
     """Test to_parquet writes correct data to a Parquet file using Arrow Table and pyarrow."""
     # Set up the connection mock to return our mock cursor
-    adbc_driver.connection.cursor.return_value = mock_cursor
+    adbc_driver.connection.cursor.return_value = mock_cursor  # pyright: ignore
 
     # Patch fetch_arrow_table to return a mock ArrowResult with a pyarrow.Table
     mock_table = pa.table({"id": [1, 2], "name": ["Alice", "Bob"]})
@@ -575,4 +583,4 @@ def test_adbc_driver_to_parquet(adbc_driver: AdbcDriver, mock_cursor: Mock, monk
         result = adbc_driver.export_to_storage(statement, tmp.name, format="parquet")  # type: ignore[attr-defined]
         assert isinstance(result, int)  # Should return number of rows
         assert called.get("table") is mock_table
-        assert tmp.name in called.get("path", "")
+        assert tmp.name in called.get("path", "")  # type: ignore[operator]

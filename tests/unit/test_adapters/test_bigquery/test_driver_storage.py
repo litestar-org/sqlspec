@@ -59,7 +59,7 @@ class TestBigQueryStorageOperations:
         # Set the spec to make isinstance() work
         from google.cloud.bigquery.job.query import QueryJob
 
-        mock_query_job.__class__ = QueryJob
+        mock_query_job.__class__ = QueryJob  # pyright: ignore
         bigquery_driver._run_query_job = MagicMock(return_value=mock_query_job)
 
         # Test fetch_arrow_table
@@ -263,7 +263,7 @@ class TestBigQueryStorageOperations:
 
         # Test with filter - note that filters come after parameters
         statement = SQL("SELECT * FROM users")
-        bigquery_driver.fetch_arrow_table(statement, None, active_filter)
+        bigquery_driver.fetch_arrow_table(statement, None, active_filter)  # type: ignore[arg-type]
 
         # Verify filter was called
         assert filter_called, "Filter was not called"
@@ -288,7 +288,7 @@ class TestBigQueryStorageOperations:
         # Set the spec to make isinstance() work
         from google.cloud.bigquery.job.query import QueryJob
 
-        mock_query_job.__class__ = QueryJob
+        mock_query_job.__class__ = QueryJob  # pyright: ignore
         bigquery_driver._run_query_job = MagicMock(return_value=mock_query_job)
 
         # Test fetch_arrow_table with client override
@@ -361,7 +361,7 @@ class TestBigQueryStorageOperations:
         # Set the spec to make isinstance() work
         from google.cloud.bigquery.job.query import QueryJob
 
-        mock_query_job.__class__ = QueryJob
+        mock_query_job.__class__ = QueryJob  # pyright: ignore
         bigquery_driver._run_query_job = MagicMock(return_value=mock_query_job)
 
         # Test fetch_arrow_table

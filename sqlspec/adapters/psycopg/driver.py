@@ -130,7 +130,9 @@ class PsycopgSyncDriver(
                 logger.debug("Executing SQL: %s", sql)
 
             # Convert parameters to the format Psycopg expects
-            psycopg_params = self._convert_parameters_to_driver_format(sql, parameters)
+            # Psycopg can handle both %s (positional) and %(name)s (named) styles
+            # Let the converter detect the actual style from the SQL
+            psycopg_params = self._convert_parameters_to_driver_format(sql, parameters, target_style=None)
 
             if self.instrumentation_config.log_parameters and psycopg_params:
                 logger.debug("Query parameters: %s", psycopg_params)
@@ -406,7 +408,9 @@ class PsycopgAsyncDriver(
                 logger.debug("Executing SQL: %s", sql)
 
             # Convert parameters to the format Psycopg expects
-            psycopg_params = self._convert_parameters_to_driver_format(sql, parameters)
+            # Psycopg can handle both %s (positional) and %(name)s (named) styles
+            # Let the converter detect the actual style from the SQL
+            psycopg_params = self._convert_parameters_to_driver_format(sql, parameters, target_style=None)
 
             if self.instrumentation_config.log_parameters and psycopg_params:
                 logger.debug("Query parameters: %s", psycopg_params)

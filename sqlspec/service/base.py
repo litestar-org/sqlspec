@@ -12,7 +12,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.telemetry import instrument_operation
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from contextlib import AbstractContextManager
 
 
 __all__ = ("InstrumentedService",)
@@ -41,7 +41,7 @@ class InstrumentedService:
         self.service_name = service_name or self.__class__.__name__
         self.logger = get_logger(f"service.{self.service_name}")
 
-    def _instrument(self, operation_name: str, **extra_attrs: Any) -> "Generator[None, None, None]":
+    def _instrument(self, operation_name: str, **extra_attrs: Any) -> "AbstractContextManager[None]":
         """Create instrumentation context for service operations.
 
         Args:

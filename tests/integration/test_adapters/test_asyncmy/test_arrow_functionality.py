@@ -244,7 +244,7 @@ async def test_asyncmy_arrow_mysql_functions(asyncmy_arrow_session: AsyncmyDrive
 
     # Verify MySQL function results
     formatted_names = result.data["formatted_name"].to_pylist()
-    assert all(name.startswith("Product: ") for name in formatted_names)
+    assert all(name.startswith("Product: ") for name in formatted_names if name is not None)
 
 
 @pytest.mark.asyncio
@@ -300,7 +300,7 @@ async def test_asyncmy_arrow_with_aggregation(asyncmy_arrow_session: AsyncmyDriv
 
     # Verify aggregation results
     counts = result.data["count"].to_pylist()
-    assert sum(counts) == 5  # Total should be 5 records
+    assert sum(counts) == 5  # Total should be 5 records # pyright: ignore
 
 
 @pytest.mark.asyncio

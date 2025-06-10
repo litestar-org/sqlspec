@@ -117,10 +117,10 @@ class AsyncpgDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            
+
             # Convert parameters to the format AsyncPG expects (positional list)
             converted_params = self._convert_parameters_to_driver_format(sql, parameters)
-            
+
             # AsyncPG expects parameters as *args, not a single list
             args_for_driver: list[Any] = []
             if converted_params is not None:
@@ -128,7 +128,7 @@ class AsyncpgDriver(
                     args_for_driver.extend(converted_params)
                 else:
                     args_for_driver.append(converted_params)
-            
+
             if self.instrumentation_config.log_parameters and args_for_driver:
                 logger.debug("Query parameters: %s", args_for_driver)
             if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
@@ -168,8 +168,9 @@ class AsyncpgDriver(
             rowcount = batch_size  # Default to batch size
             if result and isinstance(result, str):
                 # Parse PostgreSQL status like "INSERT 0 5"
+                postgres_status_min_parts = 3
                 parts = result.split()
-                if len(parts) >= 3 and parts[-1].isdigit():
+                if len(parts) >= postgres_status_min_parts and parts[-1].isdigit():
                     rowcount = int(parts[-1])
 
             return {

@@ -1,5 +1,7 @@
 """Test DuckDB connection configuration."""
 
+from typing import Any
+
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBConnection
@@ -9,7 +11,7 @@ from sqlspec.statement.sql import SQLConfig
 
 
 # Helper function to create permissive config
-def create_permissive_config(**kwargs) -> DuckDBConfig:
+def create_permissive_config(**kwargs: Any) -> DuckDBConfig:
     """Create a DuckDB config with permissive SQL settings."""
     statement_config = SQLConfig(strict_mode=False, enable_validation=False)
     if "statement_config" not in kwargs:

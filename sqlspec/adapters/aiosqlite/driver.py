@@ -114,11 +114,26 @@ class AiosqliteDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            if self.instrumentation_config.log_parameters and parameters:
-                logger.debug("Query parameters: %s", parameters)
+
+            # Convert parameters to the format expected by the SQL
+            # Note: SQL was already rendered with appropriate placeholder style in _execute_statement
+            if ":param_" in sql or (parameters and isinstance(parameters, dict)):
+                # SQL has named placeholders, ensure params are dict
+                converted_params = self._convert_parameters_to_driver_format(
+                    sql, parameters, target_style=ParameterStyle.NAMED_COLON
+                )
+            else:
+                # SQL has positional placeholders, ensure params are list/tuple
+                converted_params = self._convert_parameters_to_driver_format(
+                    sql, parameters, target_style=ParameterStyle.QMARK
+                )
+
+            if self.instrumentation_config.log_parameters and converted_params:
+                logger.debug("Query parameters: %s", converted_params)
+
             async with self._get_cursor(conn) as cursor:
                 # Aiosqlite handles both dict and tuple parameters
-                await cursor.execute(sql, parameters or ())
+                await cursor.execute(sql, converted_params or ())
                 if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
                     return {"data": await cursor.fetchall(), "description": cursor.description}
                 return cursor

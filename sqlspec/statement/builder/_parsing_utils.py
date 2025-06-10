@@ -4,7 +4,7 @@ This module provides common parsing functions to handle complex SQL expressions
 that users might pass as strings to various builder methods.
 """
 
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 from sqlglot import exp
 
@@ -37,8 +37,8 @@ def parse_column_expression(column_input: Union[str, exp.Expression]) -> exp.Exp
         parsed = exp.maybe_parse(column_input.strip())
         if parsed:
             return parsed
-    except Exception:
-        # Continue to fallback if parsing fails
+    except Exception:  # noqa: S110
+        # SQLGlot parsing failed, will use fallback column parsing
         pass
 
     # Fallback: treat as simple column name
@@ -84,8 +84,8 @@ def parse_table_expression(
         table_expr = parsed.find(exp.Table)
         if table_expr:
             return table_expr
-    except Exception:
-        # Fallback to basic table creation if parsing fails
+    except Exception:  # noqa: S110
+        # SQLGlot table parsing failed, will use basic identifier
         pass
 
     # Fallback: just table name
@@ -123,15 +123,17 @@ def parse_order_expression(order_input: Union[str, exp.Expression]) -> exp.Expre
             order_expr = select_expr.args["order"]
             if order_expr.expressions:
                 return order_expr.expressions[0]
-    except Exception:
-        # Fallback to column parsing
+    except Exception:  # noqa: S110
+        # SQLGlot ORDER BY parsing failed, will use column fallback
         pass
 
     # Fallback: parse as column expression
     return parse_column_expression(order_input)
 
 
-def parse_condition_expression(condition_input: Union[str, exp.Expression, tuple], builder=None) -> exp.Expression:
+def parse_condition_expression(
+    condition_input: Union[str, exp.Expression, tuple], builder: "Any" = None
+) -> exp.Expression:
     """Parse a condition that might be complex SQL.
 
     Handles cases like:
@@ -142,6 +144,7 @@ def parse_condition_expression(condition_input: Union[str, exp.Expression, tuple
 
     Args:
         condition_input: String, tuple, or SQLGlot expression for condition
+        builder: Optional builder instance for parameter binding
 
     Returns:
         exp.Expression: Parsed SQLGlot expression (usually a comparison or logical op)
@@ -149,7 +152,8 @@ def parse_condition_expression(condition_input: Union[str, exp.Expression, tuple
     if isinstance(condition_input, exp.Expression):
         return condition_input
 
-    if isinstance(condition_input, tuple) and len(condition_input) == 2:
+    tuple_condition_parts = 2
+    if isinstance(condition_input, tuple) and len(condition_input) == tuple_condition_parts:
         # Handle (column, value) tuple format with proper parameter binding
         column, value = condition_input
         column_expr = parse_column_expression(column)
@@ -178,7 +182,8 @@ def parse_condition_expression(condition_input: Union[str, exp.Expression, tuple
             parsed = exp.maybe_parse(condition_input)
             if parsed:
                 return parsed
-        except Exception:
+        except Exception:  # noqa: S110
+            # SQLGlot condition parsing failed, will use raw condition
             pass
 
     # Ultimate fallback: treat as raw condition string

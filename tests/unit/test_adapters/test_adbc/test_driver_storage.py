@@ -247,7 +247,7 @@ class TestADBCStorageOperations:
 
         # Test with filter - note that filters come after parameters
         statement = SQL("SELECT * FROM users")
-        adbc_driver.fetch_arrow_table(statement, None, active_filter)
+        adbc_driver.fetch_arrow_table(statement, None, active_filter)  # pyright: ignore
 
         # Verify filter was called
         assert filter_called, "Filter was not called"
@@ -312,7 +312,7 @@ class TestADBCStorageOperations:
         # Create Arrow table with nulls
         import pyarrow as pa
 
-        schema = pa.schema([pa.field("id", pa.int64()), pa.field("name", pa.string()), pa.field("email", pa.string())])
+        schema = pa.schema([pa.field("id", pa.int64()), pa.field("name", pa.string()), pa.field("email", pa.string())])  # type: ignore[arg-type]
         data = pa.table([[1, 2], ["test1", None], [None, "test@example.com"]], schema=schema)
 
         # Mock the cursor's fetch_arrow_table method

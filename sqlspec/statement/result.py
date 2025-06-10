@@ -283,6 +283,104 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
             raise TypeError(msg)
         return cast("RowT", self.data[index])
 
+    # --- SQLAlchemy-style convenience methods ---
+
+    def all(self) -> "list[RowT]":
+        """Return all rows as a list.
+
+        Returns:
+            List of all rows in the result
+        """
+        if self.data is None:
+            return []
+        return cast("list[RowT]", self.data)
+
+    def one(self) -> "RowT":
+        """Return exactly one row.
+
+        Returns:
+            The single row
+
+        Raises:
+            ValueError: If no results or more than one result
+        """
+        if self.data is None or len(self.data) == 0:
+            msg = "No result found, exactly one row expected"
+            raise ValueError(msg)
+        if len(self.data) > 1:
+            msg = f"Multiple results found ({len(self.data)}), exactly one row expected"
+            raise ValueError(msg)
+        return cast("RowT", self.data[0])
+
+    def one_or_none(self) -> "Optional[RowT]":
+        """Return at most one row.
+
+        Returns:
+            The single row or None if no results
+
+        Raises:
+            ValueError: If more than one result
+        """
+        if self.data is None or len(self.data) == 0:
+            return None
+        if len(self.data) > 1:
+            msg = f"Multiple results found ({len(self.data)}), at most one row expected"
+            raise ValueError(msg)
+        return cast("RowT", self.data[0])
+
+    def scalar(self) -> Any:
+        """Return the first column of the first row.
+
+        Returns:
+            The scalar value from first column of first row
+
+        Raises:
+            ValueError: If no results
+        """
+        row = self.one()
+        if isinstance(row, Mapping):
+            # For dict-like rows, get the first column value
+            if not row:
+                msg = "Row has no columns"
+                raise ValueError(msg)
+            first_key = next(iter(row.keys()))
+            return row[first_key]
+        if hasattr(row, "__getitem__") and hasattr(row, "__len__"):
+            # For tuple/list-like rows
+            if len(row) == 0:
+                msg = "Row has no columns"
+                raise ValueError(msg)
+            return row[0]
+        # For scalar values returned directly
+        return row
+
+    def scalar_or_none(self) -> Any:
+        """Return the first column of the first row, or None if no results.
+
+        Returns:
+            The scalar value from first column of first row, or None
+
+        Raises:
+            ValueError: If more than one result
+        """
+        row = self.one_or_none()
+        if row is None:
+            return None
+
+        if isinstance(row, Mapping):
+            # For dict-like rows, get the first column value
+            if not row:
+                return None
+            first_key = next(iter(row.keys()))
+            return row[first_key]
+        if hasattr(row, "__getitem__") and hasattr(row, "__len__"):
+            # For tuple/list-like rows
+            if len(row) == 0:
+                return None
+            return row[0]
+        # For scalar values returned directly
+        return row
+
 
 @dataclass
 class ArrowResult(StatementResult[ArrowTable]):

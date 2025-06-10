@@ -362,7 +362,7 @@ async def test_psqlpy_arrow_with_window_functions(psqlpy_arrow_session: PsqlpyDr
 
     running_totals = result.data["running_total"].to_pylist()
     # Running total should be monotonically increasing
-    assert all(running_totals[i] <= running_totals[i + 1] for i in range(len(running_totals) - 1))
+    assert all(running_totals[i] <= running_totals[i + 1] for i in range(len(running_totals) - 1))  # type: ignore[operator]
 
 
 @pytest.mark.asyncio

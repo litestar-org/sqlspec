@@ -221,7 +221,8 @@ class WhereClauseMixin:
                     subquery_exp = exp.paren(parsed_expr)
                     condition = exp.EQ(this=col_expr, expression=exp.Any(this=subquery_exp))
                     return cast("Self", self.where(condition))
-            except Exception:
+            except Exception:  # noqa: S110
+                # Subquery parsing failed for WHERE ANY
                 pass
             # If parsing fails, fall through to error
             msg = "Unsupported type for 'values' in WHERE ANY"
@@ -267,7 +268,8 @@ class WhereClauseMixin:
                     subquery_exp = exp.paren(parsed_expr)
                     condition = exp.NEQ(this=col_expr, expression=exp.Any(this=subquery_exp))
                     return cast("Self", self.where(condition))
-            except Exception:
+            except Exception:  # noqa: S110
+                # Subquery parsing failed for WHERE NOT ANY
                 pass
             # If parsing fails, fall through to error
             msg = "Unsupported type for 'values' in WHERE NOT ANY"

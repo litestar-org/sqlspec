@@ -7,7 +7,6 @@ from typing import (
     ClassVar,
     Generic,
     Optional,
-    Union,
 )
 
 from sqlglot import exp
@@ -29,9 +28,7 @@ from sqlspec.typing import (
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-
-    from sqlspec.statement.parameters import ParameterInfo, ParameterStyle
+    from sqlspec.statement.parameters import ParameterStyle
 
 __all__ = ("CommonDriverAttributesMixin",)
 
@@ -194,13 +191,14 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             raise NotFoundError(msg)
         return item_or_none
 
-    def _convert_parameters_to_driver_format(
+    def _convert_parameters_to_driver_format(  # noqa: C901
         self, sql: str, parameters: Any, target_style: "Optional[ParameterStyle]" = None
     ) -> Any:
-        """Convert parameters from any format to the format expected by the driver.
+        """Convert parameters to the format expected by the driver, but only when necessary.
 
         This method analyzes the SQL to understand what parameter style is used
-        and converts the input parameters to match.
+        and only converts when there's a mismatch between provided parameters
+        and what the driver expects.
 
         Args:
             sql: The SQL string with placeholders
@@ -229,16 +227,34 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         if target_style is None:
             target_style = self._get_placeholder_style()
 
+        # Override target style based on what's actually in the SQL
+        # This handles cases where the driver supports multiple styles
+        if param_info_list:
+            actual_styles = {p.style for p in param_info_list if p.style}
+            if len(actual_styles) == 1:
+                # All parameters use the same style - use that
+                detected_style = actual_styles.pop()
+                if detected_style != target_style:
+                    # The SQL uses a different style than the driver default
+                    target_style = detected_style
+
         # Analyze what format the driver expects based on the placeholder style
         driver_expects_dict = target_style in {
-            "named_colon", "oracle_numeric", "named_at", "named_dollar", "pyformat_named"
+            ParameterStyle.NAMED_COLON,
+            ParameterStyle.ORACLE_NUMERIC,
+            ParameterStyle.NAMED_AT,
+            ParameterStyle.NAMED_DOLLAR,
+            ParameterStyle.PYFORMAT_NAMED,
         }
 
-        # Handle single scalar parameter
-        if (
-            len(param_info_list) == 1
-            and not isinstance(parameters, (dict, list, tuple, Mapping, Sequence))
-        ):
+        # Check if parameters are already in the correct format
+        params_are_dict = isinstance(parameters, (dict, Mapping))
+        params_are_sequence = isinstance(parameters, (list, tuple, Sequence)) and not isinstance(
+            parameters, (str, bytes)
+        )
+
+        # Single scalar parameter
+        if len(param_info_list) == 1 and not params_are_dict and not params_are_sequence:
             if driver_expects_dict:
                 # Convert scalar to dict
                 param_info = param_info_list[0]
@@ -248,44 +264,64 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             # Return as single-element list for positional
             return [parameters]
 
-        # Convert between dict and list/tuple formats
-        if driver_expects_dict and not isinstance(parameters, (dict, Mapping)):
-            # Convert positional to dict
-            if isinstance(parameters, (list, tuple, Sequence)):
-                result = {}
-                for i, (param_info, value) in enumerate(zip(param_info_list, parameters)):
-                    if param_info.name:
-                        # Special handling for Oracle numeric style where name is the position (1, 2, etc.)
-                        if param_info.style == ParameterStyle.ORACLE_NUMERIC and param_info.name.isdigit():
-                            # Oracle uses string keys even for numeric placeholders
-                            result[param_info.name] = value
-                        else:
-                            result[param_info.name] = value
-                    else:
-                        # Use param_N format for unnamed placeholders
-                        result[f"param_{i}"] = value
-                return result
-
-        elif not driver_expects_dict and isinstance(parameters, (dict, Mapping)):
-            # Special case: If target style is ORACLE_NUMERIC but current params are named dict
-            # We need to check if the SQL actually has :1, :2 style placeholders
-            if target_style == ParameterStyle.ORACLE_NUMERIC:
-                # Check if all parameter names in SQL are numeric
-                if all(p.name and p.name.isdigit() for p in param_info_list):
-                    # SQL has :1, :2 style - convert dict to match
+        # If formats match, check if conversion is still needed for special cases
+        if driver_expects_dict and params_are_dict:
+            # Special case: Oracle numeric style with named dict parameters
+            if target_style == ParameterStyle.ORACLE_NUMERIC and all(
+                p.name and p.name.isdigit() for p in param_info_list
+            ):
+                # If all parameters are numeric but named, convert to dict
+                # SQL has numeric placeholders but params might have named keys
+                # Only convert if keys don't match
+                numeric_keys_expected = {p.name for p in param_info_list if p.name}
+                if not numeric_keys_expected.issubset(parameters.keys()):
+                    # Need to convert named keys to numeric positions
                     result = {}
+                    param_values = list(parameters.values())
                     for param_info in param_info_list:
-                        if param_info.name and param_info.name.isdigit():
-                            # Try to find the value by ordinal position
-                            # This handles the case where we have {"min_val": 200, "max_val": 400}
-                            # but SQL has :1, :2
-                            param_values = list(parameters.values())
-                            if param_info.ordinal < len(param_values):
-                                result[param_info.name] = param_values[param_info.ordinal]
+                        if param_info.name and param_info.ordinal < len(param_values):
+                            result[param_info.name] = param_values[param_info.ordinal]
                     return result
-            # Convert dict to positional
+
+            # Special case: Auto-generated param_N style when SQL expects specific names
             if all(key.startswith("param_") and key[6:].isdigit() for key in parameters):
-                # Already in param_N format, extract values in order
+                # Check if SQL has different parameter names
+                sql_param_names = {p.name for p in param_info_list if p.name}
+                if sql_param_names and not any(name.startswith("param_") for name in sql_param_names):
+                    # SQL has specific names, not param_N style - don't use these params as-is
+                    # This likely indicates a mismatch in parameter generation
+                    # For now, pass through and let validation catch it
+                    pass
+
+            # Otherwise, dict format matches - return as-is
+            return parameters
+
+        if not driver_expects_dict and params_are_sequence:
+            # Formats match - return as-is
+            return parameters
+
+        # Formats don't match - need conversion
+        if driver_expects_dict and params_are_sequence:
+            # Convert positional to dict
+            result = {}
+            for i, (param_info, value) in enumerate(zip(param_info_list, parameters)):
+                if param_info.name:
+                    # Use the name from SQL
+                    if param_info.style == ParameterStyle.ORACLE_NUMERIC and param_info.name.isdigit():
+                        # Oracle uses string keys even for numeric placeholders
+                        result[param_info.name] = value
+                    else:
+                        result[param_info.name] = value
+                else:
+                    # Use param_N format for unnamed placeholders
+                    result[f"param_{i}"] = value
+            return result
+
+        if not driver_expects_dict and params_are_dict:
+            # Convert dict to positional
+            # First check if it's already in param_N format
+            if all(key.startswith("param_") and key[6:].isdigit() for key in parameters):
+                # Extract values in order
                 result = []
                 for i in range(len(param_info_list)):
                     key = f"param_{i}"
@@ -302,28 +338,96 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
                     result.append(parameters[f"param_{param_info.ordinal}"])
                 else:
                     # Try to match by position if we have a simple dict
-                    # This handles cases where SQL was converted from named to positional
-                    # but parameters are still in named format
                     param_values = list(parameters.values())
                     if param_info.ordinal < len(param_values):
                         result.append(param_values[param_info.ordinal])
-            return result if result else list(parameters.values())
+            return result or list(parameters.values())
 
-        # Special case: Both driver expects dict and parameters are dict
-        # But we need to check if conversion is needed for ORACLE_NUMERIC style
-        if driver_expects_dict and isinstance(parameters, (dict, Mapping)):
-            if target_style == ParameterStyle.ORACLE_NUMERIC:
-                # Check if all parameter names in SQL are numeric
-                if all(p.name and p.name.isdigit() for p in param_info_list):
-                    # SQL has :1, :2 style - convert dict keys to match
-                    result = {}
-                    for param_info in param_info_list:
-                        if param_info.name and param_info.name.isdigit():
-                            # Try to find the value by ordinal position
-                            param_values = list(parameters.values())
-                            if param_info.ordinal < len(param_values):
-                                result[param_info.name] = param_values[param_info.ordinal]
-                    return result
-
-        # Parameters are already in the expected format
+        # This shouldn't happen, but return as-is
         return parameters
+
+    def _split_script_statements(self, script: str) -> list[str]:
+        """Split a SQL script into individual statements.
+
+        This method uses a robust lexer-driven state machine to handle
+        multi-statement scripts, including complex constructs like
+        PL/SQL blocks, T-SQL batches, and nested blocks.
+
+        Args:
+            script: The SQL script to split
+
+        Returns:
+            A list of individual SQL statements
+
+        Note:
+            This is particularly useful for databases that don't natively
+            support multi-statement execution (e.g., Oracle, some async drivers).
+        """
+        from sqlspec.statement.splitter import split_sql_script
+
+        # Map database dialect names to splitter dialect names
+        dialect_map = {
+            "oracle": "oracle",
+            "postgres": "postgresql",
+            "postgresql": "postgresql",
+            "mssql": "tsql",
+            "tsql": "tsql",
+            "sqlserver": "tsql",
+            # Add more mappings as needed
+        }
+
+        # Get the dialect name
+        dialect_name = str(self.dialect) if hasattr(self, "dialect") else "generic"
+        splitter_dialect = dialect_map.get(dialect_name.lower(), dialect_name.lower())
+
+        try:
+            return split_sql_script(script, dialect=splitter_dialect)
+        except ValueError as e:
+            # Unsupported dialect, fall back to simple split
+            logger.warning(
+                "Dialect %s not supported by statement splitter, using simple split: %s", splitter_dialect, e
+            )
+            return self._simple_split_statements(script)
+
+    def _simple_split_statements(self, script: str) -> list[str]:
+        """Simple fallback splitting on semicolons (respects quotes and comments)."""
+        statements = []
+        current_statement = []
+
+        in_single_quote = False
+        in_double_quote = False
+
+        i = 0
+        while i < len(script):
+            char = script[i]
+
+            # Handle string literals
+            if char == "'" and not in_double_quote:
+                # Check for escaped quote
+                if i + 1 < len(script) and script[i + 1] == "'":
+                    current_statement.append(char)
+                    current_statement.append("'")
+                    i += 2
+                    continue
+                in_single_quote = not in_single_quote
+            elif char == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+
+            current_statement.append(char)
+
+            # Check for statement terminator
+            if char == ";" and not in_single_quote and not in_double_quote:
+                stmt = "".join(current_statement[:-1]).strip()  # Exclude semicolon
+                if stmt:
+                    statements.append(stmt + ";")  # Add semicolon back
+                current_statement = []
+
+            i += 1
+
+        # Handle remaining content
+        if current_statement:
+            stmt = "".join(current_statement).strip()
+            if stmt:
+                statements.append(stmt)
+
+        return statements

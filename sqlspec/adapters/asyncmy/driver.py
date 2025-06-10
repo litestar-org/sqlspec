@@ -106,34 +106,22 @@ class AsyncmyDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            # Convert parameters to the format AsyncMy expects
-            # TODO: improve this.  why can't use just use parameter parsing?
-            asyncmy_params: Any = None
-            if parameters is not None:
-                if isinstance(parameters, dict):
-                    if not parameters:  # Empty dict
-                        asyncmy_params = None
-                    elif all(key.startswith("param_") and key[6:].isdigit() for key in parameters):
-                        # Convert to positional list based on param indices
-                        param_list = []
-                        for i in range(len(parameters)):
-                            param_key = f"param_{i}"
-                            if param_key in parameters:
-                                param_list.append(parameters[param_key])
-                        asyncmy_params = param_list
-                    else:
-                        asyncmy_params = parameters
-                elif isinstance(parameters, (list, tuple)):
-                    asyncmy_params = parameters or None
-                else:
-                    asyncmy_params = [parameters]
 
-            if self.instrumentation_config.log_parameters and asyncmy_params:
-                logger.debug("Query parameters: %s", asyncmy_params)
+            # Convert parameters to the format AsyncMy expects
+            converted_params = self._convert_parameters_to_driver_format(
+                sql, parameters, target_style=self._get_placeholder_style()
+            )
+
+            # AsyncMy doesn't like empty lists/tuples, convert to None
+            if converted_params in ([], ()):
+                converted_params = None
+
+            if self.instrumentation_config.log_parameters and converted_params:
+                logger.debug("Query parameters: %s", converted_params)
 
             async with self._get_cursor(conn) as cursor:
                 # AsyncMy expects list/tuple parameters or dict for named params
-                await cursor.execute(sql, asyncmy_params)
+                await cursor.execute(sql, converted_params)
 
                 # For SELECT queries, return cursor so _wrap_select_result can fetch from it
                 is_select = self.returns_rows(statement.expression)
@@ -194,8 +182,18 @@ class AsyncmyDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL script: %s", script)
+
+            # AsyncMy may not support multi-statement scripts without CLIENT_MULTI_STATEMENTS flag
+            # Use the shared implementation to split and execute statements individually
+            statements = self._split_script_statements(script)
+
             async with self._get_cursor(conn) as cursor:
-                await cursor.execute(script)
+                for statement in statements:
+                    if statement:
+                        if self.instrumentation_config.log_queries:
+                            logger.debug("Executing statement: %s", statement)
+                        await cursor.execute(statement)
+
             return "SCRIPT EXECUTED"
 
     async def _wrap_select_result(
@@ -267,7 +265,6 @@ class AsyncmyDriver(
                 )
 
             # Handle dict result from _execute (DML/DDL operations)
-            # TODO: improve this.  why can't use just use parameter parsing?
             if isinstance(result, dict) and "rowcount" in result:
                 rows_affected = result["rowcount"]
                 last_inserted_id = result.get("lastrowid")

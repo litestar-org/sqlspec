@@ -316,8 +316,13 @@ class BigQueryDriver(
         connection: Optional[BigQueryConnection] = None,
         **kwargs: Any,
     ) -> Any:
+        # Convert parameters to the format BigQuery expects
+        converted_params = self._convert_parameters_to_driver_format(
+            sql, parameters, target_style=self._get_placeholder_style()
+        )
+
         # Prepare BigQuery parameters
-        bq_params = self._prepare_bq_query_parameters(parameters or {}) if parameters else []
+        bq_params = self._prepare_bq_query_parameters(converted_params or {}) if converted_params else []
         query_job = self._run_query_job(sql, bq_params, connection=connection)
 
         # Wait for job to complete and get results
@@ -377,15 +382,14 @@ class BigQueryDriver(
                     column_names = []
                 logger.debug("Returning data result with %d rows", len(rows_list))
                 return {"data": rows_list, "column_names": column_names}
-
             # For DML/DDL queries that don't return data
-            return {
+            return {  # noqa: TRY300
                 "rowcount": query_job.num_dml_affected_rows or 0,
                 "job_id": query_job.job_id,
                 "total_bytes_processed": query_job.total_bytes_processed,
             }
-        except Exception as e:
-            logger.exception("BigQuery job failed: %s", str(e))
+        except Exception:
+            logger.exception("BigQuery job failed")
             raise
 
     def _execute_many(
@@ -400,7 +404,11 @@ class BigQueryDriver(
         jobs = []
 
         for params in param_list or []:
-            bq_params = self._prepare_bq_query_parameters(params or {}) if isinstance(params, dict) else []
+            # Convert each parameter set to the format BigQuery expects
+            converted_params = self._convert_parameters_to_driver_format(
+                sql, params, target_style=self._get_placeholder_style()
+            )
+            bq_params = self._prepare_bq_query_parameters(converted_params or {}) if converted_params else []
             job = self._run_query_job(sql, bq_params, connection=connection)
             jobs.append(job)
 
@@ -411,8 +419,8 @@ class BigQueryDriver(
                     total_rowcount += job.num_dml_affected_rows
                 else:
                     total_rowcount += 1  # Assume 1 row affected if not available
-            except Exception as e:
-                logger.exception("BigQuery batch job failed: %s", str(e))
+            except Exception:
+                logger.exception("BigQuery batch job failed")
                 # Continue with other jobs
 
         return {"rowcount": total_rowcount, "jobs": jobs}
@@ -423,8 +431,18 @@ class BigQueryDriver(
         connection: Optional[BigQueryConnection] = None,
         **kwargs: Any,
     ) -> str:
-        # BigQuery does not support multi-statement scripts in a single job; treat as a single statement
-        self._run_query_job(script, [], connection=connection)
+        # BigQuery does not support multi-statement scripts in a single job
+        # Use the shared implementation to split and execute statements individually
+        statements = self._split_script_statements(script)
+
+        for statement in statements:
+            if statement:
+                if self.instrumentation_config.log_queries:
+                    logger.debug("Executing statement: %s", statement)
+                query_job = self._run_query_job(statement, [], connection=connection)
+                # Wait for DDL operations to complete before proceeding
+                query_job.result(timeout=kwargs.get("bq_job_timeout"))
+
         return "SCRIPT EXECUTED"
 
     def _wrap_select_result(

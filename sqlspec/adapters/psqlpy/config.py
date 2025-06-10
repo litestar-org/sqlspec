@@ -299,11 +299,11 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         self.default_row_type = default_row_type
 
         super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig(),
+            instrumentation=instrumentation or InstrumentationConfig(),  # pyright: ignore
         )
 
     @property
-    def connection_type(self) -> type[PsqlpyConnection]:  # type: ignore[override]
+    def connection_type(self) -> type[ConnectionPool]:  # type: ignore[override]
         """Return the connection type."""
         return ConnectionPool
 

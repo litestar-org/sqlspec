@@ -123,10 +123,20 @@ class PsqlpyDriver(
     ) -> Any:
         async with instrument_operation_async(self, "psqlpy_execute", "database"):
             conn = self._connection(connection)
+
+            # Convert parameters to the format Psqlpy expects
+            converted_params = self._convert_parameters_to_driver_format(
+                sql, parameters, target_style=self._get_placeholder_style()
+            )
+
             # Psqlpy expects positional parameters as a list
             final_driver_params: Optional[list[Any]] = None
-            if parameters is not None:
-                final_driver_params = list(parameters) if isinstance(parameters, (list, tuple)) else [parameters]
+            if converted_params is not None:
+                if isinstance(converted_params, (list, tuple)):
+                    final_driver_params = list(converted_params)
+                else:
+                    final_driver_params = [converted_params]
+
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing psqlpy SQL: %s", sql)
             if self.instrumentation_config.log_parameters and final_driver_params:

@@ -117,16 +117,22 @@ class DuckDBDriver(
 
         if self.instrumentation_config.log_queries:
             logger.debug("Executing SQL: %s", sql)
-        if self.instrumentation_config.log_parameters and parameters:
-            logger.debug("Query parameters: %s", parameters)
+
+        # Convert parameters to the format DuckDB expects
+        converted_params = self._convert_parameters_to_driver_format(
+            sql, parameters, target_style=self._get_placeholder_style()
+        )
+
+        if self.instrumentation_config.log_parameters and converted_params:
+            logger.debug("Query parameters: %s", converted_params)
 
         # Use connection.execute() which returns better result info for DuckDB
-        result = conn.execute(sql, parameters or [])
+        result = conn.execute(sql, converted_params or [])
 
         if self.returns_rows(statement.expression):
             # For SELECT statements, fetch data and return with columns
             with self._get_cursor(conn) as cursor:
-                cursor.execute(sql, parameters or [])
+                cursor.execute(sql, converted_params or [])
                 fetched_data = cursor.fetchall()
                 column_names = [col[0] for col in cursor.description or []]
                 return {"data": fetched_data, "columns": column_names, "rowcount": cursor.rowcount}
@@ -147,10 +153,11 @@ class DuckDBDriver(
                 # If fetching fails, fall back to cursor rowcount
                 try:
                     with self._get_cursor(conn) as cursor:
-                        cursor.execute(sql, parameters or [])
+                        cursor.execute(sql, converted_params or [])
                         if hasattr(cursor, "rowcount") and cursor.rowcount is not None and cursor.rowcount >= 0:
                             rowcount = cursor.rowcount
-                except Exception:
+                except Exception:  # noqa: S110
+                    # Rowcount determination failed, will use default of 0
                     pass
 
             return {"rowcount": rowcount}
@@ -344,7 +351,7 @@ class DuckDBDriver(
                     try:
                         batch = arrow_reader.read_next_batch()
                         batches.append(batch)
-                    except StopIteration:
+                    except StopIteration:  # noqa: PERF203
                         break
 
                 arrow_table = pa.Table.from_batches(batches) if batches else pa.table({})
@@ -505,8 +512,9 @@ class DuckDBDriver(
             filters = options.get("filters")
             if filters:
                 where_clauses = []
+                filter_spec_parts = 3
                 for filter_spec in filters:
-                    if len(filter_spec) == 3:
+                    if len(filter_spec) == filter_spec_parts:
                         col, op, val = filter_spec
                         if isinstance(val, str):
                             where_clauses.append(f"{col} {op} '{val}'")

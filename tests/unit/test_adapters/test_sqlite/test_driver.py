@@ -124,7 +124,7 @@ def test_sqlite_driver_to_parquet(
 
     # Create mock Row objects that behave like sqlite3.Row
     class MockRow:
-        def __init__(self, data) -> None:
+        def __init__(self, data: dict[str, Any]) -> None:
             self._data = data
 
         def keys(self) -> list[Any]:

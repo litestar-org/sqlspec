@@ -50,8 +50,8 @@ class SetOperationMixin:
 
                 # Use AST transformation instead of string manipulation
                 def rename_parameter(node: exp.Expression) -> exp.Expression:
-                    if isinstance(node, exp.Placeholder) and node.name == param_name:
-                        return exp.Placeholder(this=new_param_name)
+                    if isinstance(node, exp.Placeholder) and node.name == param_name:  # noqa: B023
+                        return exp.Placeholder(this=new_param_name)  # noqa: B023
                     return node
 
                 right_expr = right_expr.transform(rename_parameter)

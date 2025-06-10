@@ -103,22 +103,22 @@ class OracleSyncDriver(
     ) -> Any:
         with instrument_operation(self, "oracle_execute", "database"):
             conn = self._connection(connection)
-            
+
             # Debug logging
             logger.debug("DEBUG Oracle _execute: SQL received: %s", sql)
             logger.debug("DEBUG Oracle _execute: Parameters received: %s", parameters)
-            
+
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            
+
             # Convert parameters to the format Oracle expects
             # Pass the target style to help with conversion
             converted_params = self._convert_parameters_to_driver_format(
                 sql, parameters, target_style=self._get_placeholder_style()
             )
-            
+
             logger.debug("DEBUG Oracle _execute: Converted parameters: %s", converted_params)
-            
+
             if self.instrumentation_config.log_parameters and converted_params:
                 logger.debug("Query parameters: %s", converted_params)
             with self._get_cursor(conn) as cursor:
@@ -168,8 +168,24 @@ class OracleSyncDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL script: %s", script)
+
+            # Oracle doesn't support multi-statement scripts in a single execute
+            # Split the script into individual statements
+            statements = self._split_script_statements(script)
+
             with self._get_cursor(conn) as cursor:
-                cursor.execute(script)
+                for statement in statements:
+                    if statement:
+                        statement = statement.strip()
+                        if statement:
+                            # Oracle doesn't like trailing semicolons in execute() for regular SQL
+                            # But PL/SQL blocks (BEGIN...END) need to keep their structure
+                            if not statement.upper().startswith('BEGIN'):
+                                statement = statement.rstrip(';')
+                            if self.instrumentation_config.log_queries:
+                                logger.debug("Executing statement: %s", statement)
+                            cursor.execute(statement)
+
             return "SCRIPT EXECUTED"
 
     def _wrap_select_result(
@@ -348,13 +364,13 @@ class OracleAsyncDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
-            
+
             # Convert parameters to the format Oracle expects
             # Pass the target style to help with conversion
             converted_params = self._convert_parameters_to_driver_format(
                 sql, parameters, target_style=self._get_placeholder_style()
             )
-            
+
             if self.instrumentation_config.log_parameters and converted_params:
                 logger.debug("Query parameters: %s", converted_params)
             async with self._get_cursor(conn) as cursor:
@@ -362,13 +378,13 @@ class OracleAsyncDriver(
                     await cursor.execute(sql)
                 else:
                     await cursor.execute(sql, converted_params)
-                
+
                 # For SELECT statements, extract data while cursor is open
                 if self.returns_rows(statement.expression):
                     fetched_data = await cursor.fetchall()
                     column_names = [col[0] for col in cursor.description or []]
                     return {"data": fetched_data, "column_names": column_names, "rowcount": cursor.rowcount}
-                
+
                 # For non-SELECT statements, return rowcount
                 return cursor.rowcount
 
@@ -404,8 +420,24 @@ class OracleAsyncDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL script: %s", script)
+
+            # Oracle doesn't support multi-statement scripts in a single execute
+            # Split the script into individual statements
+            statements = self._split_script_statements(script)
+
             async with self._get_cursor(conn) as cursor:
-                await cursor.execute(script)
+                for statement in statements:
+                    if statement:
+                        statement = statement.strip()
+                        if statement:
+                            # Oracle doesn't like trailing semicolons in execute() for regular SQL
+                            # But PL/SQL blocks (BEGIN...END) need to keep their structure
+                            if not statement.upper().startswith('BEGIN'):
+                                statement = statement.rstrip(';')
+                            if self.instrumentation_config.log_queries:
+                                logger.debug("Executing statement: %s", statement)
+                            await cursor.execute(statement)
+
             return "SCRIPT EXECUTED"
 
     async def _wrap_select_result(
@@ -420,7 +452,9 @@ class OracleAsyncDriver(
             if isinstance(result, dict) and "data" in result:
                 fetched_tuples = result["data"]
                 column_names = result["column_names"]
-                rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples]
+                rows_as_dicts: list[dict[str, Any]] = [
+                    dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples
+                ]
             else:
                 # This shouldn't happen with the new _execute implementation
                 return SQLResult[RowT](statement=statement, data=[], column_names=[], operation_type="SELECT")

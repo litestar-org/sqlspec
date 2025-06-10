@@ -346,8 +346,8 @@ def test_execute_script(adbc_postgresql_session: AdbcDriver) -> None:
     """
 
     result = adbc_postgresql_session.execute_script(script)
-    # Script execution typically returns a status string
-    assert isinstance(result, str) or result is None  # type: ignore[unreachable]
+    # Script execution returns SQLResult
+    assert isinstance(result, SQLResult)
 
     # Verify script effects
     select_result = adbc_postgresql_session.execute(
@@ -381,7 +381,7 @@ def test_execute_script_ddl(adbc_postgresql_session: AdbcDriver) -> None:
     """
 
     result = adbc_postgresql_session.execute_script(ddl_script)
-    assert isinstance(result, str) or result is None
+    assert isinstance(result, SQLResult)
 
     # Verify table was created and data inserted
     verify_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM script_test_table")
@@ -424,7 +424,7 @@ def test_execute_script_mixed(adbc_postgresql_session: AdbcDriver) -> None:
     """
 
     result = adbc_postgresql_session.execute_script(mixed_script)
-    assert isinstance(result, str) or result is None
+    assert isinstance(result, SQLResult)
 
     # Verify data was inserted into main table
     verify_result = adbc_postgresql_session.execute(
@@ -636,7 +636,7 @@ def test_date_time_types(adbc_postgresql_session: AdbcDriver) -> None:
     # Insert test data
     adbc_postgresql_session.execute(
         """
-        INSERT INTO datetime_test VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO datetime_test VALUES ($1, $2, $3, $4, $5::interval)
         """,
         ("2024-01-15", "14:30:00", "2024-01-15 14:30:00", "2024-01-15 14:30:00+00", "1 day 2 hours 30 minutes"),
     )

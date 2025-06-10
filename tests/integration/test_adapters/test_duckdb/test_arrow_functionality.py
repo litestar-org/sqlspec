@@ -280,7 +280,7 @@ def test_duckdb_arrow_with_aggregation(duckdb_arrow_session: DuckDBDriver) -> No
 
     # Verify aggregation results
     counts = result.data["count"].to_pylist()
-    assert sum(counts) == 5  # Total should be 5 records
+    assert sum(counts) == 5  # Total should be 5 records # type: ignore[arg-type]
 
 
 def test_duckdb_arrow_with_parquet_integration(duckdb_arrow_session: DuckDBDriver) -> None:

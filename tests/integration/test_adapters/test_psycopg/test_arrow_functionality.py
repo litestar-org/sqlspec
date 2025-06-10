@@ -309,7 +309,7 @@ def test_psycopg_arrow_with_copy_operations(psycopg_arrow_session: PsycopgSyncDr
         try:
             # TODO: we need to make sure this works on our mixin
             psycopg_arrow_session.import_from_storage(
-                csv_path,
+                str(csv_path),
                 "test_arrow",
                 strategy="append",
                 format="csv",

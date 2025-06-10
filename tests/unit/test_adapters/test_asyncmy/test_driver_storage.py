@@ -242,7 +242,7 @@ class TestAsyncMyStorageOperations:
 
         # Test with filter - note that filters come after parameters
         statement = SQL("SELECT * FROM users")
-        await asyncmy_driver.fetch_arrow_table(statement, None, active_filter)
+        await asyncmy_driver.fetch_arrow_table(statement, None, active_filter)  # type: ignore[arg-type]
 
         # Verify filter was called
         assert filter_called, "Filter was not called"

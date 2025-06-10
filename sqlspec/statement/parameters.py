@@ -24,6 +24,7 @@ __all__ = (
     "ParameterInfo",
     "ParameterStyle",
     "ParameterValidator",
+    "SQLParameterType",
     "convert_parameters",
     "detect_parameter_style",
 )
@@ -633,11 +634,12 @@ class ParameterConverter:
         if len(canonical_params) != len(final_parameter_info):
             from sqlspec.exceptions import SQLTransformationError
 
-            raise SQLTransformationError(
+            msg = (
                 f"Parameter count mismatch during denormalization. "
                 f"Expected {len(final_parameter_info)} parameters, "
                 f"found {len(canonical_params)} in SQL"
             )
+            raise SQLTransformationError(msg)
 
         result_sql = rendered_sql
 

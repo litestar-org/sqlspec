@@ -9,7 +9,7 @@ import pytest
 
 from sqlspec.adapters.asyncmy import AsyncmyConnection, AsyncmyDriver
 from sqlspec.config import InstrumentationConfig
-from sqlspec.statement.result import ArrowResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -241,7 +241,6 @@ async def test_asyncmy_driver_to_parquet(
     monkeypatch.setattr(asyncmy_driver, "_resolve_backend_and_path", mock_resolve_backend_and_path)
 
     # Mock the execute method for the unified storage mixin fallback
-    from sqlspec.statement.result import SQLResult
 
     mock_result = SQLResult(
         statement=statement,
@@ -249,7 +248,7 @@ async def test_asyncmy_driver_to_parquet(
         column_names=["id", "name"],
     )
 
-    async def mock_execute(sql_obj):
+    async def mock_execute(sql_obj) -> SQLResult[dict[str, Any]]:
         return mock_result
 
     monkeypatch.setattr(asyncmy_driver, "execute", mock_execute)
@@ -262,7 +261,7 @@ async def test_asyncmy_driver_to_parquet(
     mock_arrow_table = pa.table({"id": [1, 2], "name": ["Alice", "Bob"]})
     mock_arrow_result = ArrowResult(statement=statement, data=mock_arrow_table)
 
-    async def mock_fetch_arrow_table(query_str):
+    async def mock_fetch_arrow_table(query_str) -> ArrowResult:
         return mock_arrow_result
 
     monkeypatch.setattr(asyncmy_driver, "fetch_arrow_table", mock_fetch_arrow_table)

@@ -17,6 +17,7 @@ from sqlspec.utils.telemetry import instrument_operation
 
 if TYPE_CHECKING:
     from sqlspec.config import InstrumentationConfig
+    from sqlspec.statement.parameters import ParameterInfo
     from sqlspec.statement.result import ArrowResult
 
 __all__ = ("AdbcConnection", "AdbcDriver")
@@ -115,6 +116,118 @@ class AdbcDriver(
             with contextlib.suppress(Exception):
                 cursor.close()  # type: ignore[no-untyped-call]
 
+    def _convert_sql_parameter_style(self, sql: str, target_style: ParameterStyle) -> str:
+        """Convert SQL parameter placeholders to the target style.
+        
+        Args:
+            sql: SQL string with placeholders
+            target_style: Target parameter style for the database
+            
+        Returns:
+            SQL string with converted placeholders
+        """
+        from sqlspec.statement.parameters import ParameterValidator
+        
+        # Extract parameters from the SQL
+        validator = ParameterValidator()
+        param_info_list = validator.extract_parameters(sql)
+        
+        if not param_info_list:
+            # No parameters to convert
+            return sql
+            
+        # Check if conversion is needed
+        current_styles = {p.style for p in param_info_list if p.style}
+        if len(current_styles) == 1 and target_style in current_styles:
+            # SQL already uses the target style
+            return sql
+            
+        # Convert placeholders from end to start to preserve positions
+        result_sql = sql
+        for param_info in reversed(param_info_list):
+            start_pos = param_info.position
+            end_pos = start_pos + len(param_info.placeholder_text)
+            new_placeholder = self._get_placeholder_for_style(target_style, param_info)
+            result_sql = result_sql[:start_pos] + new_placeholder + result_sql[end_pos:]
+            
+        return result_sql
+    
+    def _convert_date_time_parameters(self, parameters: Any) -> Any:
+        """Convert string date/time parameters to proper Python objects for PostgreSQL.
+        
+        Args:
+            parameters: Parameters in any format
+            
+        Returns:
+            Parameters with date/time strings converted to Python objects
+        """
+        if parameters is None or self.dialect != "postgres":
+            return parameters
+            
+        import datetime
+        from collections.abc import Mapping, Sequence
+        
+        def convert_value(value: Any) -> Any:
+            """Convert individual value if it's a date/time string."""
+            if not isinstance(value, str):
+                return value
+                
+            # Try to parse as date (YYYY-MM-DD)
+            if len(value) == 10 and value[4] == '-' and value[7] == '-':
+                try:
+                    return datetime.date.fromisoformat(value)
+                except ValueError:
+                    pass
+                    
+            # Try to parse as time (HH:MM:SS)
+            if len(value) == 8 and value[2] == ':' and value[5] == ':':
+                try:
+                    return datetime.time.fromisoformat(value)
+                except ValueError:
+                    pass
+                    
+            # Try to parse as datetime (YYYY-MM-DD HH:MM:SS)
+            if len(value) >= 19 and value[4] == '-' and value[7] == '-' and value[10] == ' ':
+                try:
+                    # Handle with or without timezone
+                    if '+' in value or value.endswith('Z'):
+                        return datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+                    else:
+                        return datetime.datetime.fromisoformat(value)
+                except ValueError:
+                    pass
+                    
+            return value
+        
+        # Convert based on parameter type
+        if isinstance(parameters, (list, tuple)):
+            return type(parameters)(convert_value(v) for v in parameters)
+        elif isinstance(parameters, dict):
+            return {k: convert_value(v) for k, v in parameters.items()}
+        else:
+            return convert_value(parameters)
+
+    @staticmethod
+    def _get_placeholder_for_style(target_style: ParameterStyle, param_info: "ParameterInfo") -> str:
+        """Generate placeholder text for the target parameter style."""
+        if target_style == ParameterStyle.QMARK:
+            return "?"
+        if target_style == ParameterStyle.NAMED_COLON:
+            return f":{param_info.name}" if param_info.name else f":param_{param_info.ordinal}"
+        if target_style == ParameterStyle.ORACLE_NUMERIC:
+            return f":{param_info.ordinal + 1}"
+        if target_style == ParameterStyle.NAMED_DOLLAR:
+            return f"${param_info.name}" if param_info.name else f"$param_{param_info.ordinal}"
+        if target_style == ParameterStyle.NUMERIC:
+            return f"${param_info.ordinal + 1}"  # PostgreSQL-style $1, $2, etc.
+        if target_style == ParameterStyle.NAMED_AT:
+            return f"@{param_info.name}" if param_info.name else f"@param_{param_info.ordinal}"
+        if target_style == ParameterStyle.PYFORMAT_NAMED:
+            return f"%({param_info.name})s" if param_info.name else f"%(param_{param_info.ordinal})s"
+        if target_style == ParameterStyle.PYFORMAT_POSITIONAL:
+            return "%s"
+        return param_info.placeholder_text
+
     def _execute_statement(
         self,
         statement: SQL,
@@ -153,14 +266,35 @@ class AdbcDriver(
     ) -> Any:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
+            # Convert SQL to the target parameter style if needed
+            target_style = self._get_placeholder_style()
+            converted_sql = self._convert_sql_parameter_style(sql, target_style)
+            
             if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQL: %s", sql)
-            if self.instrumentation_config.log_parameters and parameters:
-                logger.debug("Query parameters: %s", parameters)
-            # ADBC accepts various parameter formats based on backend
-            cursor.execute(sql, parameters or [])
+                logger.debug("Executing SQL: %s", converted_sql)
 
-            if self.returns_rows(statement.expression):
+            # Convert parameters to the format expected by the ADBC backend
+            converted_params = self._convert_parameters_to_driver_format(
+                converted_sql, parameters, target_style=target_style
+            )
+            
+            # Convert date/time strings to Python objects for PostgreSQL
+            converted_params = self._convert_date_time_parameters(converted_params)
+
+            if self.instrumentation_config.log_parameters and converted_params:
+                logger.debug("Query parameters: %s", converted_params)
+
+            # ADBC accepts various parameter formats based on backend
+            cursor.execute(converted_sql, converted_params or [])
+
+            # Check if this is a SELECT query (returns rows)
+            is_select = self.returns_rows(statement.expression)
+            # If expression is None (parsing disabled or failed), check SQL string
+            if not is_select and statement.expression is None:
+                sql_upper = converted_sql.strip().upper()
+                is_select = any(sql_upper.startswith(prefix) for prefix in ["SELECT", "WITH", "VALUES", "TABLE"])
+
+            if is_select:
                 fetched_data = cursor.fetchall()
                 column_names = [col[0] for col in cursor.description or []]
                 return {"data": fetched_data, "columns": column_names}
@@ -177,12 +311,21 @@ class AdbcDriver(
     ) -> Any:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
+            # Convert SQL to the target parameter style if needed
+            target_style = self._get_placeholder_style()
+            converted_sql = self._convert_sql_parameter_style(sql, target_style)
+            
             if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQL (executemany): %s", sql)
+                logger.debug("Executing SQL (executemany): %s", converted_sql)
+                
+            # Convert date/time strings to Python objects for PostgreSQL
+            if param_list and self.dialect == "postgres":
+                param_list = [self._convert_date_time_parameters(params) for params in param_list]
+                
             if self.instrumentation_config.log_parameters and param_list:
                 logger.debug("Query parameters (batch): %s", param_list)
             # ADBC expects list of parameter sets
-            cursor.executemany(sql, param_list or [])
+            cursor.executemany(converted_sql, param_list or [])
             # Return consistent dict format like _execute
             return {
                 "rowcount": cursor.rowcount,
@@ -199,26 +342,18 @@ class AdbcDriver(
         conn = self._connection(connection)
         if self.instrumentation_config.log_queries:
             logger.debug("Executing SQL script: %s", script)
-        
+
         # ADBC drivers don't support multiple statements in a single execute
-        # Split the script and execute each statement individually
-        import sqlglot
-        
-        statements = []
-        try:
-            # Parse the script to get individual statements
-            for stmt in sqlglot.parse(script, dialect=self._get_dialect()):
-                if stmt:
-                    statements.append(stmt.sql(dialect=self._get_dialect()))
-        except Exception:
-            # If parsing fails, fall back to simple semicolon split
-            statements = [s.strip() for s in script.split(';') if s.strip()]
-        
+        # Use the shared implementation to split the script
+        statements = self._split_script_statements(script)
+
         with self._get_cursor(conn) as cursor:
             for statement in statements:
                 if statement:
+                    if self.instrumentation_config.log_queries:
+                        logger.debug("Executing statement: %s", statement)
                     cursor.execute(statement)
-        
+
         return "SCRIPT EXECUTED"
 
     def _wrap_select_result(  # pyright ignore

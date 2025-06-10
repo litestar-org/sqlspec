@@ -31,7 +31,7 @@ class TestCorrelationMiddleware:
         }
 
     @pytest.fixture
-    def websocket_scope(self):
+    def websocket_scope(self):  # -> dict[str, Any]:
         """Create a mock WebSocket scope."""
         return {"type": "websocket", "headers": [], "path": "/ws"}
 

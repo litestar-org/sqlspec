@@ -1,6 +1,7 @@
 """Unit tests for Asyncmy configuration."""
 
 import pytest
+from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy import CONNECTION_FIELDS, POOL_FIELDS, AsyncmyConfig, AsyncmyDriver
 from sqlspec.config import InstrumentationConfig
@@ -102,7 +103,7 @@ def test_asyncmy_config_initialization() -> None:
 
     # Test with custom parameters
     custom_statement_config = SQLConfig()
-    custom_instrumentation = InstrumentationConfig(log_queries=True)
+    custom_instrumentation = InstrumentationConfig(log_queries=True)  # pyright: ignore
 
     config = AsyncmyConfig(
         host="localhost",
@@ -119,10 +120,9 @@ def test_asyncmy_config_initialization() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.xdist_group("mysql")
-async def test_asyncmy_config_provide_session(mysql_service) -> None:
+async def test_asyncmy_config_provide_session(mysql_service: MySQLService) -> None:
     """Test Asyncmy config provide_session context manager."""
-    from pytest_databases.docker.mysql import MySQLService
-    
+
     config = AsyncmyConfig(
         host=mysql_service.host,
         port=mysql_service.port,

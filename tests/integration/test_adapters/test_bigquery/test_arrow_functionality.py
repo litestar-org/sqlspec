@@ -217,7 +217,7 @@ def test_bigquery_arrow_with_bigquery_functions(
 
     # Verify BigQuery function results
     formatted_names = result.data["formatted_name"].to_pylist()
-    assert all(name.startswith("Product: ") for name in formatted_names)
+    assert all(name.startswith("Product: ") for name in formatted_names if name is not None)
 
 
 @pytest.mark.xdist_group("bigquery")
@@ -281,7 +281,8 @@ def test_bigquery_arrow_with_window_functions(
 
     running_totals = result.data["running_total"].to_pylist()
     # Running total should be monotonically increasing
-    assert all(running_totals[i] <= running_totals[i + 1] for i in range(len(running_totals) - 1))
+    assert running_totals is not None
+    assert all(running_totals[i] <= running_totals[i + 1] for i in range(len(running_totals) - 1))  # pyright: ignore
 
 
 @pytest.mark.xdist_group("bigquery")
@@ -309,7 +310,7 @@ def test_bigquery_arrow_with_ml_functions(
 
     # Verify feature engineering
     interactions = result.data["feature_interaction"].to_pylist()
-    assert all(interaction > 0 for interaction in interactions)  # All should be positive numbers
+    assert all(interaction > 0 for interaction in interactions)  # All should be positive numbers # pyright: ignore
 
 
 @pytest.mark.xdist_group("bigquery")

@@ -34,8 +34,8 @@ def _parse_table_and_alias(table_str: str, explicit_alias: Optional[str] = None)
         table_expr = parsed.find(exp.Table)
         if table_expr:
             return table_expr
-    except Exception:
-        # Fallback to basic table creation if parsing fails
+    except Exception:  # noqa: S110
+        # Table parsing failed, will use basic identifier
         pass
 
     # Fallback: just table name

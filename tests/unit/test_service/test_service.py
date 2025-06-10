@@ -292,14 +292,14 @@ class TestAsyncDatabaseService:
     @pytest.fixture
     def mock_result(self):
         """Create a mock async SQL result."""
-        result = AsyncMock(spec=SQLResult)
+        result = MagicMock(spec=SQLResult)
         result.rowcount = 3
-        # Set up async methods
-        result.all = AsyncMock()
-        result.one = AsyncMock()
-        result.one_or_none = AsyncMock()
-        result.scalar = AsyncMock()
-        result.scalar_or_none = AsyncMock()
+        # Set up non-async methods (SQLResult methods are synchronous)
+        result.all = MagicMock()
+        result.one = MagicMock()
+        result.one_or_none = MagicMock()
+        result.scalar = MagicMock()
+        result.scalar_or_none = MagicMock()
         return result
 
     @pytest.fixture
@@ -320,7 +320,7 @@ class TestAsyncDatabaseService:
 
     @pytest.mark.asyncio
     async def test_execute(
-        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: MagicMock
     ) -> None:
         """Test async execute method."""
         mock_driver.execute.return_value = mock_result
@@ -334,7 +334,7 @@ class TestAsyncDatabaseService:
 
     @pytest.mark.asyncio
     async def test_execute_many(
-        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: MagicMock
     ) -> None:
         """Test async execute_many method."""
         mock_driver.execute_many.return_value = mock_result
@@ -348,7 +348,7 @@ class TestAsyncDatabaseService:
 
     @pytest.mark.asyncio
     async def test_select(
-        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: MagicMock
     ) -> None:
         """Test async select method."""
         mock_result.all.return_value = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
@@ -363,7 +363,7 @@ class TestAsyncDatabaseService:
 
     @pytest.mark.asyncio
     async def test_select_one(
-        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: MagicMock
     ) -> None:
         """Test async select_one method."""
         mock_result.one.return_value = {"id": 1, "name": "Alice"}
@@ -378,7 +378,7 @@ class TestAsyncDatabaseService:
 
     @pytest.mark.asyncio
     async def test_select_one_or_none(
-        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: MagicMock
     ) -> None:
         """Test async select_one_or_none method."""
         mock_result.one_or_none.return_value = {"id": 1, "name": "Alice"}
@@ -393,7 +393,7 @@ class TestAsyncDatabaseService:
 
     @pytest.mark.asyncio
     async def test_select_value(
-        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: MagicMock
     ) -> None:
         """Test async select_value method."""
         mock_result.scalar.return_value = 42
@@ -408,7 +408,7 @@ class TestAsyncDatabaseService:
 
     @pytest.mark.asyncio
     async def test_select_value_or_none(
-        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: MagicMock
     ) -> None:
         """Test async select_value_or_none method."""
         mock_result.scalar_or_none.return_value = 42
@@ -423,7 +423,7 @@ class TestAsyncDatabaseService:
 
     @pytest.mark.asyncio
     async def test_insert(
-        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: MagicMock
     ) -> None:
         """Test async insert method."""
         mock_result.rowcount = 1
@@ -437,7 +437,7 @@ class TestAsyncDatabaseService:
 
     @pytest.mark.asyncio
     async def test_update(
-        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: MagicMock
     ) -> None:
         """Test async update method."""
         mock_result.rowcount = 5
@@ -452,7 +452,7 @@ class TestAsyncDatabaseService:
 
     @pytest.mark.asyncio
     async def test_delete(
-        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: MagicMock
     ) -> None:
         """Test async delete method."""
         mock_result.rowcount = 3
@@ -515,7 +515,7 @@ class TestAsyncDatabaseService:
 
     @pytest.mark.asyncio
     async def test_with_schema_type(
-        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: AsyncMock
+        self, service: AsyncDatabaseService[Any, Any, dict[str, Any]], mock_driver: AsyncMock, mock_result: MagicMock
     ) -> None:
         """Test async operations with schema type."""
 
@@ -523,8 +523,8 @@ class TestAsyncDatabaseService:
             id: int
             name: str
 
-        # For async mock, we need to set up the async method properly
-        mock_result.all = AsyncMock(return_value=[UserDTO()])
+        # Set up the mock to return UserDTO instances
+        mock_result.all.return_value = [UserDTO()]
         mock_driver.execute.return_value = mock_result
 
         result = await service.select(SQL("SELECT * FROM users"), schema_type=UserDTO)
