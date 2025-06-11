@@ -66,7 +66,7 @@ class WindowFunctionsMixin:
                 over_args["order"] = exp.column(order_by).asc()
             elif isinstance(order_by, list):
                 # Properly handle multiple ORDER BY columns using Order expression
-                order_expressions = []
+                order_expressions: list[Union[exp.Expression, exp.Column]] = []
                 for col in order_by:
                     if isinstance(col, str):
                         order_expressions.append(exp.column(col).asc())

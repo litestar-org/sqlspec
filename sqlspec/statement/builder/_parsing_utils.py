@@ -4,7 +4,7 @@ This module provides common parsing functions to handle complex SQL expressions
 that users might pass as strings to various builder methods.
 """
 
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, cast
 
 from sqlglot import exp
 
@@ -65,7 +65,7 @@ def parse_table_expression(
     """
     if isinstance(table_input, exp.Expression):
         if explicit_alias:
-            return exp.alias_(table_input, explicit_alias)
+            return cast("exp.Expression", exp.alias_(table_input, explicit_alias))
         return table_input
 
     if not isinstance(table_input, str):
