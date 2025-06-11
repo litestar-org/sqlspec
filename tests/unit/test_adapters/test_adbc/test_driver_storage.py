@@ -67,7 +67,7 @@ class TestADBCStorageOperations:
         assert "name" in result.column_names
 
         # Verify native method was called
-        mock_cursor.execute.assert_called_once_with("SELECT * FROM users", [None])
+        mock_cursor.execute.assert_called_once_with("SELECT * FROM users", [])
         mock_cursor.fetch_arrow_table.assert_called_once()
 
     def test_ingest_arrow_table_native(self, adbc_driver: AdbcDriver, mock_adbc_connection: MagicMock) -> None:
@@ -276,7 +276,7 @@ class TestADBCStorageOperations:
 
         # Verify override connection was used
         override_conn.cursor.assert_called_once()
-        override_cursor.execute.assert_called_once_with("SELECT * FROM users", [None])
+        override_cursor.execute.assert_called_once_with("SELECT * FROM users", [])
         override_cursor.fetch_arrow_table.assert_called_once()
 
     def test_ingest_arrow_table_with_mode_replace(

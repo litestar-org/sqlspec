@@ -37,10 +37,10 @@ def adbc_postgresql_params_session(postgres_service: PostgresService) -> Generat
         """)
         # Insert test data
         session.execute(
-            SQL("INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)"), ("test1", 100, "First test")
+            SQL("INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", ("test1", 100, "First test"))
         )
         session.execute(
-            SQL("INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)"), ("test2", 200, "Second test")
+            SQL("INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", ("test2", 200, "Second test"))
         )
         yield session
         # Cleanup
@@ -68,10 +68,10 @@ def adbc_sqlite_params_session() -> Generator[AdbcDriver, None, None]:
         """)
         # Insert test data
         session.execute(
-            SQL("INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)"), ("test1", 100, "First test")
+            SQL("INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)", ("test1", 100, "First test"))
         )
         session.execute(
-            SQL("INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)"), ("test2", 200, "Second test")
+            SQL("INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)", ("test2", 200, "Second test"))
         )
         yield session
 

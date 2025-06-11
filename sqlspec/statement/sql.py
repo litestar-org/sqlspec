@@ -912,6 +912,8 @@ class SQL:
         return {"param_0": self.parameters}
 
     def _convert_to_list_parameters(self) -> list[Any]:
+        if self.parameters is None:
+            return []
         if isinstance(self.parameters, (list, tuple)):
             return list(self.parameters)
         if isinstance(self.parameters, dict):
