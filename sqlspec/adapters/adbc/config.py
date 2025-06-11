@@ -2,6 +2,7 @@
 
 import logging
 from contextlib import contextmanager
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
 
 from sqlspec.adapters.adbc.driver import AdbcConnection, AdbcDriver
@@ -542,8 +543,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                 # Create statement config with parameter style info if not already set
                 statement_config = self.statement_config
                 if statement_config.allowed_parameter_styles is None:
-                    from dataclasses import replace
-
                     statement_config = replace(
                         statement_config,
                         allowed_parameter_styles=supported_styles,

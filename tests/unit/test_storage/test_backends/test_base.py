@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, Literal
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -60,12 +60,6 @@ class MockBackend(InstrumentedObjectStore):
     def _get_metadata(self, path: str, **kwargs: Any) -> dict[str, Any]:
         self.call_count += 1
         return {"size": 1024, "exists": True}
-
-    def _get_signed_url(
-        self, path: str, operation: Literal["read", "write"] = "read", expires_in: int = 3600, **kwargs: Any
-    ) -> str:
-        self.call_count += 1
-        return f"https://signed.url/{path}?op={operation}"
 
     def _is_object(self, path: str) -> bool:
         self.call_count += 1
@@ -377,20 +371,6 @@ class TestInstrumentedObjectStore:
         matches = backend.glob("*.txt")
         assert matches == ["match1.txt", "match2.txt"]
         assert backend.call_count == 1
-
-    def test_signed_url_generation(self) -> None:
-        """Test signed URL generation."""
-        backend = MockBackend()
-
-        # Test read URL
-        read_url = backend.get_signed_url("file.txt", operation="read", expires_in=7200)
-        assert "file.txt" in read_url
-        assert "op=read" in read_url
-
-        # Test write URL
-        write_url = backend.get_signed_url("upload.txt", operation="write")
-        assert "upload.txt" in write_url
-        assert "op=write" in write_url
 
     def test_telemetry_context(self) -> None:
         """Test that operations include telemetry context."""

@@ -310,11 +310,9 @@ class ParameterizeLiterals(ProcessorProtocol[exp.Expression]):
                 except ValueError:
                     return str(literal.this), "numeric_string"
 
-        # Handle date/time literals
-        if hasattr(literal, "is_date") and literal.is_date:
-            return str(literal.this), "date"
-        if hasattr(literal, "is_timestamp") and literal.is_timestamp:
-            return str(literal.this), "timestamp"
+        # Handle date/time literals - these are DataType attributes not Literal attributes
+        # Date/time values are typically string literals that need context-aware processing
+        # We'll return them as strings and let the database handle type conversion
 
         # Fallback
         return str(literal.this), "unknown"
@@ -409,28 +407,29 @@ class ParameterizeLiterals(ProcessorProtocol[exp.Expression]):
 
     def _process_in_clause(self, in_node: exp.In, context: ParameterizationContext) -> exp.Expression:
         """Process IN clause for intelligent parameterization."""
-        # Check if it's a subquery IN clause (has 'query' attribute)
-        if hasattr(in_node, "query") and in_node.query:
+        # Check if it's a subquery IN clause (has 'query' in args)
+        if in_node.args.get("query"):
             # Don't parameterize subqueries, just process them recursively
-            in_node.query = self._transform_with_context(in_node.query, context)
+            in_node.set("query", self._transform_with_context(in_node.args["query"], context))
             return in_node
 
         # Check if it has literal expressions (the values on the right side)
-        if not hasattr(in_node, "expressions") or not in_node.expressions:
+        if "expressions" not in in_node.args or not in_node.args["expressions"]:
             return in_node
 
         # Check if the IN list is too large
-        if len(in_node.expressions) > self.max_in_list_size:
+        expressions = in_node.args["expressions"]
+        if len(expressions) > self.max_in_list_size:
             # Consider alternative strategies for large IN lists
             return in_node
 
         # Process the expressions in the IN clause
-        has_literals = any(isinstance(expr, Literal) for expr in in_node.expressions)
+        has_literals = any(isinstance(expr, Literal) for expr in expressions)
 
         if has_literals:
             # Transform literals in the IN list
             new_expressions = []
-            for expr in in_node.expressions:
+            for expr in expressions:
                 if isinstance(expr, Literal):
                     new_expressions.append(self._process_literal_with_context(expr, context))
                 else:

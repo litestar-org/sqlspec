@@ -20,8 +20,6 @@ from sqlspec.config import (
     SyncConfigT,
     SyncDatabaseConfig,
 )
-from sqlspec.exceptions import wrap_exceptions
-from sqlspec.typing import DictRow
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -50,10 +48,8 @@ class SQLSpec:
     @staticmethod
     def _get_config_name(obj: Any) -> str:
         """Get display name for configuration object."""
-        with wrap_exceptions(suppress=AttributeError):
-            return cast("str", obj.__name__)
-        # wrap exceptions just continues here instead of returning in the even t of an error.  This is actually reachable
-        return str(obj)
+        # Try to get __name__ attribute if it exists, otherwise use str()
+        return getattr(obj, "__name__", str(obj))
 
     def _cleanup_pools(self) -> None:
         """Clean up all registered connection pools."""
@@ -264,32 +260,27 @@ class SQLSpec:
 
             async def _create_driver_async() -> "DriverT":
                 resolved_connection = await connection_obj
-                default_row_type = DictRow
-                with wrap_exceptions(suppress=AttributeError):
-                    default_row_type = config.default_row_type  # type: ignore
-                driver = cast(  # pyright: ignore
+                logger.debug("Created async driver session for config: %s", config_name)
+                return cast(
                     "DriverT",
                     config.driver_type(
                         connection=resolved_connection,
                         instrumentation_config=config.instrumentation,
-                        default_row_type=default_row_type,
+                        default_row_type=config.default_row_type,
                     ),
                 )
-                logger.debug("Created async driver session for config: %s", config_name)
-                return driver
 
             return _create_driver_async()
 
-        default_row_type = DictRow
-        with wrap_exceptions(suppress=AttributeError):
-            default_row_type = config.default_row_type  # type: ignore
-        driver = config.driver_type(
-            connection=connection_obj,
-            instrumentation_config=config.instrumentation,
-            default_row_type=default_row_type,
-        )
         logger.debug("Created sync driver session for config: %s", config_name)
-        return cast("DriverT", driver)  # pyright: ignore
+        return cast(
+            "DriverT",
+            config.driver_type(
+                connection=connection_obj,
+                instrumentation_config=config.instrumentation,
+                default_row_type=config.default_row_type,
+            ),
+        )
 
     @overload
     def provide_connection(

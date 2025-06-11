@@ -1,14 +1,14 @@
 # ruff: noqa: PLR6301
-"""Centralized logging configuration for SQLSpec.
+"""Logging utilities for SQLSpec.
 
-This module provides a standardized logging setup for the entire SQLSpec library,
-including structured logging with correlation IDs and performance metrics.
+This module provides utilities for structured logging with correlation IDs.
+Users should configure their own logging handlers and levels as needed.
+SQLSpec provides StructuredFormatter for JSON-formatted logs if desired.
 """
 
 from __future__ import annotations
 
 import logging
-import sys
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
@@ -19,7 +19,6 @@ if TYPE_CHECKING:
 
 __all__ = (
     "StructuredFormatter",
-    "configure_logging",
     "correlation_id_var",
     "get_correlation_id",
     "get_logger",
@@ -99,7 +98,7 @@ class CorrelationIDFilter(logging.Filter):
             Always True to pass the record through
         """
         if correlation_id := get_correlation_id():
-            record.correlation_id = correlation_id  # type: ignore[attr-defined]
+            record.correlation_id = correlation_id
         return True
 
 
@@ -128,80 +127,6 @@ def get_logger(name: str | None = None) -> logging.Logger:
     return logger
 
 
-def configure_logging(
-    level: str = "INFO",
-    format_style: str = "structured",
-    enable_colors: bool = True,
-    log_to_file: str | None = None,
-    extra_handlers: list[logging.Handler] | None = None,
-) -> None:
-    """Configure logging for the entire SQLSpec library.
-
-    Args:
-        level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        format_style: Log format style ("structured" for JSON, "simple" for text)
-        enable_colors: Enable colored output for simple format (if supported)
-        log_to_file: Optional file path to log to
-        extra_handlers: Additional handlers to add
-    """
-    # Get the root sqlspec logger
-    root_logger = logging.getLogger("sqlspec")
-    root_logger.setLevel(getattr(logging, level.upper()))
-
-    # Clear existing handlers
-    root_logger.handlers.clear()
-
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-
-    if format_style == "structured":
-        formatter = StructuredFormatter()
-    else:
-        # Simple text format with optional colors
-        if enable_colors and sys.stdout.isatty():
-            try:
-                import colorama
-
-                colorama.init(autoreset=True)
-                format_string = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            except ImportError:
-                format_string = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        else:
-            format_string = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-
-        formatter = logging.Formatter(format_string)  # type: ignore
-
-    console_handler.setFormatter(formatter)
-    root_logger.addHandler(console_handler)
-
-    # File handler if requested
-    if log_to_file:
-        file_handler = logging.FileHandler(log_to_file)
-        file_handler.setFormatter(StructuredFormatter())  # Always use structured for files
-        root_logger.addHandler(file_handler)
-
-    # Add any extra handlers
-    if extra_handlers:
-        for handler in extra_handlers:
-            root_logger.addHandler(handler)
-
-    # Don't propagate to the root Python logger
-    root_logger.propagate = False
-
-    # Log initial configuration
-    root_logger.info(
-        "SQLSpec logging configured",
-        extra={
-            "extra_fields": {
-                "level": level,
-                "format_style": format_style,
-                "handlers_count": len(root_logger.handlers),
-            }
-        },
-    )
-
-
-# Convenience function for structured logging with extra fields
 def log_with_context(
     logger: logging.Logger,
     level: int,
@@ -226,5 +151,5 @@ def log_with_context(
         (),
         None,
     )
-    record.extra_fields = extra_fields  # type: ignore[attr-defined]
+    record.extra_fields = extra_fields
     logger.handle(record)

@@ -1,5 +1,5 @@
 # ruff: noqa: PLR0904, PLR6301
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
@@ -75,27 +75,6 @@ class ObjectStoreProtocol(Protocol):
     def get_metadata(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Get object metadata."""
         return {}
-
-    # Signed URL Generation
-    def get_signed_url(
-        self, path: str, operation: Literal["read", "write"] = "read", expires_in: int = 3600, **kwargs: Any
-    ) -> str:
-        """Generate a pre-signed URL for the given path and operation.
-
-        Args:
-            path: The path to sign.
-            operation: The operation ('read' or 'write').
-            expires_in: Expiry in seconds.
-            **kwargs: Backend-specific options.
-
-        Returns:
-            The signed URL.
-
-        Raises:
-            NotImplementedError: If not supported by backend.
-        """
-        msg = "Signed URL generation not supported by this backend"
-        raise NotImplementedError(msg)
 
     # Arrow Operations
     def read_arrow(self, path: str, **kwargs: Any) -> "ArrowTable":

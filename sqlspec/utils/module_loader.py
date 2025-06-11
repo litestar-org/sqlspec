@@ -47,9 +47,6 @@ def import_string(dotted_path: str) -> "Any":
     Args:
         dotted_path: The path of the module to import.
 
-    Raises:
-        ImportError: Could not import the module.
-
     Returns:
         object: The imported object.
     """

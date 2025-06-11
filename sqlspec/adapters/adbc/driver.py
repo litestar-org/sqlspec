@@ -1,4 +1,5 @@
 import contextlib
+import datetime
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -168,8 +169,6 @@ class AdbcDriver(
         """
         if parameters is None or self.dialect != "postgres":
             return parameters
-
-        import datetime
 
         def convert_value(value: Any) -> Any:
             """Convert individual value if it's a date/time string."""
@@ -497,7 +496,7 @@ class AdbcDriver(
                 # Truncate table first
                 from sqlspec.statement.sql import SQL
 
-                self.execute(SQL(f"DELETE FROM {target_table}"))  # type: ignore[attr-defined]
+                self.execute(SQL(f"DELETE FROM {target_table}"))
             elif mode == "create":
                 # For create mode, we would need to infer schema and create table
                 # This is complex, so for now just treat as append

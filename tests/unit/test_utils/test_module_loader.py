@@ -90,7 +90,7 @@ class TestClass:
 
 TEST_CONSTANT = "test_value"
 
-def test_function(x):
+def test_function(x: int) -> int:
     return x * 2
 """
 

@@ -12,7 +12,7 @@ This module provides a flexible, lazy-loading storage registry that supports:
 # TODO: TRY300 - Review try-except patterns for else block opportunities
 import logging
 from pathlib import Path
-from typing import Any, Optional, TypeVar, Union
+from typing import Any, Optional, TypeVar, Union, cast
 
 from sqlspec.storage.protocol import ObjectStoreProtocol
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED
@@ -288,11 +288,11 @@ class StorageRegistry:
                 msg = "obstore"
                 raise MissingDependencyError(msg) from e
             else:
-                return ObStoreBackend  # type: ignore
+                return cast("type[ObjectStoreProtocol]", ObStoreBackend)
         elif backend_type == "fsspec":
             from sqlspec.storage.backends.fsspec import FSSpecBackend
 
-            return FSSpecBackend  # type: ignore
+            return cast("type[ObjectStoreProtocol]", FSSpecBackend)
         else:
             msg = f"Unknown backend type: {backend_type}. Supported types: 'obstore', 'fsspec'"
             raise ValueError(msg)
@@ -308,7 +308,7 @@ class StorageRegistry:
             Backend instance
         """
         backend_cls = self._get_backend_class(backend_type)
-        return backend_cls(uri)  # type: ignore[call-arg]
+        return backend_cls(uri)  # type: ignore[call-arg]  # pyright: ignore[reportCallIssue]
 
     # Utility methods
     def is_alias_registered(self, alias: str) -> bool:

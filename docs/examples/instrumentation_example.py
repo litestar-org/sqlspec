@@ -1,10 +1,13 @@
 """Example of using SQLSpec's enhanced instrumentation features.
 
 This example demonstrates:
-- Structured logging with correlation IDs
+- How to configure structured logging with correlation IDs
 - OpenTelemetry tracing
 - Prometheus metrics
 - Performance monitoring
+
+Note: Users need to configure their own logging handlers. SQLSpec provides
+StructuredFormatter for JSON-formatted logs if desired.
 """
 
 from contextlib import asynccontextmanager
@@ -15,20 +18,21 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.base import SQLSpec
 from sqlspec.config import InstrumentationConfig
 from sqlspec.utils.correlation import correlation_context
-from sqlspec.utils.logging import configure_logging
 
 __all__ = ("lifespan_with_instrumentation", "main")
 
 
 def main() -> None:
     """Example of comprehensive instrumentation setup."""
-    # Configure structured logging
-    configure_logging(
-        level="INFO",
-        format_style="structured",
-        include_correlation=True,
-        include_environment=True,
-    )
+    # Note: Users should configure their own logging setup.
+    # SQLSpec provides StructuredFormatter for JSON logging if desired:
+    # import logging
+    # from sqlspec.utils.logging import StructuredFormatter
+    #
+    # handler = logging.StreamHandler()
+    # handler.setFormatter(StructuredFormatter())
+    # logging.getLogger("sqlspec").addHandler(handler)
+    # logging.getLogger("sqlspec").setLevel(logging.INFO)
 
     # Example 1: SQLite with basic instrumentation
     print("=== SQLite Example ===")
@@ -37,7 +41,7 @@ def main() -> None:
         print(f"Starting operation with correlation ID: {correlation_id}")
 
         config = SqliteConfig(
-            connection_string=":memory:",
+            database=":memory:",
             instrumentation=InstrumentationConfig(
                 # Basic logging
                 log_queries=True,
@@ -45,17 +49,14 @@ def main() -> None:
                 log_results_count=True,
                 # Enable debug mode
                 debug_mode=True,
-                debug_sql_ast=True,
-                debug_parameter_binding=True,
-                # Performance monitoring
                 slow_query_threshold_ms=100.0,
             ),
         )
 
         spec = SQLSpec()
-        spec.register_config(config)
+        db = spec.add_config(config)
 
-        with spec.provide_session(SqliteConfig) as session:
+        with spec.provide_session(db) as session:
             # Create table
             session.execute(
                 """CREATE TABLE users (
@@ -90,7 +91,6 @@ def main() -> None:
             enable_prometheus=True,
             # Structured logging
             structured_logging=True,
-            structured_format="json",
             # Storage and service logging
             log_storage_operations=True,
             log_service_operations=True,
@@ -99,12 +99,6 @@ def main() -> None:
             # Performance tuning
             slow_query_threshold_ms=500.0,
             slow_pool_operation_ms=1000.0,
-            # Sampling for high-volume operations
-            sampling_rate=0.1,
-            sampling_rules={
-                "query.select": 0.05,  # Sample 5% of SELECT queries
-                "storage.read": 0.02,  # Sample 2% of storage reads
-            },
             # Debug capabilities
             debug_mode=False,  # Disabled for production
             debug_sql_ast=False,
@@ -166,19 +160,25 @@ def main() -> None:
         print(f"Error properly tracked with correlation: {e}")
 
     print("\n=== Instrumentation Summary ===")
-    print("Check logs in 'sqlspec.log' for structured output")
-    print("Metrics would be available at /metrics endpoint")
-    print("Traces sent to OpenTelemetry collector")
+    print("Structured logs are sent to stdout (configure as needed)")
+    print("Metrics would be available at /metrics endpoint if Prometheus is configured")
+    print("Traces sent to OpenTelemetry collector if configured")
 
 
 @asynccontextmanager
 async def lifespan_with_instrumentation(app: "Any") -> "Any":
     """Example lifespan handler for web frameworks."""
     # Initialize instrumentation on startup
-    configure_logging(
-        level="INFO",
-        format_style="structured",
-    )
+    # Note: Configure your own logging as needed
+    import logging
+
+    from sqlspec.utils.logging import StructuredFormatter
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(StructuredFormatter())
+    sqlspec_logger = logging.getLogger("sqlspec")
+    sqlspec_logger.addHandler(handler)
+    sqlspec_logger.setLevel(logging.INFO)
 
     # Start Prometheus metrics server
     from prometheus_client import start_http_server

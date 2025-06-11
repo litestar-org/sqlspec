@@ -928,7 +928,7 @@ def test_adbc_postgresql_to_parquet(adbc_postgresql_session: AdbcDriver) -> None
     adbc_postgresql_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("arrow2", 222))
     statement = SQL("SELECT id, name, value FROM test_table ORDER BY id")
     with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
-        adbc_postgresql_session.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
+        adbc_postgresql_session.export_to_storage(statement, tmp.name)
         table = pq.read_table(tmp.name)
         assert table.num_rows == 2
         assert set(table.column_names) >= {"id", "name", "value"}

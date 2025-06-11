@@ -76,6 +76,7 @@ class TestSecurityValidator:
         """Test processing with no expression."""
         context = self._create_context(expression=None)
         _expression, validation_result = validator.process(context)
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.SKIP
 
     def test_clean_query(self, validator: "SecurityValidator") -> "None":
@@ -85,6 +86,7 @@ class TestSecurityValidator:
         context = self._create_context(sql=sql, expression=expression)
         _expression, validation_result = validator.process(context)
 
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.SKIP
         assert len(validation_result.issues) == 0
         security_data = context.get_additional_data("security_validator")
@@ -102,6 +104,7 @@ class TestSecurityValidator:
         context = self._create_context(sql=sql, expression=expression)
         _expression, validation_result = custom_validator.process(context)
 
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.HIGH
         issues = context.get_additional_data("security_validator")["security_issues"]
         assert any(issue.issue_type == SecurityIssueType.INJECTION for issue in issues)
@@ -119,6 +122,7 @@ class TestSecurityValidator:
         context = self._create_context(sql=sql, expression=expression)
         _expression, validation_result = custom_validator.process(context)
 
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.HIGH
         issues = context.get_additional_data("security_validator")["security_issues"]
         assert any("Excessive UNION" in issue.description for issue in issues)
@@ -130,6 +134,7 @@ class TestSecurityValidator:
         context = self._create_context(sql=sql, expression=expression)
         _expression, validation_result = validator.process(context)
 
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.HIGH
         issues = context.get_additional_data("security_validator")["security_issues"]
         assert any("Comment-based" in issue.description for issue in issues)
@@ -141,6 +146,7 @@ class TestSecurityValidator:
         context = self._create_context(sql=sql, expression=expression)
         _expression, validation_result = validator.process(context)
 
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.HIGH
         issues = context.get_additional_data("security_validator")["security_issues"]
         assert any("Encoded character" in issue.description for issue in issues)
@@ -152,6 +158,7 @@ class TestSecurityValidator:
         context = self._create_context(sql=sql, expression=expression)
         _expression, validation_result = validator.process(context)
 
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.HIGH
         issues = context.get_additional_data("security_validator")["security_issues"]
         assert any("system schema" in issue.description for issue in issues)
@@ -164,6 +171,7 @@ class TestSecurityValidator:
         context = self._create_context(sql=sql, expression=expression)
         _expression, validation_result = custom_validator.process(context)
 
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.HIGH
         issues = context.get_additional_data("security_validator")["security_issues"]
         assert any("Custom injection pattern" in issue.description for issue in issues)
@@ -176,6 +184,7 @@ class TestSecurityValidator:
         context = self._create_context(sql=sql, expression=expression)
         _expression, validation_result = validator.process(context)
 
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.MEDIUM
         issues = context.get_additional_data("security_validator")["security_issues"]
         assert any(issue.issue_type == SecurityIssueType.TAUTOLOGY for issue in issues)
@@ -187,6 +196,7 @@ class TestSecurityValidator:
         context = self._create_context(sql=sql, expression=expression)
         _expression, validation_result = validator.process(context)
 
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.HIGH
         issues = context.get_additional_data("security_validator")["security_issues"]
         assert any("OR with always-true" in issue.description for issue in issues)
@@ -198,6 +208,7 @@ class TestSecurityValidator:
         context = self._create_context(sql=sql, expression=expression)
         _expression, validation_result = validator.process(context)
 
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.MEDIUM
         issues = context.get_additional_data("security_validator")["security_issues"]
         assert any(issue.issue_type == SecurityIssueType.TAUTOLOGY for issue in issues)
@@ -210,6 +221,7 @@ class TestSecurityValidator:
         context = self._create_context(sql=sql, expression=expression)
         _expression, validation_result = validator.process(context)
 
+        assert validation_result is not None
         assert validation_result.risk_level in [RiskLevel.MEDIUM, RiskLevel.HIGH]
         issues = context.get_additional_data("security_validator")["security_issues"]
         assert any(issue.issue_type == SecurityIssueType.SUSPICIOUS_KEYWORD for issue in issues)
@@ -221,6 +233,7 @@ class TestSecurityValidator:
         context = self._create_context(sql=sql, expression=expression)
         _expression, validation_result = custom_validator.process(context)
 
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.HIGH
         issues = context.get_additional_data("security_validator")["security_issues"]
         assert any("Blocked function" in issue.description for issue in issues)
@@ -247,6 +260,7 @@ class TestSecurityValidator:
         context = self._create_context(sql=sql, expression=expression)
         _expression, validation_result = validator.process(context)
 
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.HIGH
         issues = context.get_additional_data("security_validator")["security_issues"]
         assert any("File operation" in issue.description for issue in issues)
@@ -258,6 +272,7 @@ class TestSecurityValidator:
         context = self._create_context(sql=sql, expression=expression)
         _expression, validation_result = validator.process(context)
 
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.HIGH
         issues = context.get_additional_data("security_validator")["security_issues"]
         assert any("Dynamic SQL execution" in issue.description for issue in issues)
@@ -269,6 +284,7 @@ class TestSecurityValidator:
         context = self._create_context(sql=sql, expression=expression)
         _expression, validation_result = validator.process(context)
 
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.HIGH
         issues = context.get_additional_data("security_validator")["security_issues"]
         assert any("Administrative command" in issue.description for issue in issues)
@@ -280,6 +296,7 @@ class TestSecurityValidator:
         context = self._create_context(sql=sql, expression=expression)
         _expression, validation_result = custom_validator.process(context)
 
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.MEDIUM
         issues = context.get_additional_data("security_validator")["security_issues"]
         assert any("Custom suspicious pattern" in issue.description for issue in issues)
@@ -296,6 +313,7 @@ class TestSecurityValidator:
         _expression, validation_result = validator.process(context)
 
         # Accept either MEDIUM or HIGH risk - depends on combined pattern detection
+        assert validation_result is not None
         assert validation_result.risk_level in [RiskLevel.MEDIUM, RiskLevel.HIGH]
         issues = context.get_additional_data("security_validator")["security_issues"]
 
@@ -319,6 +337,7 @@ class TestSecurityValidator:
         _expression, validation_result = validator.process(context)
 
         # Should at least detect system schema access (information_schema)
+        assert validation_result is not None
         assert validation_result.risk_level in [RiskLevel.MEDIUM, RiskLevel.HIGH]
         issues = context.get_additional_data("security_validator")["security_issues"]
 
@@ -342,6 +361,7 @@ class TestSecurityValidator:
         _expression, validation_result = validator.process(context)
 
         # The validator should detect something suspicious
+        assert validation_result is not None
         assert validation_result.risk_level >= RiskLevel.MEDIUM
         issues = context.get_additional_data("security_validator")["security_issues"]
 
@@ -420,6 +440,7 @@ class TestSecurityValidator:
         _expression, validation_result = validator.process(context)
 
         # Should return HIGH (from injection)
+        assert validation_result is not None
         assert validation_result.risk_level == RiskLevel.HIGH
 
     def test_security_issue_details(self, validator: "SecurityValidator") -> "None":

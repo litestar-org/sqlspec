@@ -3,6 +3,7 @@
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 import asyncmy
@@ -329,8 +330,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             # Create statement config with parameter style info if not already set
             statement_config = self.statement_config
             if statement_config.allowed_parameter_styles is None:
-                from dataclasses import replace
-
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,

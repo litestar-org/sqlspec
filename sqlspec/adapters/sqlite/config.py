@@ -3,6 +3,7 @@
 import logging
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 from litestar.exceptions import ImproperlyConfiguredException
@@ -246,8 +247,6 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
             # Create statement config with parameter style info if not already set
             statement_config = self.statement_config
             if statement_config.allowed_parameter_styles is None:
-                from dataclasses import replace
-
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,

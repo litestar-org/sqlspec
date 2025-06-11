@@ -646,7 +646,7 @@ class DuckDBDriver(
 
                 from sqlspec.statement.sql import SQL
 
-                result = self.execute(SQL(sql))  # type: ignore[attr-defined]
+                result = self.execute(SQL(sql))
 
                 if self.instrumentation_config.log_results_count:
                     logger.debug("Ingested %d rows into %s", table.num_rows, target_table)

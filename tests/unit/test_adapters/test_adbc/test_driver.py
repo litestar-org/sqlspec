@@ -518,7 +518,7 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
     built_stmt_from_string = adbc_driver._build_statement(string_sql, parameters=None, config=sql_config)
     assert isinstance(built_stmt_from_string, SQL)
     assert built_stmt_from_string.sql == string_sql
-    assert built_stmt_from_string.parameters == {}
+    assert built_stmt_from_string.parameters is None
 
     # Test with plain string SQL and parameters
     string_sql_with_params = "SELECT id FROM yet_another_table WHERE id = ?"

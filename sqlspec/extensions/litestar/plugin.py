@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Union, cast
 
 from litestar.di import Provide
 from litestar.plugins import InitPluginProtocol
@@ -84,7 +84,8 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
 
         # Add correlation middleware if enabled
         correlation_enabled = any(
-            c.enable_correlation_middleware and c.config.instrumentation.generate_correlation_id
+            c.enable_correlation_middleware
+            and cast("DatabaseConfigProtocol[Any, Any, Any]", c.config).instrumentation.generate_correlation_id
             for c in self._plugin_configs
         )
 
@@ -93,17 +94,11 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
 
             # Check if middleware is already added
             has_correlation_middleware = any(
-                (isinstance(mw, type) and issubclass(mw, CorrelationMiddleware))
-                or (
-                    hasattr(mw, "middleware")
-                    and isinstance(mw.middleware, type)
-                    and issubclass(mw.middleware, CorrelationMiddleware)
-                )
-                for mw in app_config.middleware
+                isinstance(mw, type) and issubclass(mw, CorrelationMiddleware) for mw in app_config.middleware
             )
 
             if not has_correlation_middleware:
-                app_config.middleware.append(CorrelationMiddleware)
+                app_config.middleware.append(CorrelationMiddleware)  # pyright: ignore
                 logger.info(
                     "Added correlation tracking middleware",
                     extra={"correlation_id": CorrelationContext.get()},

@@ -30,11 +30,11 @@ class CaseBuilderMixin:
 class CaseBuilder:
     """Builder for CASE expressions."""
 
-    _parent: "QueryBuilder[RowT]"  # type: ignore[valid-type]
+    _parent: "QueryBuilder[RowT]"
     _alias: Optional[str]
     _case_expr: exp.Case
 
-    def __init__(self, parent: "QueryBuilder[RowT]", alias: "Optional[str]" = None) -> None:  # type: ignore[valid-type,type-var]
+    def __init__(self, parent: "QueryBuilder[RowT]", alias: "Optional[str]" = None) -> None:
         """Initialize CaseBuilder.
 
         Args:
@@ -80,7 +80,7 @@ class CaseBuilder:
         self._case_expr.set("default", value_expr)
         return self
 
-    def end(self) -> "QueryBuilder[RowT]":  # type: ignore[type-var]
+    def end(self) -> "QueryBuilder[RowT]":
         """Finalize the CASE expression and add it to the SELECT clause.
 
         Returns:

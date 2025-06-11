@@ -41,7 +41,7 @@ def create_mock_sql_result(
     from sqlspec.statement.sql import SQL
 
     statement = SQL("SELECT * FROM test")
-    result = SQLResult(
+    return SQLResult(
         statement=statement,
         data=data,
         column_names=columns,
@@ -50,11 +50,8 @@ def create_mock_sql_result(
         total_count=len(data),
     )
 
-    # Add helper properties for compatibility
-    result.num_rows = len(data)  # type: ignore[attr-defined]
-    result.rowcount = len(data)  # type: ignore[attr-defined]
-
-    return result
+    # num_rows and rowcount are computed properties based on data/rows_affected
+    # No need to set them manually
 
 
 def create_mock_arrow_result(table: Optional[pa.Table] = None, statement: Optional[SQL] = None) -> ArrowResult:
@@ -77,7 +74,7 @@ class StorageTestMixin:
     def test_fetch_arrow_table(self, request: pytest.FixtureRequest) -> None:
         """Test fetch_arrow_table method."""
         mock_connection = request.getfixturevalue(self.mock_connection_fixture)
-        driver = self._create_driver(mock_connection)
+        driver: DriverT = self._create_driver(mock_connection)
 
         # Mock execute to return SQLResult
         mock_result = create_mock_sql_result()
@@ -99,7 +96,7 @@ class StorageTestMixin:
     def test_ingest_arrow_table(self, request: pytest.FixtureRequest) -> None:
         """Test ingest_arrow_table method."""
         mock_connection = request.getfixturevalue(self.mock_connection_fixture)
-        driver = self._create_driver(mock_connection)
+        driver: DriverT = self._create_driver(mock_connection)
 
         # Create test Arrow table
         table = create_mock_arrow_table()
@@ -122,7 +119,7 @@ class StorageTestMixin:
     def test_export_to_storage_parquet(self, request: pytest.FixtureRequest, tmp_path: Any) -> None:
         """Test export_to_storage with Parquet format."""
         mock_connection = request.getfixturevalue(self.mock_connection_fixture)
-        driver = self._create_driver(mock_connection)
+        driver: DriverT = self._create_driver(mock_connection)
 
         # Mock fetch_arrow_table
         mock_arrow_result = create_mock_arrow_result()
@@ -149,7 +146,7 @@ class StorageTestMixin:
     def test_export_to_storage_csv(self, request: pytest.FixtureRequest, tmp_path) -> None:
         """Test export_to_storage with CSV format."""
         mock_connection = request.getfixturevalue(self.mock_connection_fixture)
-        driver = self._create_driver(mock_connection)
+        driver: DriverT = self._create_driver(mock_connection)
 
         # Mock execute
         mock_result = create_mock_sql_result()
@@ -176,7 +173,7 @@ class StorageTestMixin:
     def test_import_from_storage_parquet(self, request: pytest.FixtureRequest, tmp_path) -> None:
         """Test import_from_storage with Parquet format."""
         mock_connection = request.getfixturevalue(self.mock_connection_fixture)
-        driver = self._create_driver(mock_connection)
+        driver: DriverT = self._create_driver(mock_connection)
 
         # Create test Arrow table
         table = create_mock_arrow_table()
@@ -205,7 +202,7 @@ class StorageTestMixin:
     def test_copy_from(self, request: pytest.FixtureRequest) -> None:
         """Test copy_from method."""
         mock_connection = request.getfixturevalue(self.mock_connection_fixture)
-        driver = self._create_driver(mock_connection)
+        driver: DriverT = self._create_driver(mock_connection)
 
         # For drivers without native copy_from, it should use import_from_storage
         driver.import_from_storage = Mock(return_value=10)
@@ -220,7 +217,7 @@ class StorageTestMixin:
     def test_copy_to(self, request: pytest.FixtureRequest) -> None:
         """Test copy_to method."""
         mock_connection = request.getfixturevalue(self.mock_connection_fixture)
-        driver = self._create_driver(mock_connection)
+        driver: DriverT = self._create_driver(mock_connection)
 
         # For drivers without native copy_to, it should use export_to_storage
         driver.export_to_storage = Mock(return_value=5)
@@ -233,7 +230,7 @@ class StorageTestMixin:
     def test_read_parquet_direct(self, request: pytest.FixtureRequest) -> None:
         """Test read_parquet_direct method."""
         mock_connection = request.getfixturevalue(self.mock_connection_fixture)
-        driver = self._create_driver(mock_connection)
+        driver: DriverT = self._create_driver(mock_connection)
 
         # Create test table
         table = create_mock_arrow_table()
@@ -252,7 +249,7 @@ class StorageTestMixin:
     def test_write_parquet_direct(self, request: pytest.FixtureRequest) -> None:
         """Test write_parquet_direct method."""
         mock_connection = request.getfixturevalue(self.mock_connection_fixture)
-        driver = self._create_driver(mock_connection)
+        driver: DriverT = self._create_driver(mock_connection)
 
         # Create test table
         table = create_mock_arrow_table()

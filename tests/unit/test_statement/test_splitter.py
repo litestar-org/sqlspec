@@ -12,7 +12,7 @@ from sqlspec.statement.splitter import (
 class TestOracleSplitter:
     """Test Oracle-specific SQL splitting."""
 
-    def test_simple_statements(self):
+    def test_simple_statements(self) -> None:
         """Test splitting simple statements."""
         script = """
         SELECT * FROM users;
@@ -26,7 +26,7 @@ class TestOracleSplitter:
         assert "INSERT INTO users" in statements[1]
         assert "DELETE FROM users" in statements[2]
 
-    def test_plsql_block(self):
+    def test_plsql_block(self) -> None:
         """Test PL/SQL anonymous block."""
         script = """
         BEGIN
@@ -44,7 +44,7 @@ class TestOracleSplitter:
         assert "BEGIN" in statements[0]
         assert "END;" in statements[0]
 
-    def test_declare_block(self):
+    def test_declare_block(self) -> None:
         """Test PL/SQL block with DECLARE."""
         script = """
         DECLARE
@@ -60,7 +60,7 @@ class TestOracleSplitter:
         assert "DECLARE" in statements[0]
         assert "END;" in statements[0]
 
-    def test_nested_blocks(self):
+    def test_nested_blocks(self) -> None:
         """Test nested BEGIN/END blocks."""
         script = """
         BEGIN
@@ -80,7 +80,7 @@ class TestOracleSplitter:
         assert statements[0].count("BEGIN") == 3
         assert statements[0].count("END;") == 3
 
-    def test_mixed_statements_and_blocks(self):
+    def test_mixed_statements_and_blocks(self) -> None:
         """Test mix of regular statements and PL/SQL blocks."""
         script = """
         CREATE TABLE test_table (id NUMBER);
@@ -98,7 +98,7 @@ class TestOracleSplitter:
         assert "BEGIN" in statements[1]
         assert "SELECT" in statements[2]
 
-    def test_slash_terminator(self):
+    def test_slash_terminator(self) -> None:
         """Test Oracle / terminator."""
         script = """
         BEGIN
@@ -115,7 +115,7 @@ class TestOracleSplitter:
         assert "/" in statements[0]
         assert "SELECT" in statements[1]
 
-    def test_keywords_in_strings(self):
+    def test_keywords_in_strings(self) -> None:
         """Test keywords inside string literals."""
         script = """
         INSERT INTO messages (text) VALUES ('BEGIN transaction');
@@ -127,7 +127,7 @@ class TestOracleSplitter:
         assert "BEGIN transaction" in statements[0]
         assert "END of story" in statements[1]
 
-    def test_comments_with_keywords(self):
+    def test_comments_with_keywords(self) -> None:
         """Test keywords in comments."""
         script = """
         -- BEGIN comment
@@ -146,7 +146,7 @@ class TestOracleSplitter:
 class TestTSQLSplitter:
     """Test T-SQL (SQL Server) specific splitting."""
 
-    def test_go_batch_separator(self):
+    def test_go_batch_separator(self) -> None:
         """Test GO batch separator."""
         script = """
         CREATE TABLE test (id INT);
@@ -166,7 +166,7 @@ class TestTSQLSplitter:
         assert statements[1].count("INSERT") == 2
         assert "SELECT" in statements[2]
 
-    def test_try_catch_blocks(self):
+    def test_try_catch_blocks(self) -> None:
         """Test TRY...CATCH blocks."""
         script = """
         BEGIN TRY
@@ -186,7 +186,7 @@ class TestTSQLSplitter:
 class TestPostgreSQLSplitter:
     """Test PostgreSQL-specific splitting."""
 
-    def test_dollar_quoted_strings(self):
+    def test_dollar_quoted_strings(self) -> None:
         """Test PostgreSQL dollar-quoted strings."""
         script = """
         CREATE FUNCTION test_func() RETURNS void AS $$
@@ -204,7 +204,7 @@ class TestPostgreSQLSplitter:
         assert "CREATE FUNCTION" in statements[0]
         assert "SELECT" in statements[1]
 
-    def test_nested_dollar_quotes(self):
+    def test_nested_dollar_quotes(self) -> None:
         """Test nested dollar-quoted strings with tags."""
         script = """
         CREATE FUNCTION complex_func() RETURNS void AS $BODY$
@@ -225,12 +225,12 @@ class TestPostgreSQLSplitter:
 class TestEdgeCases:
     """Test edge cases and error conditions."""
 
-    def test_empty_script(self):
+    def test_empty_script(self) -> None:
         """Test empty script."""
         statements = split_sql_script("", dialect="oracle")
         assert len(statements) == 0
 
-    def test_only_comments(self):
+    def test_only_comments(self) -> None:
         """Test script with only comments."""
         script = """
         -- This is a comment
@@ -239,7 +239,7 @@ class TestEdgeCases:
         statements = split_sql_script(script, dialect="oracle")
         assert len(statements) == 0
 
-    def test_unclosed_block(self):
+    def test_unclosed_block(self) -> None:
         """Test unclosed BEGIN block."""
         script = """
         BEGIN
@@ -252,7 +252,7 @@ class TestEdgeCases:
         assert "BEGIN" in statements[0]
         # Should include the incomplete block
 
-    def test_deeply_nested_blocks(self):
+    def test_deeply_nested_blocks(self) -> None:
         """Test deeply nested blocks."""
         # Generate deeply nested blocks
         depth = 10
@@ -263,7 +263,7 @@ class TestEdgeCases:
         assert statements[0].count("BEGIN") == depth
         assert statements[0].count("END;") == depth
 
-    def test_max_nesting_depth(self):
+    def test_max_nesting_depth(self) -> None:
         """Test maximum nesting depth limit."""
         config = OracleDialectConfig()
         splitter = StatementSplitter(config)

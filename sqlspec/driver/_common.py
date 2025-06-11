@@ -1,6 +1,7 @@
 """Common driver attributes and utilities."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -211,8 +212,6 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         if parameters is None:
             return None
 
-        from collections.abc import Mapping, Sequence
-
         from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 
         # Extract parameter info from the SQL
@@ -377,7 +376,7 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         }
 
         # Get the dialect name
-        dialect_name = str(self.dialect) if hasattr(self, "dialect") else "generic"
+        dialect_name = str(self.dialect)
         splitter_dialect = dialect_map.get(dialect_name.lower(), dialect_name.lower())
 
         try:

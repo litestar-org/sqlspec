@@ -270,7 +270,7 @@ class AiosqlSyncAdapter:
         result = cast("SQLResult[RowT]", self.driver.execute(sql_obj, connection=conn, schema_type=schema_type))
 
         if hasattr(result, "data") and result.data and isinstance(result, SQLResult):
-            return result.data[0]  # type: ignore[no-any-return]
+            return cast("Optional[RowT]", result.data[0])
         return None
 
     def select_value(
@@ -806,12 +806,12 @@ class AiosqlService(
             for method in ["aexecute", "aselect", "aexecute_many"]
         ):
             return AiosqlAsyncAdapter(
-                self.driver,  # type: ignore[arg-type]
+                self.driver,
                 default_filters=self.default_filters,
                 allow_sqlspec_filters=self.allow_sqlspec_filters,
             )
         return AiosqlSyncAdapter(
-            self.driver,  # type: ignore[arg-type]
+            self.driver,
             default_filters=self.default_filters,
             allow_sqlspec_filters=self.allow_sqlspec_filters,
         )
@@ -830,7 +830,7 @@ class AiosqlService(
             msg = "aiosql"
             raise MissingDependencyError(msg, "aiosql")
 
-        return aiosql.from_path(sql_path, self.aiosql_adapter, **aiosql_kwargs)  # type: ignore[arg-type]
+        return aiosql.from_path(sql_path, self.aiosql_adapter, **aiosql_kwargs)
 
     def load_queries_from_str(self, sql_str: str, **aiosql_kwargs: Any) -> Any:
         """Load queries from SQL string using aiosql with SQLSpec adapter.
@@ -846,7 +846,7 @@ class AiosqlService(
             msg = "aiosql"
             raise MissingDependencyError(msg, "aiosql")
 
-        return aiosql.from_str(sql_str, self.aiosql_adapter, **aiosql_kwargs)  # type: ignore[arg-type]
+        return aiosql.from_str(sql_str, self.aiosql_adapter, **aiosql_kwargs)
 
     def execute_query_with_filters(
         self,

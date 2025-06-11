@@ -77,15 +77,9 @@ class TestSyncConfigDialect:
                 self.instrumentation = InstrumentationConfig()
                 self.statement_config = SQLConfig()
                 self.host = "localhost"
+                self.connection_type = MockConnection  # type: ignore[assignment]
+                self.driver_type = MockDriver  # type: ignore[assignment]
                 super().__init__(**kwargs)
-
-            @property
-            def connection_type(self) -> type[MockConnection]:  # pyright: ignore
-                return MockConnection
-
-            @property
-            def driver_type(self) -> type[MockDriver]:  # pyright: ignore
-                return MockDriver
 
             @property
             def connection_config_dict(self) -> dict[str, Any]:
@@ -129,14 +123,6 @@ class TestSyncConfigDialect:
                 super().__init__(**kwargs)
 
             @property
-            def connection_type(self) -> type[MockConnection]:  # pyright: ignore
-                return MockConnection
-
-            @property
-            def driver_type(self) -> type[DriverWithoutDialect]:  # pyright: ignore
-                return DriverWithoutDialect
-
-            @property
             def connection_config_dict(self) -> dict[str, Any]:
                 return {"host": self.host}
 
@@ -164,14 +150,6 @@ class TestSyncConfigDialect:
                 self.connection_config = {"host": "localhost"}
                 self.pool_instance = None
                 super().__init__(**kwargs)
-
-            @property
-            def connection_type(self) -> type[MockConnection]:  # pyright: ignore
-                return MockConnection
-
-            @property
-            def driver_type(self) -> type[MockDriver]:  # pyright: ignore
-                return MockDriver
 
             @property
             def connection_config_dict(self) -> dict[str, Any]:
@@ -207,14 +185,6 @@ class TestAsyncConfigDialect:
                 super().__init__(**kwargs)
 
             @property
-            def connection_type(self) -> type[MockConnection]:  # pyright: ignore
-                return MockConnection
-
-            @property
-            def driver_type(self) -> type[MockAsyncDriver]:  # pyright: ignore
-                return MockAsyncDriver
-
-            @property
             def connection_config_dict(self) -> dict[str, Any]:
                 return self.connection_config
 
@@ -240,14 +210,6 @@ class TestAsyncConfigDialect:
                 self.connection_config = {"host": "localhost"}
                 self.pool_instance = None
                 super().__init__(**kwargs)
-
-            @property
-            def connection_type(self) -> type[MockConnection]:  # pyright: ignore
-                return MockConnection
-
-            @property
-            def driver_type(self) -> type[MockAsyncDriver]:  # pyright: ignore
-                return MockAsyncDriver
 
             @property
             def connection_config_dict(self) -> dict[str, Any]:
@@ -458,14 +420,6 @@ class TestDialectValidation:
                 self.statement_config = SQLConfig()
                 self.host = "localhost"
                 super().__init__(**kwargs)
-
-            @property
-            def connection_type(self) -> type[MockConnection]:  # pyright: ignore
-                return MockConnection
-
-            @property
-            def driver_type(self) -> type[DriverWithoutDialect]:  # pyright: ignore
-                return DriverWithoutDialect
 
             @property
             def connection_config_dict(self) -> dict[str, Any]:

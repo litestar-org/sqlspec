@@ -118,7 +118,7 @@ class ToSchemaMixin:
             if not isinstance(data, Sequence):
                 return cast(
                     "ModelDTOT",
-                    get_type_adapter(schema_type).validate_python(data, from_attributes=True),  # type: ignore[valid-type]  # pyright: ignore
+                    get_type_adapter(schema_type).validate_python(data, from_attributes=True),  # pyright: ignore
                 )
             return cast(
                 "Sequence[ModelDTOT]",

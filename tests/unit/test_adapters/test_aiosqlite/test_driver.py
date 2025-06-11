@@ -224,11 +224,12 @@ async def test_aiosqlite_driver_to_parquet(
 
     # Mock the backend resolution to return a mock backend with specific attributes
     mock_backend = AsyncMock()
-    # Only define write_arrow, not write_arrow_async so it uses the sync fallback
-    mock_backend.write_arrow = mock_write_arrow
-    # Make sure hasattr returns False for write_arrow_async
-    mock_backend.write_arrow_async = None
-    del mock_backend.write_arrow_async
+
+    # Create an async version of the write method
+    async def mock_write_arrow_async(path: str, table: Any, **kwargs: Any) -> None:
+        mock_write_arrow(path, table, **kwargs)
+
+    mock_backend.write_arrow_async = mock_write_arrow_async
 
     def mock_resolve_backend_and_path(uri: str) -> tuple[AsyncMock, str]:
         return mock_backend, uri

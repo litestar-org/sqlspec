@@ -1,4 +1,4 @@
-# ruff: noqa: PLR0904, SLF001
+# ruff: noqa: PLR0904
 """Unified SQL factory for creating SQL builders and column expressions with a clean API.
 
 This module provides the `sql` factory object for easy SQL construction:
@@ -6,21 +6,21 @@ This module provides the `sql` factory object for easy SQL construction:
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import Any, Optional, Union
 
 import sqlglot
 from sqlglot import exp
 from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 
-if TYPE_CHECKING:
-    from sqlspec.statement.builder import (
-        DeleteBuilder,
-        InsertBuilder,
-        MergeBuilder,
-        SelectBuilder,
-        UpdateBuilder,
-    )
+from sqlspec.exceptions import SQLBuilderError
+from sqlspec.statement.builder import (
+    DeleteBuilder,
+    InsertBuilder,
+    MergeBuilder,
+    SelectBuilder,
+    UpdateBuilder,
+)
 
 __all__ = ("SQLFactory",)
 
@@ -28,6 +28,32 @@ logger = logging.getLogger("sqlspec")
 
 MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2
+SQL_STARTERS = {
+    "SELECT",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "MERGE",
+    "WITH",
+    "CALL",
+    "DECLARE",
+    "BEGIN",
+    "END",
+    "CREATE",
+    "DROP",
+    "ALTER",
+    "TRUNCATE",
+    "RENAME",
+    "GRANT",
+    "REVOKE",
+    "SET",
+    "SHOW",
+    "USE",
+    "EXPLAIN",
+    "OPTIMIZE",
+    "VACUUM",
+    "COPY",
+}
 
 
 class SQLFactory:
@@ -74,7 +100,7 @@ class SQLFactory:
         try:
             # Minimal parsing just to get the command type
             parsed_expr = sqlglot.parse_one(sql, read=dialect)
-            if parsed_expr and hasattr(parsed_expr, "key") and parsed_expr.key:
+            if parsed_expr and parsed_expr.key:
                 return parsed_expr.key.upper()
             # Fallback for expressions that might not have a direct 'key'
             # or where key is None (e.g. some DDL without explicit command like SET)
@@ -82,7 +108,7 @@ class SQLFactory:
                 # Attempt to get the class name as a fallback, e.g., "Set", "Command"
                 command_type = type(parsed_expr).__name__.upper()
                 # Handle specific cases like "COMMAND" which might be too generic
-                if command_type == "COMMAND" and hasattr(parsed_expr, "this") and parsed_expr.this:
+                if command_type == "COMMAND" and parsed_expr.this:
                     return str(parsed_expr.this).upper()  # e.g. "SET", "ALTER"
                 return command_type
         except SQLGlotParseError:
@@ -128,9 +154,6 @@ class SQLFactory:
             SQLBuilderError: If the SQL is not a SELECT/CTE statement.
         """
 
-        from sqlspec.exceptions import SQLBuilderError
-        from sqlspec.statement.builder import SelectBuilder
-
         try:
             parsed_expr = sqlglot.parse_one(statement, read=dialect or self.dialect)
         except Exception as e:
@@ -149,15 +172,10 @@ class SQLFactory:
         actual_type_str = expr_type_map.get(actual_type, actual_type)
         # Only allow SELECT or WITH (if WITH wraps SELECT)
         if actual_type_str == "SELECT" or (
-            actual_type_str == "WITH" and hasattr(parsed_expr, "this") and isinstance(parsed_expr.this, exp.Select)
+            actual_type_str == "WITH" and parsed_expr.this and isinstance(parsed_expr.this, exp.Select)
         ):
             builder = SelectBuilder(dialect=dialect or self.dialect)
             builder._expression = parsed_expr
-            if parameters or kwargs:
-                from sqlspec.statement.sql import SQL
-
-                sql_obj = SQL(statement, parameters, *filters, dialect=dialect, config=config, **kwargs)
-                builder._sql_object = sql_obj  # type: ignore[attr-defined]
             return builder
         # If not SELECT, raise with helpful message
         msg = (
@@ -172,9 +190,6 @@ class SQLFactory:
     def select(
         self, *columns_or_sql: Union[str, exp.Expression], dialect: Optional[DialectType] = None
     ) -> "SelectBuilder":
-        from sqlspec.exceptions import SQLBuilderError
-        from sqlspec.statement.builder import SelectBuilder
-
         builder_dialect = dialect or self.dialect
         if len(columns_or_sql) == 1 and isinstance(columns_or_sql[0], str):
             sql_candidate = columns_or_sql[0].strip()
@@ -198,9 +213,6 @@ class SQLFactory:
         return select_builder
 
     def insert(self, table_or_sql: Optional[str] = None, dialect: Optional[DialectType] = None) -> "InsertBuilder":
-        from sqlspec.exceptions import SQLBuilderError
-        from sqlspec.statement.builder import InsertBuilder
-
         builder_dialect = dialect or self.dialect
         builder = InsertBuilder(dialect=builder_dialect)
         if builder._expression is None:
@@ -219,9 +231,6 @@ class SQLFactory:
         return builder
 
     def update(self, table_or_sql: Optional[str] = None, dialect: Optional[DialectType] = None) -> "UpdateBuilder":
-        from sqlspec.exceptions import SQLBuilderError
-        from sqlspec.statement.builder import UpdateBuilder
-
         builder_dialect = dialect or self.dialect
         builder = UpdateBuilder(dialect=builder_dialect)
         if builder._expression is None:
@@ -237,9 +246,6 @@ class SQLFactory:
         return builder
 
     def delete(self, table_or_sql: Optional[str] = None, dialect: Optional[DialectType] = None) -> "DeleteBuilder":
-        from sqlspec.exceptions import SQLBuilderError
-        from sqlspec.statement.builder import DeleteBuilder
-
         builder_dialect = dialect or self.dialect
         builder = DeleteBuilder(dialect=builder_dialect)
         if builder._expression is None:
@@ -253,9 +259,6 @@ class SQLFactory:
         return builder
 
     def merge(self, table_or_sql: Optional[str] = None, dialect: Optional[DialectType] = None) -> "MergeBuilder":
-        from sqlspec.exceptions import SQLBuilderError
-        from sqlspec.statement.builder import MergeBuilder
-
         builder_dialect = dialect or self.dialect
         builder = MergeBuilder(dialect=builder_dialect)
         if builder._expression is None:
@@ -291,37 +294,11 @@ class SQLFactory:
         candidate_upper = candidate.strip().upper()
 
         # Check for SQL keywords at the beginning
-        sql_starters = {
-            "SELECT",
-            "INSERT",
-            "UPDATE",
-            "DELETE",
-            "MERGE",
-            "WITH",
-            "CALL",
-            "DECLARE",
-            "BEGIN",
-            "END",
-            "CREATE",
-            "DROP",
-            "ALTER",
-            "TRUNCATE",
-            "RENAME",
-            "GRANT",
-            "REVOKE",
-            "SET",
-            "SHOW",
-            "USE",
-            "EXPLAIN",
-            "OPTIMIZE",
-            "VACUUM",
-            "COPY",
-        }
 
         if expected_type:
             return candidate_upper.startswith(expected_type.upper())
 
-        return any(candidate_upper.startswith(starter) for starter in sql_starters)
+        return any(candidate_upper.startswith(starter) for starter in SQL_STARTERS)
 
     def _populate_insert_from_sql(self, builder: "InsertBuilder", sql_string: str) -> "InsertBuilder":
         """Parse SQL string and populate INSERT builder using SQLGlot directly."""

@@ -502,8 +502,9 @@ class SecurityValidator(ProcessorProtocol[exp.Expression]):
         if not isinstance(comparison, exp.Binary):
             return False
 
-        left = comparison.left
-        right = comparison.right
+        # In sqlglot, binary expressions use 'this' and 'expression' for operands
+        left = comparison.this
+        right = comparison.expression
 
         # Check if comparing identical expressions
         if self._expressions_identical(left, right):

@@ -62,6 +62,9 @@ class SQLProcessingContext:
     statement_type: Optional[str] = None
     """The detected type of the SQL statement (e.g., SELECT, INSERT, DDL)."""
 
+    extra_info: dict[str, Any] = field(default_factory=dict)
+    """Extra information from parameter processing, including normalization state."""
+
     _extra_data: dict[str, Any] = field(default_factory=dict)
     """Allows processors to store arbitrary data if needed, use with caution."""
 

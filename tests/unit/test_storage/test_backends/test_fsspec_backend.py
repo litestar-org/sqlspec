@@ -1,12 +1,12 @@
 """Comprehensive tests for FSSpecBackend."""
 
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from sqlspec.config import InstrumentationConfig
-from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError
+from sqlspec.exceptions import MissingDependencyError
 from sqlspec.storage.backends.fsspec import FSSpecBackend
 
 
@@ -89,7 +89,7 @@ class TestFSSpecBackend:
         backend = backend_with_mock_fs
         mock_fs.cat.side_effect = Exception("Read failed")
 
-        with pytest.raises(StorageOperationFailedError, match="Failed to read bytes from test.txt"):
+        with pytest.raises(Exception, match="Read failed"):
             backend.read_bytes("test.txt")
 
     def test_write_bytes(self, backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMock) -> None:
@@ -108,14 +108,14 @@ class TestFSSpecBackend:
         backend = backend_with_mock_fs
         mock_fs.open.side_effect = Exception("Write failed")
 
-        with pytest.raises(StorageOperationFailedError, match="Failed to write bytes to output.txt"):
+        with pytest.raises(Exception, match="Write failed"):
             backend.write_bytes("output.txt", b"test data")
 
     def test_read_text(self, backend_with_mock_fs: FSSpecBackend) -> None:
         """Test reading text from storage."""
         backend = backend_with_mock_fs
 
-        with patch.object(backend, "read_bytes", return_value=b"test text"):
+        with patch.object(backend, "_read_bytes", return_value=b"test text"):
             result = backend.read_text("test.txt", encoding="utf-8")
 
         assert result == "test text"
@@ -124,7 +124,7 @@ class TestFSSpecBackend:
         """Test writing text to storage."""
         backend = backend_with_mock_fs
 
-        with patch.object(backend, "write_bytes") as mock_write:
+        with patch.object(backend, "_write_bytes") as mock_write:
             backend.write_text("output.txt", "test text", encoding="utf-8")
 
         mock_write.assert_called_once_with("output.txt", b"test text")
@@ -266,7 +266,7 @@ class TestFSSpecBackend:
         """Test error when pyarrow is not installed."""
         backend = backend_with_mock_fs
 
-        with patch("pyarrow.parquet.read_table", side_effect=ImportError):
+        with patch("sqlspec.storage.backends.fsspec.PYARROW_INSTALLED", False):
             with pytest.raises(MissingDependencyError, match="pyarrow"):
                 backend.read_arrow("data.parquet")
 
@@ -305,49 +305,32 @@ class TestFSSpecBackend:
                     assert batches[0] == mock_batch1
                     assert batches[1] == mock_batch2
 
-    def test_get_signed_url_not_supported(self, backend_with_mock_fs: FSSpecBackend) -> None:
-        """Test that signed URL generation is not supported."""
-        backend = backend_with_mock_fs
-
-        with pytest.raises(NotImplementedError, match="Signed URL generation not supported"):
-            backend.get_signed_url("file.txt")
-
     @pytest.mark.asyncio
-    async def test_async_read_bytes_with_native_support(
+    async def test_async_read_bytes_with_sync_wrapper(
         self, backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMock
     ) -> None:
-        """Test async read with native fsspec async support."""
+        """Test async read using reliable sync-to-async wrapper."""
         backend = backend_with_mock_fs
-        mock_fs._cat = AsyncMock(return_value=b"async data")
+        # No need to mock _cat - we use sync implementation
 
         result = await backend.read_bytes_async("test.txt")
 
-        assert result == b"async data"
-        mock_fs._cat.assert_called_once_with("/base/test.txt")
+        assert result == b"test data"  # Uses sync implementation
+        mock_fs.cat.assert_called_once_with("/base/test.txt")
 
     @pytest.mark.asyncio
-    async def test_async_read_bytes_fallback(self, backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMock) -> None:
-        """Test async read fallback to sync."""
-        backend = backend_with_mock_fs
-        # Remove _cat to trigger fallback
-        delattr(mock_fs, "_cat")
-
-        with patch.object(backend, "_read_bytes", return_value=b"sync data"):
-            result = await backend.read_bytes_async("test.txt")
-
-        assert result == b"sync data"
-
-    @pytest.mark.asyncio
-    async def test_async_write_bytes_with_native_support(
+    async def test_async_write_bytes_with_sync_wrapper(
         self, backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMock
     ) -> None:
-        """Test async write with native fsspec async support."""
+        """Test async write using reliable sync-to-async wrapper."""
         backend = backend_with_mock_fs
-        mock_fs._pipe = AsyncMock()
+        mock_file = MagicMock()
+        mock_fs.open.return_value.__enter__.return_value = mock_file
 
         await backend.write_bytes_async("test.txt", b"async data")
 
-        mock_fs._pipe.assert_called_once_with("/base/test.txt", b"async data")
+        mock_fs.open.assert_called_once_with("/base/test.txt", mode="wb")
+        mock_file.write.assert_called_once_with(b"async data")
 
     @pytest.mark.asyncio
     async def test_async_operations_with_wrap(self, backend_with_mock_fs: FSSpecBackend) -> None:

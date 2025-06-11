@@ -135,7 +135,7 @@ class DatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, RowT]):
             self._track_operation("execute", statement_type=type(statement).__name__) as ctx,
             wrap_exceptions(),
         ):
-            result = self.driver.execute(  # type: ignore[misc,arg-type,return-value]
+            result = self.driver.execute(
                 statement, parameters, *filters, connection=connection, config=config, schema_type=schema_type, **kwargs
             )
             ctx["result_count"] = getattr(result, "rowcount", None)
@@ -168,7 +168,7 @@ class DatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, RowT]):
             self._track_operation("execute_many", batch_size=len(parameters) if parameters else 0) as ctx,
             wrap_exceptions(),
         ):
-            result = self.driver.execute_many(  # type: ignore[misc,return-value]
+            result = self.driver.execute_many(
                 statement, parameters, *filters, connection=connection, config=config, **kwargs
             )
             ctx["result_count"] = getattr(result, "rowcount", None)
@@ -225,7 +225,7 @@ class DatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, RowT]):
             List of all results
         """
         with self._instrument("select"), self._track_operation("select") as ctx:
-            result = self.execute(  # type: ignore[misc,arg-type]
+            result = self.execute(
                 statement, parameters, *filters, connection=connection, config=config, schema_type=schema_type, **kwargs
             )
             data = list(result.all())
@@ -285,7 +285,7 @@ class DatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, RowT]):
             TooManyResultsError: If more than one result found
         """
         with self._instrument("select_one"), self._track_operation("select_one"):
-            result = self.execute(  # type: ignore[misc,arg-type]
+            result = self.execute(
                 statement, parameters, *filters, connection=connection, config=config, schema_type=schema_type, **kwargs
             )
             return result.one()
@@ -342,7 +342,7 @@ class DatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, RowT]):
             TooManyResultsError: If more than one result found
         """
         with self._instrument("select_one_or_none"), self._track_operation("select_one_or_none"):
-            result = self.execute(  # type: ignore[misc,arg-type]
+            result = self.execute(
                 statement, parameters, *filters, connection=connection, config=config, schema_type=schema_type, **kwargs
             )
             return result.one_or_none()
@@ -374,7 +374,7 @@ class DatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, RowT]):
             TooManyResultsError: If more than one result found
         """
         with self._instrument("select_value"), self._track_operation("select_value"):
-            result = self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)  # type: ignore[misc]
+            result = self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
             return result.scalar()
 
     def select_value_or_none(
@@ -403,7 +403,7 @@ class DatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, RowT]):
             TooManyResultsError: If more than one result found
         """
         with self._instrument("select_value_or_none"), self._track_operation("select_value_or_none"):
-            result = self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)  # type: ignore[misc]
+            result = self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
             return result.scalar_or_none()
 
     # DML convenience methods
@@ -431,7 +431,7 @@ class DatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, RowT]):
             Execution result
         """
         with self._instrument("insert"), self._track_operation("insert") as ctx:
-            result = self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)  # type: ignore[misc]
+            result = self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
             ctx["rows_affected"] = getattr(result, "rowcount", None)
             return result
 
@@ -458,7 +458,7 @@ class DatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, RowT]):
             Execution result
         """
         with self._instrument("update"), self._track_operation("update") as ctx:
-            result = self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)  # type: ignore[misc]
+            result = self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
             ctx["rows_affected"] = getattr(result, "rowcount", None)
             return result
 
@@ -485,7 +485,7 @@ class DatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, RowT]):
             Execution result
         """
         with self._instrument("delete"), self._track_operation("delete") as ctx:
-            result = self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)  # type: ignore[misc]
+            result = self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
             ctx["rows_affected"] = getattr(result, "rowcount", None)
             return result
 
@@ -836,7 +836,7 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
             TooManyResultsError: If more than one result found
         """
         with self._instrument("select_value"), self._track_operation("select_value"):
-            result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)  # type: ignore[misc]
+            result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
             return result.scalar()  # SQLResult.scalar() is synchronous
 
     async def select_value_or_none(
@@ -865,7 +865,7 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
             TooManyResultsError: If more than one result found
         """
         with self._instrument("select_value_or_none"), self._track_operation("select_value_or_none"):
-            result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)  # type: ignore[misc]
+            result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
             return result.scalar_or_none()  # SQLResult.scalar_or_none() is synchronous
 
     # Async DML convenience methods
@@ -893,7 +893,7 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
             Execution result
         """
         with self._instrument("insert"), self._track_operation("insert") as ctx:
-            result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)  # type: ignore[misc]
+            result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
             ctx["rows_affected"] = getattr(result, "rowcount", None)
             return result
 
@@ -920,7 +920,7 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
             Execution result
         """
         with self._instrument("update"), self._track_operation("update") as ctx:
-            result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)  # type: ignore[misc]
+            result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
             ctx["rows_affected"] = getattr(result, "rowcount", None)
             return result
 
@@ -947,6 +947,6 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
             Execution result
         """
         with self._instrument("delete"), self._track_operation("delete") as ctx:
-            result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)  # type: ignore[misc]
+            result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
             ctx["rows_affected"] = getattr(result, "rowcount", None)
             return result

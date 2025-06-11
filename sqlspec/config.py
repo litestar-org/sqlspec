@@ -12,7 +12,6 @@ from typing import (
     cast,
 )
 
-from sqlspec.exceptions import wrap_exceptions
 from sqlspec.typing import ConnectionT, Counter, Gauge, PoolT  # pyright: ignore
 from sqlspec.utils.logging import get_logger
 
@@ -166,10 +165,12 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     driver_type: "type[DriverT]" = field(init=False)
     pool_instance: "Optional[PoolT]" = field(default=None)
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
+    default_row_type: "type[Any]" = field(init=False)
     _pool_metrics: Optional[dict[str, Any]] = field(default=None, init=False, repr=False, hash=False, compare=False)
     _dialect: "Optional[DialectType]" = field(default=None, init=False, repr=False, hash=False, compare=False)
     __is_async__: "ClassVar[bool]" = False
     __supports_connection_pooling__: "ClassVar[bool]" = False
+    driver_class: "ClassVar[type[DriverT]]" = field(init=False, repr=False, hash=False, compare=False)  # pyright: ignore
 
     # Parameter style support information
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ()
@@ -205,23 +206,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
         Returns:
             The SQL dialect type.
-
-        Raises:
-            AttributeError: If no dialect is found.
         """
-        # Try to get dialect from driver_class (class attribute)
-        driver_class = getattr(self.__class__, "driver_class", None)
-        if driver_class is not None:
-            with wrap_exceptions(suppress=AttributeError):
-                return cast("DialectType", driver_class.dialect)
-
-        # Try to get dialect from driver_type (instance property)
-        with wrap_exceptions(suppress=AttributeError):
-            return cast("DialectType", self.driver_type.dialect)
-
-        # If not found, raise error
-        msg = f"No dialect defined for {self.__class__.__name__}. Set driver_class as a class attribute pointing to your driver class."
-        raise AttributeError(msg)
+        # Get dialect from driver_class (all drivers must have a dialect attribute)
+        return cast("DialectType", self.driver_class.dialect)
 
     @abstractmethod
     def create_connection(self) -> "Union[ConnectionT, Awaitable[ConnectionT]]":

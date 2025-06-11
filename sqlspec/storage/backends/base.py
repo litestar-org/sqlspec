@@ -10,7 +10,7 @@ All concrete backends should inherit from this class to get automatic instrument
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
@@ -623,68 +623,6 @@ class InstrumentedObjectStore(ABC):
                     )
 
                 return metadata
-
-    def get_signed_url(
-        self,
-        path: str,
-        operation: Literal["read", "write"] = "read",
-        expires_in: int = 3600,
-        **kwargs: Any,
-    ) -> str:
-        """Generate signed URL with instrumentation.
-
-        Args:
-            path: Path to sign
-            operation: Operation type
-            expires_in: Expiration in seconds
-            **kwargs: Additional backend-specific options
-
-        Returns:
-            Signed URL
-        """
-        correlation_id = CorrelationContext.get()
-
-        with instrument_operation(
-            self,
-            "storage.get_signed_url",
-            "storage",
-            path=path,
-            operation=operation,
-            expires_in=expires_in,
-            backend=self.backend_type,
-        ):
-            try:
-                url = self._get_signed_url(path, operation, expires_in, **kwargs)
-            except Exception as e:
-                self.logger.exception(
-                    "Failed to get signed URL for %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "operation": operation,
-                        "expires_in": expires_in,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
-                raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Generated signed URL for %s (%s)",
-                        path,
-                        operation,
-                        extra={
-                            "path": path,
-                            "operation": operation,
-                            "expires_in": expires_in,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
-                return url
 
     def is_object(self, path: str) -> bool:
         """Check if path is an object."""
@@ -1523,7 +1461,7 @@ class InstrumentedObjectStore(ABC):
 
             try:
                 batch_count = 0
-                async for batch in self._stream_arrow_async(pattern, **kwargs):  # type: ignore
+                async for batch in self._stream_arrow_async(pattern, **kwargs):
                     batch_count += 1
                     yield batch
 
@@ -1607,17 +1545,6 @@ class InstrumentedObjectStore(ABC):
     @abstractmethod
     def _get_metadata(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Actual implementation of get_metadata in subclasses."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def _get_signed_url(
-        self,
-        path: str,
-        operation: Literal["read", "write"] = "read",
-        expires_in: int = 3600,
-        **kwargs: Any,
-    ) -> str:
-        """Actual implementation of get_signed_url in subclasses."""
         raise NotImplementedError
 
     @abstractmethod
@@ -1709,6 +1636,6 @@ class InstrumentedObjectStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def _stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
+    def _stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
         """Actual async implementation of stream_arrow in subclasses."""
         raise NotImplementedError

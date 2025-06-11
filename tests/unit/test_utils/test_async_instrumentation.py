@@ -60,9 +60,6 @@ class MockAsyncBackend(InstrumentedObjectStore):
     def _get_metadata(self, path: str, **kwargs: Any) -> dict[str, Any]:
         return {"size": 100}
 
-    def _get_signed_url(self, path: str, operation: str = "read", expires_in: int = 3600, **kwargs: Any) -> str:
-        return f"https://example.com/{path}?expires={expires_in}"
-
     def _is_object(self, path: str) -> bool:
         return True
 

@@ -9,7 +9,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.sql import SQL, SQLConfig
 
 # Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
@@ -67,13 +67,15 @@ def test_postgresql_execute_script_ddl(adbc_postgresql_script_session: AdbcDrive
     assert isinstance(result, SQLResult)
 
     # Verify tables were created
-    check_result = adbc_postgresql_script_session.execute("""
+    check_result = adbc_postgresql_script_session.execute(
+        SQL("""
         SELECT table_name
         FROM information_schema.tables
         WHERE table_schema = 'public'
         AND table_name IN ('script_test1', 'script_test2')
         ORDER BY table_name
     """)
+    )
     assert len(check_result.data) == 2
 
     # Cleanup
@@ -110,12 +112,14 @@ def test_sqlite_execute_script_ddl(adbc_sqlite_script_session: AdbcDriver) -> No
     assert isinstance(result, SQLResult)
 
     # Verify tables were created
-    check_result = adbc_sqlite_script_session.execute("""
+    check_result = adbc_sqlite_script_session.execute(
+        SQL("""
         SELECT name FROM sqlite_master
         WHERE type='table'
         AND name IN ('script_test1', 'script_test2')
         ORDER BY name
     """)
+    )
     assert len(check_result.data) == 2
 
 
@@ -150,7 +154,7 @@ def test_postgresql_execute_script_mixed(adbc_postgresql_script_session: AdbcDri
     assert isinstance(result, SQLResult)
 
     # Verify data
-    data_result = adbc_postgresql_script_session.execute("SELECT * FROM script_mixed ORDER BY value")
+    data_result = adbc_postgresql_script_session.execute(SQL("SELECT * FROM script_mixed ORDER BY value"))
     assert len(data_result.data) == 3
     assert data_result.data[0]["value"] == 100  # Not updated
     assert data_result.data[1]["value"] == 400  # Updated from 200
@@ -190,7 +194,7 @@ def test_sqlite_execute_script_transaction(adbc_sqlite_script_session: AdbcDrive
     assert isinstance(result, SQLResult)
 
     # Verify all operations completed
-    check_result = adbc_sqlite_script_session.execute("SELECT * FROM script_trans ORDER BY value")
+    check_result = adbc_sqlite_script_session.execute(SQL("SELECT * FROM script_trans ORDER BY value"))
     assert len(check_result.data) == 3
     assert all(row["value"] > 1000 for row in check_result.data)
 
@@ -250,6 +254,6 @@ def test_sqlite_execute_script_comments(adbc_sqlite_script_session: AdbcDriver) 
     assert isinstance(result, SQLResult)
 
     # Verify table and data
-    check_result = adbc_sqlite_script_session.execute("SELECT * FROM script_comments")
+    check_result = adbc_sqlite_script_session.execute(SQL("SELECT * FROM script_comments"))
     assert len(check_result.data) == 1
     assert check_result.data[0]["name"] == "Test"

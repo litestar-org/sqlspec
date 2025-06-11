@@ -50,7 +50,7 @@ class CorrelationMiddleware(ASGIMiddleware):
             send: ASGI send channel
             next_app: The next ASGI application in the chain
         """
-        if scope["type"] != "http":
+        if scope["type"] != ScopeType.HTTP:
             await next_app(scope, receive, send)
             return
 

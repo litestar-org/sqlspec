@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError as SQLGlotParseError
+from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
 
 from sqlspec.exceptions import (
     ParameterError,
@@ -35,6 +36,8 @@ from sqlspec.exceptions import (
 from sqlspec.statement.filters import StatementFilter, apply_filter
 from sqlspec.statement.parameters import ParameterConverter, ParameterStyle, ParameterValidator
 from sqlspec.statement.pipelines import ValidationResult
+from sqlspec.statement.pipelines.base import StatementPipeline
+from sqlspec.statement.pipelines.context import SQLProcessingContext
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -47,8 +50,7 @@ if TYPE_CHECKING:
     from sqlspec.statement.parameters import ParameterInfo
     from sqlspec.statement.pipelines import ProcessorProtocol, SQLValidator
     from sqlspec.statement.pipelines.analyzers import StatementAnalysis
-    from sqlspec.statement.pipelines.base import StatementPipeline
-    from sqlspec.statement.pipelines.context import SQLProcessingContext, StatementPipelineResult
+    from sqlspec.statement.pipelines.context import StatementPipelineResult
     from sqlspec.typing import SQLParameterType
 
 __all__ = (
@@ -273,12 +275,7 @@ class SQL:
         config = config or SQLConfig()
         actual_filters = list(filters)
         actual_parameters = parameters
-        if (
-            parameters is not None
-            and hasattr(parameters, "append_to_statement")
-            and callable(getattr(parameters, "append_to_statement", None))
-            and not isinstance(parameters, (dict, list, tuple, str, int, float, bool))
-        ):
+        if parameters is not None and isinstance(parameters, StatementFilter):
             actual_filters.insert(0, parameters)
             actual_parameters = None
         if isinstance(statement, SQL):
@@ -695,7 +692,6 @@ class SQL:
 
     def _get_validation_only_pipeline(self) -> "StatementPipeline":
         """Get a pipeline with only validation components, no transformers or analyzers."""
-        from sqlspec.statement.pipelines import StatementPipeline
 
         # Get the configured validators from the main pipeline configuration
         main_pipeline_config = self.config.get_statement_pipeline()
@@ -907,7 +903,7 @@ class SQL:
                 for i, param_info in enumerate(self.parameter_info):
                     if i < len(self.parameters):
                         # Use param_info.name if available, otherwise generate param_N
-                        param_name = param_info.name if param_info.name else f"param_{param_info.ordinal}"
+                        param_name = param_info.name or f"param_{param_info.ordinal}"
                         result[param_name] = self.parameters[i]
                 return result
             return {f"param_{i}": value for i, value in enumerate(self.parameters)}
@@ -1012,8 +1008,6 @@ class SQL:
             except SQLValidationError:
                 return self  # Cannot parse, cannot transform
 
-        from sqlspec.statement.pipelines.context import SQLProcessingContext
-
         # Create a context for this specific transformation run
         transform_context = SQLProcessingContext(
             initial_sql_string=str(self._sql),
@@ -1028,7 +1022,6 @@ class SQL:
 
         # Get only transformers from the configured pipeline
         current_pipeline_config = self.config.get_statement_pipeline()
-        from sqlspec.statement.pipelines import StatementPipeline
 
         transform_pipeline = StatementPipeline(
             transformers=current_pipeline_config.transformers, validators=[], analyzers=[]
@@ -1433,7 +1426,7 @@ class SQL:
             "_is_many": self._is_many,
             "_is_script": self._is_script,
             # Track kwargs for correct parameter merging
-            "_raw_kwargs": self._raw_kwargs.copy() if hasattr(self, "_raw_kwargs") and self._raw_kwargs else {},
+            "_raw_kwargs": self._raw_kwargs.copy() if self._raw_kwargs else {},
         }
 
     def _ensure_processed(self) -> "_ProcessedState":
@@ -1442,8 +1435,8 @@ class SQL:
             return self._processed_state
 
         context = self._prepare_processing_context()
-        initial_expression = self._parse_initial_expression(context)
-        pipeline_result = self._execute_pipeline(context, initial_expression)
+        self._parse_initial_expression(context)
+        pipeline_result = self._execute_pipeline(context)
         processed_state = self._build_processed_state(context, pipeline_result)
 
         self._processed_state = processed_state
@@ -1452,11 +1445,10 @@ class SQL:
 
     def _prepare_processing_context(self) -> "SQLProcessingContext":
         """Prepare the processing context with input data and parameter analysis."""
-        from sqlspec.statement.pipelines.context import SQLProcessingContext
 
         raw_sql_input = str(self._sql)
         raw_parameters_input = self._raw_parameters
-        raw_kwargs_input = getattr(self, "_raw_kwargs", {})
+        raw_kwargs_input = self._raw_kwargs
 
         context = SQLProcessingContext(
             initial_sql_string=raw_sql_input,
@@ -1511,11 +1503,11 @@ class SQL:
                 merged = self._config.parameter_converter._merge_mixed_parameters(param_info, args, kwargs)
                 context.parameter_info, context.merged_parameters = param_info, merged
                 # Store normalization state in context
-                setattr(context, "extra_info", {"was_normalized": False})
+                context.extra_info = {"was_normalized": False}
                 return
 
             convert_result = self._config.parameter_converter.convert_parameters(
-                raw_sql_input, parameters, None, kwargs, validate=self._config.enable_validation
+                raw_sql_input, parameters, None, kwargs or None, validate=self._config.enable_validation
             )
             # Unpack the enhanced result (transformed_sql, param_info, merged_params, extra_info)
             transformed_sql = convert_result[0]
@@ -1524,7 +1516,7 @@ class SQL:
             extra_info = convert_result[3]
 
             # Store extra info in context for later use
-            setattr(context, "extra_info", extra_info)
+            context.extra_info = extra_info
 
             # If normalization occurred, update the SQL for parsing
             if extra_info.get("was_normalized", False):
@@ -1536,7 +1528,7 @@ class SQL:
                 [],
                 self._config.parameter_converter.merge_parameters(raw_parameters_input, None, None),
             )
-            setattr(context, "extra_info", {"was_normalized": False})
+            context.extra_info = {"was_normalized": False}
 
     def _parse_initial_expression(self, context: "SQLProcessingContext") -> "Optional[Expression]":
         """Parse the initial SQL expression with SQLGlot normalization if parsing is enabled."""
@@ -1555,22 +1547,16 @@ class SQL:
                 # Apply SQLGlot normalization if enabled
                 if self._config.enable_normalization and initial_expression is not None:
                     try:
-                        from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
-
                         # Apply identifier normalization (converts to lowercase by default)
-                        normalized_expression = normalize_identifiers(initial_expression, dialect=self._dialect)
+                        context.current_expression = normalize_identifiers(initial_expression, dialect=self._dialect)
                     except Exception as e:
                         # Fallback to non-normalized expression if normalization fails
-                        logger = get_logger(__name__)
-                        logger.warning("SQLGlot normalization failed: %s, using original expression", e)
+                        get_logger(__name__).warning("SQLGlot normalization failed: %s, using original expression", e)
                         context.current_expression = initial_expression
-                        return initial_expression
-                    else:
-                        context.current_expression = normalized_expression
-                        return normalized_expression
-                else:
-                    context.current_expression = initial_expression
-                    return initial_expression
+                    return context.current_expression
+
+                context.current_expression = initial_expression
+                return initial_expression
         except SQLValidationError as e:
             # Create failed state for validation errors during parsing
             validation_result = ValidationResult(is_safe=False, risk_level=e.risk_level, issues=[str(e)])
@@ -1590,9 +1576,7 @@ class SQL:
             self._check_and_raise_for_strict_mode()
             return None  # Return None since parsing failed
 
-    def _execute_pipeline(
-        self, context: "SQLProcessingContext", initial_expression: "Optional[Expression]"
-    ) -> "StatementPipelineResult":
+    def _execute_pipeline(self, context: "SQLProcessingContext") -> "StatementPipelineResult":
         """Execute the SQL processing pipeline based on configuration."""
         if self._config.enable_parsing and context.current_expression is not None:
             with wrap_exceptions():
@@ -1682,7 +1666,7 @@ class SQL:
         processed_state = _ProcessedState(
             raw_sql_input=context.initial_sql_string,
             raw_parameters_input=context.initial_parameters,
-            initial_expression=getattr(context, "current_expression", None),
+            initial_expression=context.current_expression,
             transformed_expression=pipeline_result.final_expression,
             final_parameter_info=pipeline_result.parameter_info,
             final_merged_parameters=pipeline_result.merged_parameters,
@@ -1691,11 +1675,6 @@ class SQL:
             input_had_placeholders=context.input_sql_had_placeholders,
             config_snapshot=self._config,
         )
-
-        # Store extra_info as a separate attribute on the SQL instance
-        if hasattr(context, "extra_info"):
-            self._normalization_info = context.extra_info
-        else:
-            self._normalization_info = {"was_normalized": False}
+        self._normalization_info = context.extra_info
 
         return processed_state

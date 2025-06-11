@@ -18,7 +18,6 @@ from sqlspec.config import (
     NoPoolSyncConfig,
     SyncDatabaseConfig,
 )
-from sqlspec.typing import DictRow
 
 # Test Fixtures and Mock Classes
 
@@ -53,6 +52,7 @@ class MockSyncConfig(NoPoolSyncConfig[Any, Any]):
         self.connection_instance = Mock()
         self.driver_instance = Mock()
         self.driver_type = MockDriver  # Add missing driver_type as a type
+        self.default_row_type = dict  # Add default row type
         super().__init__()
 
     @property
@@ -77,6 +77,7 @@ class MockAsyncConfig(NoPoolAsyncConfig[Any, Any]):
         self.connection_instance = Mock()  # Use Mock instead of AsyncMock for instances
         self.driver_instance = Mock()  # Use Mock instead of AsyncMock for instances
         self.driver_type = MockAsyncDriver  # Add missing driver_type as a type
+        self.default_row_type = dict  # Add default row type
         super().__init__()
 
     @property
@@ -425,7 +426,7 @@ def test_get_session_driver_instantiation() -> None:
         mock_driver_class.assert_called_once_with(
             connection=mock_connection,
             instrumentation_config=config.instrumentation,
-            default_row_type=DictRow,
+            default_row_type=dict,
         )
         assert session == mock_driver_instance
 

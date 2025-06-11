@@ -19,7 +19,6 @@ def test_bigquery_field_constants() -> None:
         "client_info",
         "default_query_job_config",
         "default_load_job_config",
-        "use_legacy_sql",
         "use_query_cache",
         "maximum_bytes_billed",
         "enable_bigquery_ml",
@@ -126,27 +125,3 @@ def test_bigquery_config_supports_connection_pooling() -> None:
     config = BigQueryConfig(project="test-project", dataset_id="test_dataset")
     assert config.__supports_connection_pooling__ is False
     assert BigQueryConfig.__supports_connection_pooling__ is False
-
-
-def test_bigquery_config_from_connection_config() -> None:
-    """Test BigQuery config from_connection_config backward compatibility."""
-    # Test basic backward compatibility
-    connection_config = {
-        "dataset_id": "test_dataset",
-        "default_query_job_config": "test_default_query_job_config",
-        "client_info": "test_client_info",
-    }
-    config = BigQueryConfig.from_connection_config(connection_config)
-    # Add specific assertions based on fields
-    assert config.extras == {}
-
-    # Test with extra parameters
-    connection_config_with_extras = {
-        "dataset_id": "test_dataset",
-        "default_query_job_config": "test_default_query_job_config",
-        "unknown_param": "test_value",
-        "another_param": 42,
-    }
-    config_extras = BigQueryConfig.from_connection_config(connection_config_with_extras)
-    assert config_extras.extras["unknown_param"] == "test_value"
-    assert config_extras.extras["another_param"] == 42

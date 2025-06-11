@@ -15,7 +15,10 @@ import sqlglot
 from sqlglot import Dialect, exp
 from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
-from sqlglot.optimizer import optimize_joins, pushdown_predicates, simplify
+from sqlglot.optimizer import optimize
+from sqlglot.optimizer.optimize_joins import optimize_joins
+from sqlglot.optimizer.pushdown_predicates import pushdown_predicates
+from sqlglot.optimizer.simplify import simplify
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
@@ -163,7 +166,6 @@ class QueryBuilder(ABC, Generic[ResultT]):
         Returns:
             tuple[Self, str]: The builder instance and the parameter name.
         """
-        param_name_to_use: str
         if name:
             if name in self._parameters:
                 self._raise_sql_builder_error(f"Parameter name '{name}' already exists.")
@@ -302,18 +304,15 @@ class QueryBuilder(ABC, Generic[ResultT]):
         if self._with_ctes:
             with self._debug_build_phase("process_ctes"):
                 if hasattr(final_expression, "with_") and callable(getattr(final_expression, "with_", None)):
-                    processed_expression = final_expression
                     for alias, cte_node in self._with_ctes.items():
-                        processed_expression = processed_expression.with_(  # pyright: ignore
-                            cte_node.args["this"],  # The SELECT expression
-                            as_=alias,  # The alias
-                            copy=False,
+                        final_expression = final_expression.with_(  # pyright: ignore
+                            cte_node.args["this"], as_=alias, copy=False
                         )
-                    final_expression = processed_expression
-                elif isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union)):
-                    ctes_for_with_expression = list(self._with_ctes.values())
-                    if ctes_for_with_expression:
-                        final_expression = exp.With(expressions=ctes_for_with_expression, this=final_expression)
+                elif (
+                    isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union))
+                    and self._with_ctes
+                ):
+                    final_expression = exp.With(expressions=list(self._with_ctes.values()), this=final_expression)
                 else:
                     logger.warning(
                         "Expression type %s may not support CTEs. CTEs will not be added.",
@@ -338,9 +337,8 @@ class QueryBuilder(ABC, Generic[ResultT]):
                 # self._raise_sql_builder_error will make sql_string known as potentially unbound if not for NoReturn
                 self._raise_sql_builder_error(err_msg, e)
 
-        # Log completion
-        duration = time.perf_counter() - start_time
         if self.instrumentation_config and self.instrumentation_config.log_queries:
+            duration = time.perf_counter() - start_time
             logger.info(
                 "Built %s query in %.3fms",
                 self.__class__.__name__,
@@ -375,8 +373,6 @@ class QueryBuilder(ABC, Generic[ResultT]):
             # Use SQLGlot's comprehensive optimizer if schema is available
             if hasattr(self, "schema") and self.schema:
                 with self._debug_build_phase("comprehensive_optimization"):
-                    from sqlglot.optimizer import optimize
-
                     optimized = optimize(optimized.copy(), schema=self.schema, dialect=self.dialect_name)
             else:
                 # Apply individual optimizations in order
@@ -428,10 +424,10 @@ class QueryBuilder(ABC, Generic[ResultT]):
 
         return SQL(
             statement=safe_query.sql,
-            parameters=safe_query.parameters,  # Pass parameters dict directly
-            dialect=safe_query.dialect,  # Pass the dialect object/name
+            parameters=safe_query.parameters,
+            dialect=safe_query.dialect,
             config=config,
-            _builder_result_type=self._expected_result_type,  # Property already returns type
+            _builder_result_type=self._expected_result_type,
         )
 
     def __str__(self) -> str:

@@ -239,7 +239,7 @@ def test_duckdb_driver_fetch_arrow_table_with_connection_override(duckdb_driver:
     assert result.data is mock_arrow_table
 
     # Verify override connection was used for DuckDB-style native path
-    override_connection.execute.assert_called_once_with("SELECT id FROM users", [])
+    override_connection.execute.assert_called_once_with("SELECT id FROM users", [None])
     mock_execute_result.arrow.assert_called_once()
 
 

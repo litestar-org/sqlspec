@@ -117,7 +117,6 @@ class TestSQLHelperMethods:
         """Test _execute_pipeline method."""
         context = sql_instance._prepare_processing_context()
         context.current_expression = Mock()
-        initial_expression = Mock()
 
         mock_pipeline = Mock()
         mock_result = StatementPipelineResult(
@@ -131,7 +130,7 @@ class TestSQLHelperMethods:
         mock_pipeline.execute_pipeline.return_value = mock_result
 
         with patch.object(sql_instance._config, "get_statement_pipeline", return_value=mock_pipeline):
-            result = sql_instance._execute_pipeline(context, initial_expression)
+            result = sql_instance._execute_pipeline(context)
 
             assert result == mock_result
             mock_pipeline.execute_pipeline.assert_called_once()

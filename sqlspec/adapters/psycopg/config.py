@@ -3,6 +3,7 @@
 import contextlib
 import logging
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from psycopg import AsyncConnection, Connection, connect
@@ -356,7 +357,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         # TODO: this should still create a pool and return a connection from it
         conn_dict = self.connection_config_dict
         conn_dict["row_factory"] = dict_row
-        return connect(**conn_dict)  # type: ignore[arg-type]
+        return connect(**conn_dict)
 
     @contextlib.contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[PsycopgSyncConnection, None, None]":
@@ -394,8 +395,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             # Create statement config with parameter style info if not already set
             statement_config = self.statement_config
             if statement_config.allowed_parameter_styles is None:
-                from dataclasses import replace
-
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
@@ -753,8 +752,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             # Create statement config with parameter style info if not already set
             statement_config = self.statement_config
             if statement_config.allowed_parameter_styles is None:
-                from dataclasses import replace
-
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,

@@ -47,7 +47,7 @@ class TestDatabaseService:
 
     def test_init(self, mock_driver: MagicMock) -> None:
         """Test service initialization."""
-        service = DatabaseService(mock_driver)
+        service: DatabaseService = DatabaseService(mock_driver)
         assert service.driver is mock_driver
         assert service.service_name == "DatabaseService"
         assert service.instrumentation_config is not None
@@ -313,7 +313,7 @@ class TestAsyncDatabaseService:
 
     def test_init(self, mock_driver: AsyncMock) -> None:
         """Test async service initialization."""
-        service = AsyncDatabaseService(mock_driver)
+        service: AsyncDatabaseService = AsyncDatabaseService(mock_driver)
         assert service.driver is mock_driver
         assert service.service_name == "AsyncDatabaseService"
         assert service.instrumentation_config is not None

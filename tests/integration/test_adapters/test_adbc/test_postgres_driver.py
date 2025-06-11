@@ -69,7 +69,7 @@ def test_connection(postgres_service: PostgresService) -> None:
     with config.provide_session() as session:
         assert session is not None
         assert isinstance(session, AdbcDriver)
-        result = session.execute("SELECT 1 as test_value")
+        result = session.execute(SQL("SELECT 1 as test_value"))
         assert isinstance(result, SQLResult)
         assert result.data is not None
         assert result.data[0]["test_value"] == 1
@@ -80,7 +80,7 @@ def test_basic_crud(adbc_postgresql_session: AdbcDriver) -> None:
     """Test basic CRUD operations with ADBC PostgreSQL."""
     # INSERT
     insert_result = adbc_postgresql_session.execute(
-        "INSERT INTO test_table (name, value) VALUES ($1, $2)", ("test_name", 42)
+        SQL("INSERT INTO test_table (name, value) VALUES ($1, $2)"), ("test_name", 42)
     )
     assert isinstance(insert_result, SQLResult)
     # ADBC drivers may not support rowcount and return -1
@@ -88,7 +88,7 @@ def test_basic_crud(adbc_postgresql_session: AdbcDriver) -> None:
 
     # SELECT
     select_result = adbc_postgresql_session.execute(
-        "SELECT name, value FROM test_table WHERE name = $1", ("test_name",)
+        SQL("SELECT name, value FROM test_table WHERE name = $1"), ("test_name",)
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -98,26 +98,26 @@ def test_basic_crud(adbc_postgresql_session: AdbcDriver) -> None:
 
     # UPDATE
     update_result = adbc_postgresql_session.execute(
-        "UPDATE test_table SET value = $1 WHERE name = $2", (100, "test_name")
+        SQL("UPDATE test_table SET value = $1 WHERE name = $2"), (100, "test_name")
     )
     assert isinstance(update_result, SQLResult)
     # ADBC drivers may not support rowcount and return -1
     assert update_result.rows_affected in (-1, 1)
 
     # Verify UPDATE
-    verify_result = adbc_postgresql_session.execute("SELECT value FROM test_table WHERE name = $1", ("test_name",))
+    verify_result = adbc_postgresql_session.execute(SQL("SELECT value FROM test_table WHERE name = $1"), ("test_name",))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
-    delete_result = adbc_postgresql_session.execute("DELETE FROM test_table WHERE name = $1", ("test_name",))
+    delete_result = adbc_postgresql_session.execute(SQL("DELETE FROM test_table WHERE name = $1"), ("test_name",))
     assert isinstance(delete_result, SQLResult)
     # ADBC drivers may not support rowcount and return -1
     assert delete_result.rows_affected in (-1, 1)
 
     # Verify DELETE
-    empty_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM test_table")
+    empty_result = adbc_postgresql_session.execute(SQL("SELECT COUNT(*) as count FROM test_table"))
     assert isinstance(empty_result, SQLResult)
     assert empty_result.data is not None
     assert empty_result.data[0]["count"] == 0
@@ -134,13 +134,13 @@ def test_basic_crud(adbc_postgresql_session: AdbcDriver) -> None:
 def test_parameter_styles(adbc_postgresql_session: AdbcDriver, params: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles with ADBC PostgreSQL."""
     # Insert test data
-    adbc_postgresql_session.execute("INSERT INTO test_table (name) VALUES ($1)", ("test_value",))
+    adbc_postgresql_session.execute(SQL("INSERT INTO test_table (name) VALUES ($1)"), ("test_value",))
 
     # Test parameter style
     if style == "tuple_binds":
-        sql = "SELECT name FROM test_table WHERE name = $1"
+        sql = SQL("SELECT name FROM test_table WHERE name = $1")
     else:  # dict_binds - PostgreSQL uses numbered parameters
-        sql = "SELECT name FROM test_table WHERE name = $1"
+        sql = SQL("SELECT name FROM test_table WHERE name = $1")
         params = (params["name"],) if isinstance(params, dict) else params
 
     result = adbc_postgresql_session.execute(sql, params)
@@ -166,17 +166,17 @@ def test_parameter_types(adbc_postgresql_session: AdbcDriver) -> None:
     # Test various parameter types
     params = (42, "test_string", math.pi, True, [1, 2, 3])
     insert_result = adbc_postgresql_session.execute(
-        """
+        SQL("""
         INSERT INTO param_test (int_col, text_col, float_col, bool_col, array_col)
         VALUES ($1, $2, $3, $4, $5)
-        """,
+        """),
         params,
     )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected in (-1, 1)
 
     # Verify data
-    select_result = adbc_postgresql_session.execute("SELECT * FROM param_test")
+    select_result = adbc_postgresql_session.execute(SQL("SELECT * FROM param_test"))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
@@ -251,18 +251,20 @@ def test_execute_many(adbc_postgresql_session: AdbcDriver) -> None:
     """Test execute_many functionality with ADBC PostgreSQL."""
     params_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
-    result = adbc_postgresql_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", params_list)
+    result = adbc_postgresql_session.execute_many(
+        SQL("INSERT INTO test_table (name, value) VALUES ($1, $2)"), params_list
+    )
     assert isinstance(result, SQLResult)
     assert result.rows_affected == len(params_list)
 
     # Verify all records were inserted
-    select_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM test_table")
+    select_result = adbc_postgresql_session.execute(SQL("SELECT COUNT(*) as count FROM test_table"))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert select_result.data[0]["count"] == len(params_list)
 
     # Verify data integrity
-    ordered_result = adbc_postgresql_session.execute("SELECT name, value FROM test_table ORDER BY name")
+    ordered_result = adbc_postgresql_session.execute(SQL("SELECT name, value FROM test_table ORDER BY name"))
     assert isinstance(ordered_result, SQLResult)
     assert ordered_result.data is not None
     assert len(ordered_result.data) == 3
@@ -288,7 +290,7 @@ def test_execute_many_update(adbc_postgresql_session: AdbcDriver) -> None:
     assert result.rows_affected == 3
 
     # Verify updates
-    verify_result = adbc_postgresql_session.execute("SELECT name, value FROM test_table ORDER BY name")
+    verify_result = adbc_postgresql_session.execute(SQL("SELECT name, value FROM test_table ORDER BY name"))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
@@ -305,7 +307,7 @@ def test_execute_many_empty(adbc_postgresql_session: AdbcDriver) -> None:
     assert result.rows_affected == 0
 
     # Verify no records were inserted
-    count_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM test_table")
+    count_result = adbc_postgresql_session.execute(SQL("SELECT COUNT(*) as count FROM test_table"))
     assert isinstance(count_result, SQLResult)
     assert count_result.data is not None
     assert count_result.data[0]["count"] == 0
@@ -385,7 +387,7 @@ def test_execute_script_ddl(adbc_postgresql_session: AdbcDriver) -> None:
     assert isinstance(result, SQLResult)
 
     # Verify table was created and data inserted
-    verify_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM script_test_table")
+    verify_result = adbc_postgresql_session.execute(SQL("SELECT COUNT(*) as count FROM script_test_table"))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["count"] == 3
@@ -475,7 +477,7 @@ def test_result_methods(adbc_postgresql_session: AdbcDriver) -> None:
     )
 
     # Test SelectResult methods
-    result = adbc_postgresql_session.execute("SELECT * FROM test_table ORDER BY name")
+    result = adbc_postgresql_session.execute(SQL("SELECT * FROM test_table ORDER BY name"))
     assert isinstance(result, SQLResult)
 
     # Test get_first()
@@ -501,14 +503,14 @@ def test_error_handling(adbc_postgresql_session: AdbcDriver) -> None:
     """Test error handling and exception propagation with ADBC PostgreSQL."""
     # Test invalid SQL
     with pytest.raises(Exception):  # ADBC error
-        adbc_postgresql_session.execute("INVALID SQL STATEMENT")
+        adbc_postgresql_session.execute(SQL("INVALID SQL STATEMENT"))
 
     # Test constraint violation
     adbc_postgresql_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("unique_test", 1))
 
     # Try to insert with invalid column reference
     with pytest.raises(Exception):  # ADBC error
-        adbc_postgresql_session.execute("SELECT nonexistent_column FROM test_table")
+        adbc_postgresql_session.execute(SQL("SELECT nonexistent_column FROM test_table"))
 
 
 @pytest.mark.xdist_group("postgres")
@@ -600,7 +602,7 @@ def test_basic_types(adbc_postgresql_session: AdbcDriver) -> None:
     )
 
     # Verify data
-    result = adbc_postgresql_session.execute("SELECT * FROM basic_types_test")
+    result = adbc_postgresql_session.execute(SQL("SELECT * FROM basic_types_test"))
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert result.get_count() == 1
@@ -643,7 +645,7 @@ def test_date_time_types(adbc_postgresql_session: AdbcDriver) -> None:
     )
 
     # Verify data
-    result = adbc_postgresql_session.execute("SELECT * FROM datetime_test")
+    result = adbc_postgresql_session.execute(SQL("SELECT * FROM datetime_test"))
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert result.get_count() == 1
@@ -684,7 +686,7 @@ def test_null_values(adbc_postgresql_session: AdbcDriver) -> None:
     )
 
     # Verify NULL values
-    result = adbc_postgresql_session.execute("SELECT * FROM null_values_test")
+    result = adbc_postgresql_session.execute(SQL("SELECT * FROM null_values_test"))
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert result.get_count() == 1
@@ -732,7 +734,7 @@ def test_advanced_types(adbc_postgresql_session: AdbcDriver) -> None:
     )
 
     # Verify data
-    result = adbc_postgresql_session.execute("SELECT * FROM advanced_types_test")
+    result = adbc_postgresql_session.execute(SQL("SELECT * FROM advanced_types_test"))
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert result.get_count() == 1
@@ -829,7 +831,7 @@ def test_to_parquet(adbc_postgresql_session: AdbcDriver) -> None:
     statement = SQL("SELECT id, name, value FROM test_table ORDER BY id")
 
     with tempfile.NamedTemporaryFile() as tmp:
-        adbc_postgresql_session.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
+        adbc_postgresql_session.export_to_storage(statement, tmp.name)
 
         # Read back the Parquet file
         table = pq.read_table(tmp.name)

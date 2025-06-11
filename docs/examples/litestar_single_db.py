@@ -27,8 +27,8 @@ async def simple_sqlite(db_connection: Connection) -> dict[str, str]:
         dict[str, str]: The greeting.
     """
     result = await db_connection.execute_fetchall("SELECT 'Hello, world!' AS greeting")
-    return {"greeting": result[0][0]}  # type: ignore
+    return {"greeting": result[0][0]}
 
 
-sqlspec = SQLSpec(config=AiosqliteConfig())
+sqlspec = SQLSpec(config=AiosqliteConfig(database=":memory:"))
 app = Litestar(route_handlers=[simple_sqlite], plugins=[sqlspec])

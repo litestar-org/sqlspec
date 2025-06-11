@@ -1,14 +1,10 @@
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any
 
 from sqlspec._serialization import decode_json
 from sqlspec.exceptions import MissingDependencyError
 
 __all__ = ("open_fixture", "open_fixture_async")
-
-# TODO: determine if this is needed
-# Define Path and AsyncPath as None for test patching
-Path: "Optional[type]" = None  # pyright: ignore  #TODO: for test patching
-AsyncPath: "Optional[type]" = None  # pyright: ignore  #TODO: for test patching
 
 
 def open_fixture(fixtures_path: Any, fixture_name: str) -> Any:
@@ -24,7 +20,6 @@ def open_fixture(fixtures_path: Any, fixture_name: str) -> Any:
     Returns:
         Any: The parsed JSON data
     """
-    from pathlib import Path
 
     fixture = Path(fixtures_path / f"{fixture_name}.json")
     if fixture.exists():

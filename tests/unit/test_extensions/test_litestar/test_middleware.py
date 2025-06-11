@@ -31,7 +31,7 @@ class TestCorrelationMiddleware:
         }
 
     @pytest.fixture
-    def websocket_scope(self):  # -> dict[str, Any]:
+    def websocket_scope(self) -> dict[str, Any]:
         """Create a mock WebSocket scope."""
         return {"type": "websocket", "headers": [], "path": "/ws"}
 
@@ -94,7 +94,7 @@ class TestCorrelationMiddleware:
         # Capture the modified send function
         actual_send = None
 
-        async def capture_send(scope, receive, send) -> None:
+        async def capture_send(scope: Any, receive: Any, send: Any) -> None:
             nonlocal actual_send
             actual_send = send
 
@@ -141,7 +141,7 @@ class TestCorrelationMiddleware:
         # Capture the modified send function
         actual_send = None
 
-        async def capture_send(scope, receive, send) -> None:
+        async def capture_send(scope: Any, receive: Any, send: Any) -> None:
             nonlocal actual_send
             actual_send = send
 

@@ -5,6 +5,7 @@ with automatic parameter binding and validation.
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Optional, Union, cast
 
@@ -197,8 +198,6 @@ class SelectBuilder(
                 # Apply table-level hints via string manipulation (as fallback)
                 table_hints = [h for h in self._hints if h.get("location") == "table" and h.get("table")]
                 if table_hints:
-                    import re
-
                     for th in table_hints:
                         table = str(th["table"])
                         hint = th["hint"]

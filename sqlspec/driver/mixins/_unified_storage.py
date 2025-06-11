@@ -9,6 +9,8 @@ and storage backend operations for optimal performance.
 """
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 
+import csv
+import json
 import logging
 import tempfile
 from pathlib import Path
@@ -615,7 +617,6 @@ class SyncStorageMixin(StorageMixinBase):
     @staticmethod
     def _write_csv(result: "SQLResult", file: Any, **options: Any) -> None:
         """Write result to CSV file."""
-        import csv
 
         writer = csv.writer(file, **options)
         if result.column_names:
@@ -626,7 +627,6 @@ class SyncStorageMixin(StorageMixinBase):
     @staticmethod
     def _write_json(result: "SQLResult", file: Any, **options: Any) -> None:
         """Write result to JSON file."""
-        import json
 
         if result.data and result.column_names:
             # Convert to list of dicts
@@ -671,8 +671,6 @@ class AsyncStorageMixin(StorageMixinBase):
             ArrowResult wrapping the Arrow table
         """
         self._ensure_pyarrow_installed()
-
-        from sqlspec.statement.sql import SQL
 
         # Convert to SQL object for processing
         # Get the driver's dialect if available
@@ -738,7 +736,6 @@ class AsyncStorageMixin(StorageMixinBase):
         Returns:
             ArrowResult with converted data
         """
-        from sqlspec.statement.result import ArrowResult
 
         with wrap_exceptions():
             # Execute regular query
@@ -800,9 +797,6 @@ class AsyncStorageMixin(StorageMixinBase):
 
             # Handle mode
             if mode == "replace":
-                # Truncate table first
-                from sqlspec.statement.sql import SQL
-
                 await self.execute(SQL(f"TRUNCATE TABLE {target_table}"))  # type: ignore[attr-defined]
             elif mode == "create":
                 # For create mode, we would need to infer schema and create table
@@ -814,12 +808,8 @@ class AsyncStorageMixin(StorageMixinBase):
             placeholders = [f":{col}" for col in columns]
             insert_sql = f"INSERT INTO {target_table} ({', '.join(columns)}) VALUES ({', '.join(placeholders)})"
 
-            from sqlspec.statement.sql import SQL
-
-            sql_obj = SQL(insert_sql, parameters=rows).as_many()
-
             # Execute batch insert
-            result = await self.execute_many(sql_obj)  # type: ignore[attr-defined]
+            result = await self.execute_many(SQL(insert_sql, parameters=rows).as_many())  # type: ignore[attr-defined]
             return result.rows_affected if hasattr(result, "rows_affected") else len(rows)
 
     # ============================================================================
@@ -963,7 +953,7 @@ class AsyncStorageMixin(StorageMixinBase):
 
         with wrap_exceptions():
             if file_format == "parquet":
-                arrow_table = await backend.read_arrow_async(path, **options)  # type: ignore[misc]
+                arrow_table = await backend.read_arrow_async(path, **options)
 
                 if arrow_table is not None:
                     return await self.ingest_arrow_table(arrow_table, table_name, mode=mode)
@@ -1007,7 +997,7 @@ class AsyncStorageMixin(StorageMixinBase):
         if not rows:
             # Empty table with column names
             # Create empty arrays for each column
-            empty_data = {col: [] for col in columns}
+            empty_data: dict[str, Any] = {col: [] for col in columns}
             return pa.table(empty_data)
 
         # Convert rows to columnar format
@@ -1038,7 +1028,6 @@ class AsyncStorageMixin(StorageMixinBase):
         self, query: str, backend: "ObjectStoreProtocol", path: str, format: str, **options: Any
     ) -> int:
         """Async export via storage backend."""
-        from sqlspec.statement.sql import SQL
 
         # Execute query and get results
         result = await self.execute(SQL(query))  # type: ignore[attr-defined]
@@ -1046,11 +1035,7 @@ class AsyncStorageMixin(StorageMixinBase):
         # For parquet format, convert through Arrow
         if format == "parquet":
             arrow_table = self._rows_to_arrow_table(result.data or [], result.column_names or [])
-            with wrap_exceptions():
-                try:
-                    await backend.write_arrow_async(path, arrow_table, **options)  # type: ignore[misc]
-                except AttributeError:
-                    backend.write_arrow(path, arrow_table, **options)
+            await backend.write_arrow_async(path, arrow_table, **options)
             return len(result.data or [])
 
         # Convert to appropriate format and write to backend
@@ -1079,7 +1064,7 @@ class AsyncStorageMixin(StorageMixinBase):
         """Async import via storage backend."""
         # Download from storage backend (async if supported)
         with wrap_exceptions():
-            data = await backend.read_bytes_async(path)
+            data = await backend.read_bytes_async(path)  # TODO: put?
 
         with tempfile.NamedTemporaryFile(mode="wb", suffix=f".{format}", delete=False) as tmp:
             tmp.write(data)
@@ -1093,7 +1078,6 @@ class AsyncStorageMixin(StorageMixinBase):
     @staticmethod
     def _write_csv(result: "SQLResult", file: Any, **options: Any) -> None:
         """Reuse sync implementation."""
-        import csv
 
         writer = csv.writer(file, **options)
         if result.column_names:
@@ -1104,7 +1088,6 @@ class AsyncStorageMixin(StorageMixinBase):
     @staticmethod
     def _write_json(result: "SQLResult", file: Any, **options: Any) -> None:
         """Reuse sync implementation."""
-        import json  # TODO: this should use the sqlspec._serialization encoders.  We should add another win if the json isn't dump to the right format (str vs binary).
 
         if result.data and result.column_names:
             # Convert to list of dicts

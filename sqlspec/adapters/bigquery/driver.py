@@ -1,6 +1,8 @@
 # ruff: noqa: PLR6301
 import contextlib
 import datetime
+import io
+import json
 import logging
 from collections.abc import Iterator
 from decimal import Decimal
@@ -224,7 +226,6 @@ class BigQueryDriver(
                 elif param_type == "JSON":
                     # JSON values need to be serialized to string for BigQuery
                     # BigQuery emulator may require STRING type instead of JSON
-                    import json
 
                     json_str = json.dumps(value)
                     # Use STRING type for JSON data in parameters
@@ -774,7 +775,6 @@ class BigQueryDriver(
 
             # Use BigQuery's native Arrow loading
             # Convert Arrow table to bytes for direct loading
-            import io
 
             import pyarrow.parquet as pq
 

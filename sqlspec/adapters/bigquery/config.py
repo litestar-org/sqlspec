@@ -2,6 +2,7 @@
 
 import contextlib
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
@@ -34,7 +35,6 @@ CONNECTION_FIELDS = frozenset(
         "client_info",
         "default_query_job_config",
         "default_load_job_config",
-        "use_legacy_sql",
         "use_query_cache",
         "maximum_bytes_billed",
         "enable_bigquery_ml",
@@ -110,7 +110,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         "reservation_id",
         "statement_config",
         "use_avro_logical_types",
-        "use_legacy_sql",
         "use_query_cache",
     )
 
@@ -145,7 +144,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         default_query_job_config: Optional["QueryJobConfig"] = None,
         default_load_job_config: Optional["LoadJobConfig"] = None,
         # Advanced BigQuery features
-        use_legacy_sql: Optional[bool] = None,
         use_query_cache: Optional[bool] = None,
         maximum_bytes_billed: Optional[int] = None,
         # BigQuery ML and AI configuration
@@ -196,7 +194,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             client_info: Client info used to send a user-agent string along with API requests
             default_query_job_config: Default QueryJobConfig settings for query operations
             default_load_job_config: Default LoadJobConfig settings for data loading operations
-            use_legacy_sql: Whether to use legacy SQL syntax (default: False for standard SQL)
             use_query_cache: Whether to use query cache for faster repeated queries
             maximum_bytes_billed: Maximum bytes that can be billed for queries to prevent runaway costs
             enable_bigquery_ml: Enable BigQuery ML capabilities for machine learning workflows
@@ -259,7 +256,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         self.client_info = client_info
         self.default_query_job_config = default_query_job_config
         self.default_load_job_config = default_load_job_config
-        self.use_legacy_sql = use_legacy_sql
         self.use_query_cache = use_query_cache
         self.maximum_bytes_billed = maximum_bytes_billed
         self.enable_bigquery_ml = enable_bigquery_ml
@@ -330,10 +326,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         else:
             job_config.use_query_cache = True  # Default to True
 
-        # Configure legacy SQL
-        if self.use_legacy_sql:
-            job_config.use_legacy_sql = True
-
         # Configure cost controls
         if self.maximum_bytes_billed is not None:
             job_config.maximum_bytes_billed = self.maximum_bytes_billed
@@ -343,42 +335,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             job_config.job_timeout_ms = self.query_timeout_ms
 
         self.default_query_job_config = job_config
-
-    @classmethod
-    def from_connection_config(
-        cls,
-        connection_config: dict[str, Any],
-        statement_config: Optional[SQLConfig] = None,
-        instrumentation: Optional[InstrumentationConfig] = None,
-        default_row_type: type[DictRow] = DictRow,
-        on_connection_create: Optional[Callable[[BigQueryConnection], None]] = None,
-        on_job_start: Optional[Callable[[str], None]] = None,
-        on_job_complete: Optional[Callable[[str, Any], None]] = None,
-    ) -> "BigQueryConfig":
-        """Create config from old-style connection_config dict for backward compatibility.
-
-        Args:
-            connection_config: Dictionary with connection parameters
-            statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
-            default_row_type: Default row type for results
-            on_connection_create: Callback executed when connection is created
-            on_job_start: Callback executed when a BigQuery job starts
-            on_job_complete: Callback executed when a BigQuery job completes
-
-        Returns:
-            BigQueryConfig instance
-        """
-        # Create config with all parameters
-        return cls(
-            statement_config=statement_config,
-            instrumentation=instrumentation,
-            default_row_type=default_row_type,
-            on_connection_create=on_connection_create,
-            on_job_start=on_job_start,
-            on_job_complete=on_job_complete,
-            **connection_config,  # All connection parameters go to direct fields or extras
-        )
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
@@ -493,8 +449,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
                 # Create statement config with parameter style info if not already set
                 statement_config = self.statement_config
                 if statement_config.allowed_parameter_styles is None:
-                    from dataclasses import replace
-
                     statement_config = replace(
                         statement_config,
                         allowed_parameter_styles=self.supported_parameter_styles,

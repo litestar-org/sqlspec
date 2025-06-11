@@ -10,7 +10,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.sql import SQL, SQLConfig
 
 # Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
@@ -37,10 +37,10 @@ def adbc_postgresql_params_session(postgres_service: PostgresService) -> Generat
         """)
         # Insert test data
         session.execute(
-            "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", ("test1", 100, "First test")
+            SQL("INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)"), ("test1", 100, "First test")
         )
         session.execute(
-            "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", ("test2", 200, "Second test")
+            SQL("INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)"), ("test2", 200, "Second test")
         )
         yield session
         # Cleanup
@@ -68,10 +68,10 @@ def adbc_sqlite_params_session() -> Generator[AdbcDriver, None, None]:
         """)
         # Insert test data
         session.execute(
-            "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)", ("test1", 100, "First test")
+            SQL("INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)"), ("test1", 100, "First test")
         )
         session.execute(
-            "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)", ("test2", 200, "Second test")
+            SQL("INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)"), ("test2", 200, "Second test")
         )
         yield session
 
@@ -95,12 +95,12 @@ def test_postgresql_parameter_types(
     # For dict params, we need named placeholders
     if isinstance(params, dict):
         result = adbc_postgresql_params_session.execute(
-            "SELECT * FROM test_params WHERE name = %(name)s",
+            SQL("SELECT * FROM test_params WHERE name = %(name)s"),
             params,
         )
     else:
         result = adbc_postgresql_params_session.execute(
-            "SELECT * FROM test_params WHERE name = $1",
+            SQL("SELECT * FROM test_params WHERE name = $1"),
             params,
         )
 
@@ -144,7 +144,7 @@ def test_sqlite_parameter_styles(
 def test_postgresql_multiple_parameters(adbc_postgresql_params_session: AdbcDriver) -> None:
     """Test queries with multiple parameters on PostgreSQL."""
     result = adbc_postgresql_params_session.execute(
-        "SELECT * FROM test_params WHERE value >= $1 AND value <= $2 ORDER BY value",
+        SQL("SELECT * FROM test_params WHERE value >= $1 AND value <= $2 ORDER BY value"),
         (50, 150),
     )
 
@@ -159,7 +159,7 @@ def test_postgresql_multiple_parameters(adbc_postgresql_params_session: AdbcDriv
 def test_sqlite_multiple_parameters(adbc_sqlite_params_session: AdbcDriver) -> None:
     """Test queries with multiple parameters on SQLite."""
     result = adbc_sqlite_params_session.execute(
-        "SELECT * FROM test_params WHERE value >= ? AND value <= ? ORDER BY value",
+        SQL("SELECT * FROM test_params WHERE value >= ? AND value <= ? ORDER BY value"),
         (50, 150),
     )
 
@@ -176,13 +176,13 @@ def test_postgresql_null_parameters(adbc_postgresql_params_session: AdbcDriver) 
     """Test handling of NULL parameters on PostgreSQL."""
     # Insert a record with NULL description
     adbc_postgresql_params_session.execute(
-        "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)",
+        SQL("INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)"),
         ("null_test", 300, None),
     )
 
     # Query for NULL values
     result = adbc_postgresql_params_session.execute(
-        "SELECT * FROM test_params WHERE description IS NULL",
+        SQL("SELECT * FROM test_params WHERE description IS NULL"),
     )
 
     assert isinstance(result, SQLResult)
