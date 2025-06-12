@@ -236,7 +236,8 @@ def test_execute_script_ddl(adbc_sqlite_session: AdbcDriver) -> None:
     """
 
     result = adbc_sqlite_session.execute_script(ddl_script)
-    assert isinstance(result, str) or result is None
+    assert isinstance(result, SQLResult)
+    assert result.operation_type == "SCRIPT"
 
     # Verify table was created and data inserted
     verify_result = adbc_sqlite_session.execute("SELECT COUNT(*) as count FROM script_test_table")

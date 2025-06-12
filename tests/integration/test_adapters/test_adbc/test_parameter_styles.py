@@ -92,11 +92,14 @@ def test_postgresql_parameter_types(
     expected_count: int,
 ) -> None:
     """Test different parameter types with PostgreSQL."""
-    # For dict params, we need named placeholders
+    # PostgreSQL always uses numeric placeholders ($1, $2, etc.)
+    # When using dict params, we need to use numeric placeholders too
     if isinstance(params, dict):
+        # For dict params with PostgreSQL, we need to convert to positional
+        # since ADBC PostgreSQL doesn't support named parameters
         result = adbc_postgresql_params_session.execute(
-            SQL("SELECT * FROM test_params WHERE name = %(name)s"),
-            params,
+            SQL("SELECT * FROM test_params WHERE name = $1"),
+            (params["name"],),  # Convert dict to positional tuple
         )
     else:
         result = adbc_postgresql_params_session.execute(

@@ -177,7 +177,7 @@ class SyncStorageMixin(StorageMixinBase):
 
         # Apply filters
         for filter_func in filters:
-            sql_obj = filter_func(sql_obj)
+            sql_obj = filter_func(sql_obj)  # type: ignore[operator]
 
         # Delegate to protected method that drivers can override
         return self._fetch_arrow_table(sql_obj, connection=connection, **kwargs)

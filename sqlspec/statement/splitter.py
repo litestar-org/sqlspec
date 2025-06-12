@@ -119,12 +119,10 @@ class DialectConfig(ABC):
             patterns.append((TokenType.TERMINATOR, "|".join(re.escape(t) for t in all_terminators)))
 
         # 5. Add low-precedence patterns
-        patterns.extend(
-            [
-                (TokenType.WHITESPACE, r"\s+"),
-                (TokenType.OTHER, r"."),  # Fallback for any other character
-            ]
-        )
+        patterns.extend([
+            (TokenType.WHITESPACE, r"\s+"),
+            (TokenType.OTHER, r"."),  # Fallback for any other character
+        ])
 
         return patterns
 
@@ -346,9 +344,15 @@ class PostgreSQLDialectConfig(DialectConfig):
 class StatementSplitter:
     """Splits SQL scripts into individual statements using a lexer-driven state machine."""
 
-    def __init__(self, dialect: DialectConfig) -> None:
-        """Initialize the splitter with a specific dialect configuration."""
+    def __init__(self, dialect: DialectConfig, strip_trailing_semicolon: bool = False) -> None:
+        """Initialize the splitter with a specific dialect configuration.
+
+        Args:
+            dialect: The dialect configuration to use
+            strip_trailing_semicolon: If True, remove trailing semicolons from statements
+        """
         self.dialect = dialect
+        self.strip_trailing_semicolon = strip_trailing_semicolon
         self.token_patterns = dialect.get_all_token_patterns()
         self._compiled_patterns = self._compile_patterns()
 
@@ -483,6 +487,15 @@ class StatementSplitter:
             if is_terminator:
                 # Save the statement
                 statement = "".join(current_statement_chars).strip()
+
+                # Optionally strip the trailing terminator
+                if (
+                    self.strip_trailing_semicolon
+                    and token.type == TokenType.TERMINATOR
+                    and statement.endswith(token.value)
+                ):
+                    statement = statement[: -len(token.value)].rstrip()
+
                 if statement and self._contains_executable_content(statement):
                     statements.append(statement)
                 current_statement_tokens = []
@@ -516,13 +529,13 @@ class StatementSplitter:
         return False
 
 
-# Convenience function for backward compatibility
-def split_sql_script(script: str, dialect: str = "generic") -> list[str]:
+def split_sql_script(script: str, dialect: str = "generic", strip_trailing_semicolon: bool = False) -> list[str]:
     """Split a SQL script into statements using the appropriate dialect.
 
     Args:
         script: The SQL script to split
         dialect: The SQL dialect name ('oracle', 'tsql', 'postgresql', etc.)
+        strip_trailing_semicolon: If True, remove trailing terminators from statements
 
     Returns:
         List of individual SQL statements
@@ -539,5 +552,5 @@ def split_sql_script(script: str, dialect: str = "generic") -> list[str]:
         msg = f"Unsupported dialect: {dialect}"
         raise ValueError(msg)
 
-    splitter = StatementSplitter(config)
+    splitter = StatementSplitter(config, strip_trailing_semicolon=strip_trailing_semicolon)
     return splitter.split(script)

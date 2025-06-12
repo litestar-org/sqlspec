@@ -275,12 +275,12 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
                 numeric_keys_expected = {p.name for p in param_info_list if p.name}
                 if not numeric_keys_expected.issubset(parameters.keys()):
                     # Need to convert named keys to numeric positions
-                    result = {}
+                    numeric_result: dict[str, Any] = {}
                     param_values = list(parameters.values())
                     for param_info in param_info_list:
                         if param_info.name and param_info.ordinal < len(param_values):
-                            result[param_info.name] = param_values[param_info.ordinal]
-                    return result
+                            numeric_result[param_info.name] = param_values[param_info.ordinal]
+                    return numeric_result
 
             # Special case: Auto-generated param_N style when SQL expects specific names
             if all(key.startswith("param_") and key[6:].isdigit() for key in parameters):
@@ -302,45 +302,45 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         # Formats don't match - need conversion
         if driver_expects_dict and params_are_sequence:
             # Convert positional to dict
-            result = {}
+            dict_result: dict[str, Any] = {}
             for i, (param_info, value) in enumerate(zip(param_info_list, parameters)):
                 if param_info.name:
                     # Use the name from SQL
                     if param_info.style == ParameterStyle.ORACLE_NUMERIC and param_info.name.isdigit():
                         # Oracle uses string keys even for numeric placeholders
-                        result[param_info.name] = value
+                        dict_result[param_info.name] = value
                     else:
-                        result[param_info.name] = value
+                        dict_result[param_info.name] = value
                 else:
                     # Use param_N format for unnamed placeholders
-                    result[f"param_{i}"] = value
-            return result
+                    dict_result[f"param_{i}"] = value
+            return dict_result
 
         if not driver_expects_dict and params_are_dict:
             # Convert dict to positional
             # First check if it's already in param_N format
             if all(key.startswith("param_") and key[6:].isdigit() for key in parameters):
                 # Extract values in order
-                result = []
+                positional_result: list[Any] = []
                 for i in range(len(param_info_list)):
                     key = f"param_{i}"
                     if key in parameters:
-                        result.append(parameters[key])
-                return result
+                        positional_result.append(parameters[key])
+                return positional_result
 
             # Convert named dict to positional based on parameter order in SQL
-            result = []
+            positional_params: list[Any] = []
             for param_info in param_info_list:
                 if param_info.name and param_info.name in parameters:
-                    result.append(parameters[param_info.name])
+                    positional_params.append(parameters[param_info.name])
                 elif f"param_{param_info.ordinal}" in parameters:
-                    result.append(parameters[f"param_{param_info.ordinal}"])
+                    positional_params.append(parameters[f"param_{param_info.ordinal}"])
                 else:
                     # Try to match by position if we have a simple dict
                     param_values = list(parameters.values())
                     if param_info.ordinal < len(param_values):
-                        result.append(param_values[param_info.ordinal])
-            return result or list(parameters.values())
+                        positional_params.append(param_values[param_info.ordinal])
+            return positional_params or list(parameters.values())
 
         # This shouldn't happen, but return as-is
         return parameters
@@ -380,7 +380,9 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         splitter_dialect = dialect_map.get(dialect_name.lower(), dialect_name.lower())
 
         try:
-            return split_sql_script(script, dialect=splitter_dialect)
+            # Use the splitter with strip_trailing_semicolon=True to handle
+            # terminator stripping at the parsing level
+            return split_sql_script(script, dialect=splitter_dialect, strip_trailing_semicolon=True)
         except ValueError as e:
             # Unsupported dialect, fall back to simple split
             logger.warning(
@@ -388,10 +390,11 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             )
             return self._simple_split_statements(script)
 
-    def _simple_split_statements(self, script: str) -> list[str]:
+    @staticmethod
+    def _simple_split_statements(script: str) -> list[str]:
         """Simple fallback splitting on semicolons (respects quotes and comments)."""
-        statements = []
-        current_statement = []
+        statements: list[str] = []
+        current_statement: list[str] = []
 
         in_single_quote = False
         in_double_quote = False
@@ -404,8 +407,7 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             if char == "'" and not in_double_quote:
                 # Check for escaped quote
                 if i + 1 < len(script) and script[i + 1] == "'":
-                    current_statement.append(char)
-                    current_statement.append("'")
+                    current_statement.extend((char, "'"))
                     i += 2
                     continue
                 in_single_quote = not in_single_quote

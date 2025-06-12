@@ -170,7 +170,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     _dialect: "Optional[DialectType]" = field(default=None, init=False, repr=False, hash=False, compare=False)
     __is_async__: "ClassVar[bool]" = False
     __supports_connection_pooling__: "ClassVar[bool]" = False
-    driver_class: "ClassVar[type[DriverT]]" = field(init=False, repr=False, hash=False, compare=False)  # pyright: ignore
+    driver_class: "ClassVar[type[DriverT]]" = field(init=False, repr=False, hash=False, compare=False)  # type: ignore[misc]
 
     # Parameter style support information
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ()

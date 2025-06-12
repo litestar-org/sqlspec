@@ -373,7 +373,7 @@ class DuckDBDriver(
     # DuckDB Native Storage Operations (Override base implementations)
     # ============================================================================
 
-    def _has_native_capability(self, operation: str, uri: str, format: Optional[str] = None) -> bool:  # pyright: ignore[reportIncompatibleMethodOverride]
+    def _has_native_capability(self, operation: str, uri: str, format: Optional[str] = None) -> bool:
         """Check if DuckDB has native capability for the operation."""
         # DuckDB has excellent native support for many formats and operations
         if operation == "export" and format in {"parquet", "csv", "json"}:
@@ -485,7 +485,6 @@ class DuckDBDriver(
         self, source_uri: str, columns: Optional[list[str]] = None, **options: Any
     ) -> "ArrowResult":
         """Enhanced DuckDB native Parquet reader with multiple file and filter support."""
-        from sqlspec.statement.result import ArrowResult
 
         with instrument_operation(self, "duckdb_read_parquet_native", "database"):
             connection = self._connection(None)

@@ -87,7 +87,7 @@ class OracleSyncDriver(
         sql_to_execute = statement.to_sql(placeholder_style=self._get_placeholder_style())
         return self._execute(
             sql_to_execute,
-            statement.parameters,  # Use raw merged parameters
+            statement.get_parameters(style=self._get_placeholder_style()),
             statement,
             connection=connection,
             **kwargs,
@@ -178,10 +178,7 @@ class OracleSyncDriver(
                     if statement:
                         statement = statement.strip()
                         if statement:
-                            # Oracle doesn't like trailing semicolons in execute() for regular SQL
-                            # But PL/SQL blocks (BEGIN...END) need to keep their structure
-                            if not statement.upper().startswith("BEGIN"):
-                                statement = statement.rstrip(";")
+                            # No need to manually strip semicolons - the splitter handles it
                             if self.instrumentation_config.log_queries:
                                 logger.debug("Executing statement: %s", statement)
                             cursor.execute(statement)
@@ -346,7 +343,7 @@ class OracleAsyncDriver(
 
         return await self._execute(
             statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.parameters,  # Use raw merged parameters
+            statement.get_parameters(style=self._get_placeholder_style()),
             statement,
             connection=connection,
             **kwargs,
@@ -430,10 +427,7 @@ class OracleAsyncDriver(
                     if statement:
                         statement = statement.strip()
                         if statement:
-                            # Oracle doesn't like trailing semicolons in execute() for regular SQL
-                            # But PL/SQL blocks (BEGIN...END) need to keep their structure
-                            if not statement.upper().startswith("BEGIN"):
-                                statement = statement.rstrip(";")
+                            # No need to manually strip semicolons - the splitter handles it
                             if self.instrumentation_config.log_queries:
                                 logger.debug("Executing statement: %s", statement)
                             await cursor.execute(statement)
@@ -445,7 +439,7 @@ class OracleAsyncDriver(
         statement: SQL,
         result: Any,
         schema_type: Optional[type[ModelDTOT]] = None,
-        **kwargs: Any,
+        **kwargs: Any,  # pyright: ignore[reportUnusedParameter]
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         async with instrument_operation_async(self, "oracle_async_wrap_select", "database"):
             # Handle the new dict format from _execute
@@ -482,7 +476,7 @@ class OracleAsyncDriver(
         self,
         statement: SQL,
         result: Any,
-        **kwargs: Any,
+        **kwargs: Any,  # pyright: ignore[reportUnusedParameter]
     ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "oracle_async_wrap_execute", "database"):
             operation_type = "UNKNOWN"

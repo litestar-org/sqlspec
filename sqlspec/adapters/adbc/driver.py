@@ -267,26 +267,29 @@ class AdbcDriver(
     ) -> Any:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
-            # Convert SQL to the target parameter style if needed
-            target_style = self._get_placeholder_style()
-            converted_sql = self._convert_sql_parameter_style(sql, target_style)
-
+            # The SQL is already in the correct format from to_sql()
             if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQL: %s", converted_sql)
+                logger.debug("Executing SQL: %s", sql)
 
-            # Convert parameters to the format expected by the ADBC backend
-            converted_params = self._convert_parameters_to_driver_format(
-                converted_sql, parameters, target_style=target_style
-            )
-
-            # Convert date/time strings to Python objects for PostgreSQL
-            converted_params = self._convert_date_time_parameters(converted_params)
+            # The parameters are already in the correct format from get_parameters()
+            # Only apply driver-specific type conversions (e.g., date/time for PostgreSQL)
+            converted_params = self._convert_date_time_parameters(parameters)
 
             if self.instrumentation_config.log_parameters and converted_params:
                 logger.debug("Query parameters: %s", converted_params)
 
-            # ADBC accepts various parameter formats based on backend
-            cursor.execute(converted_sql, converted_params or [])
+            # Validate that parameters are provided if the SQL expects them
+            # This provides a better error message than the database error
+            if statement.expression and hasattr(statement, "parameter_info"):
+                param_info = statement.parameter_info
+                if param_info and not converted_params:
+                    msg = (
+                        f"SQL statement requires {len(param_info)} parameters, but none were provided. "
+                        "Ensure parameters are correctly passed to the execute() method."
+                    )
+                    raise ValueError(msg)
+
+            cursor.execute(sql, converted_params or [])
 
             # Check if this is a SELECT query (returns rows)
             is_select = self.returns_rows(statement.expression)
@@ -312,12 +315,9 @@ class AdbcDriver(
     ) -> Any:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
-            # Convert SQL to the target parameter style if needed
-            target_style = self._get_placeholder_style()
-            converted_sql = self._convert_sql_parameter_style(sql, target_style)
-
+            # The SQL is already in the correct format from to_sql()
             if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQL (executemany): %s", converted_sql)
+                logger.debug("Executing SQL (executemany): %s", sql)
 
             # Convert date/time strings to Python objects for PostgreSQL
             if param_list and self.dialect == "postgres":
@@ -326,7 +326,7 @@ class AdbcDriver(
             if self.instrumentation_config.log_parameters and param_list:
                 logger.debug("Query parameters (batch): %s", param_list)
             # ADBC expects list of parameter sets
-            cursor.executemany(converted_sql, param_list or [])
+            cursor.executemany(sql, param_list or [])
             # Return consistent dict format like _execute
             return {
                 "rowcount": cursor.rowcount,

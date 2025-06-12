@@ -509,6 +509,7 @@ except ImportError:
 
 FSSPEC_INSTALLED = bool(find_spec("fsspec"))
 OBSTORE_INSTALLED = bool(find_spec("obstore"))
+PGVECTOR_INSTALLED = bool(find_spec("pgvector"))
 
 
 __all__ = (
@@ -518,6 +519,7 @@ __all__ = (
     "MSGSPEC_INSTALLED",
     "OBSTORE_INSTALLED",
     "OPENTELEMETRY_INSTALLED",
+    "PGVECTOR_INSTALLED",
     "PROMETHEUS_INSTALLED",
     "PYARROW_INSTALLED",
     "PYDANTIC_INSTALLED",

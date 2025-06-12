@@ -76,6 +76,15 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
         config: "Optional[SQLConfig]" = None,
     ) -> "SQL":
         if isinstance(statement, SQL):
+            # If parameters are provided, create a new SQL object with those parameters
+            if parameters is not None:
+                return SQL(
+                    statement.sql, 
+                    parameters, 
+                    *filters or [], 
+                    dialect=self.dialect, 
+                    config=config or statement._config
+                )
             return statement
         if isinstance(statement, QueryBuilder):
             return statement.to_statement(config=config or self.config)
