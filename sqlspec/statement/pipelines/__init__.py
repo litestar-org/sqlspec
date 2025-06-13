@@ -16,47 +16,48 @@ Key Components:
 
 from sqlspec.statement.pipelines import analyzers, transformers, validators
 from sqlspec.statement.pipelines.aggregator import AggregatedResults, ResultAggregator
-from sqlspec.statement.pipelines.analyzers import (
-    StatementAnalysis,
-    StatementAnalyzer,
-)
-from sqlspec.statement.pipelines.base import (
-    ProcessorProtocol,
-    SQLValidator,
-    StatementPipeline,
-    ValidationResult,
-)
+from sqlspec.statement.pipelines.analyzers import StatementAnalysis, StatementAnalyzer
+from sqlspec.statement.pipelines.base import ProcessorProtocol, SQLValidator, StatementPipeline
 from sqlspec.statement.pipelines.context import SQLProcessingContext, StatementPipelineResult
+from sqlspec.statement.pipelines.results import ProcessorResult, ValidationResult
 from sqlspec.statement.pipelines.transformers import (
     CommentRemover,
+    ExpressionSimplifier,
     HintRemover,
     ParameterizeLiterals,
+    SimplificationConfig,
 )
 from sqlspec.statement.pipelines.validators import (
     DMLSafetyConfig,
     DMLSafetyValidator,
     PerformanceConfig,
     PerformanceValidator,
+    SecurityValidatorConfig,
 )
 
 __all__ = (
-    # Result Aggregation
     "AggregatedResults",
     # Concrete Transformers
     "CommentRemover",
-    # Concrete Validators (individual checks or groups)
+    # Concrete Validators
     "DMLSafetyConfig",
     "DMLSafetyValidator",
+    "ExpressionSimplifier",
     "HintRemover",
     "ParameterizeLiterals",
     "PerformanceConfig",
     "PerformanceValidator",
     "ProcessorProtocol",
+    # Result Objects
+    "ProcessorResult",
     "ResultAggregator",
     "SQLProcessingContext",
+    # Base Validator
     "SQLValidator",
-    "StatementAnalysis",
+    "SecurityValidatorConfig",
+    "SimplificationConfig",
     # Concrete Analyzers
+    "StatementAnalysis",
     "StatementAnalyzer",
     # Core Pipeline & Context
     "StatementPipeline",

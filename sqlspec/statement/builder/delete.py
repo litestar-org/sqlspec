@@ -20,7 +20,7 @@ __all__ = ("DeleteBuilder",)
 
 @dataclass(unsafe_hash=True)
 class DeleteBuilder(
-    QueryBuilder[SQLResult[RowT]],  # pyright: ignore[reportInvalidTypeArguments]
+    QueryBuilder[RowT],
     WhereClauseMixin,
     ReturningClauseMixin,
     DeleteFromClauseMixin,

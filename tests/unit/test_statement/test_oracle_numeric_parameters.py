@@ -14,7 +14,7 @@ class TestOracleNumericParameters:
         """Test that :1, :2 style parameters are detected as ORACLE_NUMERIC."""
         sql = "INSERT INTO users (id, name) VALUES (:1, :2)"
         style = detect_parameter_style(sql)
-        assert style == ParameterStyle.ORACLE_NUMERIC
+        assert style == ParameterStyle.POSITIONAL_COLON
 
     def test_mixed_oracle_parameters(self) -> None:
         """Test mixed Oracle numeric and named parameters."""
@@ -28,7 +28,7 @@ class TestOracleNumericParameters:
         assert stmt._sql == sql  # Original SQL preserved
 
         # When we get parameters with Oracle numeric style, it should convert properly
-        params = stmt.get_parameters(ParameterStyle.ORACLE_NUMERIC)
+        params = stmt.get_parameters(ParameterStyle.POSITIONAL_COLON)
         assert params == {"1": 42, "status": "active"}
 
     def test_oracle_numeric_get_parameters(self) -> None:
@@ -37,7 +37,7 @@ class TestOracleNumericParameters:
         stmt = SQL(sql, parameters=["john", 42])
 
         # Convert to Oracle numeric format
-        params = stmt.get_parameters(ParameterStyle.ORACLE_NUMERIC)
+        params = stmt.get_parameters(ParameterStyle.POSITIONAL_COLON)
         assert params == {"1": "john", "2": 42}
 
     def test_oracle_numeric_to_sql(self) -> None:
@@ -46,7 +46,7 @@ class TestOracleNumericParameters:
         stmt = SQL(sql, parameters=["john", 42])
 
         # Should preserve :1, :2 style
-        result = stmt.to_sql(placeholder_style=ParameterStyle.ORACLE_NUMERIC)
+        result = stmt.to_sql(placeholder_style=ParameterStyle.POSITIONAL_COLON)
         assert ":1" in result
         assert ":2" in result
 
@@ -55,7 +55,7 @@ class TestOracleNumericParameters:
         # Numeric style
         sql1 = "SELECT * FROM users WHERE id = :1"
         stmt1 = SQL(sql1, parameters=[42])
-        assert stmt1.parameter_info[0].style == ParameterStyle.ORACLE_NUMERIC
+        assert stmt1.parameter_info[0].style == ParameterStyle.POSITIONAL_COLON
 
         # Named style
         sql2 = "SELECT * FROM users WHERE id = :id"

@@ -6,6 +6,7 @@ import pytest
 
 from sqlspec.adapters.psqlpy import PsqlpyDriver
 from sqlspec.config import InstrumentationConfig
+from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult
 from sqlspec.statement.sql import SQLConfig
 
@@ -66,8 +67,8 @@ def test_psqlpy_driver_supports_arrow(psqlpy_driver: PsqlpyDriver) -> None:
 
 def test_psqlpy_driver_placeholder_style(psqlpy_driver: PsqlpyDriver) -> None:
     """Test PSQLPy driver placeholder style detection."""
-    placeholder_style = psqlpy_driver._get_placeholder_style()
-    assert placeholder_style.value == "numeric"
+    placeholder_style = psqlpy_driver.parameter_style
+    assert placeholder_style == ParameterStyle.NUMERIC
 
 
 @pytest.mark.asyncio

@@ -265,11 +265,11 @@ def test_scalar_parameter_handling() -> None:
     [
         ("SELECT * FROM users WHERE id = ?", [123], ParameterStyle.NAMED_COLON, r"id = :param_\d+"),
         ("SELECT * FROM users WHERE name = :name", {"name": "John"}, ParameterStyle.QMARK, "name = ?"),
-        ("SELECT * FROM users WHERE id = ?", [123], ParameterStyle.PYFORMAT_NAMED, r"id = %\(param_\d+\)s"),
+        ("SELECT * FROM users WHERE id = ?", [123], ParameterStyle.NAMED_PYFORMAT, r"id = %\(param_\d+\)s"),
         (
             "SELECT * FROM users WHERE name = :name",
             {"name": "John"},
-            ParameterStyle.PYFORMAT_POSITIONAL,
+            ParameterStyle.POSITIONAL_PYFORMAT,
             "name = %s",
         ),
     ],
@@ -830,3 +830,144 @@ def test_mixed_parameter_styles_in_sql_string() -> None:
     # Positional parameter should be converted to _arg_0
     assert "_arg_0" in merged_params
     assert merged_params["_arg_0"] == 1
+
+
+class TestSQLCompileMethod:
+    """Test the SQL.compile() method functionality."""
+
+    def test_compile_basic_functionality(self) -> None:
+        """Test basic compile() method functionality."""
+        stmt = SQL("SELECT * FROM users WHERE id = ?", [123])
+        sql, params = stmt.compile()
+
+        assert isinstance(sql, str)
+        assert sql == "SELECT * FROM users WHERE id = ?"
+        assert params == [123]
+
+    def test_compile_with_named_parameters(self) -> None:
+        """Test compile() with named parameters."""
+        stmt = SQL("SELECT * FROM users WHERE name = :name", {"name": "John"})
+        sql, params = stmt.compile()
+
+        assert isinstance(sql, str)
+        assert sql == "SELECT * FROM users WHERE name = :name"
+        assert params == {"name": "John"}
+
+    def test_compile_with_no_parameters(self) -> None:
+        """Test compile() with statements that have no parameters."""
+        stmt = SQL("SELECT * FROM users")
+        sql, params = stmt.compile()
+
+        assert isinstance(sql, str)
+        assert sql == "SELECT * FROM users"
+        # params can be None, empty list, or empty dict depending on processing
+
+    def test_compile_return_type_is_tuple(self) -> None:
+        """Test that compile() returns a tuple."""
+        stmt = SQL("SELECT * FROM users WHERE id = ?", [123])
+        result = stmt.compile()
+
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+
+        sql, params = result
+        assert isinstance(sql, str)
+
+    def test_compile_with_placeholder_style_conversion(self) -> None:
+        """Test compile() with placeholder style conversion."""
+        stmt = SQL("SELECT * FROM users WHERE id = ?", [123])
+
+        # Test qmark to numeric conversion
+        sql, params = stmt.compile(placeholder_style=ParameterStyle.NUMERIC)
+        assert "$1" in sql
+        assert params == [123]
+
+        # Test qmark to named conversion
+        sql, params = stmt.compile(placeholder_style="named")
+        assert ":param_0" in sql
+        assert isinstance(params, dict)
+        assert "param_0" in params
+        assert params["param_0"] == 123
+
+    def test_compile_string_placeholder_styles(self) -> None:
+        """Test compile() with string placeholder style names."""
+        stmt = SQL("SELECT * FROM users WHERE id = ?", [123])
+
+        # Test with string style names
+        sql, params = stmt.compile(placeholder_style="numeric")
+        assert "$1" in sql
+        assert params == [123]
+
+        sql, params = stmt.compile(placeholder_style="qmark")
+        assert "?" in sql
+        assert params == [123]
+
+    def test_compile_preserves_immutability(self) -> None:
+        """Test that compile() doesn't modify the original SQL object."""
+        original_stmt = SQL("SELECT * FROM users WHERE id = ?", [123])
+        original_sql = original_stmt.sql
+        original_params = original_stmt.parameters
+
+        # Compile with different style
+        compiled_sql, compiled_params = original_stmt.compile(placeholder_style=ParameterStyle.NUMERIC)
+
+        # Original should be unchanged
+        assert original_stmt.sql == original_sql
+        assert original_stmt.parameters == original_params
+
+        # Compiled should be different
+        assert compiled_sql != original_sql
+        assert "$1" in compiled_sql
+
+    def test_compile_consistency_with_separate_calls(self) -> None:
+        """Test that compile() returns same results as separate to_sql() and get_parameters() calls."""
+        stmt = SQL("SELECT * FROM users WHERE id = ?", [123])
+
+        # Get results separately
+        separate_sql = stmt.to_sql()
+        separate_params = stmt.get_parameters()
+
+        # Get results from compile
+        compiled_sql, compiled_params = stmt.compile()
+
+        # Should be identical
+        assert compiled_sql == separate_sql
+        assert compiled_params == separate_params
+
+    def test_compile_with_complex_statement(self) -> None:
+        """Test compile() with more complex SQL statements."""
+        stmt = SQL(
+            "SELECT u.name, p.title FROM users u JOIN posts p ON u.id = p.user_id WHERE u.age > ? AND p.published = ?",
+            [25, True],
+        )
+
+        sql, params = stmt.compile(placeholder_style=ParameterStyle.NUMERIC)
+
+        assert "$1" in sql and "$2" in sql
+        assert params == [25, True]
+
+    def test_compile_with_mixed_parameters(self) -> None:
+        """Test compile() with mixed parameter types."""
+        stmt = SQL("SELECT * FROM users WHERE id = ? AND name = :name", [123], name="John")
+
+        sql, params = stmt.compile()
+
+        assert isinstance(sql, str)
+        assert params is not None
+        # The exact format depends on parameter processing, but should have both values
+
+    def test_compile_preserves_execution_modes(self) -> None:
+        """Test that compile() works with different execution modes."""
+        # Test script mode
+        script_stmt = SQL("SELECT 1; SELECT 2;").as_script()
+        sql, params = script_stmt.compile()
+        assert isinstance(sql, str)
+        assert ";" in sql
+
+        # Test many mode
+        many_stmt = SQL("INSERT INTO users (name) VALUES (?)", [["John"], ["Jane"]])
+        many_stmt = many_stmt.as_many()
+        sql, params = many_stmt.compile()
+        assert isinstance(sql, str)
+        assert "?" in sql
+        assert params == [["John"], ["Jane"]]

@@ -6,11 +6,10 @@ from typing import TYPE_CHECKING
 from sqlglot import exp
 
 from sqlspec.exceptions import RiskLevel, SQLValidationError
-from sqlspec.statement.pipelines.base import ProcessorProtocol, ValidationResult
+from sqlspec.statement.pipelines.base import ProcessorProtocol
+from sqlspec.statement.pipelines.results import ProcessorResult, ValidationResult
 
 if TYPE_CHECKING:
-    from typing import Optional
-
     from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 logger = logging.getLogger("sqlspec.validators.parameter_style")
@@ -49,84 +48,74 @@ class ParameterStyleValidator(ProcessorProtocol[exp.Expression]):
         self.risk_level = risk_level
         self.fail_on_violation = fail_on_violation
 
-    def process(self, context: "SQLProcessingContext") -> "tuple[exp.Expression, Optional[ValidationResult]]":
+    def process(self, context: "SQLProcessingContext") -> "ProcessorResult":
         """Validate parameter styles in SQL.
 
         Args:
             context: SQL processing context with config
 
         Returns:
-            Tuple of expression and validation result
+            A ProcessorResult with the outcome of the validation.
         """
         if context.current_expression is None:
-            return exp.Placeholder(), ValidationResult(
-                is_safe=False, risk_level=RiskLevel.CRITICAL, issues=["ParameterStyleValidator received no expression."]
+            return ProcessorResult(
+                expression=exp.Placeholder(),
+                validation_result=ValidationResult(
+                    is_safe=False,
+                    risk_level=RiskLevel.CRITICAL,
+                    issues=["ParameterStyleValidator received no expression."],
+                ),
             )
 
         try:
-            # Get config
             config = context.config
             issues = []
 
-            # If no restrictions, pass through
             if config.allowed_parameter_styles is None:
-                return context.current_expression, ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
-
-            # Extract parameter info from context
-            param_info = context.parameter_info
-            if not param_info:
-                # No parameters, no issue
-                return context.current_expression, ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
-
-            # Check for mixed styles
-            unique_styles = {p.style for p in param_info}
-            has_mixed = len(unique_styles) > 1
-
-            # Check if mixed styles are allowed
-            if has_mixed and not config.allow_mixed_parameter_styles:
-                detected_styles = ", ".join(sorted(str(s) for s in unique_styles))
-                msg = (
-                    f"Mixed parameter styles detected ({detected_styles}) but not allowed. "
-                    f"Either use a single parameter style or enable allow_mixed_parameter_styles."
+                return ProcessorResult(
+                    expression=context.current_expression,
+                    validation_result=ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP),
                 )
 
+            param_info = context.parameter_info
+            if not param_info:
+                return ProcessorResult(
+                    expression=context.current_expression,
+                    validation_result=ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP),
+                )
+
+            unique_styles = {p.style for p in param_info}
+            if len(unique_styles) > 1 and not config.allow_mixed_parameter_styles:
+                detected_styles = ", ".join(sorted(str(s) for s in unique_styles))
+                msg = f"Mixed parameter styles detected ({detected_styles}) but not allowed."
                 if self.fail_on_violation:
                     self._raise_mixed_style_error(msg)
-
                 issues.append(msg)
 
-            # Check each style is allowed
-            disallowed_styles = set()
-            for style in unique_styles:
-                if not config.validate_parameter_style(style):
-                    disallowed_styles.add(str(style))
-
+            disallowed_styles = {str(s) for s in unique_styles if not config.validate_parameter_style(s)}
             if disallowed_styles:
                 disallowed_str = ", ".join(sorted(disallowed_styles))
                 allowed_str = ", ".join(config.allowed_parameter_styles)
-                msg = f"Parameter style(s) {disallowed_str} not supported by database. Allowed styles: {allowed_str}"
-
+                msg = f"Parameter style(s) {disallowed_str} not supported. Allowed: {allowed_str}"
                 if self.fail_on_violation:
                     self._raise_unsupported_style_error(msg)
-
                 issues.append(msg)
 
-            # Create validation result
-            if issues:
-                validation_result = ValidationResult(is_safe=False, risk_level=self.risk_level, issues=issues)
-            else:
-                validation_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
+            validation_result = (
+                ValidationResult(is_safe=False, risk_level=self.risk_level, issues=issues)
+                if issues
+                else ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
+            )
 
         except (UnsupportedParameterStyleError, MixedParameterStyleError):
             raise
         except Exception as e:
             logger.warning("Parameter style validation failed: %s", e)
-            # On unexpected errors, be permissive but log
-            return context.current_expression, ValidationResult(
+            validation_result = ValidationResult(
                 is_safe=True, risk_level=RiskLevel.SKIP, warnings=[f"Parameter style validation failed: {e}"]
             )
-        else:
-            return context.current_expression, validation_result
+
+        return ProcessorResult(expression=context.current_expression, validation_result=validation_result)
 
     def _raise_mixed_style_error(self, msg: "str") -> "None":
         """Raise MixedParameterStyleError with the given message."""

@@ -19,7 +19,8 @@ from sqlglot.expressions import (
 )
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.base import ProcessorProtocol, ValidationResult
+from sqlspec.statement.pipelines.base import ProcessorProtocol
+from sqlspec.statement.pipelines.results import ProcessorResult, ValidationResult
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -189,10 +190,12 @@ class SecurityValidator(ProcessorProtocol[exp.Expression]):
             with contextlib.suppress(re.error):
                 self._compiled_patterns[f"custom_suspicious_{i}"] = re.compile(pattern, re.IGNORECASE)
 
-    def process(self, context: "SQLProcessingContext") -> "tuple[exp.Expression, Optional[ValidationResult]]":
+    def process(self, context: "SQLProcessingContext") -> "ProcessorResult":
         """Process the SQL expression and detect security issues in a single pass."""
         if not context.current_expression:
-            return exp.Placeholder(), ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
+            return ProcessorResult(
+                expression=None, validation_result=ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
+            )
 
         security_issues: list[SecurityIssue] = []
         visited_nodes: set[int] = set()
@@ -326,7 +329,7 @@ class SecurityValidator(ProcessorProtocol[exp.Expression]):
                 },
             )
 
-        return context.current_expression, validation_result
+        return ProcessorResult(expression=context.current_expression, validation_result=validation_result)
 
     def _check_injection_patterns(
         self, node: "exp.Expression", context: "SQLProcessingContext"

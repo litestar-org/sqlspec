@@ -860,13 +860,10 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
 
         Returns:
             Scalar value from first column of first row or None
-
-        Raises:
-            TooManyResultsError: If more than one result found
         """
         with self._instrument("select_value_or_none"), self._track_operation("select_value_or_none"):
             result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
-            return result.scalar_or_none()  # SQLResult.scalar_or_none() is synchronous
+            return result.scalar_or_none()
 
     # Async DML convenience methods
 
@@ -894,7 +891,7 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
         """
         with self._instrument("insert"), self._track_operation("insert") as ctx:
             result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
-            ctx["rows_affected"] = getattr(result, "rowcount", None)
+            ctx["rows_affected"] = result.rows_affected
             return result
 
     async def update(
@@ -921,7 +918,7 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
         """
         with self._instrument("update"), self._track_operation("update") as ctx:
             result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
-            ctx["rows_affected"] = getattr(result, "rowcount", None)
+            ctx["rows_affected"] = result.rows_affected
             return result
 
     async def delete(
@@ -948,5 +945,5 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
         """
         with self._instrument("delete"), self._track_operation("delete") as ctx:
             result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
-            ctx["rows_affected"] = getattr(result, "rowcount", None)
+            ctx["rows_affected"] = result.rows_affected
             return result

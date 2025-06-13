@@ -9,7 +9,7 @@ import contextlib
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Generic, NoReturn, Optional, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Generic, NoReturn, Optional, Union
 
 import sqlglot
 from sqlglot import Dialect, exp
@@ -23,6 +23,7 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.typing import RowT
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from sqlspec.config import InstrumentationConfig
-    from sqlspec.statement.result import StatementResult
+    from sqlspec.statement.result import SQLResult
 
 __all__ = (
     "QueryBuilder",
@@ -38,9 +39,6 @@ __all__ = (
 )
 
 logger = get_logger("statement.builder")
-
-# Result type variable
-ResultT = TypeVar("ResultT", bound="StatementResult[Any]")
 
 
 @dataclass(frozen=True)
@@ -53,7 +51,7 @@ class SafeQuery:
 
 
 @dataclass
-class QueryBuilder(ABC, Generic[ResultT]):
+class QueryBuilder(ABC, Generic[RowT]):
     """Abstract base class for SQL query builders with SQLGlot optimization.
 
     Provides common functionality for dialect handling, parameter management,
@@ -108,7 +106,7 @@ class QueryBuilder(ABC, Generic[ResultT]):
 
     @property
     @abstractmethod
-    def _expected_result_type(self) -> "type[ResultT]":
+    def _expected_result_type(self) -> "type[SQLResult[RowT]]":
         """The expected result type for the query being built.
 
         Returns:

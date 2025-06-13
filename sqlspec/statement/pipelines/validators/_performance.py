@@ -18,7 +18,8 @@ from sqlglot.optimizer import (
 )
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.validators.base import BaseValidator, ProcessorResult
+from sqlspec.statement.pipelines.results import ProcessorResult
+from sqlspec.statement.pipelines.validators.base import BaseValidator
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -157,7 +158,7 @@ class PerformanceValidator(BaseValidator):
         """
         if context.current_expression is None:
             return self._create_result(
-                context.current_expression,
+                expression=None,
                 is_safe=True,
                 risk_level=RiskLevel.SKIP,
                 issues=["No expression to analyze"],
@@ -247,7 +248,7 @@ class PerformanceValidator(BaseValidator):
 
         # Return result
         return self._create_result(
-            context.current_expression,
+            expression=context.current_expression,
             is_safe=len(issues) == 0 or risk_level == RiskLevel.LOW,
             risk_level=risk_level,
             issues=[issue.description for issue in issues],
@@ -369,7 +370,8 @@ class PerformanceValidator(BaseValidator):
 
         return issues
 
-    def _check_antipatterns(self, analysis: PerformanceAnalysis) -> "list[PerformanceIssue]":
+    @staticmethod
+    def _check_antipatterns(analysis: PerformanceAnalysis) -> "list[PerformanceIssue]":
         """Check for common performance anti-patterns.
 
         Args:
@@ -430,7 +432,8 @@ class PerformanceValidator(BaseValidator):
 
         return issues
 
-    def _calculate_complexity(self, analysis: PerformanceAnalysis) -> int:
+    @staticmethod
+    def _calculate_complexity(analysis: PerformanceAnalysis) -> int:
         """Calculate overall query complexity score.
 
         Args:
@@ -493,7 +496,8 @@ class PerformanceValidator(BaseValidator):
 
         return RiskLevel.SKIP
 
-    def _is_correlated_subquery(self, subquery: "exp.Subquery") -> bool:
+    @staticmethod
+    def _is_correlated_subquery(subquery: "exp.Subquery") -> bool:
         """Check if subquery is correlated (references outer query).
 
         Args:
@@ -506,7 +510,8 @@ class PerformanceValidator(BaseValidator):
         # In a real implementation, would need to track scope
         return any(not col.table for col in subquery.find_all(exp.Column))
 
-    def _is_non_sargable(self, predicate: "exp.Predicate") -> bool:
+    @staticmethod
+    def _is_non_sargable(predicate: "exp.Predicate") -> bool:
         """Check if predicate is non-sargable (can't use index).
 
         Args:
@@ -524,7 +529,8 @@ class PerformanceValidator(BaseValidator):
         # Check for type conversions
         return bool(hasattr(predicate, "left") and isinstance(predicate.left, exp.Cast))
 
-    def _get_table_name(self, expr: "Optional[exp.Expression]") -> str:
+    @staticmethod
+    def _get_table_name(expr: "Optional[exp.Expression]") -> str:
         """Extract table name from expression.
 
         Args:
@@ -678,7 +684,8 @@ class PerformanceValidator(BaseValidator):
             analysis.optimized_complexity = analysis.original_complexity
             analysis.potential_improvement = 0.0
 
-    def _optimization_to_dict(self, optimization: OptimizationOpportunity) -> "dict[str, Any]":
+    @staticmethod
+    def _optimization_to_dict(optimization: OptimizationOpportunity) -> "dict[str, Any]":
         """Convert OptimizationOpportunity to dictionary.
 
         Args:
@@ -696,7 +703,8 @@ class PerformanceValidator(BaseValidator):
             "optimized_sql": optimization.optimized_sql,
         }
 
-    def _issue_to_dict(self, issue: PerformanceIssue) -> "dict[str, Any]":
+    @staticmethod
+    def _issue_to_dict(issue: PerformanceIssue) -> "dict[str, Any]":
         """Convert PerformanceIssue to dictionary.
 
         Args:

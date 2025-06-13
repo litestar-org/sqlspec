@@ -4,13 +4,13 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
-from psqlpy import Connection, QueryResult
+from psqlpy import Connection
 
 from sqlspec.driver import AsyncDriverAdapterProtocol
 from sqlspec.driver.mixins import AsyncStorageMixin, SQLTranslatorMixin, ToSchemaMixin
 from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.telemetry import instrument_operation_async
@@ -45,6 +45,8 @@ class PsqlpyDriver(
     __supports_arrow__: ClassVar[bool] = True
     __supports_parquet__: ClassVar[bool] = False
     dialect: "DialectType" = "postgres"
+    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NUMERIC,)
+    default_parameter_style: ParameterStyle = ParameterStyle.NUMERIC
 
     def __init__(
         self,
@@ -60,58 +62,39 @@ class PsqlpyDriver(
             default_row_type=default_row_type,
         )
 
-    def _get_placeholder_style(self) -> ParameterStyle:
-        # Use the target parameter style from config if specified
-        if self.config and hasattr(self.config, "target_parameter_style") and self.config.target_parameter_style:
-            style_map = {
-                "qmark": ParameterStyle.QMARK,
-                "named": ParameterStyle.NAMED_COLON,
-                "named_colon": ParameterStyle.NAMED_COLON,
-                "named_at": ParameterStyle.NAMED_AT,
-                "named_dollar": ParameterStyle.NAMED_DOLLAR,
-                "numeric": ParameterStyle.NUMERIC,
-                "pyformat_named": ParameterStyle.PYFORMAT_NAMED,
-                "pyformat_positional": ParameterStyle.PYFORMAT_POSITIONAL,
-            }
-            return style_map.get(self.config.target_parameter_style, ParameterStyle.NUMERIC)
-        # Default to numeric for psqlpy
-        return ParameterStyle.NUMERIC
-
     async def _execute_statement(
         self,
         statement: SQL,
         connection: Optional[PsqlpyConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
-            return await self._execute_script(
-                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
-                connection=connection,
-                **kwargs,
-            )
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            return await self._execute_script(sql, connection=connection, **kwargs)
+
+        # Determine if we need to convert parameter style
+        detected_styles = {p.style for p in statement.parameter_info}
+        target_style = self.default_parameter_style
+
+        # Check if any detected style is not supported
+        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+        if unsupported_styles:
+            # Convert to default style if we have unsupported styles
+            target_style = self.default_parameter_style
+        elif detected_styles:
+            # Use the first detected style if all are supported
+            # Prefer the first supported style found
+            for style in detected_styles:
+                if style in self.supported_parameter_styles:
+                    target_style = style
+                    break
+
         if statement.is_many:
-            # For execute_many, we need to convert placeholders even if parsing is disabled
-            # Get the SQL with proper placeholder conversion
-            if statement._config.enable_parsing or statement.expression is not None:
-                converted_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-            else:
-                # Manually convert placeholders when parsing is disabled
-                converted_sql = self.convert_placeholders_in_raw_sql(str(statement._sql), self._get_placeholder_style())
+            sql, params = statement.compile(placeholder_style=target_style)
+            return await self._execute_many(sql, params, connection=connection, **kwargs)
 
-            return await self._execute_many(
-                converted_sql,
-                statement.parameters,
-                connection=connection,
-                **kwargs,
-            )
-
-        return await self._execute(
-            statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.get_parameters(style=self._get_placeholder_style()),
-            statement,
-            connection=connection,
-            **kwargs,
-        )
+        sql, params = statement.compile(placeholder_style=target_style)
+        return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
         self,
@@ -120,13 +103,13 @@ class PsqlpyDriver(
         statement: SQL,
         connection: Optional[PsqlpyConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> Union[SelectResultDict, DMLResultDict]:
         async with instrument_operation_async(self, "psqlpy_execute", "database"):
             conn = self._connection(connection)
 
             # Convert parameters to the format Psqlpy expects
             converted_params = self._convert_parameters_to_driver_format(
-                sql, parameters, target_style=self._get_placeholder_style()
+                sql, parameters, target_style=self.parameter_style
             )
 
             # Psqlpy expects positional parameters as a list
@@ -142,8 +125,23 @@ class PsqlpyDriver(
             if self.instrumentation_config.log_parameters and final_driver_params:
                 logger.debug("Psqlpy query parameters: %s", final_driver_params)
             if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
-                return await conn.fetch(sql, parameters=final_driver_params)
-            return await conn.execute(sql, parameters=final_driver_params)
+                query_result = await conn.fetch(sql, parameters=final_driver_params)
+                dict_rows: list[dict[str, Any]] = query_result.result()
+                column_names = list(dict_rows[0].keys()) if dict_rows else []
+                result: SelectResultDict = {
+                    "data": dict_rows,
+                    "column_names": column_names,
+                    "rows_affected": len(dict_rows),
+                }
+                return result
+
+            # For non-SELECT statements
+            execute_result = await conn.execute(sql, parameters=final_driver_params)
+            dml_result: DMLResultDict = {
+                "rows_affected": execute_result if isinstance(execute_result, int) else -1,
+                "status_message": "OK",
+            }
+            return dml_result
 
     async def _execute_many(
         self,
@@ -151,7 +149,7 @@ class PsqlpyDriver(
         param_list: Any,
         connection: Optional[PsqlpyConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> DMLResultDict:
         async with instrument_operation_async(self, "psqlpy_execute_many", "database"):
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
@@ -172,53 +170,51 @@ class PsqlpyDriver(
                 # Use psqlpy's native execute_many method
                 await conn.execute_many(sql, formatted_params)
 
-                # Return consistent dict format like _execute
+                # Return DML result dict
                 # PSQLPy's execute_many doesn't return affected rows count
                 # Use the number of parameter sets as a reasonable estimate
-                return {
-                    "rowcount": len(formatted_params),
-                    "data": [],  # executemany doesn't return data
-                    "columns": [],
+                result: DMLResultDict = {
+                    "rows_affected": len(formatted_params),
+                    "status_message": "OK",
                 }
+                return result
 
-            return {"rowcount": 0, "data": [], "columns": []}
+            # No parameters provided
+            empty_result: DMLResultDict = {
+                "rows_affected": 0,
+                "status_message": "OK",
+            }
+            return empty_result
 
     async def _execute_script(
         self,
         script: str,
         connection: Optional[PsqlpyConnection] = None,
         **kwargs: Any,
-    ) -> str:
+    ) -> ScriptResultDict:
         async with instrument_operation_async(self, "psqlpy_execute_script", "database"):
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing psqlpy SQL script: %s", script)
             await conn.execute(script, parameters=None)
-            return "SCRIPT EXECUTED"
+            result: ScriptResultDict = {
+                "statements_executed": -1,  # PSQLPy doesn't provide this info
+                "status_message": "SCRIPT EXECUTED",
+            }
+            return result
 
     async def _wrap_select_result(
         self,
         statement: SQL,
-        result: Any,
+        result: SelectResultDict,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         async with instrument_operation_async(self, "psqlpy_wrap_select", "database"):
-            query_result = cast("QueryResult", result)
-            dict_rows: list[dict[str, Any]] = query_result.result()
-
-            if not dict_rows:
-                # TODO: Use the parsed SQL here
-                # PSQLPy limitation: cannot get column names from empty result sets
-                # This is a known limitation where schema information is not available
-                return SQLResult[RowT](
-                    statement=statement,
-                    data=cast("list[RowT]", []),
-                    column_names=[],
-                    operation_type="SELECT",
-                )
-
-            column_names = list(dict_rows[0].keys())
+            # result must be a dict with keys: data, column_names, rows_affected
+            dict_rows = result["data"]
+            column_names = result["column_names"]
+            rows_affected = result["rows_affected"]
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Psqlpy query returned %d rows", len(dict_rows))
@@ -230,19 +226,21 @@ class PsqlpyDriver(
                     statement=statement,
                     data=converted_data_list,
                     column_names=column_names,
+                    rows_affected=rows_affected,
                     operation_type="SELECT",
                 )
             return SQLResult[RowT](
                 statement=statement,
                 data=cast("list[RowT]", dict_rows),
                 column_names=column_names,
+                rows_affected=rows_affected,
                 operation_type="SELECT",
             )
 
     async def _wrap_execute_result(
         self,
         statement: SQL,
-        result: Any,
+        result: Union[DMLResultDict, ScriptResultDict],
         **kwargs: Any,
     ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "psqlpy_async_wrap_execute", "database"):
@@ -251,49 +249,37 @@ class PsqlpyDriver(
                 if statement.expression:
                     operation_type = str(statement.expression.key).upper()
 
-            rows_affected = -1
-            status_message: Optional[str] = None
+            # Handle TypedDict results
+            if isinstance(result, dict):
+                # Check if this is a ScriptResultDict
+                if "statements_executed" in result:
+                    return SQLResult[RowT](
+                        statement=statement,
+                        data=[],
+                        rows_affected=0,
+                        operation_type=operation_type or "SCRIPT",
+                        metadata={"status_message": result["status_message"]},
+                    )
 
-            if isinstance(result, str) and result == "SCRIPT EXECUTED":
-                operation_type = "SCRIPT"
-                rows_affected = 0
-                status_message = result
-            elif isinstance(result, dict):
-                # New format from _execute_many: result is a dict
-                rows_affected = result.get("rowcount", -1)
-            elif isinstance(result, BatchResult):
-                rows_affected = result.affected_rows
-            elif isinstance(result, QueryResult):
-                # Try to get result data to see if it contains row count info
-                try:
-                    result_data = result.result()
-                    # For DML operations, psqlpy returns an empty list but we still affected rows
-                    if isinstance(result_data, list) and operation_type in {"INSERT", "UPDATE", "DELETE"}:
-                        # psqlpy doesn't provide row count for DML operations
-                        # We'll need to assume success if no exception was raised
-                        rows_affected = 1  # Default to 1 for single row operations
-                    else:
-                        rows_affected = getattr(result, "affected_rows", -1)
-                        if rows_affected == -1:
-                            rows_affected = getattr(result, "rowcount", -1)
-                except Exception:
-                    # If we can't get result data, try attributes
-                    rows_affected = getattr(result, "affected_rows", -1)
-                    if rows_affected == -1:
-                        rows_affected = getattr(result, "rowcount", -1)
-            else:
-                logger.warning("Psqlpy _wrap_execute_result: Unexpected result type: %s", type(result))
+                # Check if this is a DMLResultDict
+                if "rows_affected" in result:
+                    rows_affected = result["rows_affected"]
+                    status_message = result["status_message"]
 
-            if self.instrumentation_config.log_results_count:
-                logger.debug("Psqlpy execute operation affected %d rows", rows_affected)
+                    if self.instrumentation_config.log_results_count:
+                        logger.debug("Psqlpy execute operation affected %d rows", rows_affected)
 
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=rows_affected,
-                operation_type=operation_type,
-                metadata={"status_message": status_message} if status_message else {},
-            )
+                    return SQLResult[RowT](
+                        statement=statement,
+                        data=[],
+                        rows_affected=rows_affected,
+                        operation_type=operation_type,
+                        metadata={"status_message": status_message},
+                    )
+
+            # This shouldn't happen with TypedDict approach
+            msg = f"Unexpected result type: {type(result)}"
+            raise ValueError(msg)
 
     def _connection(self, connection: Optional[PsqlpyConnection] = None) -> PsqlpyConnection:
         """Get the connection to use for the operation."""

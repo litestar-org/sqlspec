@@ -139,16 +139,16 @@ def test_psycopg_async_driver_supports_arrow(psycopg_async_driver: PsycopgAsyncD
     assert PsycopgAsyncDriver.__supports_arrow__ is True
 
 
-def test_psycopg_sync_driver_placeholder_style(psycopg_sync_driver: PsycopgSyncDriver) -> None:
-    """Test Psycopg sync driver placeholder style detection."""
-    placeholder_style = psycopg_sync_driver._get_placeholder_style()
-    assert placeholder_style.value == "pyformat_positional"
+def test_psycopg_sync_driver_parameter_style(psycopg_sync_driver: PsycopgSyncDriver) -> None:
+    """Test Psycopg sync driver parameter style."""
+    # Test that the driver has the correct parameter style set
+    assert psycopg_sync_driver.parameter_style.value == "pyformat_positional"
 
 
-def test_psycopg_async_driver_placeholder_style(psycopg_async_driver: PsycopgAsyncDriver) -> None:
-    """Test Psycopg async driver placeholder style detection."""
-    placeholder_style = psycopg_async_driver._get_placeholder_style()
-    assert placeholder_style.value == "pyformat_positional"
+def test_psycopg_async_driver_parameter_style(psycopg_async_driver: PsycopgAsyncDriver) -> None:
+    """Test Psycopg async driver parameter style."""
+    # Test that the driver has the correct parameter style set
+    assert psycopg_async_driver.parameter_style.value == "pyformat_positional"
 
 
 def test_psycopg_sync_driver_get_cursor(

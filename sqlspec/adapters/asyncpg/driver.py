@@ -1,5 +1,3 @@
-# ruff: noqa: PLR6301
-import contextlib
 import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
@@ -12,7 +10,7 @@ from sqlspec.driver import AsyncDriverAdapterProtocol
 from sqlspec.driver.mixins import AsyncStorageMixin, SQLTranslatorMixin, ToSchemaMixin
 from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.logging import get_logger
@@ -53,6 +51,8 @@ class AsyncpgDriver(
     """AsyncPG PostgreSQL Driver Adapter. Modern protocol implementation."""
 
     dialect: "DialectType" = "postgres"
+    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NUMERIC,)
+    default_parameter_style: ParameterStyle = ParameterStyle.NUMERIC
     __supports_arrow__: ClassVar[bool] = True
     __supports_parquet__: ClassVar[bool] = False
 
@@ -70,40 +70,33 @@ class AsyncpgDriver(
             default_row_type=default_row_type,
         )
 
-    def _get_placeholder_style(self) -> ParameterStyle:
-        return ParameterStyle.NUMERIC
-
     async def _execute_statement(
         self,
         statement: SQL,
         connection: Optional[AsyncpgConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
-            return await self._execute_script(
-                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
-                connection=connection,
-                **kwargs,
-            )
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            return await self._execute_script(sql, connection=connection, **kwargs)
+
+        # Determine if we need to convert parameter style
+        detected_style = statement.parameter_style
+        target_style = self.default_parameter_style
+
+        # Only convert if the detected style is not supported
+        if detected_style and detected_style not in self.supported_parameter_styles:
+            target_style = self.default_parameter_style
+        elif detected_style:
+            # Use the detected style if it's supported
+            target_style = detected_style
+
         if statement.is_many:
-            return await self._execute_many(
-                statement.to_sql(placeholder_style=self._get_placeholder_style()),
-                statement.parameters,
-                connection=connection,
-                **kwargs,
-            )
+            sql, params = statement.compile(placeholder_style=target_style)
+            return await self._execute_many(sql, params, connection=connection, **kwargs)
 
-        # AsyncPG expects positional parameters with numeric placeholders ($1, $2, etc.)
-        sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-        params = statement.get_parameters(style=ParameterStyle.NUMERIC)
-
-        return await self._execute(
-            sql,
-            params,
-            statement,
-            connection=connection,
-            **kwargs,
-        )
+        sql, params = statement.compile(placeholder_style=target_style)
+        return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
         self,
@@ -112,28 +105,47 @@ class AsyncpgDriver(
         statement: SQL,
         connection: Optional[AsyncpgConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> Union[SelectResultDict, DMLResultDict]:
         async with instrument_operation_async(self, "asyncpg_execute", "database"):
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
 
-            # Convert parameters to the format AsyncPG expects (positional list)
-            converted_params = self._convert_parameters_to_driver_format(sql, parameters)
-
+            # Parameters are already in the correct format from compile()
             # AsyncPG expects parameters as *args, not a single list
             args_for_driver: list[Any] = []
-            if converted_params is not None:
-                if isinstance(converted_params, (list, tuple)):
-                    args_for_driver.extend(converted_params)
+            if parameters is not None:
+                if isinstance(parameters, (list, tuple)):
+                    args_for_driver.extend(parameters)
                 else:
-                    args_for_driver.append(converted_params)
+                    args_for_driver.append(parameters)
 
             if self.instrumentation_config.log_parameters and args_for_driver:
                 logger.debug("Query parameters: %s", args_for_driver)
             if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
-                return await conn.fetch(sql, *args_for_driver)
-            return await conn.execute(sql, *args_for_driver)
+                records = await conn.fetch(sql, *args_for_driver)
+                # Get column names from first record or empty list
+                column_names = list(records[0].keys()) if records else []
+                result: SelectResultDict = {
+                    "data": records,
+                    "column_names": column_names,
+                    "rows_affected": len(records),
+                }
+                return result
+
+            status = await conn.execute(sql, *args_for_driver)
+            # Parse row count from status string
+            rows_affected = 0
+            if status and isinstance(status, str):
+                match = ASYNC_PG_STATUS_REGEX.match(status)
+                if match and len(match.groups()) >= EXPECTED_REGEX_GROUPS:
+                    rows_affected = int(match.group(3))
+
+            dml_result: DMLResultDict = {
+                "rows_affected": rows_affected,
+                "status_message": status or "OK",
+            }
+            return dml_result
 
     async def _execute_many(
         self,
@@ -141,7 +153,7 @@ class AsyncpgDriver(
         param_list: Any,
         connection: Optional[AsyncpgConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> DMLResultDict:
         async with instrument_operation_async(self, "asyncpg_execute_many", "database"):
             conn = self._connection(connection)
             params_list: list[tuple[Any, ...]] = []
@@ -160,31 +172,26 @@ class AsyncpgDriver(
 
             result = await conn.executemany(sql, params_list)
 
-            # Return consistent dict format like _execute
-            # AsyncPG's executemany returns a status string or None
-            batch_size = len(params_list) if params_list else 0
-
             # Try to extract rowcount from result if available
-            rowcount = batch_size  # Default to batch size
+            rows_affected = 0
             if result and isinstance(result, str):
                 # Parse PostgreSQL status like "INSERT 0 5"
-                postgres_status_min_parts = 3
-                parts = result.split()
-                if len(parts) >= postgres_status_min_parts and parts[-1].isdigit():
-                    rowcount = int(parts[-1])
+                match = ASYNC_PG_STATUS_REGEX.match(result)
+                if match and len(match.groups()) >= EXPECTED_REGEX_GROUPS:
+                    rows_affected = int(match.group(3))
 
-            return {
-                "rowcount": rowcount,
-                "data": [],  # executemany doesn't return data
-                "columns": [],
+            dml_result: DMLResultDict = {
+                "rows_affected": rows_affected,
+                "status_message": result or "OK",
             }
+            return dml_result
 
     async def _execute_script(
         self,
         script: str,
         connection: Optional[AsyncpgConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> ScriptResultDict:
         async with instrument_operation_async(
             self,
             "asyncpg_execute_script",
@@ -193,30 +200,26 @@ class AsyncpgDriver(
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL script: %s", script)
-            return await conn.execute(script)
+            status = await conn.execute(script)
+
+            result: ScriptResultDict = {
+                "statements_executed": -1,  # AsyncPG doesn't provide statement count
+                "status_message": status or "SCRIPT EXECUTED",
+            }
+            return result
 
     async def _wrap_select_result(
         self,
         statement: SQL,
-        result: Any,
+        result: SelectResultDict,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         async with instrument_operation_async(self, "asyncpg_wrap_select", "database"):
-            records = cast("list[Record]", result)
+            records = cast("list[Record]", result["data"])
+            column_names = result["column_names"]
+            rows_affected = result["rows_affected"]
 
-            if not records:
-                # TODO: use the parsed `SQL`
-                # AsyncPG limitation: cannot get column names from empty result sets
-                # This is a known limitation where schema information is not available
-                return SQLResult[RowT](
-                    statement=statement,
-                    data=cast("list[RowT]", []),
-                    column_names=[],
-                    operation_type="SELECT",
-                )
-
-            column_names = list(records[0].keys())  # asyncpg.Record acts like a dict
             rows_as_dicts: list[dict[str, Any]] = [dict(record) for record in records]
 
             if self.instrumentation_config.log_results_count:
@@ -232,6 +235,7 @@ class AsyncpgDriver(
                     statement=statement,
                     data=converted_data_list,
                     column_names=column_names,
+                    rows_affected=rows_affected,
                     operation_type="SELECT",
                 )
 
@@ -239,65 +243,45 @@ class AsyncpgDriver(
                 statement=statement,
                 data=cast("list[RowT]", rows_as_dicts),
                 column_names=column_names,
+                rows_affected=rows_affected,
                 operation_type="SELECT",
             )
 
     async def _wrap_execute_result(
         self,
         statement: SQL,
-        result: Any,  # This is a status string from conn.execute()
+        result: Union[DMLResultDict, ScriptResultDict],
         **kwargs: Any,
-    ) -> SQLResult[RowT]:  # Changed return type to match base class
+    ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "asyncpg_wrap_execute", "database"):
             operation_type = "UNKNOWN"
             with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
                 if statement.expression:
                     operation_type = str(statement.expression.key).upper()
 
-            rows_affected = 0  # Default
-            status_message = "UNKNOWN"
+            # Handle script results
+            if "statements_executed" in result:
+                return SQLResult[RowT](
+                    statement=statement,
+                    data=cast("list[RowT]", []),
+                    rows_affected=0,
+                    operation_type="SCRIPT",
+                    metadata={
+                        "status_message": result.get("status_message", ""),
+                        "statements_executed": result.get("statements_executed", -1),
+                    },
+                )
 
-            # Handle dict result from _execute_many
-            if isinstance(result, dict):
-                rows_affected = result.get("rowcount", 0)
-                status_message = f"BATCH {rows_affected}"
-            else:
-                # Handle None result case gracefully
-                status_message = "UNKNOWN" if result is None else str(result)
-
-                match = ASYNC_PG_STATUS_REGEX.match(status_message)
-                if match:
-                    command_tag = match.group(1).upper()
-                    if command_tag in {"INSERT", "UPDATE", "DELETE", "MERGE"}:
-                        try:
-                            rows_affected = int(match.group(3))  # group(3) is the row count
-                        except (IndexError, ValueError):
-                            logger.warning(
-                                "Could not parse row count from asyncpg status: %s",
-                                status_message,
-                            )
-                    elif (
-                        command_tag == "SELECT" and len(match.groups()) >= EXPECTED_REGEX_GROUPS
-                    ):  # SELECT count (from SELECT INTO?)
-                        with contextlib.suppress(IndexError, ValueError):
-                            rows_affected = int(match.group(3))
-                elif "SCRIPT" in operation_type.upper():
-                    pass
-                elif status_message != "UNKNOWN":  # Don't warn for None results we converted to UNKNOWN
-                    logger.warning(
-                        "Could not parse asyncpg status message: %s",
-                        status_message,
-                    )
+            # Handle DML results
+            rows_affected = result.get("rows_affected", -1)
+            status_message = result.get("status_message", "")
 
             if self.instrumentation_config.log_results_count:
                 logger.debug(
-                    "Execute operation affected %d rows. Raw status: %s",
+                    "Execute operation affected %d rows. Status: %s",
                     rows_affected,
                     status_message,
                 )
-
-            # Data is empty as conn.execute() for DML returns status string, not records.
-            # last_inserted_id and inserted_ids are not available from status string.
             return SQLResult[RowT](
                 statement=statement,
                 data=cast("list[RowT]", []),

@@ -11,7 +11,7 @@ from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
 from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.logging import get_logger
@@ -54,7 +54,11 @@ class SqliteDriver(
     __supports_arrow__: "ClassVar[bool]" = True
     __supports_parquet__: "ClassVar[bool]" = False
     dialect: "DialectType" = "sqlite"
-    parameter_style: ParameterStyle = ParameterStyle.QMARK
+    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (
+        ParameterStyle.QMARK,
+        ParameterStyle.NAMED_COLON,
+    )
+    default_parameter_style: ParameterStyle = ParameterStyle.QMARK
 
     def __init__(
         self,
@@ -74,10 +78,6 @@ class SqliteDriver(
         if not isinstance(connection.row_factory, type(sqlite3.Row)):
             connection.row_factory = sqlite3.Row
 
-    def _get_placeholder_style(self) -> ParameterStyle:
-        """Return the parameter style for SQLite."""
-        return ParameterStyle.QMARK
-
     @staticmethod
     @contextmanager
     def _get_cursor(connection: SqliteConnection) -> Iterator[sqlite3.Cursor]:
@@ -93,34 +93,38 @@ class SqliteDriver(
         statement: SQL,
         connection: Optional[SqliteConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
-            return self._execute_script(
-                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
-                connection=connection,
-                **kwargs,
-            )
-        if statement.is_many:
-            return self._execute_many(
-                statement.to_sql(placeholder_style=self._get_placeholder_style()),
-                statement.parameters,
-                connection=connection,
-                **kwargs,
-            )
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            return self._execute_script(sql, connection=connection, **kwargs)
 
-        sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-        params = statement.get_parameters(style=self._get_placeholder_style())
+        # Determine if we need to convert parameter style
+        detected_styles = {p.style for p in statement.parameter_info}
+        target_style = self.default_parameter_style
+
+        # Check if any detected style is not supported
+        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+        if unsupported_styles:
+            # Convert to default style if we have unsupported styles
+            target_style = self.default_parameter_style
+        elif detected_styles:
+            # Use the first detected style if all are supported
+            # Prefer the first supported style found
+            for style in detected_styles:
+                if style in self.supported_parameter_styles:
+                    target_style = style
+                    break
+
+        if statement.is_many:
+            sql, params = statement.compile(placeholder_style=target_style)
+            return self._execute_many(sql, params, connection=connection, **kwargs)
+
+        sql, params = statement.compile(placeholder_style=target_style)
         # SQLite expects tuples for positional parameters
         if isinstance(params, list):
             params = tuple(params)
 
-        return self._execute(
-            sql,
-            params,
-            statement,
-            connection=connection,
-            **kwargs,
-        )
+        return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
         self,
@@ -129,15 +133,15 @@ class SqliteDriver(
         statement: SQL,
         connection: Optional[SqliteConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> Union[SelectResultDict, DMLResultDict]:
         """Execute a single statement with parameters."""
         with instrument_operation(self, "sqlite_execute", "database"):
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQLite SQL: %s", sql)
 
-            # Convert parameters to the format SQLite expects
-            sqlite_params = self._convert_parameters_to_driver_format(sql, parameters)
+            # Parameters are already in the correct format from compile()
+            sqlite_params = parameters
 
             if self.instrumentation_config.log_parameters and sqlite_params:
                 logger.debug("SQLite query parameters: %s", sqlite_params)
@@ -147,8 +151,17 @@ class SqliteDriver(
                 if self.returns_rows(statement.expression):
                     fetched_data: list[sqlite3.Row] = cursor.fetchall()
                     column_names = [col[0] for col in cursor.description or []]
-                    return {"data": fetched_data, "column_names": column_names, "rowcount": cursor.rowcount}
-                return cursor.rowcount
+                    result: SelectResultDict = {
+                        "data": fetched_data,
+                        "column_names": column_names,
+                        "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                    }
+                    return result
+                dml_result: DMLResultDict = {
+                    "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                    "status_message": "OK",
+                }
+                return dml_result
 
     def _execute_many(
         self,
@@ -156,7 +169,7 @@ class SqliteDriver(
         param_list: Any,
         connection: Optional[SqliteConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> DMLResultDict:
         """Execute a statement many times with a list of parameter tuples."""
         with instrument_operation(self, "sqlite_execute_many", "database"):
             conn = self._connection(connection)
@@ -179,19 +192,19 @@ class SqliteDriver(
 
             with self._get_cursor(conn) as cursor:
                 cursor.executemany(sql, formatted_params)
-                # Return consistent dict format like _execute
-                return {
-                    "rowcount": cursor.rowcount,
-                    "data": [],  # executemany doesn't return data
-                    "columns": [],
+                # Return DML result format for execute_many
+                result: DMLResultDict = {
+                    "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                    "status_message": "OK",
                 }
+                return result
 
     def _execute_script(
         self,
         script: str,
         connection: Optional[SqliteConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> ScriptResultDict:
         """Execute a script on the SQLite connection."""
         with instrument_operation(self, "sqlite_execute_script", "database"):
             conn = self._connection(connection)
@@ -202,25 +215,25 @@ class SqliteDriver(
                 cursor.executescript(script)
             # Explicitly commit the transaction after script execution
             conn.commit()
-            return "SCRIPT EXECUTED"
+            # Return script result format
+            result: ScriptResultDict = {
+                "statements_executed": -1,  # SQLite doesn't provide this info
+                "status_message": "SCRIPT EXECUTED",
+            }
+            return result
 
     def _wrap_select_result(
         self,
         statement: SQL,
-        result: Any,
+        result: SelectResultDict,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "sqlite_wrap_select", "database"):
-            # result should be a dict with keys: data, column_names, rowcount
-            if isinstance(result, dict):
-                fetched_data = result.get("data", [])
-                column_names = result.get("column_names", [])
-            else:
-                # Fallback for backward compatibility
-                cursor = result
-                fetched_data = cursor.fetchall()
-                column_names = [col[0] for col in cursor.description or []]
+            # result must be a dict with keys: data, column_names, rows_affected
+            fetched_data = result["data"]
+            column_names = result["column_names"]
+            rows_affected = result["rows_affected"]
 
             # Convert list[sqlite3.Row] to list[dict[str, Any]] first for consistent processing
             rows_as_dicts = [dict(row) for row in fetched_data]
@@ -236,6 +249,7 @@ class SqliteDriver(
                     statement=statement,
                     data=converted_data_list,
                     column_names=column_names,
+                    rows_affected=rows_affected,
                     operation_type="SELECT",
                 )
 
@@ -243,13 +257,14 @@ class SqliteDriver(
                 statement=statement,
                 data=cast("list[RowT]", rows_as_dicts),  # Pass the already converted list of dicts
                 column_names=column_names,
+                rows_affected=rows_affected,
                 operation_type="SELECT",
             )
 
     def _wrap_execute_result(
         self,
         statement: SQL,
-        result: Any,
+        result: Union[DMLResultDict, ScriptResultDict],
         **kwargs: Any,
     ) -> SQLResult[RowT]:
         with instrument_operation(self, "sqlite_wrap_execute", "database"):
@@ -258,43 +273,33 @@ class SqliteDriver(
                 if statement.expression:
                     operation_type = str(statement.expression.key).upper()
 
-            # result is "SCRIPT EXECUTED" for successful scripts
-            if isinstance(result, str) and result == "SCRIPT EXECUTED":
+            # Handle script results
+            if "statements_executed" in result:
                 return SQLResult[RowT](
                     statement=statement,
                     data=cast("list[RowT]", []),
                     rows_affected=0,
-                    operation_type=operation_type or "SCRIPT",
-                    metadata={"status_message": result},
+                    operation_type="SCRIPT",
+                    metadata={
+                        "status_message": result.get("status_message", ""),
+                        "statements_executed": result.get("statements_executed", -1),
+                    },
                 )
 
-            # result is a dict from _execute_many
-            if isinstance(result, dict):
-                rows_affected = result.get("rowcount", -1)
-                last_inserted_id = None
-            # result is an integer (rowcount) for DML operations
-            elif isinstance(result, int):
-                rows_affected = result
-                last_inserted_id = None
-            else:
-                # Fallback: assume cursor object
-                cursor = result
-                rows_affected = getattr(cursor, "rowcount", -1)
-                last_inserted_id = getattr(cursor, "lastrowid", None)
+            # Handle DML results (dict with rows_affected, status_message)
+            rows_affected = result.get("rows_affected", -1)
+            status_message = result.get("status_message", "")
 
-            # SQLite DML operations (without RETURNING which isn't typically fetched this way) don't populate cursor.fetchall()
-            # So, data is typically empty.
+            # SQLite DML operations (without RETURNING) don't populate data
             returned_data: list[dict[str, Any]] = []
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Execute operation affected %d rows", rows_affected)
-                if last_inserted_id is not None:
-                    logger.debug("Last inserted ID: %s", last_inserted_id)
 
             return SQLResult[RowT](
                 statement=statement,
                 data=cast("list[RowT]", returned_data),
                 rows_affected=rows_affected,
                 operation_type=operation_type,
-                last_inserted_id=last_inserted_id,
+                metadata={"status_message": status_message},
             )

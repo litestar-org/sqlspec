@@ -8,6 +8,7 @@ import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConnection, AiosqliteDriver
 from sqlspec.config import InstrumentationConfig
+from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -81,8 +82,8 @@ def test_aiosqlite_driver_supports_arrow(aiosqlite_driver: AiosqliteDriver) -> N
 
 def test_aiosqlite_driver_placeholder_style(aiosqlite_driver: AiosqliteDriver) -> None:
     """Test AIOSQLite driver placeholder style detection."""
-    placeholder_style = aiosqlite_driver._get_placeholder_style()
-    assert placeholder_style.value == "qmark"
+    placeholder_style = aiosqlite_driver.parameter_style
+    assert placeholder_style == ParameterStyle.QMARK
 
 
 @pytest.mark.asyncio

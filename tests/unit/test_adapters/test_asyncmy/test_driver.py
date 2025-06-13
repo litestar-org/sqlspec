@@ -9,6 +9,7 @@ import pytest
 
 from sqlspec.adapters.asyncmy import AsyncmyConnection, AsyncmyDriver
 from sqlspec.config import InstrumentationConfig
+from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -74,8 +75,8 @@ def test_asyncmy_driver_supports_arrow(asyncmy_driver: AsyncmyDriver) -> None:
 
 def test_asyncmy_driver_placeholder_style(asyncmy_driver: AsyncmyDriver) -> None:
     """Test Asyncmy driver placeholder style detection."""
-    placeholder_style = asyncmy_driver._get_placeholder_style()
-    assert placeholder_style.value == "pyformat_positional"
+    placeholder_style = asyncmy_driver.parameter_style
+    assert placeholder_style == ParameterStyle.POSITIONAL_PYFORMAT
 
 
 @pytest.mark.asyncio

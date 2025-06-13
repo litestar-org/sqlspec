@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Any, Optional
 from sqlglot import exp
 from sqlglot.errors import ParseError as SQLGlotParseError
 
-from sqlspec.statement.pipelines.base import ProcessorProtocol, ValidationResult
+from sqlspec.statement.pipelines.base import ProcessorProtocol
+from sqlspec.statement.pipelines.results import ProcessorResult, ValidationResult
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 
@@ -131,22 +132,13 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         self._parse_cache: dict[tuple[str, Optional[str]], exp.Expression] = {}
         self._analysis_cache: dict[str, StatementAnalysis] = {}
 
-    def process(self, context: "SQLProcessingContext") -> "tuple[exp.Expression, Optional[ValidationResult]]":
+    def process(self, context: "SQLProcessingContext") -> "ProcessorResult":
         """Process the SQL expression to extract analysis metadata and store it in the context."""
         correlation_id = CorrelationContext.get()
         start_time = time.perf_counter()
 
-        if not context.config.enable_analysis:
-            if context.current_expression is None:
-                return exp.Placeholder(), None
-            return context.current_expression, None
-
-        if context.current_expression is None:
-            logger.warning(
-                "StatementAnalyzer.process called with no current_expression in context when analysis is enabled.",
-                extra={"correlation_id": correlation_id},
-            )
-            return exp.Placeholder(), None
+        if not context.config.enable_analysis or context.current_expression is None:
+            return ProcessorResult(expression=context.current_expression)
 
         if context.config.debug_mode:
             logger.debug(
@@ -178,7 +170,11 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
                 },
             )
 
-        return context.current_expression, None
+        return ProcessorResult(
+            expression=context.current_expression,
+            analysis_result=analysis_result_obj,
+            metadata={"duration_ms": duration * 1000},
+        )
 
     def analyze_statement(self, sql_string: str, dialect: "Optional[DialectType]" = None) -> StatementAnalysis:
         """Analyze SQL string and extract components efficiently.

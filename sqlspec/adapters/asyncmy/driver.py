@@ -13,7 +13,7 @@ from sqlspec.driver import AsyncDriverAdapterProtocol
 from sqlspec.driver.mixins import AsyncStorageMixin, SQLTranslatorMixin, ToSchemaMixin
 from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.telemetry import instrument_operation_async
@@ -35,6 +35,8 @@ class AsyncmyDriver(
     """Asyncmy MySQL/MariaDB Driver Adapter. Modern protocol implementation."""
 
     dialect: "DialectType" = "mysql"
+    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.POSITIONAL_PYFORMAT,)
+    default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
     __supports_arrow__: ClassVar[bool] = True
     __supports_parquet__: ClassVar[bool] = False
 
@@ -52,9 +54,6 @@ class AsyncmyDriver(
             default_row_type=default_row_type,
         )
 
-    def _get_placeholder_style(self) -> "ParameterStyle":
-        return ParameterStyle.PYFORMAT_POSITIONAL
-
     @asynccontextmanager
     async def _get_cursor(self, connection: "Optional[AsyncmyConnection]" = None) -> "AsyncGenerator[Cursor, None]":
         conn_to_use = connection or self.connection
@@ -71,28 +70,28 @@ class AsyncmyDriver(
         statement: SQL,
         connection: "Optional[AsyncmyConnection]" = None,  # pyright: ignore
         **kwargs: Any,
-    ) -> Any:
+    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
-            return await self._execute_script(
-                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
-                connection=connection,
-                **kwargs,
-            )
-        if statement.is_many:
-            return await self._execute_many(
-                statement.to_sql(placeholder_style=self._get_placeholder_style()),
-                statement.parameters,
-                connection=connection,
-                **kwargs,
-            )
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            return await self._execute_script(sql, connection=connection, **kwargs)
 
-        return await self._execute(
-            statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.get_parameters(style=self._get_placeholder_style()),
-            statement,
-            connection=connection,
-            **kwargs,
-        )
+        # Determine if we need to convert parameter style
+        detected_style = statement.parameter_style
+        target_style = self.default_parameter_style
+
+        # Only convert if the detected style is not supported
+        if detected_style and detected_style not in self.supported_parameter_styles:
+            target_style = self.default_parameter_style
+        elif detected_style:
+            # Use the detected style if it's supported
+            target_style = detected_style
+
+        if statement.is_many:
+            sql, params = statement.compile(placeholder_style=target_style)
+            return await self._execute_many(sql, params, connection=connection, **kwargs)
+
+        sql, params = statement.compile(placeholder_style=target_style)
+        return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
         self,
@@ -101,27 +100,22 @@ class AsyncmyDriver(
         statement: SQL,
         connection: "Optional[AsyncmyConnection]" = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> Union[SelectResultDict, DMLResultDict]:
         async with instrument_operation_async(self, "asyncmy_execute", "database"):
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
 
-            # Convert parameters to the format AsyncMy expects
-            converted_params = self._convert_parameters_to_driver_format(
-                sql, parameters, target_style=self._get_placeholder_style()
-            )
-
             # AsyncMy doesn't like empty lists/tuples, convert to None
-            if converted_params in ([], ()):
-                converted_params = None
+            if parameters in ([], ()):
+                parameters = None
 
-            if self.instrumentation_config.log_parameters and converted_params:
-                logger.debug("Query parameters: %s", converted_params)
+            if self.instrumentation_config.log_parameters and parameters:
+                logger.debug("Query parameters: %s", parameters)
 
             async with self._get_cursor(conn) as cursor:
                 # AsyncMy expects list/tuple parameters or dict for named params
-                await cursor.execute(sql, converted_params)
+                await cursor.execute(sql, parameters)
 
                 # For SELECT queries, return cursor so _wrap_select_result can fetch from it
                 is_select = self.returns_rows(statement.expression)
@@ -131,13 +125,22 @@ class AsyncmyDriver(
                     is_select = any(sql_upper.startswith(prefix) for prefix in ["SELECT", "WITH", "VALUES", "TABLE"])
 
                 if is_select:
-                    return cursor
-                # For DML/DDL queries, extract cursor info while it's still valid
-                return {
-                    "rowcount": cursor.rowcount,
-                    "lastrowid": cursor.lastrowid,
-                    "description": cursor.description,
+                    # For SELECT queries, fetch data and return SelectResultDict
+                    data = await cursor.fetchall()
+                    column_names = [desc[0] for desc in cursor.description or []]
+                    result: SelectResultDict = {
+                        "data": data,
+                        "column_names": column_names,
+                        "rows_affected": len(data),
+                    }
+                    return result
+
+                # For DML/DDL queries, return DMLResultDict
+                dml_result: DMLResultDict = {
+                    "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                    "status_message": "OK",
                 }
+                return dml_result
 
     async def _execute_many(
         self,
@@ -145,7 +148,7 @@ class AsyncmyDriver(
         param_list: Any,
         connection: "Optional[AsyncmyConnection]" = None,
         **kwargs: Any,
-    ) -> int:
+    ) -> DMLResultDict:
         async with instrument_operation_async(self, "asyncmy_execute_many", "database"):
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
@@ -166,18 +169,18 @@ class AsyncmyDriver(
 
             async with self._get_cursor(conn) as cursor:
                 await cursor.executemany(sql, params_list)
-                return {
-                    "rowcount": cursor.rowcount if cursor.rowcount != -1 else len(params_list),
-                    "lastrowid": cursor.lastrowid,
-                    "description": cursor.description,
+                result: DMLResultDict = {
+                    "rows_affected": cursor.rowcount if cursor.rowcount != -1 else len(params_list),
+                    "status_message": "OK",
                 }
+                return result
 
     async def _execute_script(
         self,
         script: str,
         connection: "Optional[AsyncmyConnection]" = None,
         **kwargs: Any,
-    ) -> str:
+    ) -> ScriptResultDict:
         async with instrument_operation_async(self, "asyncmy_execute_script", "database"):
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
@@ -186,6 +189,7 @@ class AsyncmyDriver(
             # AsyncMy may not support multi-statement scripts without CLIENT_MULTI_STATEMENTS flag
             # Use the shared implementation to split and execute statements individually
             statements = self._split_script_statements(script)
+            statements_executed = 0
 
             async with self._get_cursor(conn) as cursor:
                 for statement in statements:
@@ -193,35 +197,36 @@ class AsyncmyDriver(
                         if self.instrumentation_config.log_queries:
                             logger.debug("Executing statement: %s", statement)
                         await cursor.execute(statement)
+                        statements_executed += 1
 
-            return "SCRIPT EXECUTED"
+            result: ScriptResultDict = {
+                "statements_executed": statements_executed,
+                "status_message": "SCRIPT EXECUTED",
+            }
+            return result
 
     async def _wrap_select_result(
         self,
         statement: SQL,
-        result: Any,
+        result: SelectResultDict,
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
         async with instrument_operation_async(self, "asyncmy_wrap_select", "database"):
-            cursor = cast("Cursor", result)
+            data = result["data"]
+            column_names = result["column_names"]
+            rows_affected = result["rows_affected"]
 
-            try:
-                results: list[tuple[Any, ...]] = await cursor.fetchall()
-            except Exception:
-                results = []
-
-            column_names = [desc[0] for desc in cursor.description or []]
-
-            if not results:
+            if not data:
                 return SQLResult[RowT](
                     statement=statement,
                     data=[],
                     column_names=column_names,
+                    rows_affected=0,
                     operation_type="SELECT",
                 )
 
-            rows_as_dicts = [dict(zip(column_names, row)) for row in results]
+            rows_as_dicts = [dict(zip(column_names, row)) for row in data]
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Asyncmy query returned %d rows", len(rows_as_dicts))
@@ -233,6 +238,7 @@ class AsyncmyDriver(
                     statement=statement,
                     data=converted_data_list,
                     column_names=column_names,
+                    rows_affected=rows_affected,
                     operation_type="SELECT",
                 )
 
@@ -240,13 +246,14 @@ class AsyncmyDriver(
                 statement=statement,
                 data=rows_as_dicts,
                 column_names=column_names,
+                rows_affected=rows_affected,
                 operation_type="SELECT",
             )
 
     async def _wrap_execute_result(
         self,
         statement: SQL,
-        result: Any,
+        result: Union[DMLResultDict, ScriptResultDict],
         **kwargs: Any,
     ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "asyncmy_wrap_execute", "database"):
@@ -255,51 +262,32 @@ class AsyncmyDriver(
                 if statement.expression:
                     operation_type = str(statement.expression.key).upper()
 
-            if isinstance(result, str) and result == "SCRIPT EXECUTED":
+            # Handle script results
+            if "statements_executed" in result:
                 return SQLResult[RowT](
                     statement=statement,
-                    data=[],
+                    data=cast("list[RowT]", []),
                     rows_affected=0,
-                    operation_type=operation_type or "SCRIPT",
-                    metadata={"status_message": result},
+                    operation_type="SCRIPT",
+                    metadata={
+                        "status_message": result.get("status_message", ""),
+                        "statements_executed": result.get("statements_executed", -1),
+                    },
                 )
 
-            # Handle dict result from _execute (DML/DDL operations)
-            if isinstance(result, dict) and "rowcount" in result:
-                rows_affected = result["rowcount"]
-                last_inserted_id = result.get("lastrowid")
-
-                if self.instrumentation_config.log_results_count:
-                    logger.debug("Asyncmy execute operation affected %d rows", rows_affected)
-                    if last_inserted_id is not None:
-                        logger.debug("Asyncmy last inserted ID: %s", last_inserted_id)
-
-                return SQLResult[RowT](
-                    statement=statement,
-                    data=[],
-                    rows_affected=rows_affected,
-                    operation_type=operation_type,
-                    inserted_ids=[last_inserted_id] if last_inserted_id is not None else [],
-                )
-
-            # Handle cursor object (legacy path for backward compatibility)
-            cursor = cast("Cursor", result)
-            rows_affected = getattr(cursor, "rowcount", -1)
-            last_inserted_id = getattr(cursor, "lastrowid", None)
-
-            returned_data: list[dict[str, Any]] = []
+            # Handle DML results
+            rows_affected = result.get("rows_affected", -1)
+            status_message = result.get("status_message", "")
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Asyncmy execute operation affected %d rows", rows_affected)
-                if last_inserted_id is not None:
-                    logger.debug("Asyncmy last inserted ID: %s", last_inserted_id)
 
             return SQLResult[RowT](
                 statement=statement,
-                data=returned_data,
+                data=cast("list[RowT]", []),
                 rows_affected=rows_affected,
-                last_inserted_id=last_inserted_id,
                 operation_type=operation_type,
+                metadata={"status_message": status_message},
             )
 
     def _connection(self, connection: Optional[Connection] = None) -> Connection:  # pyright: ignore

@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlspec.statement.filters import StatementFilter
-    from sqlspec.statement.result import SQLResult
+    from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 
 __all__ = ("AsyncDriverAdapterProtocol",)
 
@@ -84,14 +84,18 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
         statement: "SQL",
         connection: "Optional[ConnectionT]" = None,
         **kwargs: Any,
-    ) -> Any:  # Raw driver result
+    ) -> "Union[SelectResultDict, DMLResultDict, ScriptResultDict]":
+        """Actual execution implementation by concrete drivers, using the raw connection.
+
+        Returns one of the standardized result dictionaries based on the statement type.
+        """
         raise NotImplementedError
 
     @abstractmethod
     async def _wrap_select_result(
         self,
         statement: "SQL",
-        result: Any,
+        result: "SelectResultDict",
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
@@ -101,7 +105,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
     async def _wrap_execute_result(
         self,
         statement: "SQL",
-        result: Any,
+        result: "Union[DMLResultDict, ScriptResultDict]",
         **kwargs: Any,
     ) -> "SQLResult[RowT]":
         raise NotImplementedError
@@ -145,7 +149,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
     @overload
     async def execute(
         self,
-        statement: "Union[str, Any]",  # exp.Expression
+        statement: "Union[str, SQL]",  # exp.Expression
         parameters: "Optional[SQLParameterType]" = None,
         *filters: "StatementFilter",
         schema_type: "type[ModelDTOT]",
@@ -157,31 +161,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
     @overload
     async def execute(
         self,
-        statement: "Union[str, Any]",  # exp.Expression
-        parameters: "Optional[SQLParameterType]" = None,
-        *filters: "StatementFilter",
-        schema_type: None = None,
-        connection: "Optional[ConnectionT]" = None,
-        config: "Optional[SQLConfig]" = None,
-        **kwargs: Any,
-    ) -> "SQLResult[RowT]": ...
-
-    @overload
-    async def execute(
-        self,
-        statement: "SQL",
-        parameters: "Optional[SQLParameterType]" = None,
-        *filters: "StatementFilter",
-        schema_type: "type[ModelDTOT]",
-        connection: "Optional[ConnectionT]" = None,
-        config: "Optional[SQLConfig]" = None,
-        **kwargs: Any,
-    ) -> "SQLResult[ModelDTOT]": ...
-
-    @overload
-    async def execute(
-        self,
-        statement: "SQL",
+        statement: "Union[str, SQL]",
         parameters: "Optional[SQLParameterType]" = None,
         *filters: "StatementFilter",
         schema_type: None = None,
@@ -266,7 +246,6 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
                     enable_analysis=script_config.enable_analysis,
                     strict_mode=False,
                     cache_parsed_expression=script_config.cache_parsed_expression,
-                    processing_pipeline_components=[],
                     parameter_converter=script_config.parameter_converter,
                     parameter_validator=script_config.parameter_validator,
                     sqlglot_schema=script_config.sqlglot_schema,

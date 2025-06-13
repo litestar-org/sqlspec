@@ -40,7 +40,7 @@ logger = logging.getLogger("sqlspec")
 
 @dataclass
 class SelectBuilder(
-    QueryBuilder[SQLResult[RowT]],  # pyright: ignore[reportInvalidTypeArguments]
+    QueryBuilder[RowT],
     WhereClauseMixin,
     OrderByClauseMixin,
     LimitOffsetClauseMixin,

@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Final, Optional, Union
 
+from typing_extensions import TypedDict
+
 from sqlspec.exceptions import (
     ExtraParameterError,
     MissingParameterError,
@@ -71,11 +73,11 @@ class ParameterStyle(str, Enum):
     QMARK = "qmark"
     NUMERIC = "numeric"
     NAMED_COLON = "named_colon"
-    ORACLE_NUMERIC = "oracle_numeric"  # For :1, :2, :3 style
+    POSITIONAL_COLON = "oracle_numeric"  # For :1, :2, :3 style
     NAMED_AT = "named_at"
     NAMED_DOLLAR = "named_dollar"
-    PYFORMAT_NAMED = "pyformat_named"
-    PYFORMAT_POSITIONAL = "pyformat_positional"
+    NAMED_PYFORMAT = "pyformat_named"
+    POSITIONAL_PYFORMAT = "pyformat_positional"
 
     def __str__(self) -> str:
         """String representation for better error messages.
@@ -88,9 +90,9 @@ class ParameterStyle(str, Enum):
 
 # Define SQLGlot incompatible styles after ParameterStyle enum
 SQLGLOT_INCOMPATIBLE_STYLES: Final = {
-    ParameterStyle.PYFORMAT_POSITIONAL,  # %s
-    ParameterStyle.PYFORMAT_NAMED,  # %(name)s
-    ParameterStyle.ORACLE_NUMERIC,  # :1, :2 (SQLGlot can't parse these)
+    ParameterStyle.POSITIONAL_PYFORMAT,  # %s
+    ParameterStyle.NAMED_PYFORMAT,  # %(name)s
+    ParameterStyle.POSITIONAL_COLON,  # :1, :2 (SQLGlot can't parse these)
 }
 
 
@@ -112,6 +114,14 @@ class ParameterInfo:
 
     placeholder_text: str = field(compare=False)
     """The original text of the parameter."""
+
+
+class NormalizationInfo(TypedDict, total=False):
+    """Information about SQL parameter normalization."""
+
+    was_normalized: bool
+    placeholder_map: dict[str, Union[str, int]]
+    original_styles: list[ParameterStyle]
 
 
 @dataclass
@@ -141,12 +151,12 @@ class ParameterValidator:
 
         if match.group("pyformat_named"):
             name = match.group("pyformat_name")
-            style = ParameterStyle.PYFORMAT_NAMED
+            style = ParameterStyle.NAMED_PYFORMAT
         elif match.group("pyformat_pos"):
-            style = ParameterStyle.PYFORMAT_POSITIONAL
+            style = ParameterStyle.POSITIONAL_PYFORMAT
         elif match.group("oracle_numeric"):
             name = match.group("oracle_num")  # Store the number as the name
-            style = ParameterStyle.ORACLE_NUMERIC
+            style = ParameterStyle.POSITIONAL_COLON
         elif match.group("named_colon"):
             name = match.group("colon_name")
             style = ParameterStyle.NAMED_COLON
@@ -178,16 +188,9 @@ class ParameterValidator:
         Args:
             sql: SQL string to analyze
 
-        Raises:
-            AttributeError: If sql is None
-
         Returns:
             List of ParameterInfo objects in order of appearance
         """
-        if sql is None:
-            msg = "'NoneType' object has no attribute 'finditer'"
-            raise AttributeError(msg)
-
         if sql in self._parameter_cache:
             return self._parameter_cache[sql]
 
@@ -220,20 +223,20 @@ class ParameterValidator:
 
         # Check for dominant styles
         # Note: This logic prioritizes pyformat if present, then named, then positional.
-        is_pyformat_named = any(p.style == ParameterStyle.PYFORMAT_NAMED for p in parameters_info)
-        is_pyformat_positional = any(p.style == ParameterStyle.PYFORMAT_POSITIONAL for p in parameters_info)
+        is_pyformat_named = any(p.style == ParameterStyle.NAMED_PYFORMAT for p in parameters_info)
+        is_pyformat_positional = any(p.style == ParameterStyle.POSITIONAL_PYFORMAT for p in parameters_info)
 
         if is_pyformat_named:
-            return ParameterStyle.PYFORMAT_NAMED
+            return ParameterStyle.NAMED_PYFORMAT
         if is_pyformat_positional:  # If only PYFORMAT_POSITIONAL and not PYFORMAT_NAMED
-            return ParameterStyle.PYFORMAT_POSITIONAL
+            return ParameterStyle.POSITIONAL_PYFORMAT
 
         # Simplified logic if not pyformat, checks for any named or any positional
         has_named = any(
             p.style
             in {
                 ParameterStyle.NAMED_COLON,
-                ParameterStyle.ORACLE_NUMERIC,
+                ParameterStyle.POSITIONAL_COLON,
                 ParameterStyle.NAMED_AT,
                 ParameterStyle.NAMED_DOLLAR,
             }
@@ -249,7 +252,7 @@ class ParameterValidator:
             # Or, more accurately, find the first named style:
             for p_style in (
                 ParameterStyle.NAMED_COLON,
-                ParameterStyle.ORACLE_NUMERIC,
+                ParameterStyle.POSITIONAL_COLON,
                 ParameterStyle.NAMED_AT,
                 ParameterStyle.NAMED_DOLLAR,
             ):
@@ -283,15 +286,15 @@ class ParameterValidator:
             return None
 
         # Oracle numeric parameters (:1, :2) are positional despite having a "name"
-        if all(p.style == ParameterStyle.ORACLE_NUMERIC for p in parameters_info):
+        if all(p.style == ParameterStyle.POSITIONAL_COLON for p in parameters_info):
             return list
 
         if any(
-            p.name is not None and p.style != ParameterStyle.ORACLE_NUMERIC for p in parameters_info
+            p.name is not None and p.style != ParameterStyle.POSITIONAL_COLON for p in parameters_info
         ):  # True for NAMED styles and PYFORMAT_NAMED
             return dict
         # All parameters must have p.name is None or be ORACLE_NUMERIC (positional styles)
-        if all(p.name is None or p.style == ParameterStyle.ORACLE_NUMERIC for p in parameters_info):
+        if all(p.name is None or p.style == ParameterStyle.POSITIONAL_COLON for p in parameters_info):
             return list
         # This case implies a mix of parameters where some have names and some don't,
         # but not fitting the clear dict/list categories above.
@@ -428,7 +431,7 @@ class ParameterValidator:
         # Filter for parameters that are truly positional (name is None or Oracle numeric)
         # This is important if parameters_info could contain mixed (which determine_parameter_input_type tries to handle)
         expected_positional_params_count = sum(
-            1 for p in parameters_info if p.name is None or p.style == ParameterStyle.ORACLE_NUMERIC
+            1 for p in parameters_info if p.name is None or p.style == ParameterStyle.POSITIONAL_COLON
         )
         actual_count = len(provided_params)
 
@@ -501,7 +504,7 @@ class ParameterConverter:
         args: "Optional[Sequence[Any]]" = None,
         kwargs: "Optional[Mapping[str, Any]]" = None,
         validate: bool = True,
-    ) -> tuple[str, "list[ParameterInfo]", "SQLParameterType", "dict[str, Union[str, int]]"]:
+    ) -> tuple[str, "list[ParameterInfo]", "SQLParameterType", "dict[str, Any]"]:
         """Convert and merge parameters, and transform SQL for parsing.
 
         Args:
@@ -536,7 +539,7 @@ class ParameterConverter:
         # Conditional normalization
         if needs_normalization:
             transformed_sql, placeholder_map = self._transform_sql_for_parsing(sql, parameters_info)
-            extra_info = {
+            extra_info: dict[str, Any] = {
                 "was_normalized": True,
                 "placeholder_map": placeholder_map,
                 "original_styles": list({p.style for p in parameters_info}),
@@ -674,16 +677,16 @@ class ParameterConverter:
             return f"${param_info.ordinal + 1}"
         if target_style == ParameterStyle.NAMED_COLON:
             return f":{param_info.name}" if param_info.name else f":param_{param_info.ordinal}"
-        if target_style == ParameterStyle.ORACLE_NUMERIC:
+        if target_style == ParameterStyle.POSITIONAL_COLON:
             # Oracle numeric uses :1, :2 format
             return f":{param_info.ordinal + 1}"
         if target_style == ParameterStyle.NAMED_AT:
             return f"@{param_info.name}" if param_info.name else f"@param_{param_info.ordinal}"
         if target_style == ParameterStyle.NAMED_DOLLAR:
             return f"${param_info.name}" if param_info.name else f"$param_{param_info.ordinal}"
-        if target_style == ParameterStyle.PYFORMAT_NAMED:
+        if target_style == ParameterStyle.NAMED_PYFORMAT:
             return f"%({param_info.name})s" if param_info.name else f"%(param_{param_info.ordinal})s"
-        if target_style == ParameterStyle.PYFORMAT_POSITIONAL:
+        if target_style == ParameterStyle.POSITIONAL_PYFORMAT:
             return "%s"
         # Fallback to original
         return param_info.placeholder_text
@@ -714,7 +717,7 @@ def convert_parameters(
     args: "Optional[Sequence[Any]]" = None,
     kwargs: "Optional[Mapping[str, Any]]" = None,
     validate: bool = True,
-) -> tuple[str, "list[ParameterInfo]", "SQLParameterType", "dict[str, Union[str, int]]"]:
+) -> tuple[str, "list[ParameterInfo]", "SQLParameterType", "NormalizationInfo"]:
     """Convert parameters for a SQL statement and transform SQL for parsing.
 
     This is a convenience function using the module-level converter.

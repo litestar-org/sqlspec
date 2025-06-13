@@ -10,7 +10,10 @@ from abc import ABC, abstractmethod
 from collections.abc import Generator
 from dataclasses import dataclass
 from enum import Enum
+from re import Pattern
 from typing import Callable, Optional, Union
+
+from typing_extensions import TypeAlias
 
 from sqlspec.utils.logging import get_logger
 
@@ -54,6 +57,11 @@ class Token:
     position: int  # Absolute position in the script
 
 
+TokenHandler: TypeAlias = Callable[[str, int, int, int], Optional[Token]]
+TokenPattern: TypeAlias = Union[str, TokenHandler]
+CompiledTokenPattern: TypeAlias = Union[Pattern[str], TokenHandler]
+
+
 class DialectConfig(ABC):
     """Abstract base class for SQL dialect configurations."""
 
@@ -92,10 +100,10 @@ class DialectConfig(ABC):
         """Maximum allowed nesting depth for blocks."""
         return 256
 
-    def get_all_token_patterns(self) -> list[tuple[TokenType, Union[str, Callable]]]:
+    def get_all_token_patterns(self) -> list[tuple[TokenType, TokenPattern]]:
         """Assembles the complete, ordered list of token regex patterns."""
         # 1. Start with high-precedence patterns
-        patterns: list[tuple[TokenType, Union[str, Callable]]] = [
+        patterns: list[tuple[TokenType, TokenPattern]] = [
             (TokenType.COMMENT_LINE, r"--[^\n]*"),
             (TokenType.COMMENT_BLOCK, r"/\*[\s\S]*?\*/"),
             (TokenType.STRING_LITERAL, r"'(?:[^']|'')*'"),
@@ -119,14 +127,16 @@ class DialectConfig(ABC):
             patterns.append((TokenType.TERMINATOR, "|".join(re.escape(t) for t in all_terminators)))
 
         # 5. Add low-precedence patterns
-        patterns.extend([
-            (TokenType.WHITESPACE, r"\s+"),
-            (TokenType.OTHER, r"."),  # Fallback for any other character
-        ])
+        patterns.extend(
+            [
+                (TokenType.WHITESPACE, r"\s+"),
+                (TokenType.OTHER, r"."),  # Fallback for any other character
+            ]
+        )
 
         return patterns
 
-    def _get_dialect_specific_patterns(self) -> list[tuple[TokenType, Union[str, Callable]]]:
+    def _get_dialect_specific_patterns(self) -> list[tuple[TokenType, TokenPattern]]:
         """Override to add dialect-specific token patterns."""
         return []
 
@@ -311,7 +321,7 @@ class PostgreSQLDialectConfig(DialectConfig):
     def statement_terminators(self) -> set[str]:
         return {";"}
 
-    def _get_dialect_specific_patterns(self) -> list[tuple[TokenType, Union[str, Callable]]]:
+    def _get_dialect_specific_patterns(self) -> list[tuple[TokenType, TokenPattern]]:
         """Add PostgreSQL-specific patterns like dollar-quoted strings."""
         return [
             (TokenType.STRING_LITERAL, self._handle_dollar_quoted_string),
@@ -356,9 +366,9 @@ class StatementSplitter:
         self.token_patterns = dialect.get_all_token_patterns()
         self._compiled_patterns = self._compile_patterns()
 
-    def _compile_patterns(self) -> list[tuple[TokenType, Union[re.Pattern, Callable]]]:
+    def _compile_patterns(self) -> list[tuple[TokenType, CompiledTokenPattern]]:
         """Compile regex patterns for efficiency."""
-        compiled = []
+        compiled: list[tuple[TokenType, CompiledTokenPattern]] = []
         for token_type, pattern in self.token_patterns:
             if isinstance(pattern, str):
                 compiled.append((token_type, re.compile(pattern, re.IGNORECASE | re.DOTALL)))

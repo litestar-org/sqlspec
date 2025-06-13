@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlspec.statement.filters import StatementFilter
-    from sqlspec.statement.result import SQLResult
+    from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 
 __all__ = ("SyncDriverAdapterProtocol",)
 
@@ -79,11 +79,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
             # If parameters are provided, create a new SQL object with those parameters
             if parameters is not None:
                 return SQL(
-                    statement.sql, 
-                    parameters, 
-                    *filters or [], 
-                    dialect=self.dialect, 
-                    config=config or statement._config
+                    statement.sql, parameters, *filters or [], dialect=self.dialect, config=config or statement._config
                 )
             return statement
         if isinstance(statement, QueryBuilder):
@@ -100,15 +96,18 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
         statement: "SQL",
         connection: "Optional[ConnectionT]" = None,
         **kwargs: Any,
-    ) -> Any:  # Raw driver result
-        """Actual execution implementation by concrete drivers, using the raw connection."""
+    ) -> "Union[SelectResultDict, DMLResultDict, ScriptResultDict]":
+        """Actual execution implementation by concrete drivers, using the raw connection.
+
+        Returns one of the standardized result dictionaries based on the statement type.
+        """
         raise NotImplementedError
 
     @abstractmethod
     def _wrap_select_result(
         self,
         statement: "SQL",
-        result: Any,
+        result: "SelectResultDict",
         schema_type: "Optional[type[ModelDTOT]]" = None,
         **kwargs: Any,
     ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
@@ -118,7 +117,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
     def _wrap_execute_result(
         self,
         statement: "SQL",
-        result: Any,
+        result: "Union[DMLResultDict, ScriptResultDict]",
         **kwargs: Any,
     ) -> "SQLResult[RowT]":
         raise NotImplementedError

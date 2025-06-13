@@ -33,15 +33,15 @@ def test_parameter_style_values() -> None:
     assert ParameterStyle.NAMED_COLON == "named_colon"
     assert ParameterStyle.NAMED_AT == "named_at"
     assert ParameterStyle.NAMED_DOLLAR == "named_dollar"
-    assert ParameterStyle.PYFORMAT_NAMED == "pyformat_named"
-    assert ParameterStyle.PYFORMAT_POSITIONAL == "pyformat_positional"
+    assert ParameterStyle.NAMED_PYFORMAT == "pyformat_named"
+    assert ParameterStyle.POSITIONAL_PYFORMAT == "pyformat_positional"
 
 
 def test_parameter_style_string_representation() -> None:
     """Test ParameterStyle string representation."""
     assert str(ParameterStyle.QMARK) == "qmark"
     assert str(ParameterStyle.NAMED_COLON) == "named_colon"
-    assert str(ParameterStyle.PYFORMAT_NAMED) == "pyformat_named"
+    assert str(ParameterStyle.NAMED_PYFORMAT) == "pyformat_named"
 
 
 @pytest.mark.parametrize(
@@ -49,8 +49,8 @@ def test_parameter_style_string_representation() -> None:
     [
         ("user_id", ParameterStyle.NAMED_COLON, 25, 0, ":user_id"),
         (None, ParameterStyle.QMARK, 10, 1, "?"),
-        ("param1", ParameterStyle.PYFORMAT_NAMED, 35, 0, "%(param1)s"),
-        (None, ParameterStyle.PYFORMAT_POSITIONAL, 15, 2, "%s"),
+        ("param1", ParameterStyle.NAMED_PYFORMAT, 35, 0, "%(param1)s"),
+        (None, ParameterStyle.POSITIONAL_PYFORMAT, 15, 2, "%s"),
     ],
     ids=["named_colon", "qmark", "pyformat_named", "pyformat_positional"],
 )
@@ -101,8 +101,8 @@ def validator() -> ParameterValidator:
             2,
             [ParameterStyle.NAMED_COLON, ParameterStyle.NAMED_COLON],
         ),
-        ("SELECT * FROM users WHERE id = %(id)s", 1, [ParameterStyle.PYFORMAT_NAMED]),
-        ("SELECT * FROM users WHERE name = %s", 1, [ParameterStyle.PYFORMAT_POSITIONAL]),
+        ("SELECT * FROM users WHERE id = %(id)s", 1, [ParameterStyle.NAMED_PYFORMAT]),
+        ("SELECT * FROM users WHERE name = %s", 1, [ParameterStyle.POSITIONAL_PYFORMAT]),
         ("SELECT * FROM users WHERE id = @id", 1, [ParameterStyle.NAMED_AT]),
         ("SELECT * FROM users WHERE id = $1", 1, [ParameterStyle.NUMERIC]),
         ("SELECT * FROM users WHERE name = $name", 1, [ParameterStyle.NAMED_DOLLAR]),
@@ -172,8 +172,8 @@ def test_extract_parameters_ignores_literals_and_comments(
     [
         ("SELECT * FROM users WHERE id = ?", ParameterStyle.QMARK),
         ("SELECT * FROM users WHERE name = :name", ParameterStyle.NAMED_COLON),
-        ("SELECT * FROM users WHERE id = %(id)s", ParameterStyle.PYFORMAT_NAMED),
-        ("SELECT * FROM users WHERE name = %s", ParameterStyle.PYFORMAT_POSITIONAL),
+        ("SELECT * FROM users WHERE id = %(id)s", ParameterStyle.NAMED_PYFORMAT),
+        ("SELECT * FROM users WHERE name = %s", ParameterStyle.POSITIONAL_PYFORMAT),
         ("SELECT * FROM users WHERE id = @id", ParameterStyle.NAMED_AT),
         ("SELECT * FROM users WHERE id = $1", ParameterStyle.NUMERIC),
         ("SELECT * FROM users WHERE name = $name", ParameterStyle.NAMED_DOLLAR),
@@ -450,15 +450,15 @@ def test_merge_mixed_parameters(converter: ParameterConverter) -> None:
     [
         ("SELECT * FROM users WHERE id = ?", ParameterStyle.QMARK),
         ("SELECT * FROM users WHERE name = :name", ParameterStyle.NAMED_COLON),
-        ("SELECT * FROM users WHERE id = %(id)s", ParameterStyle.PYFORMAT_NAMED),
-        ("SELECT * FROM users WHERE name = %s", ParameterStyle.PYFORMAT_POSITIONAL),
+        ("SELECT * FROM users WHERE id = %(id)s", ParameterStyle.NAMED_PYFORMAT),
+        ("SELECT * FROM users WHERE name = %s", ParameterStyle.POSITIONAL_PYFORMAT),
         ("SELECT * FROM users WHERE id = @id", ParameterStyle.NAMED_AT),
         ("SELECT * FROM users WHERE id = $1", ParameterStyle.NUMERIC),
         ("SELECT * FROM users WHERE name = $name", ParameterStyle.NAMED_DOLLAR),
         ("SELECT * FROM users", ParameterStyle.NONE),
         # Mixed styles - should return dominant
         ("SELECT * FROM users WHERE id = ? AND name = :name", ParameterStyle.NAMED_COLON),
-        ("SELECT * FROM users WHERE id = %(id)s AND active = %s", ParameterStyle.PYFORMAT_NAMED),
+        ("SELECT * FROM users WHERE id = %(id)s AND active = %s", ParameterStyle.NAMED_PYFORMAT),
     ],
     ids=[
         "qmark",
@@ -582,7 +582,7 @@ def test_complex_sql_with_multiple_parameter_styles() -> None:
     styles = [p.style for p in params]
     assert ParameterStyle.QMARK in styles
     assert ParameterStyle.NAMED_COLON in styles
-    assert ParameterStyle.PYFORMAT_NAMED in styles
+    assert ParameterStyle.NAMED_PYFORMAT in styles
 
 
 def test_parameter_info_ordinal_assignment() -> None:

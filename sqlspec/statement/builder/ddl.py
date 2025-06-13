@@ -1184,11 +1184,6 @@ class AlterTableBuilder(DDLBuilder):
         self._schema = None
         self._if_exists = False
 
-    def schema(self, schema_name: str) -> "Self":
-        """Set the schema for the table."""
-        self._schema = schema_name
-        return self
-
     def if_exists(self) -> "Self":
         """Add IF EXISTS clause."""
         self._if_exists = True
@@ -1399,164 +1394,94 @@ class AlterTableBuilder(DDLBuilder):
         if not self._operations:
             self._raise_sql_builder_error("At least one operation must be specified for ALTER TABLE")
 
-        # Build table identifier with schema if provided
         if self._schema:
             table = exp.Table(this=exp.to_identifier(self._table_name), db=exp.to_identifier(self._schema))
         else:
             table = exp.to_table(self._table_name)
 
-        # For now, we'll generate the action string from operations
-        # In the future, when SQLGlot supports granular ALTER operations,
-        # we can build proper AST nodes
-        action_parts = []
-        for op in self._operations:
-            action_sql = self._build_operation_sql(op)
-            action_parts.append(action_sql)
+        actions = [self._build_operation_expression(op) for op in self._operations]
 
-        # Join multiple operations with commas (database-specific)
-        actions_str = ", ".join(action_parts)
-
-        # For now, use a raw ALTER expression since sqlglot's Alter expects
-        # specific action nodes that we're not building yet
         return exp.Alter(
             this=table,
-            kind="TABLE",
-            actions=[exp.Literal.string(actions_str)],
+            actions=actions,
             exists=self._if_exists,
         )
 
-    def _build_operation_sql(self, operation: "AlterOperation") -> str:
-        """Build SQL string for a single alter operation."""
-        if operation.operation_type == "ADD COLUMN":
-            if not operation.column_definition:
+    def _build_operation_expression(self, op: "AlterOperation") -> exp.Expression:
+        """Build a structured SQLGlot expression for a single alter operation."""
+        op_type = op.operation_type.upper()
+
+        if op_type == "ADD COLUMN":
+            if not op.column_definition:
                 self._raise_sql_builder_error("Column definition required for ADD COLUMN")
+            col_def_expr = CreateTableBuilder._build_column_expression(op.column_definition)
+            return exp.AddColumn(this=col_def_expr, after=op.after_column, first=op.first)
 
-            col_sql = AlterTableBuilder._build_column_sql(operation.column_definition)
-            result = f"ADD COLUMN {col_sql}"
+        if op_type == "DROP COLUMN":
+            return exp.Drop(this=exp.to_identifier(op.column_name), kind="COLUMN", exists=True)
 
-            if operation.first:
-                result += " FIRST"
-            elif operation.after_column:
-                result += f" AFTER {operation.after_column}"
+        if op_type == "DROP COLUMN CASCADE":
+            return exp.Drop(this=exp.to_identifier(op.column_name), kind="COLUMN", cascade=True, exists=True)
 
-            return result
+        if op_type == "ALTER COLUMN TYPE":
+            return exp.AlterColumn(
+                this=exp.to_identifier(op.column_name),
+                kind="TYPE",
+                expression=exp.DataType.build(op.new_type),
+                using=exp.maybe_parse(op.using_expression) if op.using_expression else None,
+            )
 
-        if operation.operation_type == "DROP COLUMN":
-            return f"DROP COLUMN {operation.column_name}"
+        if op_type == "RENAME COLUMN":
+            return exp.RenameColumn(this=exp.to_identifier(op.column_name), to=exp.to_identifier(op.new_name))
 
-        if operation.operation_type == "DROP COLUMN CASCADE":
-            return f"DROP COLUMN {operation.column_name} CASCADE"
-
-        if operation.operation_type == "ALTER COLUMN TYPE":
-            result = f"ALTER COLUMN {operation.column_name} TYPE {operation.new_type}"
-            if operation.using_expression:
-                result += f" USING {operation.using_expression}"
-            return result
-
-        if operation.operation_type == "RENAME COLUMN":
-            return f"RENAME COLUMN {operation.column_name} TO {operation.new_name}"
-
-        if operation.operation_type == "ADD CONSTRAINT":
-            if not operation.constraint_definition:
+        if op_type == "ADD CONSTRAINT":
+            if not op.constraint_definition:
                 self._raise_sql_builder_error("Constraint definition required for ADD CONSTRAINT")
+            constraint_expr = CreateTableBuilder._build_constraint_expression(op.constraint_definition)
+            return exp.AddConstraint(this=constraint_expr)
 
-            return AlterTableBuilder._build_constraint_sql(operation.constraint_definition, is_add=True)
+        if op_type == "DROP CONSTRAINT":
+            return exp.Drop(this=exp.to_identifier(op.constraint_name), kind="CONSTRAINT", exists=True)
 
-        if operation.operation_type == "DROP CONSTRAINT":
-            return f"DROP CONSTRAINT {operation.constraint_name}"
+        if op_type == "DROP CONSTRAINT CASCADE":
+            return exp.Drop(
+                this=exp.to_identifier(op.constraint_name),
+                kind="CONSTRAINT",
+                cascade=True,
+                exists=True,
+            )
 
-        if operation.operation_type == "DROP CONSTRAINT CASCADE":
-            return f"DROP CONSTRAINT {operation.constraint_name} CASCADE"
+        if op_type == "ALTER COLUMN SET NOT NULL":
+            return exp.AlterColumn(
+                this=exp.to_identifier(op.column_name),
+                kind="SET NOT NULL",
+            )
 
-        if operation.operation_type == "ALTER COLUMN SET NOT NULL":
-            return f"ALTER COLUMN {operation.column_name} SET NOT NULL"
+        if op_type == "ALTER COLUMN DROP NOT NULL":
+            return exp.AlterColumn(
+                this=exp.to_identifier(op.column_name),
+                kind="DROP NOT NULL",
+            )
 
-        if operation.operation_type == "ALTER COLUMN DROP NOT NULL":
-            return f"ALTER COLUMN {operation.column_name} DROP NOT NULL"
-
-        if operation.operation_type == "ALTER COLUMN SET DEFAULT":
-            if not operation.column_definition or operation.column_definition.default is None:
+        if op_type == "ALTER COLUMN SET DEFAULT":
+            if not op.column_definition or op.column_definition.default is None:
                 self._raise_sql_builder_error("Default value required for SET DEFAULT")
+            default_val = op.column_definition.default
+            default_expr = exp.maybe_parse(str(default_val)) or exp.Literal.string(str(default_val))
+            return exp.AlterColumn(
+                this=exp.to_identifier(op.column_name),
+                kind="SET DEFAULT",
+                expression=default_expr,
+            )
 
-            default_val = operation.column_definition.default
-            if isinstance(default_val, str):
-                # Check if it's a function/expression or literal
-                if default_val.upper() in {"CURRENT_TIMESTAMP", "CURRENT_DATE"} or "(" in default_val:
-                    default_str = default_val
-                else:
-                    default_str = f"'{default_val}'"
-            else:
-                default_str = str(default_val)
+        if op_type == "ALTER COLUMN DROP DEFAULT":
+            return exp.AlterColumn(
+                this=exp.to_identifier(op.column_name),
+                kind="DROP DEFAULT",
+            )
 
-            return f"ALTER COLUMN {operation.column_name} SET DEFAULT {default_str}"
-
-        if operation.operation_type == "ALTER COLUMN DROP DEFAULT":
-            return f"ALTER COLUMN {operation.column_name} DROP DEFAULT"
-
-        self._raise_sql_builder_error(f"Unknown operation type: {operation.operation_type}")
+        self._raise_sql_builder_error(f"Unknown operation type: {op.operation_type}")
         return None
-
-    @staticmethod
-    def _build_column_sql(col: "ColumnDefinition") -> str:
-        """Generate SQL for a column definition in ALTER TABLE context."""
-        parts = [col.name, col.dtype]
-
-        # Column constraints
-        if col.not_null:
-            parts.append("NOT NULL")
-
-        if col.default is not None:
-            if isinstance(col.default, str):
-                if col.default.upper() in {"CURRENT_TIMESTAMP", "CURRENT_DATE"} or "(" in col.default:
-                    parts.append(f"DEFAULT {col.default}")
-                else:
-                    parts.append(f"DEFAULT '{col.default}'")
-            else:
-                parts.append(f"DEFAULT {col.default}")
-
-        if col.unique:
-            parts.append("UNIQUE")
-
-        if col.comment:
-            parts.append(f"COMMENT '{col.comment}'")
-
-        return " ".join(parts)
-
-    @staticmethod
-    def _build_constraint_sql(constraint: "ConstraintDefinition", is_add: bool = False) -> str:
-        """Generate SQL for a constraint definition in ALTER TABLE context."""
-        parts = []
-
-        if is_add:
-            parts.append("ADD")
-
-        # Constraint name
-        if constraint.name:
-            parts.append(f"CONSTRAINT {constraint.name}")
-
-        # Constraint type and definition
-        if constraint.constraint_type == "PRIMARY KEY":
-            cols = ", ".join(constraint.columns)
-            parts.append(f"PRIMARY KEY ({cols})")
-
-        elif constraint.constraint_type == "FOREIGN KEY":
-            cols = ", ".join(constraint.columns)
-            ref_cols = ", ".join(constraint.references_columns)
-            parts.append(f"FOREIGN KEY ({cols}) REFERENCES {constraint.references_table} ({ref_cols})")
-
-            if constraint.on_delete:
-                parts.append(f"ON DELETE {constraint.on_delete}")
-            if constraint.on_update:
-                parts.append(f"ON UPDATE {constraint.on_update}")
-
-        elif constraint.constraint_type == "UNIQUE":
-            cols = ", ".join(constraint.columns)
-            parts.append(f"UNIQUE ({cols})")
-
-        elif constraint.constraint_type == "CHECK":
-            parts.append(f"CHECK ({constraint.condition})")
-
-        return " ".join(parts)
 
 
 @dataclass

@@ -103,11 +103,8 @@ class SQLConfig:
 
     # Component lists for explicit staging
     transformers: "Optional[list[ProcessorProtocol[exp.Expression]]]" = None
-    validators: "Optional[list[ProcessorProtocol[exp.Expression]]]" = None  # Or specific ValidatorProtocol
-    analyzers: "Optional[list[ProcessorProtocol[exp.Expression]]]" = None  # Or specific AnalyzerProtocol
-
-    # Fallback for old-style mixed component list (for smoother transition)
-    processing_pipeline_components: "Optional[list[ProcessorProtocol[exp.Expression]]]" = None
+    validators: "Optional[list[ProcessorProtocol[exp.Expression]]]" = None
+    analyzers: "Optional[list[ProcessorProtocol[exp.Expression]]]" = None
 
     # Other configs
     parameter_converter: ParameterConverter = field(default_factory=ParameterConverter)
@@ -143,7 +140,7 @@ class SQLConfig:
     def get_statement_pipeline(self) -> "StatementPipeline":  # Renamed
         """Constructs and returns a StatementPipeline from the configured components.
         Prioritizes explicit transformer/validator/analyzer lists if provided.
-        Otherwise, uses default components based on enable_* flags or processing_pipeline_components.
+        Otherwise, uses default components based on enable_* flags
         """
         from sqlspec.statement.pipelines import StatementPipeline
         from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
@@ -156,7 +153,6 @@ class SQLConfig:
 
         # Determine components for each stage
         # If explicit lists are given, use them
-        # Otherwise, use defaults or the old processing_pipeline_components list
 
         final_transformers: list[ProcessorProtocol[exp.Expression]] = []
         final_validators: list[ProcessorProtocol[exp.Expression]] = []
@@ -164,30 +160,16 @@ class SQLConfig:
 
         if self.transformers is not None:
             final_transformers.extend(self.transformers)
-        elif self.processing_pipeline_components is not None:
-            final_transformers.extend(
-                [
-                    p
-                    for p in self.processing_pipeline_components
-                    if not (hasattr(p, "validate") or hasattr(p, "analyze"))
-                ]
-            )
         elif self.enable_transformations:
             final_transformers.extend([CommentRemover(), ParameterizeLiterals()])
 
         if self.validators is not None:
             final_validators.extend(self.validators)
-        elif self.processing_pipeline_components is not None:
-            final_validators.extend(
-                [p for p in self.processing_pipeline_components if hasattr(p, "validate") and not hasattr(p, "analyze")]
-            )
         elif self.enable_validation:
             final_validators.extend([SecurityValidator(), DMLSafetyValidator(), PerformanceValidator()])
 
         if self.analyzers is not None:
             final_analyzers.extend(self.analyzers)
-        elif self.processing_pipeline_components is not None:
-            final_analyzers.extend([p for p in self.processing_pipeline_components if hasattr(p, "analyze")])
         elif self.enable_analysis:
             final_analyzers.append(StatementAnalyzer(cache_size=self.analysis_cache_size))
 
@@ -620,25 +602,63 @@ class SQL:
 
         if isinstance(style, ParameterStyle):
             # Handle Oracle numeric style specially
-            if style == ParameterStyle.ORACLE_NUMERIC:
-                params = self.parameters
-                if isinstance(params, (list, tuple)):
+            if style == ParameterStyle.POSITIONAL_COLON:
+                oracle_params: Any = self.parameters
+                if isinstance(oracle_params, (list, tuple)):
                     # Convert positional to Oracle's :1, :2 format
-                    return {str(i + 1): value for i, value in enumerate(params)}
-                if isinstance(params, dict):
-                    return params
+                    return {str(i + 1): value for i, value in enumerate(oracle_params)}
+                if isinstance(oracle_params, dict):
+                    return oracle_params
             if style in {
                 ParameterStyle.NAMED_COLON,
-                ParameterStyle.ORACLE_NUMERIC,
+                ParameterStyle.POSITIONAL_COLON,
                 ParameterStyle.NAMED_AT,
                 ParameterStyle.NAMED_DOLLAR,
-                ParameterStyle.PYFORMAT_NAMED,
+                ParameterStyle.NAMED_PYFORMAT,
             }:
                 return self._convert_to_dict_parameters()
-            if style in {ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.PYFORMAT_POSITIONAL}:
+            if style in {ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_PYFORMAT}:
                 return self._convert_to_list_parameters()
 
         return self.parameters
+
+    def compile(
+        self,
+        placeholder_style: "Optional[Union[ParameterStyle, str]]" = None,
+    ) -> "tuple[str, SQLParameterType]":
+        """Compile SQL statement and parameters together for execution.
+
+        This method ensures SQL and parameters are processed exactly once
+        and returned in a format ready for database execution.
+
+        Args:
+            placeholder_style: Target parameter style for the compiled output.
+                              If None, uses the dialect's default style.
+
+        Returns:
+            Tuple of (sql_string, parameters) where:
+            - sql_string: The SQL with placeholders in the target style
+            - parameters: Parameters formatted for the target style
+                         (list, tuple, dict, or None)
+
+        Example:
+            >>> stmt = SQL("SELECT * FROM users WHERE id = ?", [123])
+            >>> sql, params = stmt.compile(
+            ...     placeholder_style=ParameterStyle.NUMERIC
+            ... )
+            >>> print(sql)  # "SELECT * FROM users WHERE id = $1"
+            >>> print(params)  # [123]
+        """
+        # Ensure processing happens exactly once
+        self._ensure_processed()
+
+        # Generate SQL with target placeholder style
+        sql = self.to_sql(placeholder_style=placeholder_style)
+
+        # Get parameters in the format expected by the target style
+        params = self.get_parameters(style=placeholder_style)
+
+        return sql, params
 
     def validate(self) -> "ValidationResult":
         """Perform validation on the statement, update the internal validation result,
@@ -739,9 +759,9 @@ class SQL:
                 "named_at": ParameterStyle.NAMED_AT,
                 "named_dollar": ParameterStyle.NAMED_DOLLAR,
                 "numeric": ParameterStyle.NUMERIC,
-                "oracle_numeric": ParameterStyle.ORACLE_NUMERIC,
-                "pyformat_named": ParameterStyle.PYFORMAT_NAMED,
-                "pyformat_positional": ParameterStyle.PYFORMAT_POSITIONAL,
+                "oracle_numeric": ParameterStyle.POSITIONAL_COLON,
+                "pyformat_named": ParameterStyle.NAMED_PYFORMAT,
+                "pyformat_positional": ParameterStyle.POSITIONAL_PYFORMAT,
                 "static": ParameterStyle.STATIC,
             }
             try:
@@ -749,12 +769,9 @@ class SQL:
             except KeyError:
                 logger.warning("Unknown placeholder_style '%s', defaulting to qmark.", target_style)
                 target_style_enum = ParameterStyle.QMARK
-        elif isinstance(target_style, ParameterStyle):
-            target_style_enum = target_style
         else:
-            # Handle unexpected type
-            logger.error("Invalid target_style type: %s. Defaulting to qmark.", type(target_style))
-            target_style_enum = ParameterStyle.QMARK
+            # target_style is ParameterStyle (guaranteed by type annotation)
+            target_style_enum = target_style
 
         if target_style_enum == ParameterStyle.STATIC:
             # For static rendering, we need to handle scripts by rendering sub-expressions
@@ -816,7 +833,7 @@ class SQL:
             return "?"
         if target_style == ParameterStyle.NAMED_COLON:
             return f":{param_info.name}" if param_info.name else f":param_{param_info.ordinal}"
-        if target_style == ParameterStyle.ORACLE_NUMERIC:
+        if target_style == ParameterStyle.POSITIONAL_COLON:
             # Oracle numeric uses :1, :2 format based on ordinal position
             return f":{param_info.ordinal + 1}"
         if target_style == ParameterStyle.NAMED_DOLLAR:
@@ -825,9 +842,9 @@ class SQL:
             return f"${param_info.ordinal + 1}"  # PostgreSQL-style $1, $2, etc.
         if target_style == ParameterStyle.NAMED_AT:
             return f"@{param_info.name}" if param_info.name else f"@param_{param_info.ordinal}"
-        if target_style == ParameterStyle.PYFORMAT_NAMED:
+        if target_style == ParameterStyle.NAMED_PYFORMAT:
             return f"%({param_info.name})s" if param_info.name else f"%(param_{param_info.ordinal})s"
-        if target_style == ParameterStyle.PYFORMAT_POSITIONAL:
+        if target_style == ParameterStyle.POSITIONAL_PYFORMAT:
             return "%s"
         return param_info.placeholder_text
 
@@ -1477,8 +1494,8 @@ class SQL:
                 # (e.g., %s for PYFORMAT_POSITIONAL which sqlglot interprets as modulo)
 
                 problematic_styles = {
-                    ParameterStyle.PYFORMAT_POSITIONAL,  # %s
-                    ParameterStyle.PYFORMAT_NAMED,  # %(name)s
+                    ParameterStyle.POSITIONAL_PYFORMAT,  # %s
+                    ParameterStyle.NAMED_PYFORMAT,  # %(name)s
                 }
 
                 if any(param.style in problematic_styles for param in existing_params_info):

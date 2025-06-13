@@ -183,74 +183,74 @@ def test_adbc_driver_get_dialect_exception() -> None:
 
 
 def test_adbc_driver_get_placeholder_style_postgresql(mock_adbc_connection: Mock) -> None:
-    """Test AdbcDriver._get_placeholder_style for PostgreSQL."""
+    """Test AdbcDriver.parameter_style for PostgreSQL."""
     mock_adbc_connection.adbc_get_info.return_value = {
         "vendor_name": "PostgreSQL",
         "driver_name": "adbc_driver_postgresql",
     }
 
     driver = AdbcDriver(connection=mock_adbc_connection)
-    style = driver._get_placeholder_style()
+    style = driver.parameter_style
     assert style == ParameterStyle.NUMERIC
 
 
 def test_adbc_driver_get_placeholder_style_sqlite(mock_adbc_connection: Mock) -> None:
-    """Test AdbcDriver._get_placeholder_style for SQLite."""
+    """Test AdbcDriver.parameter_style for SQLite."""
     mock_adbc_connection.adbc_get_info.return_value = {
         "vendor_name": "SQLite",
         "driver_name": "adbc_driver_sqlite",
     }
 
     driver = AdbcDriver(connection=mock_adbc_connection)
-    style = driver._get_placeholder_style()
+    style = driver.parameter_style
     assert style == ParameterStyle.QMARK
 
 
 def test_adbc_driver_get_placeholder_style_bigquery(mock_adbc_connection: Mock) -> None:
-    """Test AdbcDriver._get_placeholder_style for BigQuery."""
+    """Test AdbcDriver.parameter_style for BigQuery."""
     mock_adbc_connection.adbc_get_info.return_value = {
         "vendor_name": "BigQuery",
         "driver_name": "adbc_driver_bigquery",
     }
 
     driver = AdbcDriver(connection=mock_adbc_connection)
-    style = driver._get_placeholder_style()
+    style = driver.parameter_style
     assert style == ParameterStyle.NAMED_AT
 
 
 def test_adbc_driver_get_placeholder_style_duckdb(mock_adbc_connection: Mock) -> None:
-    """Test AdbcDriver._get_placeholder_style for DuckDB."""
+    """Test AdbcDriver.parameter_style for DuckDB."""
     mock_adbc_connection.adbc_get_info.return_value = {
         "vendor_name": "DuckDB",
         "driver_name": "adbc_driver_duckdb",
     }
 
     driver = AdbcDriver(connection=mock_adbc_connection)
-    style = driver._get_placeholder_style()
+    style = driver.parameter_style
     assert style == ParameterStyle.QMARK
 
 
 def test_adbc_driver_get_placeholder_style_mysql(mock_adbc_connection: Mock) -> None:
-    """Test AdbcDriver._get_placeholder_style for MySQL."""
+    """Test AdbcDriver.parameter_style for MySQL."""
     mock_adbc_connection.adbc_get_info.return_value = {
         "vendor_name": "MySQL",
         "driver_name": "mysql_driver",
     }
 
     driver = AdbcDriver(connection=mock_adbc_connection)
-    style = driver._get_placeholder_style()
-    assert style == ParameterStyle.QMARK
+    style = driver.parameter_style
+    assert style == ParameterStyle.POSITIONAL_PYFORMAT
 
 
 def test_adbc_driver_get_placeholder_style_snowflake(mock_adbc_connection: Mock) -> None:
-    """Test AdbcDriver._get_placeholder_style for Snowflake."""
+    """Test AdbcDriver.parameter_style for Snowflake."""
     mock_adbc_connection.adbc_get_info.return_value = {
         "vendor_name": "Snowflake",
         "driver_name": "adbc_driver_snowflake",
     }
 
     driver = AdbcDriver(connection=mock_adbc_connection)
-    style = driver._get_placeholder_style()
+    style = driver.parameter_style
     assert style == ParameterStyle.QMARK
 
 

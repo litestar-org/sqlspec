@@ -11,7 +11,7 @@ from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
 from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.telemetry import instrument_operation
@@ -51,6 +51,8 @@ class AdbcDriver(
 
     __supports_arrow__: ClassVar[bool] = True
     __supports_parquet__: ClassVar[bool] = True
+    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK,)
+    default_parameter_style: ParameterStyle = ParameterStyle.QMARK
 
     def __init__(
         self,
@@ -66,18 +68,8 @@ class AdbcDriver(
             default_row_type=default_row_type,
         )
         self.dialect = self._get_dialect(connection)
-
-    def _get_placeholder_style(self) -> ParameterStyle:
-        """Return the placeholder style based on the detected ADBC dialect."""
-        dialect_style_map = {
-            "sqlite": ParameterStyle.QMARK,
-            "duckdb": ParameterStyle.QMARK,
-            "postgres": ParameterStyle.NUMERIC,
-            "mysql": ParameterStyle.QMARK,
-            "bigquery": ParameterStyle.NAMED_AT,
-            "snowflake": ParameterStyle.QMARK,
-        }
-        return dialect_style_map.get(str(self.dialect), ParameterStyle.QMARK)
+        # Set parameter style based on detected dialect
+        self.default_parameter_style = self._get_parameter_style_for_dialect(self.dialect)
 
     @staticmethod
     def _get_dialect(connection: "AdbcConnection") -> str:
@@ -111,6 +103,20 @@ class AdbcDriver(
         except Exception:
             logger.warning("Could not reliably determine ADBC dialect from driver info. Defaulting to 'postgres'.")
         return "postgres"
+
+    @staticmethod
+    def _get_parameter_style_for_dialect(dialect: str) -> ParameterStyle:
+        """Get the parameter style for a given dialect."""
+        dialect_style_map = {
+            "postgres": ParameterStyle.NUMERIC,
+            "postgresql": ParameterStyle.NUMERIC,
+            "bigquery": ParameterStyle.NAMED_AT,
+            "sqlite": ParameterStyle.QMARK,
+            "duckdb": ParameterStyle.QMARK,
+            "mysql": ParameterStyle.POSITIONAL_PYFORMAT,
+            "snowflake": ParameterStyle.QMARK,
+        }
+        return dialect_style_map.get(dialect, ParameterStyle.QMARK)
 
     @staticmethod
     @contextmanager
@@ -215,7 +221,7 @@ class AdbcDriver(
             return "?"
         if target_style == ParameterStyle.NAMED_COLON:
             return f":{param_info.name}" if param_info.name else f":param_{param_info.ordinal}"
-        if target_style == ParameterStyle.ORACLE_NUMERIC:
+        if target_style == ParameterStyle.POSITIONAL_COLON:
             return f":{param_info.ordinal + 1}"
         if target_style == ParameterStyle.NAMED_DOLLAR:
             return f"${param_info.name}" if param_info.name else f"$param_{param_info.ordinal}"
@@ -223,9 +229,9 @@ class AdbcDriver(
             return f"${param_info.ordinal + 1}"  # PostgreSQL-style $1, $2, etc.
         if target_style == ParameterStyle.NAMED_AT:
             return f"@{param_info.name}" if param_info.name else f"@param_{param_info.ordinal}"
-        if target_style == ParameterStyle.PYFORMAT_NAMED:
+        if target_style == ParameterStyle.NAMED_PYFORMAT:
             return f"%({param_info.name})s" if param_info.name else f"%(param_{param_info.ordinal})s"
-        if target_style == ParameterStyle.PYFORMAT_POSITIONAL:
+        if target_style == ParameterStyle.POSITIONAL_PYFORMAT:
             return "%s"
         return param_info.placeholder_text
 
@@ -234,28 +240,34 @@ class AdbcDriver(
         statement: SQL,
         connection: Optional["AdbcConnection"] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
-            return self._execute_script(
-                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
-                connection=connection,
-                **kwargs,
-            )
-        if statement.is_many:
-            return self._execute_many(
-                statement.to_sql(placeholder_style=self._get_placeholder_style()),
-                statement.parameters,
-                connection=connection,
-                **kwargs,
-            )
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            return self._execute_script(sql, connection=connection, **kwargs)
 
-        return self._execute(
-            statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.get_parameters(style=self._get_placeholder_style()),
-            statement,
-            connection=connection,
-            **kwargs,
-        )
+        # Determine if we need to convert parameter style
+        detected_styles = {p.style for p in statement.parameter_info}
+        target_style = self.default_parameter_style
+
+        # Check if any detected style is not supported
+        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+        if unsupported_styles:
+            # Convert to default style if we have unsupported styles
+            target_style = self.default_parameter_style
+        elif detected_styles:
+            # Use the first detected style if all are supported
+            # Prefer the first supported style found
+            for style in detected_styles:
+                if style in self.supported_parameter_styles:
+                    target_style = style
+                    break
+
+        if statement.is_many:
+            sql, params = statement.compile(placeholder_style=target_style)
+            return self._execute_many(sql, params, connection=connection, **kwargs)
+
+        sql, params = statement.compile(placeholder_style=target_style)
+        return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
         self,
@@ -264,7 +276,7 @@ class AdbcDriver(
         statement: SQL,
         connection: Optional["AdbcConnection"] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
             # The SQL is already in the correct format from to_sql()
@@ -295,16 +307,25 @@ class AdbcDriver(
             is_select = self.returns_rows(statement.expression)
             # If expression is None (parsing disabled or failed), check SQL string
             if not is_select and statement.expression is None:
-                sql_upper = converted_sql.strip().upper()
+                sql_upper = sql.strip().upper()
                 is_select = any(sql_upper.startswith(prefix) for prefix in ["SELECT", "WITH", "VALUES", "TABLE"])
 
             if is_select:
                 fetched_data = cursor.fetchall()
                 column_names = [col[0] for col in cursor.description or []]
-                return {"data": fetched_data, "columns": column_names}
+                result: SelectResultDict = {
+                    "data": fetched_data,
+                    "column_names": column_names,
+                    "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                }
+                return result
 
-            # For non-SELECT statements, return rowcount
-            return {"rowcount": cursor.rowcount}
+            # For non-SELECT statements, return DML result
+            dml_result: DMLResultDict = {
+                "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                "status_message": "OK",
+            }
+            return dml_result
 
     def _execute_many(
         self,
@@ -312,7 +333,7 @@ class AdbcDriver(
         param_list: Any,
         connection: Optional["AdbcConnection"] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> DMLResultDict:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
             # The SQL is already in the correct format from to_sql()
@@ -327,19 +348,19 @@ class AdbcDriver(
                 logger.debug("Query parameters (batch): %s", param_list)
             # ADBC expects list of parameter sets
             cursor.executemany(sql, param_list or [])
-            # Return consistent dict format like _execute
-            return {
-                "rowcount": cursor.rowcount,
-                "data": [],  # executemany doesn't return data
-                "columns": [],
+            # Return DML result dict
+            result: DMLResultDict = {
+                "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                "status_message": "OK",
             }
+            return result
 
     def _execute_script(
         self,
         script: str,
         connection: Optional["AdbcConnection"] = None,
         **kwargs: Any,
-    ) -> str:
+    ) -> ScriptResultDict:
         conn = self._connection(connection)
         if self.instrumentation_config.log_queries:
             logger.debug("Executing SQL script: %s", script)
@@ -355,18 +376,24 @@ class AdbcDriver(
                         logger.debug("Executing statement: %s", statement)
                     cursor.execute(statement)
 
-        return "SCRIPT EXECUTED"
+        result: ScriptResultDict = {
+            "statements_executed": len(statements),
+            "status_message": "SCRIPT EXECUTED",
+        }
+        return result
 
-    def _wrap_select_result(  # pyright ignore
+    def _wrap_select_result(
         self,
         statement: SQL,
-        result: Any,
+        result: SelectResultDict,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "adbc_wrap_select", "database"):
+            # result must be a dict with keys: data, column_names, rows_affected
             fetched_data = result["data"]
-            column_names = result["columns"]
+            column_names = result["column_names"]
+            rows_affected = result["rows_affected"]
 
             rows_as_dicts: list[dict[str, Any]] = []
             if fetched_data:
@@ -382,19 +409,21 @@ class AdbcDriver(
                     statement=statement,
                     data=converted_data_list,
                     column_names=column_names,
+                    rows_affected=rows_affected,
                     operation_type="SELECT",
                 )
             return SQLResult[RowT](
                 statement=statement,
                 data=rows_as_dicts,
                 column_names=column_names,
+                rows_affected=rows_affected,
                 operation_type="SELECT",
             )
 
-    def _wrap_execute_result(  # pyright ignore
+    def _wrap_execute_result(
         self,
         statement: SQL,
-        result: Any,
+        result: Union[DMLResultDict, ScriptResultDict],
         **kwargs: Any,
     ) -> SQLResult[RowT]:
         with instrument_operation(self, "adbc_wrap_execute", "database"):
@@ -403,31 +432,37 @@ class AdbcDriver(
                 if statement.expression:
                     operation_type = str(statement.expression.key).upper()
 
-            if isinstance(result, str):
-                return SQLResult[RowT](
-                    statement=statement,
-                    data=[],
-                    rows_affected=0,
-                    operation_type=operation_type or "SCRIPT",
-                    metadata={"status_message": result},
-                )
+            # Handle TypedDict results
+            if isinstance(result, dict):
+                # Check if this is a ScriptResultDict
+                if "statements_executed" in result:
+                    return SQLResult[RowT](
+                        statement=statement,
+                        data=[],
+                        rows_affected=0,
+                        operation_type=operation_type or "SCRIPT",
+                        metadata={"status_message": result["status_message"]},
+                    )
 
-            rows_affected = result["rowcount"]
-            returned_data: list[dict[str, Any]] = []
-            column_names_for_returning: list[str] = []
+                # Check if this is a DMLResultDict
+                if "rows_affected" in result:
+                    rows_affected = result["rows_affected"]
+                    status_message = result["status_message"]
 
-            if self.instrumentation_config.log_results_count:
-                logger.debug("Execute operation affected %d rows", rows_affected)
-                if returned_data:
-                    logger.debug("RETURNING clause potentially returned %d rows", len(returned_data))
+                    if self.instrumentation_config.log_results_count:
+                        logger.debug("Execute operation affected %d rows", rows_affected)
 
-            return SQLResult[RowT](
-                statement=statement,
-                data=returned_data,
-                rows_affected=rows_affected,
-                operation_type=operation_type,
-                column_names=column_names_for_returning,
-            )
+                    return SQLResult[RowT](
+                        statement=statement,
+                        data=[],
+                        rows_affected=rows_affected,
+                        operation_type=operation_type,
+                        metadata={"status_message": status_message},
+                    )
+
+            # This shouldn't happen with TypedDict approach
+            msg = f"Unexpected result type: {type(result)}"
+            raise ValueError(msg)
 
     # ============================================================================
     # ADBC Native Arrow Support
@@ -459,8 +494,8 @@ class AdbcDriver(
         with wrap_exceptions(), self._get_cursor(conn) as cursor:
             # Execute the query
             cursor.execute(
-                sql_obj.to_sql(placeholder_style=self._get_placeholder_style()),
-                sql_obj.get_parameters(style=self._get_placeholder_style()) or [],
+                sql_obj.to_sql(placeholder_style=self.parameter_style),
+                sql_obj.get_parameters(style=self.parameter_style) or [],
             )
 
             # Use ADBC's native Arrow fetch

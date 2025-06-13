@@ -52,6 +52,30 @@ class InstrumentedObjectStore(ABC):
         self.backend_name = backend_name or self.__class__.__name__
         self.logger = get_logger(f"storage.{self.backend_name}")
 
+    def _log_operation_start(self, op_name: str, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log the start of an operation if debug mode is enabled."""
+        if self.instrumentation_config.debug_mode:
+            extra = kwargs.setdefault("extra", {})
+            extra["correlation_id"] = CorrelationContext.get()
+            extra["backend"] = self.backend_type
+            self.logger.debug(msg, *args, **kwargs)
+
+    def _log_operation_success(self, op_name: str, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log the successful completion of an operation."""
+        if self.instrumentation_config.log_service_operations:
+            extra = kwargs.setdefault("extra", {})
+            extra["correlation_id"] = CorrelationContext.get()
+            extra["backend"] = self.backend_type
+            self.logger.info(msg, *args, **kwargs)
+
+    def _log_operation_error(self, op_name: str, e: Exception, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Log an error during an operation."""
+        extra = kwargs.setdefault("extra", {})
+        extra["correlation_id"] = CorrelationContext.get()
+        extra["backend"] = self.backend_type
+        extra["error_type"] = type(e).__name__
+        self.logger.exception(msg, *args, **kwargs)
+
     @property
     def backend_type(self) -> str:
         """Return the backend type identifier.
@@ -73,54 +97,22 @@ class InstrumentedObjectStore(ABC):
         Returns:
             The bytes read from storage
         """
-        correlation_id = CorrelationContext.get()
-
-        with instrument_operation(
-            self,
-            "storage.read_bytes",
-            "storage",
-            path=path,
-            backend=self.backend_type,
-        ):
-            if self.instrumentation_config.debug_mode:
-                self.logger.debug(
-                    "Reading bytes from %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "backend": self.backend_type,
-                        "correlation_id": correlation_id,
-                    },
-                )
-
+        op_name = "storage.read_bytes"
+        with instrument_operation(self, op_name, "storage", path=path, backend=self.backend_type):
+            self._log_operation_start(op_name, "Reading bytes from %s", path, extra={"path": path})
             try:
                 data = self._read_bytes(path, **kwargs)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to read from %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
+                self._log_operation_error(op_name, e, "Failed to read from %s", path, extra={"path": path})
                 raise
             else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Read %d bytes from %s",
-                        len(data),
-                        path,
-                        extra={
-                            "path": path,
-                            "size_bytes": len(data),
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
+                self._log_operation_success(
+                    op_name,
+                    "Read %d bytes from %s",
+                    len(data),
+                    path,
+                    extra={"path": path, "size_bytes": len(data)},
+                )
                 return data
 
     def write_bytes(self, path: str, data: bytes, **kwargs: Any) -> None:
@@ -131,57 +123,16 @@ class InstrumentedObjectStore(ABC):
             data: Bytes to write
             **kwargs: Additional backend-specific options
         """
-        correlation_id = CorrelationContext.get()
-
-        with instrument_operation(
-            self,
-            "storage.write_bytes",
-            "storage",
-            path=path,
-            size_bytes=len(data),
-            backend=self.backend_type,
-        ):
-            if self.instrumentation_config.debug_mode:
-                self.logger.debug(
-                    "Writing %d bytes to %s",
-                    len(data),
-                    path,
-                    extra={
-                        "path": path,
-                        "size_bytes": len(data),
-                        "backend": self.backend_type,
-                        "correlation_id": correlation_id,
-                    },
-                )
-
+        op_name = "storage.write_bytes"
+        log_attrs = {"path": path, "size_bytes": len(data)}
+        with instrument_operation(self, op_name, "storage", **log_attrs, backend=self.backend_type):
+            self._log_operation_start(op_name, "Writing %d bytes to %s", len(data), path, extra=log_attrs)
             try:
                 self._write_bytes(path, data, **kwargs)
+                self._log_operation_success(op_name, "Wrote %d bytes to %s", len(data), path, extra=log_attrs)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to write to %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "size_bytes": len(data),
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
+                self._log_operation_error(op_name, e, "Failed to write to %s", path, extra=log_attrs)
                 raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Wrote %d bytes to %s",
-                        len(data),
-                        path,
-                        extra={
-                            "path": path,
-                            "size_bytes": len(data),
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
 
     def read_text(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from storage with instrumentation.
@@ -194,46 +145,24 @@ class InstrumentedObjectStore(ABC):
         Returns:
             The text read from storage
         """
-        correlation_id = CorrelationContext.get()
-
-        with instrument_operation(
-            self,
-            "storage.read_text",
-            "storage",
-            path=path,
-            encoding=encoding,
-            backend=self.backend_type,
-        ):
+        op_name = "storage.read_text"
+        with instrument_operation(self, op_name, "storage", path=path, encoding=encoding, backend=self.backend_type):
+            self._log_operation_start(op_name, "Reading text from %s", path, extra={"path": path, "encoding": encoding})
             try:
                 text = self._read_text(path, encoding, **kwargs)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to read text from %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "encoding": encoding,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
+                self._log_operation_error(
+                    op_name, e, "Failed to read text from %s", path, extra={"path": path, "encoding": encoding}
                 )
                 raise
             else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Read text from %s (%d chars)",
-                        path,
-                        len(text),
-                        extra={
-                            "path": path,
-                            "char_count": len(text),
-                            "encoding": encoding,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
+                self._log_operation_success(
+                    op_name,
+                    "Read text from %s (%d chars)",
+                    path,
+                    len(text),
+                    extra={"path": path, "char_count": len(text), "encoding": encoding},
+                )
                 return text
 
     def write_text(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
@@ -245,47 +174,16 @@ class InstrumentedObjectStore(ABC):
             encoding: Text encoding
             **kwargs: Additional backend-specific options
         """
-        correlation_id = CorrelationContext.get()
-
-        with instrument_operation(
-            self,
-            "storage.write_text",
-            "storage",
-            path=path,
-            char_count=len(data),
-            encoding=encoding,
-            backend=self.backend_type,
-        ):
+        op_name = "storage.write_text"
+        log_attrs = {"path": path, "char_count": len(data), "encoding": encoding}
+        with instrument_operation(self, op_name, "storage", **log_attrs, backend=self.backend_type):
+            self._log_operation_start(op_name, "Writing text to %s (%d chars)", path, len(data), extra=log_attrs)
             try:
                 self._write_text(path, data, encoding, **kwargs)
+                self._log_operation_success(op_name, "Wrote text to %s (%d chars)", path, len(data), extra=log_attrs)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to write text to %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "char_count": len(data),
-                        "encoding": encoding,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
+                self._log_operation_error(op_name, e, "Failed to write text to %s", path, extra=log_attrs)
                 raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Wrote text to %s (%d chars)",
-                        path,
-                        len(data),
-                        extra={
-                            "path": path,
-                            "char_count": len(data),
-                            "encoding": encoding,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
 
     def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """List objects in storage with instrumentation.
@@ -298,46 +196,35 @@ class InstrumentedObjectStore(ABC):
         Returns:
             List of object paths
         """
-        correlation_id = CorrelationContext.get()
-
+        op_name = "storage.list_objects"
         with instrument_operation(
-            self,
-            "storage.list_objects",
-            "storage",
-            prefix=prefix,
-            recursive=recursive,
-            backend=self.backend_type,
+            self, op_name, "storage", prefix=prefix, recursive=recursive, backend=self.backend_type
         ):
+            self._log_operation_start(
+                op_name,
+                "Listing objects with prefix %s",
+                prefix,
+                extra={"prefix": prefix, "recursive": recursive},
+            )
             try:
                 objects = self._list_objects(prefix, recursive, **kwargs)
             except Exception as e:
-                self.logger.exception(
+                self._log_operation_error(
+                    op_name,
+                    e,
                     "Failed to list objects with prefix %s",
                     prefix,
-                    extra={
-                        "prefix": prefix,
-                        "recursive": recursive,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
+                    extra={"prefix": prefix, "recursive": recursive},
                 )
                 raise
             else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Listed %d objects with prefix %s",
-                        len(objects),
-                        prefix,
-                        extra={
-                            "prefix": prefix,
-                            "object_count": len(objects),
-                            "recursive": recursive,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
+                self._log_operation_success(
+                    op_name,
+                    "Listed %d objects with prefix %s",
+                    len(objects),
+                    prefix,
+                    extra={"prefix": prefix, "object_count": len(objects), "recursive": recursive},
+                )
                 return objects
 
     def exists(self, path: str, **kwargs: Any) -> bool:
@@ -350,43 +237,21 @@ class InstrumentedObjectStore(ABC):
         Returns:
             True if object exists
         """
-        correlation_id = CorrelationContext.get()
-
-        with instrument_operation(
-            self,
-            "storage.exists",
-            "storage",
-            path=path,
-            backend=self.backend_type,
-        ):
+        op_name = "storage.exists"
+        with instrument_operation(self, op_name, "storage", path=path, backend=self.backend_type):
             try:
                 exists = self._exists(path, **kwargs)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to check existence of %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
+                self._log_operation_error(op_name, e, "Failed to check existence of %s", path, extra={"path": path})
                 raise
             else:
-                if self.instrumentation_config.debug_mode:
-                    self.logger.debug(
-                        "Checked existence of %s: %s",
-                        path,
-                        exists,
-                        extra={
-                            "path": path,
-                            "exists": exists,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
+                self._log_operation_start(
+                    op_name,
+                    "Checked existence of %s: %s",
+                    path,
+                    exists,
+                    extra={"path": path, "exists": exists},
+                )
                 return exists
 
     def delete(self, path: str, **kwargs: Any) -> None:
@@ -396,40 +261,15 @@ class InstrumentedObjectStore(ABC):
             path: Path to delete
             **kwargs: Additional backend-specific options
         """
-        correlation_id = CorrelationContext.get()
-
-        with instrument_operation(
-            self,
-            "storage.delete",
-            "storage",
-            path=path,
-            backend=self.backend_type,
-        ):
+        op_name = "storage.delete"
+        with instrument_operation(self, op_name, "storage", path=path, backend=self.backend_type):
+            self._log_operation_start(op_name, "Deleting %s", path, extra={"path": path})
             try:
                 self._delete(path, **kwargs)
+                self._log_operation_success(op_name, "Deleted %s", path, extra={"path": path})
             except Exception as e:
-                self.logger.exception(
-                    "Failed to delete %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
+                self._log_operation_error(op_name, e, "Failed to delete %s", path, extra={"path": path})
                 raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Deleted %s",
-                        path,
-                        extra={
-                            "path": path,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
 
     def copy(self, source: str, destination: str, **kwargs: Any) -> None:
         """Copy object with instrumentation.
@@ -439,45 +279,16 @@ class InstrumentedObjectStore(ABC):
             destination: Destination path
             **kwargs: Additional backend-specific options
         """
-        correlation_id = CorrelationContext.get()
-
-        with instrument_operation(
-            self,
-            "storage.copy",
-            "storage",
-            source=source,
-            destination=destination,
-            backend=self.backend_type,
-        ):
+        op_name = "storage.copy"
+        log_attrs = {"source": source, "destination": destination}
+        with instrument_operation(self, op_name, "storage", **log_attrs, backend=self.backend_type):
+            self._log_operation_start(op_name, "Copying %s to %s", source, destination, extra=log_attrs)
             try:
                 self._copy(source, destination, **kwargs)
+                self._log_operation_success(op_name, "Copied %s to %s", source, destination, extra=log_attrs)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to copy %s to %s",
-                    source,
-                    destination,
-                    extra={
-                        "source": source,
-                        "destination": destination,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
+                self._log_operation_error(op_name, e, "Failed to copy %s to %s", source, destination, extra=log_attrs)
                 raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Copied %s to %s",
-                        source,
-                        destination,
-                        extra={
-                            "source": source,
-                            "destination": destination,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
 
     def move(self, source: str, destination: str, **kwargs: Any) -> None:
         """Move object with instrumentation.
@@ -487,45 +298,16 @@ class InstrumentedObjectStore(ABC):
             destination: Destination path
             **kwargs: Additional backend-specific options
         """
-        correlation_id = CorrelationContext.get()
-
-        with instrument_operation(
-            self,
-            "storage.move",
-            "storage",
-            source=source,
-            destination=destination,
-            backend=self.backend_type,
-        ):
+        op_name = "storage.move"
+        log_attrs = {"source": source, "destination": destination}
+        with instrument_operation(self, op_name, "storage", **log_attrs, backend=self.backend_type):
+            self._log_operation_start(op_name, "Moving %s to %s", source, destination, extra=log_attrs)
             try:
                 self._move(source, destination, **kwargs)
+                self._log_operation_success(op_name, "Moved %s to %s", source, destination, extra=log_attrs)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to move %s to %s",
-                    source,
-                    destination,
-                    extra={
-                        "source": source,
-                        "destination": destination,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
+                self._log_operation_error(op_name, e, "Failed to move %s to %s", source, destination, extra=log_attrs)
                 raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Moved %s to %s",
-                        source,
-                        destination,
-                        extra={
-                            "source": source,
-                            "destination": destination,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
 
     def glob(self, pattern: str, **kwargs: Any) -> list[str]:
         """Find objects matching pattern with instrumentation.
@@ -537,43 +319,22 @@ class InstrumentedObjectStore(ABC):
         Returns:
             List of matching paths
         """
-        correlation_id = CorrelationContext.get()
-
-        with instrument_operation(
-            self,
-            "storage.glob",
-            "storage",
-            pattern=pattern,
-            backend=self.backend_type,
-        ):
+        op_name = "storage.glob"
+        with instrument_operation(self, op_name, "storage", pattern=pattern, backend=self.backend_type):
+            self._log_operation_start(op_name, "Globbing %s", pattern, extra={"pattern": pattern})
             try:
                 matches = self._glob(pattern, **kwargs)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to glob %s",
-                    pattern,
-                    extra={
-                        "pattern": pattern,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
+                self._log_operation_error(op_name, e, "Failed to glob %s", pattern, extra={"pattern": pattern})
                 raise
             else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Found %d matches for %s",
-                        len(matches),
-                        pattern,
-                        extra={
-                            "pattern": pattern,
-                            "match_count": len(matches),
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
+                self._log_operation_success(
+                    op_name,
+                    "Found %d matches for %s",
+                    len(matches),
+                    pattern,
+                    extra={"pattern": pattern, "match_count": len(matches)},
+                )
                 return matches
 
     def get_metadata(self, path: str, **kwargs: Any) -> dict[str, Any]:
@@ -586,42 +347,18 @@ class InstrumentedObjectStore(ABC):
         Returns:
             Object metadata
         """
-        correlation_id = CorrelationContext.get()
-
-        with instrument_operation(
-            self,
-            "storage.get_metadata",
-            "storage",
-            path=path,
-            backend=self.backend_type,
-        ):
+        op_name = "storage.get_metadata"
+        with instrument_operation(self, op_name, "storage", path=path, backend=self.backend_type):
+            self._log_operation_start(op_name, "Getting metadata for %s", path, extra={"path": path})
             try:
                 metadata = self._get_metadata(path, **kwargs)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to get metadata for %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
+                self._log_operation_error(op_name, e, "Failed to get metadata for %s", path, extra={"path": path})
                 raise
             else:
-                if self.instrumentation_config.debug_mode:
-                    self.logger.debug(
-                        "Got metadata for %s",
-                        path,
-                        extra={
-                            "path": path,
-                            "metadata": metadata,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
+                self._log_operation_start(
+                    op_name, "Got metadata for %s", path, extra={"path": path, "metadata": metadata}
+                )
                 return metadata
 
     def is_object(self, path: str) -> bool:
@@ -642,44 +379,26 @@ class InstrumentedObjectStore(ABC):
         Returns:
             Arrow table
         """
-        correlation_id = CorrelationContext.get()
-
-        with instrument_operation(
-            self,
-            "storage.read_arrow",
-            "storage",
-            path=path,
-            backend=self.backend_type,
-        ):
+        op_name = "storage.read_arrow"
+        with instrument_operation(self, op_name, "storage", path=path, backend=self.backend_type):
+            self._log_operation_start(op_name, "Reading Arrow table from %s", path, extra={"path": path})
             try:
                 table = self._read_arrow(path, **kwargs)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to read Arrow table from %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
+                self._log_operation_error(op_name, e, "Failed to read Arrow table from %s", path, extra={"path": path})
                 raise
             else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Read Arrow table from %s (%d rows)",
-                        path,
-                        len(table),
-                        extra={
-                            "path": path,
-                            "row_count": len(table),
-                            "column_count": len(table.columns),
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
+                self._log_operation_success(
+                    op_name,
+                    "Read Arrow table from %s (%d rows)",
+                    path,
+                    len(table),
+                    extra={
+                        "path": path,
+                        "row_count": len(table),
+                        "column_count": len(table.columns),
+                    },
+                )
                 return table
 
     def write_arrow(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
@@ -690,45 +409,28 @@ class InstrumentedObjectStore(ABC):
             table: Arrow table to write
             **kwargs: Additional backend-specific options
         """
-        correlation_id = CorrelationContext.get()
-
-        with instrument_operation(
-            self,
-            "storage.write_arrow",
-            "storage",
-            path=path,
-            row_count=len(table),
-            backend=self.backend_type,
-        ):
+        op_name = "storage.write_arrow"
+        log_attrs = {"path": path, "row_count": len(table)}
+        with instrument_operation(self, op_name, "storage", **log_attrs, backend=self.backend_type):
+            self._log_operation_start(
+                op_name,
+                "Writing Arrow table to %s (%d rows)",
+                path,
+                len(table),
+                extra=log_attrs,
+            )
             try:
                 self._write_arrow(path, table, **kwargs)
-            except Exception as e:
-                self.logger.exception(
-                    "Failed to write Arrow table to %s",
+                self._log_operation_success(
+                    op_name,
+                    "Wrote Arrow table to %s (%d rows)",
                     path,
-                    extra={
-                        "path": path,
-                        "row_count": len(table),
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
+                    len(table),
+                    extra={**log_attrs, "column_count": len(table.columns)},
                 )
+            except Exception as e:
+                self._log_operation_error(op_name, e, "Failed to write Arrow table to %s", path, extra=log_attrs)
                 raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Wrote Arrow table to %s (%d rows)",
-                        path,
-                        len(table),
-                        extra={
-                            "path": path,
-                            "row_count": len(table),
-                            "column_count": len(table.columns),
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
 
     def stream_arrow(self, pattern: str, **kwargs: Any) -> Iterator[ArrowRecordBatch]:
         """Stream Arrow record batches with instrumentation.
@@ -740,38 +442,16 @@ class InstrumentedObjectStore(ABC):
         Yields:
             Iterator of Arrow record batches
         """
-        correlation_id = CorrelationContext.get()
-
-        with instrument_operation(
-            self,
-            "storage.stream_arrow",
-            "storage",
-            pattern=pattern,
-            backend=self.backend_type,
-        ):
-            if self.instrumentation_config.log_service_operations:
-                self.logger.info(
-                    "Starting Arrow stream for pattern %s",
-                    pattern,
-                    extra={
-                        "pattern": pattern,
-                        "backend": self.backend_type,
-                        "correlation_id": correlation_id,
-                    },
-                )
-
+        op_name = "storage.stream_arrow"
+        with instrument_operation(self, op_name, "storage", pattern=pattern, backend=self.backend_type):
+            self._log_operation_success(
+                op_name, "Starting Arrow stream for pattern %s", pattern, extra={"pattern": pattern}
+            )
             try:
                 yield from self._stream_arrow(pattern, **kwargs)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to stream Arrow from %s",
-                    pattern,
-                    extra={
-                        "pattern": pattern,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
+                self._log_operation_error(
+                    op_name, e, "Failed to stream Arrow from %s", pattern, extra={"pattern": pattern}
                 )
                 raise
 
@@ -781,653 +461,238 @@ class InstrumentedObjectStore(ABC):
 
     async def read_bytes_async(self, path: str, **kwargs: Any) -> bytes:
         """Async read bytes from storage."""
-        correlation_id = CorrelationContext.get()
-
-        async with instrument_operation_async(
-            self,
-            "storage.read_bytes_async",
-            "storage",
-            path=path,
-            backend=self.backend_type,
-        ):
-            if self.instrumentation_config.debug_mode:
-                self.logger.debug(
-                    "Async reading bytes from %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "backend": self.backend_type,
-                        "correlation_id": correlation_id,
-                    },
-                )
-
+        op_name = "storage.read_bytes_async"
+        async with instrument_operation_async(self, op_name, "storage", path=path, backend=self.backend_type):
+            self._log_operation_start(op_name, "Async reading bytes from %s", path, extra={"path": path})
             try:
                 data = await self._read_bytes_async(path, **kwargs)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to async read from %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
+                self._log_operation_error(op_name, e, "Failed to async read from %s", path, extra={"path": path})
                 raise
             else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Async read %d bytes from %s",
-                        len(data),
-                        path,
-                        extra={
-                            "path": path,
-                            "size_bytes": len(data),
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
+                self._log_operation_success(
+                    op_name,
+                    "Async read %d bytes from %s",
+                    len(data),
+                    path,
+                    extra={"path": path, "size_bytes": len(data)},
+                )
                 return data
 
     async def write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:
         """Async write bytes to storage."""
-        correlation_id = CorrelationContext.get()
-
-        async with instrument_operation_async(
-            self,
-            "storage.write_bytes_async",
-            "storage",
-            path=path,
-            size_bytes=len(data),
-            backend=self.backend_type,
-        ):
-            if self.instrumentation_config.debug_mode:
-                self.logger.debug(
-                    "Async writing %d bytes to %s",
-                    len(data),
-                    path,
-                    extra={
-                        "path": path,
-                        "size_bytes": len(data),
-                        "backend": self.backend_type,
-                        "correlation_id": correlation_id,
-                    },
-                )
-
+        op_name = "storage.write_bytes_async"
+        log_attrs = {"path": path, "size_bytes": len(data)}
+        async with instrument_operation_async(self, op_name, "storage", **log_attrs, backend=self.backend_type):
+            self._log_operation_start(op_name, "Async writing %d bytes to %s", len(data), path, extra=log_attrs)
             try:
                 await self._write_bytes_async(path, data, **kwargs)
+                self._log_operation_success(op_name, "Async wrote %d bytes to %s", len(data), path, extra=log_attrs)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to async write to %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "size_bytes": len(data),
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
+                self._log_operation_error(op_name, e, "Failed to async write to %s", path, extra=log_attrs)
                 raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Async wrote %d bytes to %s",
-                        len(data),
-                        path,
-                        extra={
-                            "path": path,
-                            "size_bytes": len(data),
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
 
     async def read_text_async(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Async read text from storage."""
-        correlation_id = CorrelationContext.get()
-
-        async with instrument_operation_async(
-            self,
-            "storage.read_text_async",
-            "storage",
-            path=path,
-            encoding=encoding,
-            backend=self.backend_type,
-        ):
-            if self.instrumentation_config.debug_mode:
-                self.logger.debug(
-                    "Async reading text from %s (encoding: %s)",
-                    path,
-                    encoding,
-                    extra={
-                        "path": path,
-                        "encoding": encoding,
-                        "backend": self.backend_type,
-                        "correlation_id": correlation_id,
-                    },
-                )
-
+        op_name = "storage.read_text_async"
+        log_attrs = {"path": path, "encoding": encoding}
+        async with instrument_operation_async(self, op_name, "storage", **log_attrs, backend=self.backend_type):
+            self._log_operation_start(
+                op_name, "Async reading text from %s (encoding: %s)", path, encoding, extra=log_attrs
+            )
             try:
                 text = await self._read_text_async(path, encoding, **kwargs)
-            except Exception as e:
-                self.logger.exception(
-                    "Failed to async read text from %s",
+                self._log_operation_success(
+                    op_name,
+                    "Async read %d characters from %s",
+                    len(text),
                     path,
-                    extra={
-                        "path": path,
-                        "encoding": encoding,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
+                    extra={**log_attrs, "char_count": len(text)},
                 )
-                raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Async read %d characters from %s",
-                        len(text),
-                        path,
-                        extra={
-                            "path": path,
-                            "encoding": encoding,
-                            "char_count": len(text),
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
 
-                return text
+            except Exception as e:
+                self._log_operation_error(op_name, e, "Failed to async read text from %s", path, extra=log_attrs)
+                raise
+            return text
 
     async def write_text_async(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Async write text to storage."""
-        correlation_id = CorrelationContext.get()
-
-        async with instrument_operation_async(
-            self,
-            "storage.write_text_async",
-            "storage",
-            path=path,
-            char_count=len(data),
-            encoding=encoding,
-            backend=self.backend_type,
-        ):
-            if self.instrumentation_config.debug_mode:
-                self.logger.debug(
-                    "Async writing %d characters to %s (encoding: %s)",
-                    len(data),
-                    path,
-                    encoding,
-                    extra={
-                        "path": path,
-                        "char_count": len(data),
-                        "encoding": encoding,
-                        "backend": self.backend_type,
-                        "correlation_id": correlation_id,
-                    },
-                )
-
+        op_name = "storage.write_text_async"
+        log_attrs = {"path": path, "char_count": len(data), "encoding": encoding}
+        async with instrument_operation_async(self, op_name, "storage", **log_attrs, backend=self.backend_type):
+            self._log_operation_start(
+                op_name,
+                "Async writing %d characters to %s (encoding: %s)",
+                len(data),
+                path,
+                encoding,
+                extra=log_attrs,
+            )
             try:
                 await self._write_text_async(path, data, encoding, **kwargs)
-            except Exception as e:
-                self.logger.exception(
-                    "Failed to async write text to %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "char_count": len(data),
-                        "encoding": encoding,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
+                self._log_operation_success(
+                    op_name, "Async wrote %d characters to %s", len(data), path, extra=log_attrs
                 )
+            except Exception as e:
+                self._log_operation_error(op_name, e, "Failed to async write text to %s", path, extra=log_attrs)
                 raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Async wrote %d characters to %s",
-                        len(data),
-                        path,
-                        extra={
-                            "path": path,
-                            "char_count": len(data),
-                            "encoding": encoding,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
 
     async def exists_async(self, path: str, **kwargs: Any) -> bool:
         """Async check if object exists."""
-        correlation_id = CorrelationContext.get()
-
-        async with instrument_operation_async(
-            self,
-            "storage.exists_async",
-            "storage",
-            path=path,
-            backend=self.backend_type,
-        ):
-            if self.instrumentation_config.debug_mode:
-                self.logger.debug(
-                    "Async checking existence of %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "backend": self.backend_type,
-                        "correlation_id": correlation_id,
-                    },
-                )
-
+        op_name = "storage.exists_async"
+        async with instrument_operation_async(self, op_name, "storage", path=path, backend=self.backend_type):
+            self._log_operation_start(op_name, "Async checking existence of %s", path, extra={"path": path})
             try:
                 exists = await self._exists_async(path, **kwargs)
-            except Exception as e:
-                self.logger.exception(
-                    "Failed to async check existence of %s",
+                self._log_operation_success(
+                    op_name,
+                    "Async checked existence of %s: %s",
                     path,
-                    extra={
-                        "path": path,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
+                    exists,
+                    extra={"path": path, "exists": exists},
+                )
+            except Exception as e:
+                self._log_operation_error(
+                    op_name, e, "Failed to async check existence of %s", path, extra={"path": path}
                 )
                 raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Async checked existence of %s: %s",
-                        path,
-                        exists,
-                        extra={
-                            "path": path,
-                            "exists": exists,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
-                return exists
+            return exists
 
     async def delete_async(self, path: str, **kwargs: Any) -> None:
         """Async delete object."""
-        correlation_id = CorrelationContext.get()
-
-        async with instrument_operation_async(
-            self,
-            "storage.delete_async",
-            "storage",
-            path=path,
-            backend=self.backend_type,
-        ):
-            if self.instrumentation_config.debug_mode:
-                self.logger.debug(
-                    "Async deleting %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "backend": self.backend_type,
-                        "correlation_id": correlation_id,
-                    },
-                )
-
+        op_name = "storage.delete_async"
+        async with instrument_operation_async(self, op_name, "storage", path=path, backend=self.backend_type):
+            self._log_operation_start(op_name, "Async deleting %s", path, extra={"path": path})
             try:
                 await self._delete_async(path, **kwargs)
+                self._log_operation_success(op_name, "Async deleted %s", path, extra={"path": path})
             except Exception as e:
-                self.logger.exception(
-                    "Failed to async delete %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
+                self._log_operation_error(op_name, e, "Failed to async delete %s", path, extra={"path": path})
                 raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Async deleted %s",
-                        path,
-                        extra={
-                            "path": path,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """Async list objects."""
-        correlation_id = CorrelationContext.get()
-
-        async with instrument_operation_async(
-            self,
-            "storage.list_objects_async",
-            "storage",
-            prefix=prefix,
-            recursive=recursive,
-            backend=self.backend_type,
-        ):
-            if self.instrumentation_config.debug_mode:
-                self.logger.debug(
-                    "Async listing objects with prefix '%s'",
-                    prefix,
-                    extra={
-                        "prefix": prefix,
-                        "recursive": recursive,
-                        "backend": self.backend_type,
-                        "correlation_id": correlation_id,
-                    },
-                )
-
+        op_name = "storage.list_objects_async"
+        log_attrs = {"prefix": prefix, "recursive": recursive}
+        async with instrument_operation_async(self, op_name, "storage", **log_attrs, backend=self.backend_type):
+            self._log_operation_start(op_name, "Async listing objects with prefix '%s'", prefix, extra=log_attrs)
             try:
                 objects = await self._list_objects_async(prefix, recursive, **kwargs)
-            except Exception as e:
-                self.logger.exception(
-                    "Failed to async list objects with prefix '%s'",
+                self._log_operation_success(
+                    op_name,
+                    "Async listed %d objects with prefix '%s'",
+                    len(objects),
                     prefix,
-                    extra={
-                        "prefix": prefix,
-                        "recursive": recursive,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
+                    extra={**log_attrs, "object_count": len(objects)},
+                )
+            except Exception as e:
+                self._log_operation_error(
+                    op_name, e, "Failed to async list objects with prefix '%s'", prefix, extra=log_attrs
                 )
                 raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Async listed %d objects with prefix '%s'",
-                        len(objects),
-                        prefix,
-                        extra={
-                            "prefix": prefix,
-                            "recursive": recursive,
-                            "object_count": len(objects),
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
-                return objects
+        return objects
 
     async def copy_async(self, source: str, destination: str, **kwargs: Any) -> None:
         """Async copy object."""
-        correlation_id = CorrelationContext.get()
-
-        async with instrument_operation_async(
-            self,
-            "storage.copy_async",
-            "storage",
-            source=source,
-            destination=destination,
-            backend=self.backend_type,
-        ):
-            if self.instrumentation_config.debug_mode:
-                self.logger.debug(
-                    "Async copying %s to %s",
-                    source,
-                    destination,
-                    extra={
-                        "source": source,
-                        "destination": destination,
-                        "backend": self.backend_type,
-                        "correlation_id": correlation_id,
-                    },
-                )
-
+        op_name = "storage.copy_async"
+        log_attrs = {"source": source, "destination": destination}
+        async with instrument_operation_async(self, op_name, "storage", **log_attrs, backend=self.backend_type):
+            self._log_operation_start(op_name, "Async copying %s to %s", source, destination, extra=log_attrs)
             try:
                 await self._copy_async(source, destination, **kwargs)
+                self._log_operation_success(op_name, "Async copied %s to %s", source, destination, extra=log_attrs)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to async copy %s to %s",
-                    source,
-                    destination,
-                    extra={
-                        "source": source,
-                        "destination": destination,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
+                self._log_operation_error(
+                    op_name, e, "Failed to async copy %s to %s", source, destination, extra=log_attrs
                 )
                 raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Async copied %s to %s",
-                        source,
-                        destination,
-                        extra={
-                            "source": source,
-                            "destination": destination,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
 
     async def move_async(self, source: str, destination: str, **kwargs: Any) -> None:
         """Async move object."""
-        correlation_id = CorrelationContext.get()
-
-        async with instrument_operation_async(
-            self,
-            "storage.move_async",
-            "storage",
-            source=source,
-            destination=destination,
-            backend=self.backend_type,
-        ):
-            if self.instrumentation_config.debug_mode:
-                self.logger.debug(
-                    "Async moving %s to %s",
-                    source,
-                    destination,
-                    extra={
-                        "source": source,
-                        "destination": destination,
-                        "backend": self.backend_type,
-                        "correlation_id": correlation_id,
-                    },
-                )
-
+        op_name = "storage.move_async"
+        log_attrs = {"source": source, "destination": destination}
+        async with instrument_operation_async(self, op_name, "storage", **log_attrs, backend=self.backend_type):
+            self._log_operation_start(op_name, "Async moving %s to %s", source, destination, extra=log_attrs)
             try:
                 await self._move_async(source, destination, **kwargs)
+                self._log_operation_success(op_name, "Async moved %s to %s", source, destination, extra=log_attrs)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to async move %s to %s",
-                    source,
-                    destination,
-                    extra={
-                        "source": source,
-                        "destination": destination,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
+                self._log_operation_error(
+                    op_name, e, "Failed to async move %s to %s", source, destination, extra=log_attrs
                 )
                 raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Async moved %s to %s",
-                        source,
-                        destination,
-                        extra={
-                            "source": source,
-                            "destination": destination,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
 
     async def get_metadata_async(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Async get object metadata."""
-        correlation_id = CorrelationContext.get()
-
-        async with instrument_operation_async(
-            self,
-            "storage.get_metadata_async",
-            "storage",
-            path=path,
-            backend=self.backend_type,
-        ):
-            if self.instrumentation_config.debug_mode:
-                self.logger.debug(
-                    "Async getting metadata for %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "backend": self.backend_type,
-                        "correlation_id": correlation_id,
-                    },
-                )
-
+        op_name = "storage.get_metadata_async"
+        async with instrument_operation_async(self, op_name, "storage", path=path, backend=self.backend_type):
+            self._log_operation_start(op_name, "Async getting metadata for %s", path, extra={"path": path})
             try:
                 metadata = await self._get_metadata_async(path, **kwargs)
-            except Exception as e:
-                self.logger.exception(
-                    "Failed to async get metadata for %s",
+                self._log_operation_success(
+                    op_name,
+                    "Async got metadata for %s",
                     path,
-                    extra={
-                        "path": path,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
+                    extra={"path": path, "metadata": metadata},
                 )
+            except Exception as e:
+                self._log_operation_error(op_name, e, "Failed to async get metadata for %s", path, extra={"path": path})
                 raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Async got metadata for %s",
-                        path,
-                        extra={
-                            "path": path,
-                            "metadata": metadata,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
-                return metadata
+            return metadata
 
     async def read_arrow_async(self, path: str, **kwargs: Any) -> ArrowTable:
         """Async read Arrow table."""
-        correlation_id = CorrelationContext.get()
-
-        async with instrument_operation_async(
-            self,
-            "storage.read_arrow_async",
-            "storage",
-            path=path,
-            backend=self.backend_type,
-        ):
-            if self.instrumentation_config.debug_mode:
-                self.logger.debug(
-                    "Async reading Arrow table from %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "backend": self.backend_type,
-                        "correlation_id": correlation_id,
-                    },
-                )
-
+        op_name = "storage.read_arrow_async"
+        async with instrument_operation_async(self, op_name, "storage", path=path, backend=self.backend_type):
+            self._log_operation_start(op_name, "Async reading Arrow table from %s", path, extra={"path": path})
             try:
                 table = await self._read_arrow_async(path, **kwargs)
-            except Exception as e:
-                self.logger.exception(
-                    "Failed to async read Arrow table from %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
-                )
-                raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Async read Arrow table with %d rows from %s",
-                        table.num_rows,
-                        path,
-                        extra={
-                            "path": path,
-                            "num_rows": table.num_rows,
-                            "num_columns": table.num_columns,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-
-                return table
-
-    async def write_arrow_async(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
-        """Async write Arrow table."""
-        correlation_id = CorrelationContext.get()
-
-        async with instrument_operation_async(
-            self,
-            "storage.write_arrow_async",
-            "storage",
-            path=path,
-            num_rows=table.num_rows,
-            num_columns=table.num_columns,
-            backend=self.backend_type,
-        ):
-            if self.instrumentation_config.debug_mode:
-                self.logger.debug(
-                    "Async writing Arrow table with %d rows to %s",
+                self._log_operation_success(
+                    op_name,
+                    "Async read Arrow table with %d rows from %s",
                     table.num_rows,
                     path,
                     extra={
                         "path": path,
                         "num_rows": table.num_rows,
                         "num_columns": table.num_columns,
-                        "backend": self.backend_type,
-                        "correlation_id": correlation_id,
                     },
                 )
-
-            try:
-                await self._write_arrow_async(path, table, **kwargs)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to async write Arrow table to %s",
-                    path,
-                    extra={
-                        "path": path,
-                        "num_rows": table.num_rows,
-                        "num_columns": table.num_columns,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
+                self._log_operation_error(
+                    op_name, e, "Failed to async read Arrow table from %s", path, extra={"path": path}
                 )
                 raise
-            else:
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Async wrote Arrow table with %d rows to %s",
-                        table.num_rows,
-                        path,
-                        extra={
-                            "path": path,
-                            "num_rows": table.num_rows,
-                            "num_columns": table.num_columns,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
+            return table
+
+    async def write_arrow_async(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
+        """Async write Arrow table."""
+        op_name = "storage.write_arrow_async"
+        log_attrs = {
+            "path": path,
+            "num_rows": table.num_rows,
+            "num_columns": table.num_columns,
+        }
+        async with instrument_operation_async(self, op_name, "storage", **log_attrs, backend=self.backend_type):
+            self._log_operation_start(
+                op_name,
+                "Async writing Arrow table with %d rows to %s",
+                table.num_rows,
+                path,
+                extra=log_attrs,
+            )
+            try:
+                await self._write_arrow_async(path, table, **kwargs)
+                self._log_operation_success(
+                    op_name,
+                    "Async wrote Arrow table with %d rows to %s",
+                    table.num_rows,
+                    path,
+                    extra=log_attrs,
+                )
+            except Exception as e:
+                self._log_operation_error(op_name, e, "Failed to async write Arrow table to %s", path, extra=log_attrs)
+                raise
 
     async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
         """Async stream Arrow record batches.
@@ -1439,54 +704,31 @@ class InstrumentedObjectStore(ABC):
         Yields:
             AsyncIterator of Arrow record batches
         """
-        correlation_id = CorrelationContext.get()
-
-        async with instrument_operation_async(
-            self,
-            "storage.stream_arrow_async",
-            "storage",
-            pattern=pattern,
-            backend=self.backend_type,
-        ):
-            if self.instrumentation_config.debug_mode:
-                self.logger.debug(
-                    "Async streaming Arrow batches for pattern %s",
-                    pattern,
-                    extra={
-                        "pattern": pattern,
-                        "backend": self.backend_type,
-                        "correlation_id": correlation_id,
-                    },
-                )
-
+        op_name = "storage.stream_arrow_async"
+        async with instrument_operation_async(self, op_name, "storage", pattern=pattern, backend=self.backend_type):
+            self._log_operation_start(
+                op_name, "Async streaming Arrow batches for pattern %s", pattern, extra={"pattern": pattern}
+            )
             try:
                 batch_count = 0
                 async for batch in self._stream_arrow_async(pattern, **kwargs):
                     batch_count += 1
                     yield batch
 
-                if self.instrumentation_config.log_service_operations:
-                    self.logger.info(
-                        "Async streamed %d Arrow batches for pattern %s",
-                        batch_count,
-                        pattern,
-                        extra={
-                            "pattern": pattern,
-                            "batch_count": batch_count,
-                            "backend": self.backend_type,
-                            "correlation_id": correlation_id,
-                        },
-                    )
+                self._log_operation_success(
+                    op_name,
+                    "Async streamed %d Arrow batches for pattern %s",
+                    batch_count,
+                    pattern,
+                    extra={"pattern": pattern, "batch_count": batch_count},
+                )
             except Exception as e:
-                self.logger.exception(
+                self._log_operation_error(
+                    op_name,
+                    e,
                     "Failed to async stream Arrow batches for pattern %s",
                     pattern,
-                    extra={
-                        "pattern": pattern,
-                        "backend": self.backend_type,
-                        "error_type": type(e).__name__,
-                        "correlation_id": correlation_id,
-                    },
+                    extra={"pattern": pattern},
                 )
                 raise
 

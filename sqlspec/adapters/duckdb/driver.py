@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.config import InstrumentationConfig
+    from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict
     from sqlspec.typing import ArrowTable
 
 __all__ = ("DuckDBConnection", "DuckDBDriver")
@@ -48,6 +49,7 @@ class DuckDBDriver(
     """
 
     dialect: "DialectType" = "duckdb"
+    parameter_style: ParameterStyle = ParameterStyle.QMARK
     __supports_arrow__: ClassVar[bool] = True
     __supports_parquet__: ClassVar[bool] = True
 
@@ -65,9 +67,6 @@ class DuckDBDriver(
             default_row_type=default_row_type,
         )
 
-    def _get_placeholder_style(self) -> ParameterStyle:
-        return ParameterStyle.QMARK
-
     @staticmethod
     @contextmanager
     def _get_cursor(connection: "DuckDBConnection") -> Generator["DuckDBConnection", None, None]:
@@ -84,26 +83,15 @@ class DuckDBDriver(
         **kwargs: Any,
     ) -> Any:
         if statement.is_script:
-            return self._execute_script(
-                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
-                connection=connection,
-                **kwargs,
-            )
-        if statement.is_many:
-            return self._execute_many(
-                statement.to_sql(placeholder_style=self._get_placeholder_style()),
-                statement.parameters,
-                connection=connection,
-                **kwargs,
-            )
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            return self._execute_script(sql, connection=connection, **kwargs)
 
-        return self._execute(
-            statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.get_parameters(style=self._get_placeholder_style()),
-            statement,
-            connection=connection,
-            **kwargs,
-        )
+        if statement.is_many:
+            sql, params = statement.compile(placeholder_style=self.parameter_style)
+            return self._execute_many(sql, params, connection=connection, **kwargs)
+
+        sql, params = statement.compile(placeholder_style=self.parameter_style)
+        return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
         self,
@@ -118,10 +106,8 @@ class DuckDBDriver(
         if self.instrumentation_config.log_queries:
             logger.debug("Executing SQL: %s", sql)
 
-        # Convert parameters to the format DuckDB expects
-        converted_params = self._convert_parameters_to_driver_format(
-            sql, parameters, target_style=self._get_placeholder_style()
-        )
+        # Parameters are already in the correct format from compile()
+        converted_params = parameters
 
         if self.instrumentation_config.log_parameters and converted_params:
             logger.debug("Query parameters: %s", converted_params)
@@ -208,34 +194,30 @@ class DuckDBDriver(
         script: str,
         connection: Optional["DuckDBConnection"] = None,
         **kwargs: Any,
-    ) -> str:
+    ) -> "ScriptResultDict":
         conn = self._connection(connection)
         if self.instrumentation_config.log_queries:
             logger.debug("Executing SQL script: %s", script)
         with self._get_cursor(conn) as cursor:
             cursor.execute(script)
-        return "SCRIPT EXECUTED"
+        result: ScriptResultDict = {
+            "statements_executed": -1,  # DuckDB doesn't provide this info
+            "status_message": "SCRIPT EXECUTED",
+        }
+        return result
 
     def _wrap_select_result(
         self,
         statement: SQL,
-        result: Any,
+        result: "SelectResultDict",
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "duckdb_wrap_select", "database"):
-            if not isinstance(result, dict) or "data" not in result:
-                logger.warning("Unexpected result format in _wrap_select_result for DuckDB.")
-                return SQLResult[RowT](
-                    statement=statement,
-                    data=cast("list[RowT]", []),
-                    column_names=[],
-                    operation_type="SELECT",
-                    rows_affected=0,
-                )
-
-            fetched_tuples: list[tuple[Any, ...]] = result.get("data", [])
-            column_names: list[str] = result.get("columns", [])
+            # result must be a dict with keys: data, column_names, rows_affected
+            fetched_tuples = result["data"]
+            column_names = result["column_names"]
+            rows_affected = result["rows_affected"]
 
             rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row)) for row in fetched_tuples]
 
@@ -249,19 +231,21 @@ class DuckDBDriver(
                     statement=statement,
                     data=converted_data_list,
                     column_names=column_names,
+                    rows_affected=rows_affected,
                     operation_type="SELECT",
                 )
             return SQLResult[RowT](
                 statement=statement,
                 data=cast("list[RowT]", rows_as_dicts),
                 column_names=column_names,
+                rows_affected=rows_affected,
                 operation_type="SELECT",
             )
 
     def _wrap_execute_result(
         self,
         statement: SQL,
-        result: Any,
+        result: "Union[DMLResultDict, ScriptResultDict]",
         **kwargs: Any,
     ) -> SQLResult[RowT]:
         with instrument_operation(self, "duckdb_wrap_execute", "database"):
@@ -270,35 +254,37 @@ class DuckDBDriver(
                 if statement.expression:
                     operation_type = str(statement.expression.key).upper()
 
-            rows_affected = -1
+            # Handle TypedDict results
+            if isinstance(result, dict):
+                # Check if this is a ScriptResultDict
+                if "statements_executed" in result:
+                    return SQLResult[RowT](
+                        statement=statement,
+                        data=cast("list[RowT]", []),
+                        rows_affected=0,
+                        operation_type=operation_type or "SCRIPT",
+                        metadata={"status_message": result["status_message"]},
+                    )
 
-            if isinstance(result, str) and result == "SCRIPT EXECUTED":
-                operation_type = "SCRIPT"
-                rows_affected = 0
-                return SQLResult[RowT](
-                    statement=statement,
-                    data=cast("list[RowT]", []),
-                    rows_affected=rows_affected,
-                    operation_type=operation_type,
-                    metadata={"status_message": result},
-                )
-            if isinstance(result, dict) and "rowcount" in result:
-                rows_affected = result["rowcount"]
-            else:
-                logger.warning(
-                    "Unexpected result format in _wrap_execute_result for DuckDB DML. Expected dict with 'rowcount' or str 'SCRIPT EXECUTED'. Got: %s",
-                    type(result),
-                )
+                # Check if this is a DMLResultDict
+                if "rows_affected" in result:
+                    rows_affected = result["rows_affected"]
+                    status_message = result["status_message"]
 
-            if self.instrumentation_config.log_results_count:
-                logger.debug("Execute operation affected %d rows", rows_affected)
+                    if self.instrumentation_config.log_results_count:
+                        logger.debug("Execute operation affected %d rows", rows_affected)
 
-            return SQLResult[RowT](
-                statement=statement,
-                data=cast("list[RowT]", []),
-                rows_affected=rows_affected,
-                operation_type=operation_type,
-            )
+                    return SQLResult[RowT](
+                        statement=statement,
+                        data=cast("list[RowT]", []),
+                        rows_affected=rows_affected,
+                        operation_type=operation_type,
+                        metadata={"status_message": status_message},
+                    )
+
+            # This shouldn't happen with TypedDict approach
+            msg = f"Unexpected result type: {type(result)}"
+            raise ValueError(msg)
 
     # ============================================================================
     # DuckDB Native Arrow Support
@@ -327,8 +313,7 @@ class DuckDBDriver(
 
         with wrap_exceptions():
             # Use DuckDB's native execute() with parameters for optimal performance
-            sql_string = sql_obj.to_sql(placeholder_style=self._get_placeholder_style())
-            parameters = sql_obj.get_parameters(style=self._get_placeholder_style())
+            sql_string, parameters = sql_obj.compile(placeholder_style=self.parameter_style)
 
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing DuckDB Arrow query: %s", sql_string)

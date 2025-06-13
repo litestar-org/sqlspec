@@ -14,9 +14,9 @@ from sqlglot.expressions import (
     Null,
 )
 
-from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.base import ProcessorProtocol, ValidationResult
+from sqlspec.statement.pipelines.base import ProcessorProtocol
 from sqlspec.statement.pipelines.context import SQLProcessingContext
+from sqlspec.statement.pipelines.results import ProcessorResult
 
 __all__ = ("ParameterizationContext", "ParameterizeLiterals")
 
@@ -98,44 +98,30 @@ class ParameterizeLiterals(ProcessorProtocol[exp.Expression]):
         self._parameter_counter = 0
         self._parameter_metadata: list[dict[str, Any]] = []  # Track parameter types and context
 
-    def process(self, context: SQLProcessingContext) -> tuple[exp.Expression, Optional[ValidationResult]]:
+    def process(self, context: SQLProcessingContext) -> "ProcessorResult":
         """Advanced literal parameterization with context-aware AST analysis."""
-        assert context.current_expression is not None, (
-            "ParameterizeLiterals expects a valid current_expression in context."
-        )
+        if context.current_expression is None or context.config.input_sql_had_placeholders:
+            return ProcessorResult(expression=context.current_expression)
 
         self.extracted_parameters = []
         self._parameter_counter = 0
         self._parameter_metadata = []
 
-        if context.config.input_sql_had_placeholders:
-            return context.current_expression, None
-
-        # Create parameterization context
         param_context = ParameterizationContext(parent_stack=[])
-
-        # Use SQLGlot's transform with parent tracking
         transformed_expression = self._transform_with_context(context.current_expression.copy(), param_context)
         context.current_expression = transformed_expression
 
-        if (
-            not hasattr(context, "extracted_parameters_from_pipeline")
-            or context.extracted_parameters_from_pipeline is None
-        ):
+        if context.extracted_parameters_from_pipeline is None:
             context.extracted_parameters_from_pipeline = []
         context.extracted_parameters_from_pipeline.extend(self.extracted_parameters)
 
-        # Store metadata in context for advanced usage
         context.set_additional_data("parameter_metadata", self._parameter_metadata)
 
-        # Create validation result with parameterization statistics
-        validation_result = ValidationResult(
-            is_safe=True,
-            risk_level=RiskLevel.LOW,
-            warnings=[f"Parameterized {len(self.extracted_parameters)} literals"],
-        )
-
-        return context.current_expression, validation_result
+        metadata = {
+            "type": "transformer",
+            "parameters_extracted": len(self.extracted_parameters),
+        }
+        return ProcessorResult(expression=context.current_expression, metadata=metadata)
 
     def _transform_with_context(self, node: exp.Expression, context: ParameterizationContext) -> exp.Expression:
         """Transform expression tree with context tracking."""

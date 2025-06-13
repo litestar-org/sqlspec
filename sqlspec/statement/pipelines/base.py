@@ -6,7 +6,7 @@ SQL processing steps, such as transformations and validations.
 
 import contextlib
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Generic, Optional
+from typing import TYPE_CHECKING, Generic, Optional
 
 import sqlglot  # Added
 from sqlglot import exp
@@ -15,6 +15,7 @@ from typing_extensions import TypeVar
 
 from sqlspec.exceptions import RiskLevel, SQLValidationError
 from sqlspec.statement.pipelines.context import SQLProcessingContext, StatementPipelineResult
+from sqlspec.statement.pipelines.results import ProcessorResult, ValidationResult
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 
@@ -27,11 +28,9 @@ if TYPE_CHECKING:
 
 
 __all__ = (
-    "AnalysisResult",
     "ProcessorProtocol",
     "SQLValidator",
     "StatementPipeline",
-    "TransformationResult",
     "UsesExpression",
     "ValidationResult",
 )
@@ -91,20 +90,14 @@ class ProcessorProtocol(ABC, Generic[ExpressionT]):
     """Defines the interface for a single processing step in the SQL pipeline."""
 
     @abstractmethod
-    def process(self, context: "SQLProcessingContext") -> "tuple[ExpressionT, Optional[ValidationResult]]":
+    def process(self, context: "SQLProcessingContext") -> "ProcessorResult":
         """Processes an SQL expression.
 
         Args:
             context: The SQLProcessingContext holding the current state and config.
 
         Returns:
-            A tuple containing the (potentially modified) expression and an optional
-            ValidationResult if the processor is a validator. Transformers might only
-            modify context.current_expression and return (context.current_expression, None).
-            Analyzers might return (context.current_expression, context.analysis_result) or similar.
-            The exact return needs to be harmonized or made more flexible.
-            For now, aiming for (updated_expression, optional_validation_result_part).
-            Processors will update the context directly for analysis results or extracted params.
+            A ProcessorResult containing the outcome of the processing step.
         """
         raise NotImplementedError
 
@@ -193,20 +186,14 @@ class StatementPipeline:
                             "correlation_id": correlation_id,
                         },
                     )
-                # Transformers take context, modify context.current_expression
-                # and potentially context.extracted_parameters_from_pipeline.
-                # The return value of transformer.process is (modified_expr, None)
-                modified_expr, _ = transformer.process(context)
-                context.current_expression = modified_expr  # Update context
-
-        # Parameter merging logic will be handled by SQL._initialize_statement after pipeline result
-        # For now, StatementPipelineResult will return the merged_parameters from the context,
-        # which SQL._initialize_statement should update with extracted_parameters_from_pipeline.
+                result = transformer.process(context)
+                if result.expression:
+                    context.current_expression = result.expression
+                if result.metadata:
+                    context.aggregated_results.add_transformation_info(transformer_name, result.metadata)
 
         # 2. Validation Stage
         if context.config.enable_validation:
-            all_issues: list[str] = []
-            highest_risk = RiskLevel.SKIP
             for validator_component in self.validators:
                 validator_name = validator_component.__class__.__name__
                 if context.config.debug_mode:
@@ -218,55 +205,30 @@ class StatementPipeline:
                             "correlation_id": correlation_id,
                         },
                     )
-                # Validators take context. current_expression is read from context.
-                # They should return (expression, ValidationResult_part)
-                # The expression returned by a validator should be the one it received (context.current_expression)
-                _, val_res_part = validator_component.process(context)
-                if val_res_part and val_res_part.issues:
-                    all_issues.extend(val_res_part.issues)
-                    if val_res_part.risk_level.value > highest_risk.value:
-                        highest_risk = val_res_part.risk_level
-
-            if all_issues:
-                context.validation_result = ValidationResult(
-                    is_safe=highest_risk.value < RiskLevel.MEDIUM.value, risk_level=highest_risk, issues=all_issues
-                )
-                if context.config.debug_mode:
-                    logger.warning(
-                        "Validation issues found",
-                        extra={
-                            "issues": all_issues,
-                            "risk_level": highest_risk.name,
-                            "correlation_id": correlation_id,
-                        },
-                    )
-            else:
-                context.validation_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
-        else:  # Validation disabled
-            context.validation_result = ValidationResult(
-                is_safe=True, risk_level=RiskLevel.SKIP, issues=["Validation disabled by config."]
-            )
+                result = validator_component.process(context)
+                context.aggregated_results.add_processor_result(validator_name, result)
 
         # 3. Analysis Stage
         if context.config.enable_analysis and context.current_expression is not None:
             for analyzer_component in self.analyzers:
-                # Analyzers take context. current_expression, validation_result are available.
-                # They should return (expression, StatementAnalysis_result_part)
-                # Expression is context.current_expression.
-                _, analysis_res_part = analyzer_component.process(context)
-                if analysis_res_part:  # Assuming StatementAnalyzer returns the analysis directly
-                    # Note: analysis_res_part might be ValidationResult from process signature,
-                    # but analyzers should store their analysis in context.analysis_result directly
-                    # The analyzer should have already set context.analysis_result
+                analyzer_name = analyzer_component.__class__.__name__
+                result = analyzer_component.process(context)
+                context.aggregated_results.add_processor_result(analyzer_name, result)
+                if result.analysis_result:
+                    context.analysis_result = result.analysis_result
                     break  # Assuming one primary analyzer for now
+
+        if context.validation_result:
+            context.aggregated_results.validation_result = context.validation_result
 
         return StatementPipelineResult(
             final_expression=context.current_expression,
-            merged_parameters=context.merged_parameters,  # This will be further updated by SQL._initialize_statement
+            merged_parameters=context.merged_parameters,
             parameter_info=context.parameter_info,
             validation_result=context.validation_result,
             analysis_result=context.analysis_result,
             input_sql_had_placeholders=context.input_sql_had_placeholders,
+            aggregated_results=context.aggregated_results,
         )
 
 
@@ -287,9 +249,8 @@ class SQLValidator(ProcessorProtocol[exp.Expression]):
         """Add a validator to the pipeline."""
         self.validators.append(validator)
 
-    @staticmethod
     def _process_single_validator(
-        validator_instance: "ProcessorProtocol[exp.Expression]", context: "SQLProcessingContext"
+        self: "ProcessorProtocol[exp.Expression]", context: "SQLProcessingContext"
     ) -> "Optional[ValidationResult]":
         """Process a single validator and handle any exceptions.
 
@@ -301,46 +262,53 @@ class SQLValidator(ProcessorProtocol[exp.Expression]):
             ValidationResult or None if validation succeeded without issues
         """
         try:
-            _, validation_result = validator_instance.process(context)
+            result = self.process(context)
+
         except Exception as e:
-            logger.warning("Individual validator %s failed: %s", validator_instance.__class__.__name__, e)
+            logger.warning("Individual validator %s failed: %s", self.__class__.__name__, e)
             return ValidationResult(
                 is_safe=False,
                 risk_level=RiskLevel.CRITICAL,
-                issues=[f"Validator {validator_instance.__class__.__name__} error: {e}"],
+                issues=[f"Validator {self.__class__.__name__} error: {e}"],
             )
-        return validation_result
+        return result.validation_result
 
-    def process(self, context: "SQLProcessingContext") -> "tuple[exp.Expression, ValidationResult]":
+    def process(self, context: "SQLProcessingContext") -> "ProcessorResult":
         """Process the expression through all configured validators.
 
         Args:
             context: The SQLProcessingContext holding the current state and config.
 
         Returns:
-            Tuple of (unchanged expression, aggregated validation result)
+            A ProcessorResult containing the aggregated validation findings.
         """
         if not context.config.enable_validation:
-            return (
-                context.current_expression or exp.Placeholder(),
-                ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP),
+            return ProcessorResult(
+                expression=context.current_expression,
+                validation_result=ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP),
             )
 
         if context.current_expression is None:
-            return exp.Placeholder(), ValidationResult(
-                is_safe=False, risk_level=RiskLevel.CRITICAL, issues=["SQLValidator received no expression in context."]
+            return ProcessorResult(
+                expression=exp.Placeholder(),
+                validation_result=ValidationResult(
+                    is_safe=False,
+                    risk_level=RiskLevel.CRITICAL,
+                    issues=["SQLValidator received no expression in context."],
+                ),
             )
 
-        aggregated_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)  # Start with SKIP or SAFE
+        aggregated_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
 
-        # All validators now implement ProcessorProtocol and use process(context)
         for validator_instance in self.validators:
-            validation_result = self._process_single_validator(validator_instance, context)
-            if validation_result is not None:
-                aggregated_result.merge(validation_result)
+            validation_result_part = self._process_single_validator(validator_instance, context)
+            if validation_result_part:
+                aggregated_result.merge(validation_result_part)
 
-        # The SQLValidator processor itself doesn't modify the expression
-        return context.current_expression, aggregated_result
+        return ProcessorResult(
+            expression=context.current_expression,
+            validation_result=aggregated_result,
+        )
 
     def validate(
         self,
@@ -372,93 +340,5 @@ class SQLValidator(ProcessorProtocol[exp.Expression]):
                 if param_val.extract_parameters(sql):
                     validation_context.input_sql_had_placeholders = True
 
-        _, validation_result = self.process(validation_context)
-        return validation_result
-
-
-class ValidationResult:
-    """Result of SQL validation with detailed information."""
-
-    __slots__ = (
-        "is_safe",
-        "issues",
-        "risk_level",
-        "transformed_sql",
-        "warnings",
-    )
-
-    def __init__(
-        self,
-        is_safe: bool,
-        risk_level: "RiskLevel",
-        issues: "Optional[list[str]]" = None,
-        warnings: "Optional[list[str]]" = None,
-        transformed_sql: "Optional[str]" = None,
-    ) -> None:
-        self.is_safe = is_safe
-        self.risk_level = risk_level
-        self.issues = list(issues) if issues is not None else []
-        self.warnings = list(warnings) if warnings is not None else []
-        self.transformed_sql = transformed_sql  # Though likely not used by validators
-
-    def merge(self, other: "ValidationResult") -> None:
-        """Merge another ValidationResult into this one."""
-        if not other.is_safe:
-            self.is_safe = False
-        self.issues.extend(other.issues)
-        self.warnings.extend(other.warnings)
-        # Set risk level to the higher of the two
-        if other.risk_level.value > self.risk_level.value:
-            self.risk_level = other.risk_level
-
-    def __bool__(self) -> bool:
-        return self.is_safe
-
-
-class TransformationResult:
-    """Result of SQL transformation with detailed information."""
-
-    __slots__ = (
-        "expression",
-        "modified",
-        "notes",
-    )
-
-    def __init__(
-        self,
-        expression: exp.Expression,
-        modified: bool,
-        notes: "Optional[list[str]]" = None,
-    ) -> None:
-        self.expression = expression
-        self.modified = modified
-        self.notes = notes if notes is not None else []
-
-    def __bool__(self) -> bool:
-        return self.modified
-
-
-class AnalysisResult:
-    """Result of SQL analysis with detailed metrics and insights."""
-
-    __slots__ = (
-        "issues",
-        "metrics",
-        "notes",
-        "warnings",
-    )
-
-    def __init__(
-        self,
-        metrics: "Optional[dict[str, Any]]" = None,
-        warnings: "Optional[list[str]]" = None,
-        issues: "Optional[list[str]]" = None,
-        notes: "Optional[list[str]]" = None,
-    ) -> None:
-        self.metrics = metrics if metrics is not None else {}
-        self.warnings = warnings if warnings is not None else []
-        self.issues = issues if issues is not None else []
-        self.notes = notes if notes is not None else []
-
-    def __bool__(self) -> bool:
-        return len(self.issues) == 0
+        result = self.process(validation_context)
+        return result.validation_result or ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)

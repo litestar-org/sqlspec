@@ -62,7 +62,9 @@ def test_sqlite_driver_initialization(mock_sqlite_connection: Mock) -> None:
     assert driver.config is config
     assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "sqlite"
-    assert driver.parameter_style == "qmark"
+    from sqlspec.statement.parameters import ParameterStyle
+
+    assert driver.parameter_style == ParameterStyle.QMARK
 
 
 def test_sqlite_driver_dialect_property(sqlite_driver: SqliteDriver) -> None:
@@ -72,13 +74,9 @@ def test_sqlite_driver_dialect_property(sqlite_driver: SqliteDriver) -> None:
 
 def test_sqlite_driver_parameter_style(sqlite_driver: SqliteDriver) -> None:
     """Test SQLite driver parameter style."""
-    assert sqlite_driver.parameter_style == "qmark"
+    from sqlspec.statement.parameters import ParameterStyle
 
-
-def test_sqlite_driver_placeholder_style(sqlite_driver: SqliteDriver) -> None:
-    """Test SQLite driver placeholder style detection."""
-    placeholder_style = sqlite_driver._get_placeholder_style()
-    assert placeholder_style == "qmark"
+    assert sqlite_driver.parameter_style == ParameterStyle.QMARK
 
 
 def test_sqlite_config_dialect_property() -> None:

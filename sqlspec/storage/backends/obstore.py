@@ -185,7 +185,12 @@ class ObStoreBackend(InstrumentedObjectStore):
             raise StorageOperationFailedError(msg) from exc
 
     def _glob(self, pattern: str, **kwargs: Any) -> list[str]:
-        """Find objects matching pattern using obstore."""
+        """Find objects matching pattern using obstore.
+
+        Note: obstore does not support server-side globbing. This implementation
+        lists all objects and filters them client-side, which may be inefficient
+        for large buckets.
+        """
         # List all objects and filter by pattern
         return [
             obj
@@ -285,7 +290,8 @@ class ObStoreBackend(InstrumentedObjectStore):
 
         objects = [str(item.path) async for item in await self.store.list_async(resolved_prefix)]  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
 
-        # Manual filtering for non-recursive if needed
+        # Manual filtering for non-recursive if needed as obstore lacks an
+        # async version of list_with_delimiter.
         if not recursive and resolved_prefix:
             base_depth = resolved_prefix.count("/")
             objects = [obj for obj in objects if obj.count("/") <= base_depth + 1]
@@ -365,10 +371,8 @@ class ObStoreBackend(InstrumentedObjectStore):
         resolved_path = self._resolve_path(path)
         await self.store.write_arrow_async(resolved_path, table, **kwargs)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
 
-    def _stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
-        async def _async_generator() -> AsyncIterator[ArrowRecordBatch]:
-            resolved_pattern = self._resolve_path(pattern)
-            async for batch in self.store.stream_arrow_async(resolved_pattern, **kwargs):  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
-                yield batch
-
-        return _async_generator()
+    async def _stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
+        """Stream Arrow record batches using obstore's native async support."""
+        resolved_pattern = self._resolve_path(pattern)
+        async for batch in self.store.stream_arrow_async(resolved_pattern, **kwargs):  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+            yield batch

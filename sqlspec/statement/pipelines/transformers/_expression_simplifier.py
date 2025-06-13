@@ -6,8 +6,9 @@ from sqlglot import exp
 from sqlglot.optimizer import simplify
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.base import ProcessorProtocol, ValidationResult
+from sqlspec.statement.pipelines.base import ProcessorProtocol
 from sqlspec.statement.pipelines.context import SQLProcessingContext
+from sqlspec.statement.pipelines.results import ProcessorResult, ValidationResult
 
 __all__ = ("ExpressionSimplifier", "SimplificationConfig")
 
@@ -47,48 +48,33 @@ class ExpressionSimplifier(ProcessorProtocol[exp.Expression]):
         self.enabled = enabled
         self.config = config or SimplificationConfig()
 
-    def process(self, context: SQLProcessingContext) -> tuple[exp.Expression, Optional[ValidationResult]]:
+    def process(self, context: SQLProcessingContext) -> "ProcessorResult":
         """Process the expression to apply SQLGlot's simplification optimizations."""
-        assert context.current_expression is not None, (
-            "ExpressionSimplifier expects a valid current_expression in context."
-        )
-
-        if not self.enabled:
-            return context.current_expression, None
+        if not self.enabled or context.current_expression is None:
+            return ProcessorResult(expression=context.current_expression)
 
         original_sql = context.current_expression.sql(dialect=context.dialect)
 
         try:
-            # Apply SQLGlot's comprehensive simplification
-            # Note: simplify.simplify() applies all optimizations automatically
             simplified = simplify.simplify(context.current_expression.copy())
         except Exception as e:
-            # If simplification fails, return original expression
             result = ValidationResult(
                 is_safe=True, risk_level=RiskLevel.MEDIUM, warnings=[f"Expression simplification failed: {e}"]
             )
-            return context.current_expression, result
-        else:
-            # Update context with simplified expression
-            context.current_expression = simplified
+            return ProcessorResult(expression=context.current_expression, validation_result=result)
 
-            # Create result with optimization metrics
-            simplified_sql = simplified.sql(dialect=context.dialect)
+        context.current_expression = simplified
+        simplified_sql = simplified.sql(dialect=context.dialect)
+        chars_saved = len(original_sql) - len(simplified_sql)
 
-            if original_sql != simplified_sql:
-                result = ValidationResult(
-                    is_safe=True,
-                    risk_level=RiskLevel.LOW,
-                    warnings=[f"Expression simplified: {len(original_sql)} → {len(simplified_sql)} chars"],
-                )
-            else:
-                # No changes made
-                result = ValidationResult(
-                    is_safe=True,
-                    risk_level=RiskLevel.LOW,
-                    warnings=["Expression already optimized - no simplifications applied"],
-                )
-            return simplified, result
+        metadata = {
+            "type": "transformer",
+            "simplified": original_sql != simplified_sql,
+            "chars_saved": chars_saved,
+            "optimizations_applied": self._get_applied_optimizations(),
+        }
+
+        return ProcessorResult(expression=simplified, metadata=metadata)
 
     def _get_applied_optimizations(self) -> list[str]:
         """Get list of optimization types that are enabled."""

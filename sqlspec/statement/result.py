@@ -4,21 +4,66 @@
 from abc import ABC, abstractmethod
 
 # Import Mapping for type checking in __post_init__
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, Optional, Union, cast
 
-from typing_extensions import TypeVar
+from typing_extensions import TypedDict, TypeVar
 
 from sqlspec.typing import ArrowTable, RowT
 
 if TYPE_CHECKING:
     from sqlspec.statement.sql import SQL
 
-__all__ = ("ArrowResult", "SQLResult", "StatementResult")
+__all__ = ("ArrowResult", "DMLResultDict", "SQLResult", "ScriptResultDict", "SelectResultDict", "StatementResult")
 
 
 T = TypeVar("T")
+
+
+class SelectResultDict(TypedDict):
+    """TypedDict for SELECT/RETURNING query results.
+
+    This structure is returned by drivers when executing SELECT queries
+    or DML queries with RETURNING clauses.
+    """
+
+    data: "list[Any]"
+    """List of rows returned by the query."""
+    column_names: "list[str]"
+    """List of column names in the result set."""
+    rows_affected: int
+    """Number of rows affected (-1 when unsupported)."""
+
+
+class DMLResultDict(TypedDict, total=False):
+    """TypedDict for DML (INSERT/UPDATE/DELETE) results without RETURNING.
+
+    This structure is returned by drivers when executing DML operations
+    that don't return data (no RETURNING clause).
+    """
+
+    rows_affected: int
+    """Number of rows affected by the operation."""
+    status_message: str
+    """Status message from the database (-1 when unsupported)."""
+    description: str
+    """Optional description of the operation."""
+
+
+class ScriptResultDict(TypedDict, total=False):
+    """TypedDict for script execution results.
+
+    This structure is returned by drivers when executing multi-statement
+    SQL scripts.
+    """
+
+    statements_executed: int
+    """Number of statements that were executed."""
+    status_message: str
+    """Overall status message from the script execution."""
+    description: str
+    """Optional description of the script execution."""
 
 
 @dataclass
@@ -354,7 +399,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
                 raise ValueError(msg)
             first_key = next(iter(row.keys()))
             return row[first_key]
-        if hasattr(row, "__getitem__") and hasattr(row, "__len__"):
+        if isinstance(row, Sequence) and not isinstance(row, (str, bytes)):
             # For tuple/list-like rows
             if len(row) == 0:
                 msg = "Row has no columns"
@@ -379,7 +424,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
                 return None
             first_key = next(iter(row.keys()))
             return row[first_key]
-        if hasattr(row, "__getitem__") and hasattr(row, "__len__"):
+        if isinstance(row, Sequence) and not isinstance(row, (str, bytes)):
             # For tuple/list-like rows
             if len(row) == 0:
                 return None
@@ -402,7 +447,7 @@ class ArrowResult(StatementResult[ArrowTable]):
         schema: Optional Arrow schema information.
     """
 
-    data: "ArrowTable"
+    data: "Optional[ArrowTable]" = None
     """The result data from the operation."""
     schema: Optional["dict[str, Any]"] = None
     """Optional Arrow schema information."""

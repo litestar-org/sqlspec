@@ -20,6 +20,9 @@ class ObjectStoreProtocol(Protocol):
     All methods use 'path' terminology for consistency with object store patterns.
     """
 
+    def __init__(self, uri: str, **kwargs: Any) -> None:
+        return
+
     # Core Operations (sync)
     def read_bytes(self, path: str, **kwargs: Any) -> bytes:
         """Read bytes from an object."""

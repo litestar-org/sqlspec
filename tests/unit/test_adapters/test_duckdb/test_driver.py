@@ -6,6 +6,7 @@ import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConnection, DuckDBDriver
 from sqlspec.config import InstrumentationConfig
+from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -69,8 +70,8 @@ def test_duckdb_driver_supports_arrow(duckdb_driver: DuckDBDriver) -> None:
 
 def test_duckdb_driver_placeholder_style(duckdb_driver: DuckDBDriver) -> None:
     """Test DuckDB driver placeholder style detection."""
-    placeholder_style = duckdb_driver._get_placeholder_style()
-    assert placeholder_style == "qmark"
+    placeholder_style = duckdb_driver.parameter_style
+    assert placeholder_style == ParameterStyle.QMARK
 
 
 def test_duckdb_config_dialect_property() -> None:

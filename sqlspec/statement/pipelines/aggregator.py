@@ -1,13 +1,13 @@
 # Result Aggregation System for SQL Processing Pipeline
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlspec.exceptions import RiskLevel
+from sqlspec.statement.pipelines.results import ValidationResult
 
 if TYPE_CHECKING:
-    from sqlspec.statement.pipelines import ValidationResult
     from sqlspec.statement.pipelines.analyzers import StatementAnalysis
-    from sqlspec.statement.pipelines.validators.base import ProcessorResult
+    from sqlspec.statement.pipelines.results import ProcessorResult
 
 __all__ = ("AggregatedResults", "ResultAggregator")
 
@@ -21,20 +21,14 @@ class AggregatedResults:
     """
 
     # Validation aggregation
-    overall_risk_level: RiskLevel = RiskLevel.SKIP
-    is_safe: bool = True
-    all_issues: "list[str]" = field(default_factory=list)
-    all_warnings: "list[str]" = field(default_factory=list)
+    validation_result: "ValidationResult" = field(
+        default_factory=lambda: ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
+    )
     validator_results: "dict[str, ValidationResult]" = field(default_factory=dict)
 
     # Analysis aggregation
-    has_analysis: bool = False
-    table_count: int = 0
-    join_count: int = 0
-    subquery_count: int = 0
-    complexity_score: int = 0
-    performance_issues: "list[dict[str, Any]]" = field(default_factory=list)
-    security_issues: "list[dict[str, Any]]" = field(default_factory=list)
+    analysis_result: "Optional[StatementAnalysis]" = None
+    analyzer_results: "dict[str, StatementAnalysis]" = field(default_factory=dict)
 
     # Transformation aggregation
     was_transformed: bool = False
@@ -50,44 +44,33 @@ class AggregatedResults:
     # Component-specific metadata
     component_metadata: "dict[str, dict[str, Any]]" = field(default_factory=dict)
 
-    def add_validation_result(self, validator_name: str, result: "ValidationResult") -> None:
-        """Add a validation result from a specific validator.
+    def add_processor_result(self, processor_name: str, result: "ProcessorResult") -> None:
+        """Add a generic processor result."""
+        self.total_processors_run += 1
 
-        Args:
-            validator_name: Name of the validator
-            result: Validation result to add
-        """
+        if result.validation_result:
+            self._add_validation_result(processor_name, result.validation_result)
+
+        if result.analysis_result:
+            self._add_analysis_result(processor_name, result.analysis_result)
+
+        if result.metadata:
+            if "transformer" in result.metadata.get("type", ""):
+                self.add_transformation_info(processor_name, result.metadata)
+            else:
+                self.component_metadata[processor_name] = result.metadata
+
+    def _add_validation_result(self, validator_name: str, result: "ValidationResult") -> None:
+        """Add a validation result from a specific validator."""
         self.validator_results[validator_name] = result
+        self.validation_result.merge(result)
 
-        # Update overall risk level (take the highest)
-        if result.risk_level and result.risk_level.value > self.overall_risk_level.value:
-            self.overall_risk_level = result.risk_level
+    def _add_analysis_result(self, analyzer_name: str, analysis: "StatementAnalysis") -> None:
+        """Add an analysis result from a specific analyzer."""
+        self.analysis_result = analysis
+        self.analyzer_results[analyzer_name] = analysis
 
-        # Update safety status
-        if not result.is_safe:
-            self.is_safe = False
-
-        # Collect issues and warnings
-        if result.issues:
-            self.all_issues.extend(result.issues)
-        if result.warnings:
-            self.all_warnings.extend(result.warnings)
-
-    def add_analysis_result(self, analyzer_name: str, analysis: "StatementAnalysis") -> None:
-        """Add an analysis result from a specific analyzer.
-
-        Args:
-            analyzer_name: Name of the analyzer
-            analysis: Analysis result to add
-        """
-        self.has_analysis = True
-
-        # Aggregate counts
-        self.table_count = len(analysis.tables)
-        self.join_count = analysis.join_count
-        self.subquery_count = analysis.subquery_count
-
-        # Store full analysis in metadata
+        # Store key analysis metrics in component metadata
         self.component_metadata[analyzer_name] = {
             "tables": list(analysis.tables),
             "columns": list(analysis.columns),
@@ -95,138 +78,96 @@ class AggregatedResults:
             "has_aggregation": analysis.has_aggregation,
             "has_window_functions": analysis.has_window_functions,
             "cte_count": analysis.cte_count,
+            "complexity_score": analysis.complexity_score,
         }
 
     def add_transformation_info(self, transformer_name: str, info: "dict[str, Any]") -> None:
-        """Add transformation information.
-
-        Args:
-            transformer_name: Name of the transformer
-            info: Transformation details
-        """
+        """Add transformation information."""
         self.was_transformed = True
-        self.transformations_applied.append(transformer_name)
+        if transformer_name not in self.transformations_applied:
+            self.transformations_applied.append(transformer_name)
 
-        # Extract common metrics
         if "parameters_extracted" in info:
-            self.parameters_extracted += info["parameters_extracted"]
+            self.parameters_extracted += info.get("parameters_extracted", 0)
         if "comments_removed" in info:
-            self.comments_removed += info["comments_removed"]
+            self.comments_removed += info.get("comments_removed", 0)
 
-        # Store full info in metadata
         self.component_metadata[transformer_name] = info
 
-    def add_processor_result(self, processor_name: str, result: "ProcessorResult") -> None:
-        """Add a generic processor result.
-
-        Args:
-            processor_name: Name of the processor
-            result: Processor result to add
-        """
-        self.total_processors_run += 1
-
-        # Handle validation results
-        if result.validation_result:
-            self.add_validation_result(processor_name, result.validation_result)
-
-        # Handle analysis results
-        if result.analysis_result:
-            self.add_analysis_result(processor_name, result.analysis_result)
-
-        # Handle metadata
-        if result.metadata:
-            # Check for specific issue types
-            if "performance_issues" in result.metadata:
-                self.performance_issues.extend(result.metadata["performance_issues"])
-            if "security_issues" in result.metadata:
-                self.security_issues.extend(result.metadata["security_issues"])
-            if "safety_issues" in result.metadata:
-                self.security_issues.extend(result.metadata["safety_issues"])
-
-            # Store all metadata
-            self.component_metadata[processor_name] = result.metadata
-
     def mark_processor_failed(self, processor_name: str, error: str) -> None:
-        """Mark a processor as failed.
-
-        Args:
-            processor_name: Name of the failed processor
-            error: Error message
-        """
-        self.failed_processors.append(processor_name)
+        """Mark a processor as failed."""
+        if processor_name not in self.failed_processors:
+            self.failed_processors.append(processor_name)
         self.component_metadata[f"{processor_name}_error"] = {"error": error}
 
-    def get_summary(self) -> "dict[str, Any]":
-        """Get a summary of all aggregated results.
+    def merge(self, other: "AggregatedResults") -> None:
+        """Merge another AggregatedResults into this one."""
+        self.validation_result.merge(other.validation_result)
+        self.validator_results.update(other.validator_results)
 
-        Returns:
-            Dictionary containing summary information
-        """
-        return {
-            "overall_risk_level": self.overall_risk_level.name,
-            "is_safe": self.is_safe,
-            "total_issues": len(self.all_issues),
-            "total_warnings": len(self.all_warnings),
+        if other.analysis_result:
+            self.analysis_result = other.analysis_result
+        self.analyzer_results.update(other.analyzer_results)
+
+        self.was_transformed = self.was_transformed or other.was_transformed
+        self.transformations_applied.extend(
+            t for t in other.transformations_applied if t not in self.transformations_applied
+        )
+        self.parameters_extracted += other.parameters_extracted
+        self.comments_removed += other.comments_removed
+
+        self.total_processors_run += other.total_processors_run
+        self.failed_processors.extend(p for p in other.failed_processors if p not in self.failed_processors)
+        self.processing_time_ms += other.processing_time_ms
+
+        self.component_metadata.update(other.component_metadata)
+
+    def get_summary(self) -> "dict[str, Any]":
+        """Get a summary of all aggregated results."""
+        summary = {
+            "overall_risk_level": self.validation_result.risk_level.name,
+            "is_safe": self.validation_result.is_safe,
+            "total_issues": len(self.validation_result.issues),
+            "total_warnings": len(self.validation_result.warnings),
             "was_transformed": self.was_transformed,
             "transformations_count": len(self.transformations_applied),
-            "has_analysis": self.has_analysis,
-            "complexity_score": self.complexity_score,
-            "performance_issues_count": len(self.performance_issues),
-            "security_issues_count": len(self.security_issues),
             "processors_run": self.total_processors_run,
             "processors_failed": len(self.failed_processors),
             "processing_time_ms": self.processing_time_ms,
         }
-
-    def get_recommendations(self) -> "list[str]":
-        """Get all recommendations from aggregated results.
-
-        Returns:
-            List of unique recommendations
-        """
-        recommendations = set()
-
-        # From performance issues
-        for issue in self.performance_issues:
-            if "recommendation" in issue:
-                recommendations.add(issue["recommendation"])
-
-        # From security issues
-        for issue in self.security_issues:
-            if "recommendation" in issue:
-                recommendations.add(issue["recommendation"])
-
-        # From component metadata
-        for metadata in self.component_metadata.values():
-            if (
-                isinstance(metadata, dict)
-                and "recommendations" in metadata
-                and isinstance(metadata["recommendations"], list)
-            ):
-                recommendations.update(metadata["recommendations"])
-
-        return sorted(recommendations)
+        if self.analysis_result:
+            summary.update(
+                {
+                    "has_analysis": True,
+                    "table_count": len(self.analysis_result.tables),
+                    "join_count": self.analysis_result.join_count,
+                    "complexity_score": self.analysis_result.complexity_score,
+                }
+            )
+        else:
+            summary.update(
+                {
+                    "has_analysis": False,
+                    "table_count": 0,
+                    "join_count": 0,
+                    "complexity_score": 0,
+                }
+            )
+        return summary
 
     def to_dict(self) -> "dict[str, Any]":
-        """Convert aggregated results to dictionary.
-
-        Returns:
-            Complete dictionary representation
-        """
+        """Convert aggregated results to a dictionary."""
         return {
             "summary": self.get_summary(),
-            "risk_assessment": {
-                "overall_risk_level": self.overall_risk_level.name,
-                "is_safe": self.is_safe,
-                "issues": self.all_issues,
-                "warnings": self.all_warnings,
+            "validation": {
+                "risk_level": self.validation_result.risk_level.name,
+                "is_safe": self.validation_result.is_safe,
+                "issues": self.validation_result.issues,
+                "warnings": self.validation_result.warnings,
             },
             "analysis": {
-                "has_analysis": self.has_analysis,
-                "table_count": self.table_count,
-                "join_count": self.join_count,
-                "subquery_count": self.subquery_count,
-                "complexity_score": self.complexity_score,
+                "has_analysis": bool(self.analysis_result),
+                "details": self.component_metadata.get("StatementAnalyzer", {}),
             },
             "transformations": {
                 "was_transformed": self.was_transformed,
@@ -234,11 +175,6 @@ class AggregatedResults:
                 "parameters_extracted": self.parameters_extracted,
                 "comments_removed": self.comments_removed,
             },
-            "issues": {
-                "performance": self.performance_issues,
-                "security": self.security_issues,
-            },
-            "recommendations": self.get_recommendations(),
             "processing": {
                 "processors_run": self.total_processors_run,
                 "failed_processors": self.failed_processors,
@@ -249,45 +185,24 @@ class AggregatedResults:
 
 
 class ResultAggregator:
-    """Aggregates results from multiple pipeline components.
-
-    This class provides methods to collect and consolidate results from
-    all pipeline processors into a unified view.
-    """
+    """Aggregates results from multiple pipeline components."""
 
     def __init__(self) -> None:
-        """Initialize the result aggregator."""
         self._results = AggregatedResults()
 
     @property
     def results(self) -> AggregatedResults:
-        """Get the aggregated results.
-
-        Returns:
-            The aggregated results object
-        """
+        """Get the aggregated results."""
         return self._results
 
     def aggregate_processor_results(self, results: "list[tuple[str, ProcessorResult]]") -> AggregatedResults:
-        """Aggregate results from multiple processors.
-
-        Args:
-            results: List of (processor_name, result) tuples
-
-        Returns:
-            Aggregated results
-        """
+        """Aggregate results from multiple processors."""
         for processor_name, result in results:
             self._results.add_processor_result(processor_name, result)
-
         return self._results
 
     def add_timing_info(self, processing_time_ms: float) -> None:
-        """Add processing time information.
-
-        Args:
-            processing_time_ms: Total processing time in milliseconds
-        """
+        """Add processing time information."""
         self._results.processing_time_ms = processing_time_ms
 
     def reset(self) -> None:
@@ -295,44 +210,5 @@ class ResultAggregator:
         self._results = AggregatedResults()
 
     def merge_with(self, other: "AggregatedResults") -> None:
-        """Merge another aggregated result into this one.
-
-        Args:
-            other: Other aggregated results to merge
-        """
-        # Merge risk levels (take highest)
-        if other.overall_risk_level.value > self._results.overall_risk_level.value:
-            self._results.overall_risk_level = other.overall_risk_level
-
-        # Merge safety
-        if not other.is_safe:
-            self._results.is_safe = False
-
-        # Merge lists
-        self._results.all_issues.extend(other.all_issues)
-        self._results.all_warnings.extend(other.all_warnings)
-        self._results.transformations_applied.extend(other.transformations_applied)
-        self._results.performance_issues.extend(other.performance_issues)
-        self._results.security_issues.extend(other.security_issues)
-        self._results.failed_processors.extend(other.failed_processors)
-
-        # Merge counts
-        self._results.parameters_extracted += other.parameters_extracted
-        self._results.comments_removed += other.comments_removed
-        self._results.total_processors_run += other.total_processors_run
-        self._results.processing_time_ms += other.processing_time_ms
-
-        # Merge dictionaries
-        self._results.validator_results.update(other.validator_results)
-        self._results.component_metadata.update(other.component_metadata)
-
-        # Update flags
-        if other.was_transformed:
-            self._results.was_transformed = True
-        if other.has_analysis:
-            self._results.has_analysis = True
-            # Take the analysis metrics from the latest
-            self._results.table_count = other.table_count
-            self._results.join_count = other.join_count
-            self._results.subquery_count = other.subquery_count
-            self._results.complexity_score = other.complexity_score
+        """Merge another aggregated result into this one."""
+        self._results.merge(other)

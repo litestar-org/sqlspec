@@ -2,8 +2,9 @@ from typing import Optional
 
 from sqlglot import exp
 
-from sqlspec.statement.pipelines.base import ProcessorProtocol, ValidationResult
+from sqlspec.statement.pipelines.base import ProcessorProtocol
 from sqlspec.statement.pipelines.context import SQLProcessingContext
+from sqlspec.statement.pipelines.results import ProcessorResult
 
 __all__ = ("CommentRemover",)
 
@@ -32,47 +33,41 @@ class CommentRemover(ProcessorProtocol[exp.Expression]):
     ) -> None:
         self.enabled = enabled
 
-    def process(self, context: SQLProcessingContext) -> tuple[exp.Expression, Optional[ValidationResult]]:
+    def process(self, context: SQLProcessingContext) -> "ProcessorResult":
         """Process the expression to remove comments using SQLGlot AST traversal."""
-        assert context.current_expression is not None, "CommentRemover expects a valid current_expression in context."
+        if not self.enabled or context.current_expression is None:
+            return ProcessorResult(expression=context.current_expression)
 
-        if not self.enabled:
-            return context.current_expression, None
+        comments_removed_count = 0
 
-        # Use SQLGlot's transform method for reliable comment removal
         def _remove_comments(node: exp.Expression) -> "Optional[exp.Expression]":
-            # SQLGlot stores comments and provides a .comments property to access them
-            # We can use pop_comments() to remove them
-
+            nonlocal comments_removed_count
             if hasattr(node, "comments") and node.comments:
-                # Preserve SQL hints and MySQL version comments, remove standard comments
+                original_comment_count = len(node.comments)
                 comments_to_keep = []
 
                 for comment in node.comments:
                     comment_text = str(comment).strip()
-
-                    # Check for Oracle hints - SQLGlot may strip the + when parsing
-                    # Look for typical hint keywords to identify hints vs comments
                     hint_keywords = ["INDEX", "USE_NL", "USE_HASH", "PARALLEL", "FULL", "FIRST_ROWS", "ALL_ROWS"]
                     is_oracle_hint = any(keyword in comment_text.upper() for keyword in hint_keywords)
 
-                    # Always preserve Oracle hints - use HintRemover to remove these
                     if is_oracle_hint or (comment_text.startswith("!") and comment_text.endswith("")):
                         comments_to_keep.append(comment)
-                    # All other standard comments are removed
 
-                # Remove all comments first
-                node.pop_comments()
-
-                # Add back only the hints/version comments we want to keep
-                if comments_to_keep:
-                    node.add_comments(comments_to_keep)
+                if len(comments_to_keep) < original_comment_count:
+                    comments_removed_count += original_comment_count - len(comments_to_keep)
+                    node.pop_comments()
+                    if comments_to_keep:
+                        node.add_comments(comments_to_keep)
 
             return node
 
-        if context.current_expression:
-            cleaned_expression = context.current_expression.transform(_remove_comments, copy=True)
-            context.current_expression = cleaned_expression
-            return cleaned_expression, None
+        cleaned_expression = context.current_expression.transform(_remove_comments, copy=True)
+        context.current_expression = cleaned_expression
 
-        return context.current_expression, None
+        metadata = {
+            "type": "transformer",
+            "comments_removed": comments_removed_count,
+            "original_sql": context.initial_sql_string,
+        }
+        return ProcessorResult(expression=cleaned_expression, metadata=metadata)

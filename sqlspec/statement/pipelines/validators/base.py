@@ -6,50 +6,35 @@ from typing import TYPE_CHECKING, Any, Optional
 from sqlglot import exp
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.base import ProcessorProtocol, ValidationResult
+from sqlspec.statement.pipelines.base import ProcessorProtocol
+from sqlspec.statement.pipelines.results import ProcessorResult, ValidationResult
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
 
-__all__ = ("BaseValidator", "ProcessorResult")
-
-
-class ProcessorResult:
-    """Result from a processor with validation and analysis information."""
-
-    def __init__(
-        self,
-        expression: "Optional[exp.Expression]" = None,
-        validation_result: "Optional[ValidationResult]" = None,
-        analysis_result: "Optional[Any]" = None,
-        metadata: "Optional[dict[str, Any]]" = None,
-    ) -> None:
-        self.expression = expression
-        self.validation_result = validation_result
-        self.analysis_result = analysis_result
-        self.metadata = metadata or {}
+__all__ = ("BaseValidator",)
 
 
 class BaseValidator(ProcessorProtocol[exp.Expression], ABC):
     """Base class for all validators."""
 
-    def process(self, context: "SQLProcessingContext") -> "tuple[exp.Expression, Optional[ValidationResult]]":
+    def process(self, context: "SQLProcessingContext") -> "ProcessorResult":
         """Process the SQL context through this validator.
 
         Args:
             context: The SQL processing context
 
         Returns:
-            Tuple of (unchanged expression, validation result)
+            A ProcessorResult containing the outcome of the validation.
         """
         # Call the abstract process method that returns ProcessorResult
         result = self._process_internal(context)
 
         # Return in the expected tuple format
-        expression = result.expression if result.expression is not None else context.current_expression
-        if expression is None:
-            expression = exp.Placeholder()  # Return a dummy expression if none available
-        return expression, result.validation_result
+        if result.expression is None:
+            result.expression = context.current_expression or exp.Placeholder()
+
+        return result
 
     @abstractmethod
     def _process_internal(self, context: "SQLProcessingContext") -> ProcessorResult:
@@ -61,6 +46,7 @@ class BaseValidator(ProcessorProtocol[exp.Expression], ABC):
         Returns:
             ProcessorResult with validation findings
         """
+        raise NotImplementedError
 
     def _create_result(
         self,

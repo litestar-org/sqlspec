@@ -8,6 +8,10 @@ from typing import Any, Optional, Union, cast
 
 from sqlglot import exp
 
+from sqlspec.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def parse_column_expression(column_input: Union[str, exp.Expression]) -> exp.Expression:
     """Parse a column input that might be a complex expression.
@@ -27,69 +31,29 @@ def parse_column_expression(column_input: Union[str, exp.Expression]) -> exp.Exp
     """
     if isinstance(column_input, exp.Expression):
         return column_input
-
-    if not isinstance(column_input, str):
-        # Convert to string and try to parse
-        column_input = str(column_input)
-
-    try:
-        # Try parsing as a full expression first (handles functions, CASE, etc.)
-        parsed = exp.maybe_parse(column_input.strip())
-        if parsed:
-            return parsed
-    except Exception:  # noqa: S110
-        # SQLGlot parsing failed, will use fallback column parsing
-        pass
-
-    # Fallback: treat as simple column name
-    return exp.column(column_input)
+    return exp.maybe_parse(column_input) or exp.column(str(column_input))
 
 
-def parse_table_expression(
-    table_input: Union[str, exp.Expression], explicit_alias: Optional[str] = None
-) -> exp.Expression:
-    """Parse a table input that may contain an alias.
-
-    Handles cases like:
-    - Simple table names: "users" -> Table(this=users)
-    - Table with alias: "users u" -> Table(this=users, alias=u)
-    - Explicit AS syntax: "users AS u" -> Table(this=users, alias=u)
-    - Subqueries: "(SELECT ...)" -> Subquery(...)
-
-    Args:
-        table_input: String or SQLGlot expression representing a table/subquery
-        explicit_alias: Explicit alias to use (overrides any alias in table_input)
-
-    Returns:
-        exp.Expression: Parsed SQLGlot expression (usually Table or Subquery)
-    """
-    if isinstance(table_input, exp.Expression):
-        if explicit_alias:
-            return cast("exp.Expression", exp.alias_(table_input, explicit_alias))
-        return table_input
-
-    if not isinstance(table_input, str):
-        table_input = str(table_input)
-
-    if explicit_alias:
-        # If explicit alias provided, use table_input as table name only
-        return exp.table_(table_input, alias=explicit_alias)
-
-    # Use SQLGlot's parser to handle table expressions with aliases
+def parse_table_expression(table_input: str, explicit_alias: Optional[str] = None) -> exp.Expression:
+    """Parses a table string that can be a name, a name with an alias, or a subquery string."""
     try:
         import sqlglot
 
-        # Parse as FROM clause and extract the table
-        parsed = sqlglot.parse_one(f"FROM {table_input}")
-        table_expr = parsed.find(exp.Table)
-        if table_expr:
-            return table_expr
-    except Exception:  # noqa: S110
-        # SQLGlot table parsing failed, will use basic identifier
-        pass
+        # Wrapping in a SELECT statement is a robust way to parse various table-like syntaxes
+        parsed = sqlglot.parse_one(f"SELECT * FROM {table_input}")
+        if isinstance(parsed, exp.Select) and parsed.args.get("from"):
+            from_clause = cast("exp.From", parsed.args.get("from"))
+            table_expr = from_clause.this
 
-    # Fallback: just table name
-    return exp.table_(table_input)
+            if explicit_alias:
+                # exp.alias_ is safer than .as_()
+                return exp.alias_(table_expr, explicit_alias)
+            return table_expr
+    except Exception:
+        # Fallback for simple table names or if parsing fails
+        logger.debug("Failed to parse table '%s' using sqlglot, using simple fallback", table_input)
+
+    return exp.to_table(table_input, alias=explicit_alias)
 
 
 def parse_order_expression(order_input: Union[str, exp.Expression]) -> exp.Expression:
@@ -110,24 +74,17 @@ def parse_order_expression(order_input: Union[str, exp.Expression]) -> exp.Expre
     if isinstance(order_input, exp.Expression):
         return order_input
 
-    if not isinstance(order_input, str):
-        order_input = str(order_input)
-
     try:
-        # Parse as ORDER BY clause and extract the expression
+        # Use sqlglot's direct parser for Ordered expressions
         import sqlglot
 
-        parsed = sqlglot.parse_one(f"SELECT * FROM t ORDER BY {order_input}")
-        select_expr = parsed.find(exp.Select)
-        if select_expr and select_expr.args.get("order"):
-            order_expr = select_expr.args["order"]
-            if order_expr.expressions:
-                return order_expr.expressions[0]
-    except Exception:  # noqa: S110
-        # SQLGlot ORDER BY parsing failed, will use column fallback
-        pass
+        parsed = sqlglot.parse_one(str(order_input), into=exp.Ordered)
+        if parsed:
+            return parsed
+    except Exception:
+        # Fallback for simple column names or other expressions
+        logger.debug("Failed to parse order expression '%s' using sqlglot, using simple fallback", order_input)
 
-    # Fallback: parse as column expression
     return parse_column_expression(order_input)
 
 

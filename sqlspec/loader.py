@@ -92,18 +92,11 @@ class SQLFileLoader:
             storage_registry: Storage registry for handling file URIs.
         """
         self.encoding = encoding
+        self.storage_registry = storage_registry
         # Instance-level storage for loaded queries and files
         self._queries: dict[str, str] = {}
         self._files: dict[str, SQLFile] = {}
         self._query_to_file: dict[str, str] = {}  # Maps query name to file path
-        self._storage_registry = storage_registry
-
-    @property
-    def storage_registry(self) -> StorageRegistry:
-        """Get or create storage registry."""
-        if self._storage_registry is None:
-            self._storage_registry = storage_registry
-        return self._storage_registry
 
     def _read_file_content(self, path: Union[str, Path]) -> str:
         """Read file content using appropriate backend.
@@ -117,16 +110,10 @@ class SQLFileLoader:
         Raises:
             SQLFileParseError: If file cannot be read.
         """
-        if isinstance(path, Path):
-            self._check_file_path(path)
-            content_bytes = self._read_file_content_bytes(path)
-            return content_bytes.decode(self.encoding)
-
         path_str = str(path)
 
-        # Check if it's a URI or local path
+        # Use storage backend for URIs (anything with a scheme)
         if "://" in path_str:
-            # Use storage backend for URIs
             try:
                 backend = self.storage_registry.get(path_str)
                 return backend.read_text(path_str, encoding=self.encoding)
@@ -134,12 +121,12 @@ class SQLFileLoader:
                 raise SQLFileNotFoundError(path_str) from e
             except Exception as e:
                 raise SQLFileParseError(path_str, path_str, e) from e
-        else:
-            # Handle local file path as string
-            local_path = Path(path_str)
-            self._check_file_path(local_path)
-            content_bytes = self._read_file_content_bytes(local_path)
-            return content_bytes.decode(self.encoding)
+
+        # Handle local file paths
+        local_path = Path(path_str)
+        self._check_file_path(local_path)
+        content_bytes = self._read_file_content_bytes(local_path)
+        return content_bytes.decode(self.encoding)
 
     @staticmethod
     def _read_file_content_bytes(path: Path) -> bytes:
@@ -158,6 +145,19 @@ class SQLFileLoader:
             raise SQLFileParseError(str(path_obj), str(path_obj), ValueError("Path is not a file"))
 
     @staticmethod
+    def _strip_leading_comments(sql_text: str) -> str:
+        """Remove leading comment lines from a SQL string."""
+        lines = sql_text.strip().split("\n")
+        first_sql_line_index = -1
+        for i, line in enumerate(lines):
+            if line.strip() and not line.strip().startswith("--"):
+                first_sql_line_index = i
+                break
+        if first_sql_line_index == -1:
+            return ""  # All comments or empty
+        return "\n".join(lines[first_sql_line_index:]).strip()
+
+    @staticmethod
     def _parse_sql_content(content: str, file_path: str) -> dict[str, str]:
         """Parse SQL content and extract named queries.
 
@@ -171,7 +171,7 @@ class SQLFileLoader:
         Raises:
             SQLFileParseError: If no named queries found.
         """
-        queries = {}
+        queries: dict[str, str] = {}
 
         # Split content by query name patterns
         parts = QUERY_NAME_PATTERN.split(content)
@@ -193,22 +193,7 @@ class SQLFileLoader:
             if not query_name or not sql_text:
                 continue
 
-            # Clean up SQL text - remove leading comment lines
-            lines = sql_text.split("\n")
-            clean_lines = []
-            in_sql = False
-
-            for line in lines:
-                stripped = line.strip()
-                # Skip comment lines until we hit actual SQL
-                if not in_sql and stripped.startswith("--"):
-                    continue
-                if stripped and not stripped.startswith("--"):
-                    in_sql = True
-                if in_sql:
-                    clean_lines.append(line)
-
-            clean_sql = "\n".join(clean_lines).strip()
+            clean_sql = SQLFileLoader._strip_leading_comments(sql_text)
 
             if clean_sql:
                 if query_name in queries:

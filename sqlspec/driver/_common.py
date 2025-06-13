@@ -1,6 +1,6 @@
 """Common driver attributes and utilities."""
 
-from abc import ABC, abstractmethod
+from abc import ABC
 from collections.abc import Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
@@ -42,8 +42,10 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
 
     dialect: "Any"  # DialectType
     """The SQL dialect supported by the underlying database driver."""
-    parameter_style: "ParameterStyle"
-    """The parameter style used by the driver."""
+    supported_parameter_styles: "tuple[ParameterStyle, ...]"
+    """The parameter styles supported by this driver."""
+    default_parameter_style: "ParameterStyle"
+    """The default parameter style to convert to when unsupported style is detected."""
     connection: "ConnectionT"
     """The underlying database connection."""
     config: "SQLConfig"
@@ -142,11 +144,6 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         except (ImportError, AttributeError) as e:  # pragma: no cover
             logger.warning("Prometheus client not available or misconfigured, skipping Prometheus setup: %s", e)
 
-    @abstractmethod
-    def _get_placeholder_style(self) -> "ParameterStyle":
-        """Return the parameter style for the driver (e.g., qmark, numeric)."""
-        raise NotImplementedError  # pragma: no cover
-
     def _connection(self, connection: "Optional[ConnectionT]" = None) -> "ConnectionT":
         return connection or self.connection
 
@@ -224,7 +221,7 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
 
         # Determine the target style from the SQL if not provided
         if target_style is None:
-            target_style = self._get_placeholder_style()
+            target_style = self.parameter_style
 
         # Override target style based on what's actually in the SQL
         # This handles cases where the driver supports multiple styles
@@ -240,10 +237,10 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         # Analyze what format the driver expects based on the placeholder style
         driver_expects_dict = target_style in {
             ParameterStyle.NAMED_COLON,
-            ParameterStyle.ORACLE_NUMERIC,
+            ParameterStyle.POSITIONAL_COLON,
             ParameterStyle.NAMED_AT,
             ParameterStyle.NAMED_DOLLAR,
-            ParameterStyle.PYFORMAT_NAMED,
+            ParameterStyle.NAMED_PYFORMAT,
         }
 
         # Check if parameters are already in the correct format
@@ -266,7 +263,7 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         # If formats match, check if conversion is still needed for special cases
         if driver_expects_dict and params_are_dict:
             # Special case: Oracle numeric style with named dict parameters
-            if target_style == ParameterStyle.ORACLE_NUMERIC and all(
+            if target_style == ParameterStyle.POSITIONAL_COLON and all(
                 p.name and p.name.isdigit() for p in param_info_list
             ):
                 # If all parameters are numeric but named, convert to dict
@@ -306,7 +303,7 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             for i, (param_info, value) in enumerate(zip(param_info_list, parameters)):
                 if param_info.name:
                     # Use the name from SQL
-                    if param_info.style == ParameterStyle.ORACLE_NUMERIC and param_info.name.isdigit():
+                    if param_info.style == ParameterStyle.POSITIONAL_COLON and param_info.name.isdigit():
                         # Oracle uses string keys even for numeric placeholders
                         dict_result[param_info.name] = value
                     else:

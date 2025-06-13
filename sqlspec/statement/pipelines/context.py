@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from sqlspec.statement.parameters import ParameterInfo
     from sqlspec.statement.pipelines.aggregator import AggregatedResults
     from sqlspec.statement.pipelines.analyzers import StatementAnalysis
-    from sqlspec.statement.pipelines.base import ValidationResult
+    from sqlspec.statement.pipelines.results import ValidationResult
     from sqlspec.statement.sql import SQLConfig
     from sqlspec.typing import SQLParameterType
 
@@ -52,7 +52,7 @@ class SQLProcessingContext:
     analysis_result: Optional["StatementAnalysis"] = None
     """Result from the statement analysis stage."""
 
-    aggregated_results: Optional["AggregatedResults"] = None
+    aggregated_results: "AggregatedResults" = field(init=False)
     """Aggregated results from all pipeline processors."""
 
     # --- Flags and metadata ---
@@ -67,6 +67,11 @@ class SQLProcessingContext:
 
     _extra_data: dict[str, Any] = field(default_factory=dict)
     """Allows processors to store arbitrary data if needed, use with caution."""
+
+    def __post_init__(self) -> None:
+        from sqlspec.statement.pipelines.aggregator import AggregatedResults
+
+        self.aggregated_results = AggregatedResults()
 
     def get_additional_data(self, key: str, default: Any = None) -> Any:
         return self._extra_data.get(key, default)

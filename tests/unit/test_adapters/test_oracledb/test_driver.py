@@ -11,6 +11,7 @@ from sqlspec.adapters.oracledb import (
     OracleSyncDriver,
 )
 from sqlspec.config import InstrumentationConfig
+from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQLConfig
 
 
@@ -112,14 +113,14 @@ def test_oracle_async_driver_supports_arrow(oracle_async_driver: OracleAsyncDriv
 
 def test_oracle_sync_driver_placeholder_style(oracle_sync_driver: OracleSyncDriver) -> None:
     """Test Oracle sync driver placeholder style detection."""
-    placeholder_style = oracle_sync_driver._get_placeholder_style()
-    assert placeholder_style.value == "oracle_numeric"
+    placeholder_style = oracle_sync_driver.parameter_style
+    assert placeholder_style == ParameterStyle.POSITIONAL_COLON
 
 
 def test_oracle_async_driver_placeholder_style(oracle_async_driver: OracleAsyncDriver) -> None:
     """Test Oracle async driver placeholder style detection."""
-    placeholder_style = oracle_async_driver._get_placeholder_style()
-    assert placeholder_style.value == "oracle_numeric"
+    placeholder_style = oracle_async_driver.parameter_style
+    assert placeholder_style == ParameterStyle.POSITIONAL_COLON
 
 
 def test_oracle_sync_driver_get_cursor(oracle_sync_driver: OracleSyncDriver, mock_oracle_sync_connection: Mock) -> None:

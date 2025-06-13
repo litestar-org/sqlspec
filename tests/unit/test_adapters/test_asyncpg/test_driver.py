@@ -7,6 +7,7 @@ import pytest
 
 from sqlspec.adapters.asyncpg import AsyncpgDriver
 from sqlspec.config import InstrumentationConfig
+from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -66,8 +67,8 @@ def test_asyncpg_driver_supports_arrow(asyncpg_driver: AsyncpgDriver) -> None:
 
 def test_asyncpg_driver_placeholder_style(asyncpg_driver: AsyncpgDriver) -> None:
     """Test AsyncPG driver placeholder style detection."""
-    placeholder_style = asyncpg_driver._get_placeholder_style()
-    assert placeholder_style.value == "numeric"
+    placeholder_style = asyncpg_driver.parameter_style
+    assert placeholder_style == ParameterStyle.NUMERIC
 
 
 @pytest.mark.asyncio

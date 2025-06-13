@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
@@ -17,7 +16,7 @@ from sqlspec.driver.mixins import (
 )
 from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.logging import get_logger
@@ -40,6 +39,11 @@ class PsycopgSyncDriver(
     """Psycopg Sync Driver Adapter. Refactored for new protocol."""
 
     dialect: "DialectType" = "postgres"  # pyright: ignore[reportInvalidTypeForm]
+    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (
+        ParameterStyle.POSITIONAL_PYFORMAT,
+        ParameterStyle.NAMED_PYFORMAT,
+    )
+    default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
     __supports_arrow__: ClassVar[bool] = True
     __supports_parquet__: ClassVar[bool] = False
 
@@ -57,23 +61,6 @@ class PsycopgSyncDriver(
             default_row_type=default_row_type,
         )
 
-    def _get_placeholder_style(self) -> ParameterStyle:
-        # Use the target parameter style from config if specified
-        if self.config and hasattr(self.config, "target_parameter_style") and self.config.target_parameter_style:
-            style_map = {
-                "qmark": ParameterStyle.QMARK,
-                "named": ParameterStyle.NAMED_COLON,
-                "named_colon": ParameterStyle.NAMED_COLON,
-                "named_at": ParameterStyle.NAMED_AT,
-                "named_dollar": ParameterStyle.NAMED_DOLLAR,
-                "numeric": ParameterStyle.NUMERIC,
-                "pyformat_named": ParameterStyle.PYFORMAT_NAMED,
-                "pyformat_positional": ParameterStyle.PYFORMAT_POSITIONAL,
-            }
-            return style_map.get(self.config.target_parameter_style, ParameterStyle.PYFORMAT_POSITIONAL)
-        # Default to pyformat_positional for psycopg
-        return ParameterStyle.PYFORMAT_POSITIONAL
-
     @staticmethod
     @contextmanager
     def _get_cursor(connection: PsycopgSyncConnection) -> Generator[Any, None, None]:
@@ -85,36 +72,34 @@ class PsycopgSyncDriver(
         statement: SQL,
         connection: Optional[PsycopgSyncConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
-            return self._execute_script(
-                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
-                connection=connection,
-                **kwargs,
-            )
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            return self._execute_script(sql, connection=connection, **kwargs)
+
+        # Determine if we need to convert parameter style
+        detected_styles = {p.style for p in statement.parameter_info}
+        target_style = self.default_parameter_style
+
+        # Check if any detected style is not supported
+        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+        if unsupported_styles:
+            # Convert to default style if we have unsupported styles
+            target_style = self.default_parameter_style
+        elif detected_styles:
+            # Use the first detected style if all are supported
+            # Prefer the first supported style found
+            for style in detected_styles:
+                if style in self.supported_parameter_styles:
+                    target_style = style
+                    break
+
         if statement.is_many:
-            # For execute_many, we need to convert placeholders even if parsing is disabled
-            # Get the SQL with proper placeholder conversion
-            if statement._config.enable_parsing or statement.expression is not None:
-                converted_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-            else:
-                # Manually convert placeholders when parsing is disabled
-                converted_sql = self.convert_placeholders_in_raw_sql(str(statement._sql), self._get_placeholder_style())
+            sql, params = statement.compile(placeholder_style=target_style)
+            return self._execute_many(sql, params, connection=connection, **kwargs)
 
-            return self._execute_many(
-                converted_sql,
-                statement.parameters,
-                connection=connection,
-                **kwargs,
-            )
-
-        return self._execute(
-            statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.get_parameters(style=self._get_placeholder_style()),
-            statement,
-            connection=connection,
-            **kwargs,
-        )
+        sql, params = statement.compile(placeholder_style=target_style)
+        return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
         self,
@@ -123,16 +108,14 @@ class PsycopgSyncDriver(
         statement: SQL,
         connection: Optional[PsycopgSyncConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> Union[SelectResultDict, DMLResultDict]:
         with instrument_operation(self, "psycopg_execute", "database"):
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
 
-            # Convert parameters to the format Psycopg expects
-            # Psycopg can handle both %s (positional) and %(name)s (named) styles
-            # Let the converter detect the actual style from the SQL
-            psycopg_params = self._convert_parameters_to_driver_format(sql, parameters, target_style=None)
+            # Use parameters as compiled by statement.compile()
+            psycopg_params = parameters
 
             if self.instrumentation_config.log_parameters and psycopg_params:
                 logger.debug("Query parameters: %s", psycopg_params)
@@ -147,14 +130,19 @@ class PsycopgSyncDriver(
                     # Query returned data - fetch it
                     fetched_data = cursor.fetchall()
                     column_names = [col.name for col in cursor.description]
-                    return {"data": fetched_data, "column_names": column_names}
+                    result: SelectResultDict = {
+                        "data": fetched_data,
+                        "column_names": column_names,
+                        "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                    }
+                    return result
 
                 # For DML/DDL queries that don't return data
-                return {
-                    "rowcount": cursor.rowcount,
-                    "statusmessage": cursor.statusmessage,
-                    "description": cursor.description,
+                dml_result: DMLResultDict = {
+                    "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                    "status_message": cursor.statusmessage or "OK",
                 }
+                return dml_result
 
     def _execute_many(
         self,
@@ -162,7 +150,7 @@ class PsycopgSyncDriver(
         param_list: Any,
         connection: Optional[PsycopgSyncConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> DMLResultDict:
         with instrument_operation(self, "psycopg_execute_many", "database"):
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
@@ -172,38 +160,43 @@ class PsycopgSyncDriver(
             with self._get_cursor(conn) as cursor:
                 # Psycopg expects a list of parameter dicts for executemany
                 cursor.executemany(sql, param_list or [])
-                return {
-                    "rowcount": cursor.rowcount,
-                    "statusmessage": cursor.statusmessage,
-                    "description": cursor.description,
+                result: DMLResultDict = {
+                    "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                    "status_message": cursor.statusmessage or "OK",
                 }
+                return result
 
     def _execute_script(
         self,
         script: str,
         connection: Optional[PsycopgSyncConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> ScriptResultDict:
         with instrument_operation(self, "psycopg_execute_script", "database"):
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL script: %s", script)
             with self._get_cursor(conn) as cursor:
                 cursor.execute(script)
-                # For scripts, return the status message string so base driver can wrap it
-                return cursor.statusmessage or "SCRIPT EXECUTED"
+                # For scripts, return script result format
+                result: ScriptResultDict = {
+                    "statements_executed": -1,  # Psycopg doesn't provide this info
+                    "status_message": cursor.statusmessage or "SCRIPT EXECUTED",
+                }
+                return result
 
-    def _wrap_select_result(  # pyright: ignore
+    def _wrap_select_result(
         self,
         statement: SQL,
-        result: Any,
+        result: SelectResultDict,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "psycopg_wrap_select", "database"):
-            # Result is now a dict with 'data' and 'column_names'
-            fetched_data: list[PsycopgDictRow] = result["data"]
+            # result must be a dict with keys: data, column_names, rows_affected
+            fetched_data = result["data"]
             column_names = result["column_names"]
+            rows_affected = result["rows_affected"]
             rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
 
             if self.instrumentation_config.log_results_count:
@@ -217,19 +210,21 @@ class PsycopgSyncDriver(
                     statement=statement,
                     data=converted_data_list,
                     column_names=column_names,
+                    rows_affected=rows_affected,
                     operation_type="SELECT",
                 )
             return SQLResult[RowT](
                 statement=statement,
                 data=rows_as_dicts,
                 column_names=column_names,
+                rows_affected=rows_affected,
                 operation_type="SELECT",
             )
 
-    def _wrap_execute_result(  # pyright: ignore
+    def _wrap_execute_result(
         self,
         statement: SQL,
-        result: Any,
+        result: Union[DMLResultDict, ScriptResultDict],
         **kwargs: Any,
     ) -> SQLResult[RowT]:
         with instrument_operation(self, "psycopg_wrap_execute", "database"):
@@ -238,35 +233,22 @@ class PsycopgSyncDriver(
                 if statement.expression:
                     operation_type = str(statement.expression.key).upper()
 
-            if isinstance(result, str):
-                return SQLResult[RowT](
-                    statement=statement,
-                    data=[],
-                    rows_affected=0,
-                    operation_type=operation_type or "SCRIPT",
-                    metadata={"status_message": result},
-                )
-
-            # Handle dict result from _execute
+            # Handle TypedDict results
             if isinstance(result, dict):
-                # Check if this is a SELECT-like result with data (including RETURNING)
-                if "data" in result:
-                    fetched_data: list[PsycopgDictRow] = result["data"]
-                    column_names = result.get("column_names", [])
-                    rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
-
+                # Check if this is a ScriptResultDict
+                if "statements_executed" in result:
                     return SQLResult[RowT](
                         statement=statement,
-                        data=rows_as_dicts,
-                        rows_affected=len(rows_as_dicts),
-                        operation_type=operation_type,
-                        column_names=column_names,
+                        data=[],
+                        rows_affected=0,
+                        operation_type=operation_type or "SCRIPT",
+                        metadata={"status_message": result["status_message"]},
                     )
 
-                # Regular DML/DDL result without RETURNING
-                if "rowcount" in result:
-                    rows_affected = result["rowcount"]
-                    statusmessage = result.get("statusmessage", "")
+                # Check if this is a DMLResultDict
+                if "rows_affected" in result:
+                    rows_affected = result["rows_affected"]
+                    status_message = result["status_message"]
 
                     if self.instrumentation_config.log_results_count:
                         logger.debug("Execute operation affected %d rows", rows_affected)
@@ -276,37 +258,12 @@ class PsycopgSyncDriver(
                         data=[],
                         rows_affected=rows_affected,
                         operation_type=operation_type,
-                        metadata={"status_message": statusmessage},
+                        metadata={"status_message": status_message},
                     )
 
-            # Handle cursor object (legacy path, should not be reached with new code)
-            cursor = result
-            rows_affected = getattr(cursor, "rowcount", -1)
-
-            returned_data = []
-            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
-                if cursor.description:
-                    try:
-                        fetched_returning_data = cursor.fetchall()
-                        if fetched_returning_data:
-                            returned_data = [dict(row) for row in fetched_returning_data]
-                        if not rows_affected or rows_affected == -1:
-                            rows_affected = len(returned_data)
-                    except Exception as e:  # pragma: no cover
-                        logger.debug("Could not fetch RETURNING data in _wrap_execute_result: %s", e)
-
-            if self.instrumentation_config.log_results_count:
-                logger.debug("Execute operation affected %d rows", rows_affected)
-                if returned_data:
-                    logger.debug("RETURNING clause returned %d rows", len(returned_data))
-
-            return SQLResult[RowT](
-                statement=statement,
-                data=returned_data,
-                rows_affected=rows_affected,
-                operation_type=operation_type,
-                column_names=[col.name for col in cursor.description or []] if returned_data else [],
-            )
+            # This shouldn't happen with TypedDict approach
+            msg = f"Unexpected result type: {type(result)}"
+            raise ValueError(msg)
 
     def _connection(self, connection: Optional[PsycopgSyncConnection] = None) -> PsycopgSyncConnection:
         """Get the connection to use for the operation."""
@@ -319,6 +276,11 @@ class PsycopgAsyncDriver(
     """Psycopg Async Driver Adapter. Refactored for new protocol."""
 
     dialect: "DialectType" = "postgres"  # pyright: ignore[reportInvalidTypeForm]
+    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (
+        ParameterStyle.POSITIONAL_PYFORMAT,
+        ParameterStyle.NAMED_PYFORMAT,
+    )
+    default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
     __supports_arrow__: ClassVar[bool] = True
     __supports_parquet__: ClassVar[bool] = False
 
@@ -335,23 +297,6 @@ class PsycopgAsyncDriver(
             default_row_type=DictRow,
         )
 
-    def _get_placeholder_style(self) -> ParameterStyle:
-        # Use the target parameter style from config if specified
-        if self.config and hasattr(self.config, "target_parameter_style") and self.config.target_parameter_style:
-            style_map = {
-                "qmark": ParameterStyle.QMARK,
-                "named": ParameterStyle.NAMED_COLON,
-                "named_colon": ParameterStyle.NAMED_COLON,
-                "named_at": ParameterStyle.NAMED_AT,
-                "named_dollar": ParameterStyle.NAMED_DOLLAR,
-                "numeric": ParameterStyle.NUMERIC,
-                "pyformat_named": ParameterStyle.PYFORMAT_NAMED,
-                "pyformat_positional": ParameterStyle.PYFORMAT_POSITIONAL,
-            }
-            return style_map.get(self.config.target_parameter_style, ParameterStyle.PYFORMAT_POSITIONAL)
-        # Default to pyformat_positional for psycopg
-        return ParameterStyle.PYFORMAT_POSITIONAL
-
     @staticmethod
     @asynccontextmanager
     async def _get_cursor(connection: PsycopgAsyncConnection) -> AsyncGenerator[Any, None]:
@@ -363,36 +308,34 @@ class PsycopgAsyncDriver(
         statement: SQL,
         connection: Optional[PsycopgAsyncConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
-            return await self._execute_script(
-                statement.to_sql(placeholder_style=ParameterStyle.STATIC),
-                connection=connection,
-                **kwargs,
-            )
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            return await self._execute_script(sql, connection=connection, **kwargs)
+
+        # Determine if we need to convert parameter style
+        detected_styles = {p.style for p in statement.parameter_info}
+        target_style = self.default_parameter_style
+
+        # Check if any detected style is not supported
+        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+        if unsupported_styles:
+            # Convert to default style if we have unsupported styles
+            target_style = self.default_parameter_style
+        elif detected_styles:
+            # Use the first detected style if all are supported
+            # Prefer the first supported style found
+            for style in detected_styles:
+                if style in self.supported_parameter_styles:
+                    target_style = style
+                    break
+
         if statement.is_many:
-            # For execute_many, we need to convert placeholders even if parsing is disabled
-            # Get the SQL with proper placeholder conversion
-            if statement._config.enable_parsing or statement.expression is not None:
-                converted_sql = statement.to_sql(placeholder_style=self._get_placeholder_style())
-            else:
-                # Manually convert placeholders when parsing is disabled
-                converted_sql = self.convert_placeholders_in_raw_sql(str(statement._sql), self._get_placeholder_style())
+            sql, params = statement.compile(placeholder_style=target_style)
+            return await self._execute_many(sql, params, connection=connection, **kwargs)
 
-            return await self._execute_many(
-                converted_sql,
-                statement.parameters,
-                connection=connection,
-                **kwargs,
-            )
-
-        return await self._execute(
-            statement.to_sql(placeholder_style=self._get_placeholder_style()),
-            statement.get_parameters(style=self._get_placeholder_style()),
-            statement,
-            connection=connection,
-            **kwargs,
-        )
+        sql, params = statement.compile(placeholder_style=target_style)
+        return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
         self,
@@ -401,16 +344,14 @@ class PsycopgAsyncDriver(
         statement: SQL,
         connection: Optional[PsycopgAsyncConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> Union[SelectResultDict, DMLResultDict]:
         async with instrument_operation_async(self, "psycopg_async_execute", "database"):
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL: %s", sql)
 
-            # Convert parameters to the format Psycopg expects
-            # Psycopg can handle both %s (positional) and %(name)s (named) styles
-            # Let the converter detect the actual style from the SQL
-            psycopg_params = self._convert_parameters_to_driver_format(sql, parameters, target_style=None)
+            # Use parameters as compiled by statement.compile()
+            psycopg_params = parameters
 
             if self.instrumentation_config.log_parameters and psycopg_params:
                 logger.debug("Query parameters: %s", psycopg_params)
@@ -425,14 +366,19 @@ class PsycopgAsyncDriver(
                     # Query returned data - fetch it
                     fetched_data = await cursor.fetchall()
                     column_names = [col.name for col in cursor.description]
-                    return {"data": fetched_data, "column_names": column_names}
+                    result: SelectResultDict = {
+                        "data": fetched_data,
+                        "column_names": column_names,
+                        "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                    }
+                    return result
 
                 # For DML/DDL queries that don't return data
-                return {
-                    "rowcount": cursor.rowcount,
-                    "statusmessage": cursor.statusmessage,
-                    "description": cursor.description,
+                dml_result: DMLResultDict = {
+                    "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                    "status_message": cursor.statusmessage or "OK",
                 }
+                return dml_result
 
     async def _execute_many(
         self,
@@ -440,7 +386,7 @@ class PsycopgAsyncDriver(
         param_list: Any,
         connection: Optional[PsycopgAsyncConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> DMLResultDict:
         async with instrument_operation_async(self, "psycopg_async_execute_many", "database"):
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
@@ -450,38 +396,43 @@ class PsycopgAsyncDriver(
             async with self._get_cursor(conn) as cursor:
                 # Psycopg expects a list of parameter dicts for executemany
                 await cursor.executemany(sql, param_list or [])
-                return {
-                    "rowcount": cursor.rowcount,
-                    "statusmessage": cursor.statusmessage,
-                    "description": cursor.description,
+                result: DMLResultDict = {
+                    "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                    "status_message": cursor.statusmessage or "OK",
                 }
+                return result
 
     async def _execute_script(
         self,
         script: str,
         connection: Optional[PsycopgAsyncConnection] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> ScriptResultDict:
         async with instrument_operation_async(self, "psycopg_async_execute_script", "database"):
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL script: %s", script)
             async with self._get_cursor(conn) as cursor:
                 await cursor.execute(script)
-                # For scripts, return the status message string so base driver can wrap it
-                return cursor.statusmessage or "SCRIPT EXECUTED"
+                # For scripts, return script result format
+                result: ScriptResultDict = {
+                    "statements_executed": -1,  # Psycopg doesn't provide this info
+                    "status_message": cursor.statusmessage or "SCRIPT EXECUTED",
+                }
+                return result
 
-    async def _wrap_select_result(  # pyright: ignore
+    async def _wrap_select_result(
         self,
         statement: SQL,
-        result: Any,
+        result: SelectResultDict,
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         async with instrument_operation_async(self, "psycopg_wrap_select", "database"):
-            # Result is now a dict with 'data' and 'column_names'
-            fetched_data: list[PsycopgDictRow] = result["data"]
+            # result must be a dict with keys: data, column_names, rows_affected
+            fetched_data = result["data"]
             column_names = result["column_names"]
+            rows_affected = result["rows_affected"]
             rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
 
             if self.instrumentation_config.log_results_count:
@@ -495,19 +446,21 @@ class PsycopgAsyncDriver(
                     statement=statement,
                     data=converted_data_list,
                     column_names=column_names,
+                    rows_affected=rows_affected,
                     operation_type="SELECT",
                 )
             return SQLResult[RowT](
                 statement=statement,
                 data=rows_as_dicts,
                 column_names=column_names,
+                rows_affected=rows_affected,
                 operation_type="SELECT",
             )
 
-    async def _wrap_execute_result(  # pyright: ignore
+    async def _wrap_execute_result(
         self,
         statement: SQL,
-        result: Any,
+        result: Union[DMLResultDict, ScriptResultDict],
         **kwargs: Any,
     ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "psycopg_wrap_execute", "database"):
@@ -516,35 +469,22 @@ class PsycopgAsyncDriver(
                 if statement.expression:
                     operation_type = str(statement.expression.key).upper()
 
-            if isinstance(result, str):
-                return SQLResult[RowT](
-                    statement=statement,
-                    data=[],
-                    rows_affected=0,
-                    operation_type=operation_type or "SCRIPT",
-                    metadata={"status_message": result},
-                )
-
-            # Handle dict result from _execute
+            # Handle TypedDict results
             if isinstance(result, dict):
-                # Check if this is a SELECT-like result with data (including RETURNING)
-                if "data" in result:
-                    fetched_data: list[PsycopgDictRow] = result["data"]
-                    column_names = result.get("column_names", [])
-                    rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
-
+                # Check if this is a ScriptResultDict
+                if "statements_executed" in result:
                     return SQLResult[RowT](
                         statement=statement,
-                        data=rows_as_dicts,
-                        rows_affected=len(rows_as_dicts),
-                        operation_type=operation_type,
-                        column_names=column_names,
+                        data=[],
+                        rows_affected=0,
+                        operation_type=operation_type or "SCRIPT",
+                        metadata={"status_message": result["status_message"]},
                     )
 
-                # Regular DML/DDL result without RETURNING
-                if "rowcount" in result:
-                    rows_affected = result["rowcount"]
-                    statusmessage = result.get("statusmessage", "")
+                # Check if this is a DMLResultDict
+                if "rows_affected" in result:
+                    rows_affected = result["rows_affected"]
+                    status_message = result["status_message"]
 
                     if self.instrumentation_config.log_results_count:
                         logger.debug("Execute operation affected %d rows", rows_affected)
@@ -554,37 +494,12 @@ class PsycopgAsyncDriver(
                         data=[],
                         rows_affected=rows_affected,
                         operation_type=operation_type,
-                        metadata={"status_message": statusmessage},
+                        metadata={"status_message": status_message},
                     )
 
-            # Handle cursor object (legacy path, should not be reached with new code)
-            cursor = result
-            rows_affected = getattr(cursor, "rowcount", -1)
-
-            returned_data = []
-            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
-                if cursor.description:
-                    try:
-                        fetched_returning_data = await cursor.fetchall()
-                        if fetched_returning_data:
-                            returned_data = [dict(row) for row in fetched_returning_data]
-                            if not rows_affected or rows_affected == -1:
-                                rows_affected = len(returned_data)
-                    except Exception as e:  # pragma: no cover
-                        logger.debug("Could not fetch RETURNING data in async _wrap_execute_result: %s", e)
-
-            if self.instrumentation_config.log_results_count:
-                logger.debug("Execute operation affected %d rows", rows_affected)
-                if returned_data:
-                    logger.debug("RETURNING clause returned %d rows", len(returned_data))
-
-            return SQLResult[RowT](
-                statement=statement,
-                data=returned_data,
-                rows_affected=rows_affected,
-                operation_type=operation_type,
-                column_names=[col.name for col in cursor.description or []] if returned_data else [],
-            )
+            # This shouldn't happen with TypedDict approach
+            msg = f"Unexpected result type: {type(result)}"
+            raise ValueError(msg)
 
     def _connection(self, connection: Optional[PsycopgAsyncConnection] = None) -> PsycopgAsyncConnection:
         """Get the connection to use for the operation."""

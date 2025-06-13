@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING, Any, Optional
 import sqlglot.expressions as exp
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.validators.base import BaseValidator, ProcessorResult
+from sqlspec.statement.pipelines.results import ProcessorResult
+from sqlspec.statement.pipelines.validators.base import BaseValidator
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -82,7 +83,7 @@ class DMLSafetyValidator(BaseValidator):
 
         if context.current_expression is None:
             return self._create_result(
-                context.current_expression,
+                expression=None,
                 is_safe=True,
                 risk_level=RiskLevel.SKIP,
                 issues=["No expression to validate"],
@@ -161,7 +162,7 @@ class DMLSafetyValidator(BaseValidator):
 
         # Return result
         return self._create_result(
-            context.current_expression,
+            expression=context.current_expression,
             is_safe=len(issues) == 0,
             risk_level=risk_level,
             issues=[issue.description for issue in issues],

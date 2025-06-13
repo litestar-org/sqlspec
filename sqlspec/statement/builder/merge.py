@@ -29,7 +29,7 @@ logger = logging.getLogger("sqlspec")
 
 @dataclass(unsafe_hash=True)
 class MergeBuilder(
-    QueryBuilder[SQLResult[RowT]],  # pyright: ignore[reportInvalidTypeArguments]
+    QueryBuilder[RowT],
     MergeUsingClauseMixin,
     MergeOnClauseMixin,
     MergeMatchedClauseMixin,

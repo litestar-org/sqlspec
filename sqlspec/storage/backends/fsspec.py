@@ -1,5 +1,4 @@
 # pyright: ignore=reportUnknownVariableType
-import fnmatch
 import logging
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Optional, Union
@@ -170,7 +169,7 @@ class FSSpecBackend(InstrumentedObjectStore):
         """List objects with optional prefix."""
         resolved_prefix = self._resolve_path(prefix) if prefix else self.base_path
 
-        # Use fs.find for listing files
+        # Use fs.glob for listing files
         if recursive:
             pattern = f"{resolved_prefix}/**" if resolved_prefix else "**"
         else:
@@ -239,11 +238,11 @@ class FSSpecBackend(InstrumentedObjectStore):
             yield from self._stream_file_batches(obj_path)
 
     async def _read_bytes_async(self, path: str, **kwargs: Any) -> bytes:
-        """Async read bytes using native fsspec if available."""
+        """Async read bytes. Wraps the sync implementation."""
         return await async_(self._read_bytes)(path, **kwargs)
 
     async def _write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:
-        """Async write bytes using native fsspec if available."""
+        """Async write bytes. Wras the sync implementation."""
         return await async_(self._write_bytes)(path, data, **kwargs)
 
     async def _stream_file_batches_async(self, obj_path: str) -> "AsyncIterator[ArrowRecordBatch]":
@@ -255,55 +254,65 @@ class FSSpecBackend(InstrumentedObjectStore):
             yield batch
 
     async def _stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
-        """Async stream Arrow - wraps sync implementation with async_().
+        """Async stream Arrow record batches.
+
+        This implementation provides file-level async streaming. Each file is
+        read into memory before its batches are processed.
+
+        Args:
+            pattern: The glob pattern to match.
+            **kwargs: Additional arguments to pass to the glob method.
 
         Yields:
             AsyncIterator of Arrow record batches
         """
-        # Use sync implementation wrapped with async_() for reliability
-        for batch in await async_(self._stream_arrow)(pattern, **kwargs):
-            yield batch
+        if not PYARROW_INSTALLED:
+            raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
 
-    def _matches_pattern(self, path: str, pattern: str) -> bool:
-        """Check if path matches glob pattern."""
-        return fnmatch.fnmatch(path, self._resolve_path(pattern))
+        # Get paths asynchronously
+        paths = await async_(self.glob)(pattern, **kwargs)
+
+        # Stream batches from each path
+        for path in paths:
+            async for batch in self._stream_file_batches_async(path):
+                yield batch
 
     async def _read_text_async(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
-        """Async read text - wraps sync implementation with async_()."""
+        """Async read text. Wraps the sync implementation."""
         return await async_(self._read_text)(path, encoding, **kwargs)
 
     async def _write_text_async(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
-        """Async write text - wraps sync implementation with async_()."""
+        """Async write text. Wraps the sync implementation."""
         await async_(self._write_text)(path, data, encoding, **kwargs)
 
     async def _list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
-        """Async list objects - wraps sync implementation with async_()."""
+        """Async list objects. Wraps the sync implementation."""
         return await async_(self._list_objects)(prefix, recursive, **kwargs)
 
     async def _exists_async(self, path: str, **kwargs: Any) -> bool:
-        """Async exists check - wraps sync implementation with async_()."""
+        """Async exists check. Wraps the sync implementation."""
         return await async_(self._exists)(path, **kwargs)
 
     async def _delete_async(self, path: str, **kwargs: Any) -> None:
-        """Async delete - wraps sync implementation with async_()."""
+        """Async delete. Wraps the sync implementation."""
         await async_(self._delete)(path, **kwargs)
 
     async def _copy_async(self, source: str, destination: str, **kwargs: Any) -> None:
-        """Async copy - wraps sync implementation with async_()."""
+        """Async copy. Wraps the sync implementation."""
         await async_(self._copy)(source, destination, **kwargs)
 
     async def _move_async(self, source: str, destination: str, **kwargs: Any) -> None:
-        """Async move - wraps sync implementation with async_()."""
+        """Async move. Wraps the sync implementation."""
         await async_(self._move)(source, destination, **kwargs)
 
     async def _get_metadata_async(self, path: str, **kwargs: Any) -> dict[str, Any]:
-        """Async get metadata - wraps sync implementation with async_()."""
+        """Async get metadata. Wraps the sync implementation."""
         return await async_(self._get_metadata)(path, **kwargs)
 
     async def _read_arrow_async(self, path: str, **kwargs: Any) -> "ArrowTable":
-        """Async read Arrow - wraps sync implementation with async_()."""
+        """Async read Arrow. Wraps the sync implementation."""
         return await async_(self._read_arrow)(path, **kwargs)
 
     async def _write_arrow_async(self, path: str, table: "ArrowTable", **kwargs: Any) -> None:
-        """Async write Arrow - wraps sync implementation with async_()."""
+        """Async write Arrow. Wraps the sync implementation."""
         await async_(self._write_arrow)(path, table, **kwargs)

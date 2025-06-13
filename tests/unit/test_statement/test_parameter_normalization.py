@@ -66,7 +66,7 @@ class TestParameterNormalization:
         stmt = SQL(sql, parameters=["john"])
 
         # Get SQL with original style
-        result_sql = stmt.to_sql(placeholder_style=ParameterStyle.PYFORMAT_POSITIONAL)
+        result_sql = stmt.to_sql(placeholder_style=ParameterStyle.POSITIONAL_PYFORMAT)
 
         # Should have %s back
         assert "%s" in result_sql
@@ -86,9 +86,9 @@ class TestParameterNormalization:
 
     def test_sqlglot_incompatible_styles_constant(self) -> None:
         """Test that SQLGLOT_INCOMPATIBLE_STYLES contains the correct styles."""
-        assert ParameterStyle.PYFORMAT_POSITIONAL in SQLGLOT_INCOMPATIBLE_STYLES
-        assert ParameterStyle.PYFORMAT_NAMED in SQLGLOT_INCOMPATIBLE_STYLES
-        assert ParameterStyle.ORACLE_NUMERIC in SQLGLOT_INCOMPATIBLE_STYLES
+        assert ParameterStyle.POSITIONAL_PYFORMAT in SQLGLOT_INCOMPATIBLE_STYLES
+        assert ParameterStyle.NAMED_PYFORMAT in SQLGLOT_INCOMPATIBLE_STYLES
+        assert ParameterStyle.POSITIONAL_COLON in SQLGLOT_INCOMPATIBLE_STYLES
 
         # These should NOT be in the incompatible set
         assert ParameterStyle.QMARK not in SQLGLOT_INCOMPATIBLE_STYLES

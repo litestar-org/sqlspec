@@ -335,7 +335,7 @@ class SyncStorageMixin(StorageMixinBase):
 
     def export_to_storage(
         self,
-        query: "Union[str, Statement]",
+        query: "Statement",
         destination_uri: str,
         format: "Optional[str]" = None,
         **options: Any,
@@ -353,18 +353,12 @@ class SyncStorageMixin(StorageMixinBase):
         Returns:
             Number of rows exported
         """
-        with instrument_operation(
-            self,
-            "export_to_storage",
-            "storage",
-            destination_uri=destination_uri,
-            format=format,
-        ):
+        with instrument_operation(self, "export_to_storage", "storage", destination_uri=destination_uri, format=format):
             return self._export_to_storage(query, destination_uri, format, **options)
 
     def _export_to_storage(
         self,
-        query: "Union[str, Statement]",
+        query: "Statement",
         destination_uri: str,
         format: "Optional[str]" = None,
         **options: Any,
@@ -679,18 +673,21 @@ class AsyncStorageMixin(StorageMixinBase):
         if isinstance(statement, str):
             sql_obj = SQL(statement, parameters=parameters, config=config or self.config, dialect=driver_dialect)
         elif hasattr(statement, "to_sql"):  # SQL object
-            sql_obj = statement
+            sql_obj = statement  # type: ignore[assignment]
             if parameters is not None:
                 # Create a new SQL object with the provided parameters
                 sql_obj = SQL(
-                    statement.sql, parameters=parameters, config=config or sql_obj._config, dialect=driver_dialect
+                    statement.sql,  # type: ignore[arg-type]
+                    parameters=parameters,
+                    config=config or sql_obj._config,
+                    dialect=driver_dialect,
                 )
         else:  # sqlglot Expression
             sql_obj = SQL(statement, parameters=parameters, config=config or self.config, dialect=driver_dialect)
 
         # Apply filters
         for filter_func in filters:
-            sql_obj = filter_func(sql_obj)
+            sql_obj = filter_func(sql_obj)  # type: ignore[operator]
 
         # Delegate to protected method that drivers can override
         return await self._fetch_arrow_table(sql_obj, connection=connection, **kwargs)
@@ -818,7 +815,7 @@ class AsyncStorageMixin(StorageMixinBase):
 
     async def export_to_storage(
         self,
-        query: "Union[str, Statement]",
+        query: "Statement",
         destination_uri: str,
         format: "Optional[str]" = None,
         **options: Any,
@@ -847,7 +844,7 @@ class AsyncStorageMixin(StorageMixinBase):
 
     async def _export_to_storage(
         self,
-        query: "Union[str, Statement]",
+        query: "Statement",
         destination_uri: str,
         format: "Optional[str]" = None,
         **options: Any,
