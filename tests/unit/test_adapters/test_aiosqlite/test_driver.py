@@ -82,7 +82,7 @@ def test_aiosqlite_driver_supports_arrow(aiosqlite_driver: AiosqliteDriver) -> N
 
 def test_aiosqlite_driver_placeholder_style(aiosqlite_driver: AiosqliteDriver) -> None:
     """Test AIOSQLite driver placeholder style detection."""
-    placeholder_style = aiosqlite_driver.parameter_style
+    placeholder_style = aiosqlite_driver.default_parameter_style
     assert placeholder_style == ParameterStyle.QMARK
 
 
@@ -166,8 +166,10 @@ async def test_aiosqlite_driver_non_query_statement(
     # Verify cursor operations
     mock_cursor.execute.assert_called_once()
 
-    # The result should be the cursor for non-query statements
-    assert result is mock_cursor
+    # The result should be a DMLResultDict for non-query statements
+    assert isinstance(result, dict)
+    assert "rows_affected" in result
+    assert result["rows_affected"] == 1
 
 
 @pytest.mark.asyncio

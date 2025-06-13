@@ -109,7 +109,7 @@ def test_bigquery_driver_initialization_with_job_config(mock_bigquery_connection
 
 def test_bigquery_driver_get_placeholder_style(bigquery_driver: BigQueryDriver) -> None:
     """Test BigQueryDriver placeholder style is NAMED_AT."""
-    style = bigquery_driver.parameter_style
+    style = bigquery_driver.default_parameter_style
     assert style == ParameterStyle.NAMED_AT
 
 

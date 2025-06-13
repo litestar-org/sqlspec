@@ -1,14 +1,15 @@
-# TODO: TRY300 - Review try-except patterns for else block opportunities
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from sqlglot import exp
 from sqlglot.optimizer import simplify
 
 from sqlspec.exceptions import RiskLevel
 from sqlspec.statement.pipelines.base import ProcessorProtocol
-from sqlspec.statement.pipelines.context import SQLProcessingContext
-from sqlspec.statement.pipelines.results import ProcessorResult, ValidationResult
+from sqlspec.statement.pipelines.result_types import TransformationLog, ValidationError
+
+if TYPE_CHECKING:
+    from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 __all__ = ("ExpressionSimplifier", "SimplificationConfig")
 
@@ -24,7 +25,7 @@ class SimplificationConfig:
     enable_complement_removal: bool = True
 
 
-class ExpressionSimplifier(ProcessorProtocol[exp.Expression]):
+class ExpressionSimplifier(ProcessorProtocol):
     """Advanced expression optimization using SQLGlot's simplification engine.
 
     This transformer applies SQLGlot's comprehensive simplification suite:
@@ -48,33 +49,48 @@ class ExpressionSimplifier(ProcessorProtocol[exp.Expression]):
         self.enabled = enabled
         self.config = config or SimplificationConfig()
 
-    def process(self, context: SQLProcessingContext) -> "ProcessorResult":
+    def process(self, expression: "exp.Expression", context: "SQLProcessingContext") -> "exp.Expression":
         """Process the expression to apply SQLGlot's simplification optimizations."""
-        if not self.enabled or context.current_expression is None:
-            return ProcessorResult(expression=context.current_expression)
+        if not self.enabled:
+            return expression
 
-        original_sql = context.current_expression.sql(dialect=context.dialect)
+        original_sql = expression.sql(dialect=context.dialect)
 
         try:
-            simplified = simplify.simplify(context.current_expression.copy())
+            simplified = simplify.simplify(expression.copy())
         except Exception as e:
-            result = ValidationResult(
-                is_safe=True, risk_level=RiskLevel.MEDIUM, warnings=[f"Expression simplification failed: {e}"]
+            # Add warning to context
+            error = ValidationError(
+                message=f"Expression simplification failed: {e}",
+                code="simplification-failed",
+                risk_level=RiskLevel.LOW,  # Not critical
+                processor=self.__class__.__name__,
+                expression=expression,
             )
-            return ProcessorResult(expression=context.current_expression, validation_result=result)
+            context.validation_errors.append(error)
+            return expression
+        else:
+            simplified_sql = simplified.sql(dialect=context.dialect)
+            chars_saved = len(original_sql) - len(simplified_sql)
 
-        context.current_expression = simplified
-        simplified_sql = simplified.sql(dialect=context.dialect)
-        chars_saved = len(original_sql) - len(simplified_sql)
+            # Log transformation
+            if original_sql != simplified_sql:
+                log = TransformationLog(
+                    description=f"Simplified expression (saved {chars_saved} chars)",
+                    processor=self.__class__.__name__,
+                    before=original_sql,
+                    after=simplified_sql,
+                )
+                context.transformations.append(log)
 
-        metadata = {
-            "type": "transformer",
-            "simplified": original_sql != simplified_sql,
-            "chars_saved": chars_saved,
-            "optimizations_applied": self._get_applied_optimizations(),
-        }
+            # Store metadata
+            context.metadata[self.__class__.__name__] = {
+                "simplified": original_sql != simplified_sql,
+                "chars_saved": chars_saved,
+                "optimizations_applied": self._get_applied_optimizations(),
+            }
 
-        return ProcessorResult(expression=simplified, metadata=metadata)
+            return simplified
 
     def _get_applied_optimizations(self) -> list[str]:
         """Get list of optimization types that are enabled."""

@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 import logging
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
@@ -75,22 +74,12 @@ class AsyncmyDriver(
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
-        # Determine if we need to convert parameter style
-        detected_style = statement.parameter_style
-        target_style = self.default_parameter_style
-
-        # Only convert if the detected style is not supported
-        if detected_style and detected_style not in self.supported_parameter_styles:
-            target_style = self.default_parameter_style
-        elif detected_style:
-            # Use the detected style if it's supported
-            target_style = detected_style
+        # Let the SQL object handle parameter style conversion based on dialect support
+        sql, params = statement.compile(placeholder_style=self.default_parameter_style)
 
         if statement.is_many:
-            sql, params = statement.compile(placeholder_style=target_style)
             return await self._execute_many(sql, params, connection=connection, **kwargs)
 
-        sql, params = statement.compile(placeholder_style=target_style)
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
@@ -232,11 +221,10 @@ class AsyncmyDriver(
                 logger.debug("Asyncmy query returned %d rows", len(rows_as_dicts))
 
             if schema_type:
-                converted_data_seq = self.to_schema(data=rows_as_dicts, schema_type=schema_type)
-                converted_data_list = list(converted_data_seq) if converted_data_seq is not None else []
+                converted_data = self.to_schema(data=rows_as_dicts, schema_type=schema_type)
                 return SQLResult[ModelDTOT](
                     statement=statement,
-                    data=converted_data_list,
+                    data=list(converted_data),
                     column_names=column_names,
                     rows_affected=rows_affected,
                     operation_type="SELECT",
@@ -258,33 +246,34 @@ class AsyncmyDriver(
     ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "asyncmy_wrap_execute", "database"):
             operation_type = "UNKNOWN"
-            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
-                if statement.expression:
-                    operation_type = str(statement.expression.key).upper()
+            if statement.expression:
+                operation_type = str(statement.expression.key).upper()
 
             # Handle script results
             if "statements_executed" in result:
+                script_result = cast("ScriptResultDict", result)
                 return SQLResult[RowT](
                     statement=statement,
-                    data=cast("list[RowT]", []),
+                    data=[],
                     rows_affected=0,
                     operation_type="SCRIPT",
                     metadata={
-                        "status_message": result.get("status_message", ""),
-                        "statements_executed": result.get("statements_executed", -1),
+                        "status_message": script_result.get("status_message", ""),
+                        "statements_executed": script_result.get("statements_executed", -1),
                     },
                 )
 
             # Handle DML results
-            rows_affected = result.get("rows_affected", -1)
-            status_message = result.get("status_message", "")
+            dml_result = cast("DMLResultDict", result)
+            rows_affected = dml_result.get("rows_affected", -1)
+            status_message = dml_result.get("status_message", "")
 
             if self.instrumentation_config.log_results_count:
                 logger.debug("Asyncmy execute operation affected %d rows", rows_affected)
 
             return SQLResult[RowT](
                 statement=statement,
-                data=cast("list[RowT]", []),
+                data=[],
                 rows_affected=rows_affected,
                 operation_type=operation_type,
                 metadata={"status_message": status_message},

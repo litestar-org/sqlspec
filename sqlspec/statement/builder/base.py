@@ -16,9 +16,11 @@ from sqlglot import Dialect, exp
 from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 from sqlglot.optimizer import optimize
+from sqlglot.optimizer.eliminate_subqueries import eliminate_subqueries
 from sqlglot.optimizer.optimize_joins import optimize_joins
 from sqlglot.optimizer.pushdown_predicates import pushdown_predicates
 from sqlglot.optimizer.simplify import simplify
+from sqlglot.optimizer.unnest_subqueries import unnest_subqueries
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
@@ -389,13 +391,9 @@ class QueryBuilder(ABC, Generic[RowT]):
                 # Apply additional SQLGlot optimizations
                 if isinstance(optimized, exp.Select):
                     with self._debug_build_phase("eliminate_subqueries"):
-                        from sqlglot.optimizer.eliminate_subqueries import eliminate_subqueries
-
                         optimized = eliminate_subqueries(optimized.copy())
 
                     with self._debug_build_phase("unnest_subqueries"):
-                        from sqlglot.optimizer.unnest_subqueries import unnest_subqueries
-
                         optimized = unnest_subqueries(optimized.copy())
 
         except Exception as e:

@@ -1,18 +1,16 @@
 # DML Safety Validator - Consolidates risky DML operations and DDL prevention
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
-import sqlglot.expressions as exp
+from sqlglot import expressions as exp
 
-from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.results import ProcessorResult
 from sqlspec.statement.pipelines.validators.base import BaseValidator
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
 
-__all__ = ("DMLSafetyConfig", "DMLSafetyValidator", "SafetyIssue", "StatementCategory")
+__all__ = ("DMLSafetyConfig", "DMLSafetyValidator", "StatementCategory")
 
 
 class StatementCategory(Enum):
@@ -37,19 +35,6 @@ class DMLSafetyConfig:
     max_affected_rows: "Optional[int]" = None  # Limit for DML operations
 
 
-@dataclass
-class SafetyIssue:
-    """Represents a safety issue found during validation."""
-
-    category: StatementCategory
-    operation: str
-    risk_level: RiskLevel
-    description: str
-    recommendation: str
-    affected_tables: "list[str]" = field(default_factory=list)
-    estimated_impact: "Optional[str]" = None
-
-
 class DMLSafetyValidator(BaseValidator):
     """Unified validator for DML/DDL safety checks.
 
@@ -69,106 +54,69 @@ class DMLSafetyValidator(BaseValidator):
         super().__init__()
         self.config = config or DMLSafetyConfig()
 
-    def _process_internal(self, context: "SQLProcessingContext") -> ProcessorResult:
-        """Process SQL statement for safety validation.
+    def validate(self, expression: "exp.Expression", context: "SQLProcessingContext") -> None:
+        """Validate SQL statement for safety issues.
 
         Args:
+            expression: The SQL expression to validate
             context: The SQL processing context
-
-        Returns:
-            ProcessorResult with validation findings
         """
-        issues: list[SafetyIssue] = []
-        risk_level = RiskLevel.SKIP
-
-        if context.current_expression is None:
-            return self._create_result(
-                expression=None,
-                is_safe=True,
-                risk_level=RiskLevel.SKIP,
-                issues=["No expression to validate"],
-                metadata={"skipped": True},
-            )
-
         # Categorize statement
-        category = self._categorize_statement(context.current_expression)
-        operation = self._get_operation_type(context.current_expression)
+        category = self._categorize_statement(expression)
+        operation = self._get_operation_type(expression)
 
         # Check DDL restrictions
         if category == StatementCategory.DDL and self.config.prevent_ddl:
             if operation not in self.config.allowed_ddl_operations:
-                issues.append(
-                    SafetyIssue(
-                        category=category,
-                        operation=operation,
-                        risk_level=RiskLevel.CRITICAL,
-                        description=f"DDL operation '{operation}' is not allowed",
-                        recommendation="Use migration tools for schema changes",
-                    )
+                self.add_error(
+                    context,
+                    message=f"DDL operation '{operation}' is not allowed",
+                    code="ddl-not-allowed",
+                    risk_level=RiskLevel.CRITICAL,
+                    expression=expression,
                 )
 
         # Check DML safety
         elif category == StatementCategory.DML:
-            if operation in self.config.require_where_clause and not self._has_where_clause(context.current_expression):
-                issues.append(
-                    SafetyIssue(
-                        category=category,
-                        operation=operation,
-                        risk_level=RiskLevel.HIGH,
-                        description=f"{operation} without WHERE clause affects all rows",
-                        recommendation="Add WHERE clause or use TRUNCATE if intentional",
-                    )
+            if operation in self.config.require_where_clause and not self._has_where_clause(expression):
+                self.add_error(
+                    context,
+                    message=f"{operation} without WHERE clause affects all rows",
+                    code=f"{operation.lower()}-without-where",
+                    risk_level=RiskLevel.HIGH,
+                    expression=expression,
                 )
 
             # Check affected row limits
             if self.config.max_affected_rows:
-                estimated_rows = self._estimate_affected_rows(context.current_expression)
+                estimated_rows = self._estimate_affected_rows(expression)
                 if estimated_rows > self.config.max_affected_rows:
-                    issues.append(
-                        SafetyIssue(
-                            category=category,
-                            operation=operation,
-                            risk_level=RiskLevel.MEDIUM,
-                            description=f"Operation may affect {estimated_rows:,} rows (limit: {self.config.max_affected_rows:,})",
-                            recommendation="Consider batching or increasing limit",
-                        )
+                    self.add_error(
+                        context,
+                        message=f"Operation may affect {estimated_rows:,} rows (limit: {self.config.max_affected_rows:,})",
+                        code="excessive-rows-affected",
+                        risk_level=RiskLevel.MEDIUM,
+                        expression=expression,
                     )
 
         # Check DCL restrictions
         elif category == StatementCategory.DCL and self.config.prevent_dcl:
-            issues.append(
-                SafetyIssue(
-                    category=category,
-                    operation=operation,
-                    risk_level=RiskLevel.HIGH,
-                    description=f"DCL operation '{operation}' is not allowed",
-                    recommendation="Contact DBA for permission changes",
-                )
+            self.add_error(
+                context,
+                message=f"DCL operation '{operation}' is not allowed",
+                code="dcl-not-allowed",
+                risk_level=RiskLevel.HIGH,
+                expression=expression,
             )
 
-        # Determine overall risk
-        if issues:
-            risk_level = max(issue.risk_level for issue in issues)
-
-        # Build metadata
-        metadata = {
+        # Store metadata in context
+        context.metadata[self.__class__.__name__] = {
             "statement_category": category.value,
             "operation": operation,
-            "safety_issues": [self._issue_to_dict(issue) for issue in issues],
-            "has_where_clause": self._has_where_clause(context.current_expression),
-            "affected_tables": self._extract_affected_tables(context.current_expression),
+            "has_where_clause": self._has_where_clause(expression) if category == StatementCategory.DML else None,
+            "affected_tables": self._extract_affected_tables(expression),
             "migration_mode": self.config.migration_mode,
         }
-
-        # Return result
-        return self._create_result(
-            expression=context.current_expression,
-            is_safe=len(issues) == 0,
-            risk_level=risk_level,
-            issues=[issue.description for issue in issues],
-            warnings=[issue.recommendation for issue in issues if issue.risk_level == RiskLevel.LOW],
-            metadata=metadata,
-        )
 
     def _categorize_statement(self, expression: "exp.Expression") -> StatementCategory:
         """Categorize SQL statement type.
@@ -309,21 +257,3 @@ class DMLSafetyValidator(BaseValidator):
 
         return tables
 
-    def _issue_to_dict(self, issue: SafetyIssue) -> "dict[str, Any]":
-        """Convert SafetyIssue to dictionary.
-
-        Args:
-            issue: The safety issue
-
-        Returns:
-            Dictionary representation
-        """
-        return {
-            "category": issue.category.value,
-            "operation": issue.operation,
-            "risk_level": issue.risk_level.name,
-            "description": issue.description,
-            "recommendation": issue.recommendation,
-            "affected_tables": issue.affected_tables,
-            "estimated_impact": issue.estimated_impact,
-        }

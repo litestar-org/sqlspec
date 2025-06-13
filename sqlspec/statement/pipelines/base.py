@@ -6,7 +6,7 @@ SQL processing steps, such as transformations and validations.
 
 import contextlib
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Generic, Optional
+from typing import TYPE_CHECKING, Optional
 
 import sqlglot  # Added
 from sqlglot import exp
@@ -15,7 +15,7 @@ from typing_extensions import TypeVar
 
 from sqlspec.exceptions import RiskLevel, SQLValidationError
 from sqlspec.statement.pipelines.context import SQLProcessingContext, StatementPipelineResult
-from sqlspec.statement.pipelines.results import ProcessorResult, ValidationResult
+from sqlspec.statement.pipelines.results import ValidationResult
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 
@@ -86,18 +86,19 @@ class UsesExpression:
             raise SQLValidationError(msg, sql_str, RiskLevel.HIGH) from e
 
 
-class ProcessorProtocol(ABC, Generic[ExpressionT]):
+class ProcessorProtocol(ABC):
     """Defines the interface for a single processing step in the SQL pipeline."""
 
     @abstractmethod
-    def process(self, context: "SQLProcessingContext") -> "ProcessorResult":
+    def process(self, expression: "exp.Expression", context: "SQLProcessingContext") -> "exp.Expression":
         """Processes an SQL expression.
 
         Args:
+            expression: The SQL expression to process.
             context: The SQLProcessingContext holding the current state and config.
 
         Returns:
-            A ProcessorResult containing the outcome of the processing step.
+            The (possibly modified) SQL expression.
         """
         raise NotImplementedError
 
@@ -107,9 +108,9 @@ class StatementPipeline:
 
     def __init__(
         self,
-        transformers: Optional[list[ProcessorProtocol[exp.Expression]]] = None,
-        validators: Optional[list[ProcessorProtocol[exp.Expression]]] = None,
-        analyzers: Optional[list[ProcessorProtocol[exp.Expression]]] = None,
+        transformers: Optional[list[ProcessorProtocol]] = None,
+        validators: Optional[list[ProcessorProtocol]] = None,
+        analyzers: Optional[list[ProcessorProtocol]] = None,
     ) -> None:
         self.transformers = transformers or []
         self.validators = validators or []
@@ -186,11 +187,21 @@ class StatementPipeline:
                             "correlation_id": correlation_id,
                         },
                     )
-                result = transformer.process(context)
-                if result.expression:
-                    context.current_expression = result.expression
-                if result.metadata:
-                    context.aggregated_results.add_transformation_info(transformer_name, result.metadata)
+                try:
+                    context.current_expression = transformer.process(context.current_expression, context)
+                except Exception as e:
+                    # Log transformation failure as a validation error
+                    from sqlspec.statement.pipelines.result_types import ValidationError as ValError
+                    error = ValError(
+                        message=f"Transformer {transformer_name} failed: {e}",
+                        code="transformer-failure",
+                        risk_level=RiskLevel.CRITICAL,
+                        processor=transformer_name,
+                        expression=context.current_expression,
+                    )
+                    context.validation_errors.append(error)
+                    logger.error("Transformer %s failed: %s", transformer_name, e)
+                    break
 
         # 2. Validation Stage
         if context.config.enable_validation:
@@ -205,110 +216,122 @@ class StatementPipeline:
                             "correlation_id": correlation_id,
                         },
                     )
-                result = validator_component.process(context)
-                context.aggregated_results.add_processor_result(validator_name, result)
+                try:
+                    # Validators process and add errors to context
+                    validator_component.process(context.current_expression, context)
+                except Exception as e:
+                    # Log validator failure
+                    from sqlspec.statement.pipelines.result_types import ValidationError as ValError
+                    error = ValError(
+                        message=f"Validator {validator_name} failed: {e}",
+                        code="validator-failure", 
+                        risk_level=RiskLevel.CRITICAL,
+                        processor=validator_name,
+                        expression=context.current_expression,
+                    )
+                    context.validation_errors.append(error)
+                    logger.error("Validator %s failed: %s", validator_name, e)
 
         # 3. Analysis Stage
         if context.config.enable_analysis and context.current_expression is not None:
             for analyzer_component in self.analyzers:
                 analyzer_name = analyzer_component.__class__.__name__
-                result = analyzer_component.process(context)
-                context.aggregated_results.add_processor_result(analyzer_name, result)
-                if result.analysis_result:
-                    context.analysis_result = result.analysis_result
-                    break  # Assuming one primary analyzer for now
+                if context.config.debug_mode:
+                    logger.debug(
+                        "Running analyzer: %s",
+                        analyzer_name,
+                        extra={
+                            "analyzer": analyzer_name,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+                try:
+                    # Analyzers process and add findings to context
+                    analyzer_component.process(context.current_expression, context)
+                except Exception as e:
+                    # Log analyzer failure
+                    from sqlspec.statement.pipelines.result_types import ValidationError as ValError
+                    error = ValError(
+                        message=f"Analyzer {analyzer_name} failed: {e}",
+                        code="analyzer-failure",
+                        risk_level=RiskLevel.MEDIUM,  # Analyzer failures are less critical
+                        processor=analyzer_name,
+                        expression=context.current_expression,
+                    )
+                    context.validation_errors.append(error)
+                    logger.error("Analyzer %s failed: %s", analyzer_name, e)
 
-        if context.validation_result:
-            context.aggregated_results.validation_result = context.validation_result
-
+        # Return new PipelineResult
+        from sqlspec.statement.pipelines.context import PipelineResult
+        
+        # Also create legacy result for backward compatibility
+        validation_result = None
+        if context.validation_errors:
+            validation_result = ValidationResult(
+                is_safe=not context.has_errors,
+                risk_level=context.risk_level,
+                issues=[error.message for error in context.validation_errors],
+            )
+        
         return StatementPipelineResult(
             final_expression=context.current_expression,
             merged_parameters=context.merged_parameters,
             parameter_info=context.parameter_info,
-            validation_result=context.validation_result,
-            analysis_result=context.analysis_result,
+            validation_result=validation_result,
+            analysis_result=None,  # Legacy field
             input_sql_had_placeholders=context.input_sql_had_placeholders,
-            aggregated_results=context.aggregated_results,
+            aggregated_results=None,  # Legacy field
         )
 
 
-class SQLValidator(ProcessorProtocol[exp.Expression]):
+class SQLValidator(UsesExpression):
     """Main SQL validator that orchestrates multiple validation checks.
     This class functions as a validation pipeline runner.
     """
 
     def __init__(
         self,
-        validators: "Optional[Sequence[ProcessorProtocol[exp.Expression]]]" = None,
+        validators: "Optional[Sequence[ProcessorProtocol]]" = None,
         min_risk_to_raise: "Optional[RiskLevel]" = RiskLevel.HIGH,
     ) -> None:
-        self.validators: list[ProcessorProtocol[exp.Expression]] = list(validators) if validators is not None else []
+        self.validators: list[ProcessorProtocol] = list(validators) if validators is not None else []
         self.min_risk_to_raise = min_risk_to_raise
 
-    def add_validator(self, validator: "ProcessorProtocol[exp.Expression]") -> None:
+    def add_validator(self, validator: "ProcessorProtocol") -> None:
         """Add a validator to the pipeline."""
         self.validators.append(validator)
 
-    def _process_single_validator(
-        self: "ProcessorProtocol[exp.Expression]", context: "SQLProcessingContext"
-    ) -> "Optional[ValidationResult]":
-        """Process a single validator and handle any exceptions.
-
-        Args:
-            validator_instance: The validator to process
-            context: The SQLProcessingContext
-
-        Returns:
-            ValidationResult or None if validation succeeded without issues
-        """
-        try:
-            result = self.process(context)
-
-        except Exception as e:
-            logger.warning("Individual validator %s failed: %s", self.__class__.__name__, e)
-            return ValidationResult(
-                is_safe=False,
-                risk_level=RiskLevel.CRITICAL,
-                issues=[f"Validator {self.__class__.__name__} error: {e}"],
-            )
-        return result.validation_result
-
-    def process(self, context: "SQLProcessingContext") -> "ProcessorResult":
+    def process(self, expression: "exp.Expression", context: "SQLProcessingContext") -> "exp.Expression":
         """Process the expression through all configured validators.
 
         Args:
+            expression: The SQL expression to validate.
             context: The SQLProcessingContext holding the current state and config.
 
         Returns:
-            A ProcessorResult containing the aggregated validation findings.
+            The expression unchanged (validators don't transform).
         """
         if not context.config.enable_validation:
-            return ProcessorResult(
-                expression=context.current_expression,
-                validation_result=ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP),
-            )
-
-        if context.current_expression is None:
-            return ProcessorResult(
-                expression=exp.Placeholder(),
-                validation_result=ValidationResult(
-                    is_safe=False,
-                    risk_level=RiskLevel.CRITICAL,
-                    issues=["SQLValidator received no expression in context."],
-                ),
-            )
-
-        aggregated_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
+            # Skip validation - add a skip marker to context
+            return expression
 
         for validator_instance in self.validators:
-            validation_result_part = self._process_single_validator(validator_instance, context)
-            if validation_result_part:
-                aggregated_result.merge(validation_result_part)
+            try:
+                validator_instance.process(expression, context)
+            except Exception as e:
+                # Add error to context
+                from sqlspec.statement.pipelines.result_types import ValidationError as ValError
+                error = ValError(
+                    message=f"Validator {validator_instance.__class__.__name__} error: {e}",
+                    code="validator-error",
+                    risk_level=RiskLevel.CRITICAL,
+                    processor=validator_instance.__class__.__name__,
+                    expression=expression,
+                )
+                context.validation_errors.append(error)
+                logger.warning("Individual validator %s failed: %s", validator_instance.__class__.__name__, e)
 
-        return ProcessorResult(
-            expression=context.current_expression,
-            validation_result=aggregated_result,
-        )
+        return expression
 
     def validate(
         self,
@@ -321,7 +344,7 @@ class SQLValidator(ProcessorProtocol[exp.Expression]):
         from sqlspec.statement.sql import SQLConfig  # Local import for SQL.to_expression
 
         current_config = config or SQLConfig()
-        expression_to_validate = UsesExpression.get_expression(sql, dialect=dialect)
+        expression_to_validate = self.get_expression(sql, dialect=dialect)
 
         # Create a context for this validation run
         validation_context = SQLProcessingContext(
@@ -329,6 +352,7 @@ class SQLValidator(ProcessorProtocol[exp.Expression]):
             dialect=dialect,
             config=current_config,
             current_expression=expression_to_validate,
+            initial_expression=expression_to_validate,
             # Other context fields like parameters might not be strictly necessary for all validators
             # but good to pass if available or if validators might need them.
             # For a standalone validate() call, parameter context might be minimal.
@@ -340,5 +364,13 @@ class SQLValidator(ProcessorProtocol[exp.Expression]):
                 if param_val.extract_parameters(sql):
                     validation_context.input_sql_had_placeholders = True
 
-        result = self.process(validation_context)
-        return result.validation_result or ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
+        self.process(expression_to_validate, validation_context)
+        
+        # Convert context errors to legacy ValidationResult
+        if validation_context.validation_errors:
+            return ValidationResult(
+                is_safe=False,
+                risk_level=validation_context.risk_level,
+                issues=[error.message for error in validation_context.validation_errors],
+            )
+        return ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)

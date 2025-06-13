@@ -19,8 +19,6 @@ from sqlspec.statement.parameters import (
     ParameterInfo,
     ParameterStyle,
     ParameterValidator,
-    convert_parameters,
-    detect_parameter_style,
 )
 
 
@@ -475,7 +473,9 @@ def test_merge_mixed_parameters(converter: ParameterConverter) -> None:
 )
 def test_detect_parameter_style(sql: str, expected_style: ParameterStyle) -> None:
     """Test parameter style detection function."""
-    detected_style = detect_parameter_style(sql)
+    validator = ParameterValidator()
+    params = validator.extract_parameters(sql)
+    detected_style = validator.get_parameter_style(params)
 
     assert detected_style == expected_style
 
@@ -492,12 +492,13 @@ def test_detect_parameter_style(sql: str, expected_style: ParameterStyle) -> Non
 )
 def test_convert_parameters_function(sql: str, parameters: Any, args: Any, kwargs: Any, validate: bool) -> None:
     """Test the module-level convert_parameters function."""
-    result = convert_parameters(sql, parameters, args, kwargs, validate)
-    transformed_sql, param_info, merged_params, placeholder_map = result
+    converter = ParameterConverter()
+    result = converter.convert_parameters(sql, parameters, args, kwargs, validate)
+    transformed_sql, param_info, merged_params, extra_info = result
 
     assert isinstance(transformed_sql, str)
     assert isinstance(param_info, list)
-    assert isinstance(placeholder_map, dict)
+    assert isinstance(extra_info, dict)
 
     # Should process parameters appropriately
     if parameters is not None or args is not None or kwargs is not None:
@@ -510,7 +511,7 @@ def test_parameter_validation_with_none_sql() -> None:
     """Test parameter validation with None SQL."""
     validator = ParameterValidator()
 
-    with pytest.raises(AttributeError):
+    with pytest.raises(TypeError):
         validator.extract_parameters(None)  # type: ignore[arg-type]
 
 

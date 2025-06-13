@@ -67,7 +67,7 @@ def test_psqlpy_driver_supports_arrow(psqlpy_driver: PsqlpyDriver) -> None:
 
 def test_psqlpy_driver_placeholder_style(psqlpy_driver: PsqlpyDriver) -> None:
     """Test PSQLPy driver placeholder style detection."""
-    placeholder_style = psqlpy_driver.parameter_style
+    placeholder_style = psqlpy_driver.default_parameter_style
     assert placeholder_style == ParameterStyle.NUMERIC
 
 

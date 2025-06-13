@@ -494,8 +494,8 @@ class AdbcDriver(
         with wrap_exceptions(), self._get_cursor(conn) as cursor:
             # Execute the query
             cursor.execute(
-                sql_obj.to_sql(placeholder_style=self.parameter_style),
-                sql_obj.get_parameters(style=self.parameter_style) or [],
+                sql_obj.to_sql(placeholder_style=self.default_parameter_style),
+                sql_obj.get_parameters(style=self.default_parameter_style) or [],
             )
 
             # Use ADBC's native Arrow fetch

@@ -8,6 +8,7 @@ from sqlglot.dialects.dialect import DialectType
 from typing_extensions import Self
 
 from sqlspec.statement.builder.base import QueryBuilder, SafeQuery
+from sqlspec.statement.result import SQLResult
 
 if TYPE_CHECKING:
     from sqlspec.statement.sql import SQL, SQLConfig
@@ -48,9 +49,9 @@ class DDLBuilder(QueryBuilder[Any]):
         raise NotImplementedError(msg)
 
     @property
-    def _expected_result_type(self) -> "type[object]":
+    def _expected_result_type(self) -> "type[SQLResult[Any]]":
         # DDL typically returns no rows; use object for now.
-        return object
+        return SQLResult
 
     def build(self) -> "SafeQuery":
         if self._expression is None:
@@ -126,7 +127,7 @@ class CreateTableBuilder(DDLBuilder):
         super().__init__()
         self._table_name = table_name
 
-    def schema(self, schema_name: str) -> "Self":
+    def in_schema(self, schema_name: str) -> "Self":
         """Set the schema for the table."""
         self._schema = schema_name
         return self
@@ -171,10 +172,10 @@ class CreateTableBuilder(DDLBuilder):
         collate: "Optional[str]" = None,
     ) -> "Self":
         """Add a column definition to the table."""
-        if not name or not isinstance(name, str):
+        if not name:
             self._raise_sql_builder_error("Column name must be a non-empty string")
 
-        if not dtype or not isinstance(dtype, str):
+        if not dtype:
             self._raise_sql_builder_error("Column type must be a non-empty string")
 
         # Check for duplicate column names
@@ -354,7 +355,7 @@ class CreateTableBuilder(DDLBuilder):
             table = exp.to_table(self._table_name)
 
         # Build column expressions
-        column_defs = []
+        column_defs: list[exp.Expression] = []
         for col in self._columns:
             col_expr = self._build_column_expression(col)
             column_defs.append(col_expr)
@@ -372,7 +373,7 @@ class CreateTableBuilder(DDLBuilder):
                 column_defs.append(constraint_expr)
 
         # Build properties for table options
-        props = []
+        props: list[exp.Property] = []
         if self._table_options.get("engine"):
             props.append(
                 exp.Property(
@@ -425,7 +426,7 @@ class CreateTableBuilder(DDLBuilder):
         )
 
         # Add constraints
-        constraints = []
+        constraints: list[exp.ColumnConstraint] = []
 
         if col.not_null:
             constraints.append(exp.ColumnConstraint(kind=exp.NotNullColumnConstraint()))
@@ -836,7 +837,7 @@ class CreateSchemaBuilder(DDLBuilder):
     def _create_base_expression(self) -> exp.Expression:
         if not self._schema_name:
             self._raise_sql_builder_error("Schema name must be set for CREATE SCHEMA.")
-        props = []
+        props: list[exp.Property] = []
         if self._authorization:
             props.append(
                 exp.Property(this=exp.to_identifier("AUTHORIZATION"), value=exp.to_identifier(self._authorization))
@@ -1042,7 +1043,7 @@ class CreateMaterializedViewBuilder(DDLBuilder):
             schema_expr = exp.Schema(expressions=[exp.column(c) for c in self._columns])
 
         # Build properties for dialect-specific options
-        props = []
+        props: list[exp.Property] = []
         if self._refresh_mode:
             props.append(
                 exp.Property(this=exp.to_identifier("REFRESH_MODE"), value=exp.Literal.string(self._refresh_mode))
@@ -1144,7 +1145,9 @@ class CreateViewBuilder(DDLBuilder):
             schema_expr = exp.Schema(expressions=[exp.column(c) for c in self._columns])
 
         # Build properties for hints
-        props = [exp.Property(this=exp.to_identifier("HINT"), value=exp.Literal.string(h)) for h in self._hints]
+        props: list[exp.Property] = [
+            exp.Property(this=exp.to_identifier("HINT"), value=exp.Literal.string(h)) for h in self._hints
+        ]
         properties_node = exp.Properties(expressions=props) if props else None
 
         return exp.Create(
@@ -1201,10 +1204,10 @@ class AlterTableBuilder(DDLBuilder):
         first: bool = False,
     ) -> "Self":
         """Add a new column to the table."""
-        if not name or not isinstance(name, str):
+        if not name:
             self._raise_sql_builder_error("Column name must be a non-empty string")
 
-        if not dtype or not isinstance(dtype, str):
+        if not dtype:
             self._raise_sql_builder_error("Column type must be a non-empty string")
 
         column_def = ColumnDefinition(
@@ -1228,7 +1231,7 @@ class AlterTableBuilder(DDLBuilder):
 
     def drop_column(self, name: str, cascade: bool = False) -> "Self":
         """Drop a column from the table."""
-        if not name or not isinstance(name, str):
+        if not name:
             self._raise_sql_builder_error("Column name must be a non-empty string")
 
         operation = AlterOperation(
@@ -1246,10 +1249,10 @@ class AlterTableBuilder(DDLBuilder):
         using: "Optional[str]" = None,
     ) -> "Self":
         """Change the type of an existing column."""
-        if not name or not isinstance(name, str):
+        if not name:
             self._raise_sql_builder_error("Column name must be a non-empty string")
 
-        if not new_type or not isinstance(new_type, str):
+        if not new_type:
             self._raise_sql_builder_error("New type must be a non-empty string")
 
         operation = AlterOperation(
@@ -1264,10 +1267,10 @@ class AlterTableBuilder(DDLBuilder):
 
     def rename_column(self, old_name: str, new_name: str) -> "Self":
         """Rename a column."""
-        if not old_name or not isinstance(old_name, str):
+        if not old_name:
             self._raise_sql_builder_error("Old column name must be a non-empty string")
 
-        if not new_name or not isinstance(new_name, str):
+        if not new_name:
             self._raise_sql_builder_error("New column name must be a non-empty string")
 
         operation = AlterOperation(
@@ -1337,7 +1340,7 @@ class AlterTableBuilder(DDLBuilder):
 
     def drop_constraint(self, name: str, cascade: bool = False) -> "Self":
         """Drop a constraint from the table."""
-        if not name or not isinstance(name, str):
+        if not name:
             self._raise_sql_builder_error("Constraint name must be a non-empty string")
 
         operation = AlterOperation(
@@ -1399,7 +1402,7 @@ class AlterTableBuilder(DDLBuilder):
         else:
             table = exp.to_table(self._table_name)
 
-        actions = [self._build_operation_expression(op) for op in self._operations]
+        actions: list[exp.Expression] = [self._build_operation_expression(op) for op in self._operations]
 
         return exp.Alter(
             this=table,
@@ -1415,7 +1418,7 @@ class AlterTableBuilder(DDLBuilder):
             if not op.column_definition:
                 self._raise_sql_builder_error("Column definition required for ADD COLUMN")
             col_def_expr = CreateTableBuilder._build_column_expression(op.column_definition)
-            return exp.AddColumn(this=col_def_expr, after=op.after_column, first=op.first)
+            return exp.AddColumn(this=col_def_expr, after=op.after_column, first=op.first)  # pyright: ignore
 
         if op_type == "DROP COLUMN":
             return exp.Drop(this=exp.to_identifier(op.column_name), kind="COLUMN", exists=True)
@@ -1427,7 +1430,7 @@ class AlterTableBuilder(DDLBuilder):
             return exp.AlterColumn(
                 this=exp.to_identifier(op.column_name),
                 kind="TYPE",
-                expression=exp.DataType.build(op.new_type),
+                expression=exp.DataType.build(op.new_type),  # pyright: ignore
                 using=exp.maybe_parse(op.using_expression) if op.using_expression else None,
             )
 

@@ -287,8 +287,10 @@ class SqliteDriver(
                 )
 
             # Handle DML results (dict with rows_affected, status_message)
-            rows_affected = result.get("rows_affected", -1)
-            status_message = result.get("status_message", "")
+            # Cast to DMLResultDict since we know it's not a ScriptResultDict
+            dml_result = cast("DMLResultDict", result)
+            rows_affected = dml_result.get("rows_affected", -1)
+            status_message = dml_result.get("status_message", "")
 
             # SQLite DML operations (without RETURNING) don't populate data
             returned_data: list[dict[str, Any]] = []

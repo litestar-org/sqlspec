@@ -1,8 +1,9 @@
-from typing import Any, Optional, Protocol
+from typing import Any, Optional, Protocol, Union
 
 from sqlglot import exp
+from typing_extensions import Self
 
-__all__ = ("BuilderProtocol",)
+__all__ = ("BuilderProtocol", "SelectBuilderProtocol")
 
 
 class BuilderProtocol(Protocol):
@@ -13,3 +14,7 @@ class BuilderProtocol(Protocol):
     dialect_name: Optional[str]
 
     def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]: ...
+
+
+class SelectBuilderProtocol(BuilderProtocol, Protocol):
+    def select(self, *columns: Union[str, exp.Expression]) -> Self: ...

@@ -325,15 +325,21 @@ class BigQueryDriver(
             return self._execute_script(sql, connection=connection, **kwargs)
 
         # Determine if we need to convert parameter style
-        detected_style = statement.parameter_style
+        detected_styles = {p.style for p in statement.parameter_info}
         target_style = self.default_parameter_style
 
-        # Only convert if the detected style is not supported
-        if detected_style and detected_style not in self.supported_parameter_styles:
+        # Check if any detected style is not supported
+        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+        if unsupported_styles:
+            # Convert to default style if we have unsupported styles
             target_style = self.default_parameter_style
-        elif detected_style:
-            # Use the detected style if it's supported
-            target_style = detected_style
+        elif detected_styles:
+            # Use the first detected style if all are supported
+            # Prefer the first supported style found
+            for style in detected_styles:
+                if style in self.supported_parameter_styles:
+                    target_style = style
+                    break
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)
@@ -457,10 +463,6 @@ class BigQueryDriver(
                 and query_job.state == "DONE"
                 and not query_job.errors
             ):
-                # For successful DML without proper row count, assume 1 row affected
-                # This is a workaround for BigQuery emulator compatibility
-                # The emulator often returns 0 or None for num_dml_affected_rows
-                # and sometimes misreports statement_type
                 num_affected = 1
                 logger.debug(
                     "BigQuery emulator workaround: assuming 1 row affected for successful DML "
@@ -472,12 +474,11 @@ class BigQueryDriver(
         except Exception:
             logger.exception("BigQuery job failed")
             raise
-        else:
-            dml_result: DMLResultDict = {
-                "rows_affected": num_affected or 0,
-                "status_message": f"OK - job_id: {query_job.job_id}",
-            }
-            return dml_result
+
+        return {
+            "rows_affected": num_affected or 0,
+            "status_message": f"OK - job_id: {query_job.job_id}",
+        }
 
     def _execute_many(
         self,
@@ -486,36 +487,44 @@ class BigQueryDriver(
         connection: Optional[BigQueryConnection] = None,
         **kwargs: Any,
     ) -> DMLResultDict:
-        # SQL should already be in correct format from compile()
-        converted_sql = sql
-
-        # For BigQuery, batch execution is not natively supported; run jobs in a loop
-        total_rowcount = 0
-        jobs = []
+        # Use a multi-statement script for batch execution
+        script_parts = []
+        all_params: dict[str, Any] = {}
+        param_counter = 0
 
         for params in param_list or []:
-            # Parameters are already in the correct format from compile()
-            converted_params = params
-            bq_params = self._prepare_bq_query_parameters(converted_params or {}) if converted_params else []
-            job = self._run_query_job(converted_sql, bq_params, connection=connection)
-            jobs.append(job)
+            if not isinstance(params, dict):
+                msg = "BigQuery executemany requires dict parameters."
+                raise SQLSpecError(msg)
+            # TODO: can't we do this in the parameter parsing step?
+            # Remap parameters to be unique across the entire script
+            param_mapping = {}
+            current_sql = sql
+            for key, value in params.items():
+                new_key = f"p_{param_counter}"
+                param_counter += 1
+                param_mapping[key] = new_key
+                all_params[new_key] = value
 
-            # Wait for job to complete and count affected rows
-            try:
-                job.result(timeout=kwargs.get("bq_job_timeout"))
-                if job.num_dml_affected_rows is not None:
-                    total_rowcount += job.num_dml_affected_rows
-                else:
-                    total_rowcount += 1  # Assume 1 row affected if not available
-            except Exception:
-                logger.exception("BigQuery batch job failed")
-                # Continue with other jobs
+            # Replace placeholders in the SQL for this statement
+            for old_key, new_key in param_mapping.items():
+                current_sql = current_sql.replace(f"@{old_key}", f"@{new_key}")
 
-        result: DMLResultDict = {
+            script_parts.append(current_sql)
+
+        # Execute as a single script
+        full_script = ";\n".join(script_parts)
+        bq_params = self._prepare_bq_query_parameters(all_params)
+        query_job = self._run_query_job(full_script, bq_params, connection=connection, **kwargs)
+
+        # Wait for the job to complete
+        query_job.result(timeout=kwargs.get("bq_job_timeout"))
+        total_rowcount = query_job.num_dml_affected_rows or 0
+
+        return {
             "rows_affected": total_rowcount,
-            "status_message": f"OK - executed {len(jobs)} jobs",
+            "status_message": f"OK - executed batch job {query_job.job_id}",
         }
-        return result
 
     def _execute_script(
         self,
@@ -641,7 +650,7 @@ class BigQueryDriver(
         """
 
         # Execute the query directly with BigQuery to get the QueryJob
-        params = sql_obj.get_parameters(style=self.parameter_style)
+        params = sql_obj.get_parameters(style=self.default_parameter_style)
         params_dict: dict[str, Any] = {}
         if params:
             if isinstance(params, dict):
@@ -653,7 +662,7 @@ class BigQueryDriver(
 
         bq_params = self._prepare_bq_query_parameters(params_dict) if params_dict else []
         query_job = self._run_query_job(
-            sql_obj.to_sql(placeholder_style=self.parameter_style),
+            sql_obj.to_sql(placeholder_style=self.default_parameter_style),
             bq_params,
             connection=connection,
         )

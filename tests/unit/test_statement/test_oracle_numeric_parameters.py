@@ -3,7 +3,7 @@
 import pytest
 
 from sqlspec.exceptions import ParameterError
-from sqlspec.statement.parameters import ParameterStyle, detect_parameter_style
+from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.sql import SQL
 
 
@@ -13,7 +13,9 @@ class TestOracleNumericParameters:
     def test_oracle_numeric_parameter_detection(self) -> None:
         """Test that :1, :2 style parameters are detected as ORACLE_NUMERIC."""
         sql = "INSERT INTO users (id, name) VALUES (:1, :2)"
-        style = detect_parameter_style(sql)
+        validator = ParameterValidator()
+        params = validator.extract_parameters(sql)
+        style = validator.get_parameter_style(params)
         assert style == ParameterStyle.POSITIONAL_COLON
 
     def test_mixed_oracle_parameters(self) -> None:

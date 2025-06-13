@@ -70,7 +70,7 @@ def test_duckdb_driver_supports_arrow(duckdb_driver: DuckDBDriver) -> None:
 
 def test_duckdb_driver_placeholder_style(duckdb_driver: DuckDBDriver) -> None:
     """Test DuckDB driver placeholder style detection."""
-    placeholder_style = duckdb_driver.parameter_style
+    placeholder_style = duckdb_driver.default_parameter_style
     assert placeholder_style == ParameterStyle.QMARK
 
 

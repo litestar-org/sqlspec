@@ -64,7 +64,7 @@ def test_sqlite_driver_initialization(mock_sqlite_connection: Mock) -> None:
     assert driver.dialect == "sqlite"
     from sqlspec.statement.parameters import ParameterStyle
 
-    assert driver.parameter_style == ParameterStyle.QMARK
+    assert driver.default_parameter_style == ParameterStyle.QMARK
 
 
 def test_sqlite_driver_dialect_property(sqlite_driver: SqliteDriver) -> None:
@@ -76,7 +76,7 @@ def test_sqlite_driver_parameter_style(sqlite_driver: SqliteDriver) -> None:
     """Test SQLite driver parameter style."""
     from sqlspec.statement.parameters import ParameterStyle
 
-    assert sqlite_driver.parameter_style == ParameterStyle.QMARK
+    assert sqlite_driver.default_parameter_style == ParameterStyle.QMARK
 
 
 def test_sqlite_config_dialect_property() -> None:

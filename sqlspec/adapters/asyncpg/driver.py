@@ -81,15 +81,21 @@ class AsyncpgDriver(
             return await self._execute_script(sql, connection=connection, **kwargs)
 
         # Determine if we need to convert parameter style
-        detected_style = statement.parameter_style
+        detected_styles = {p.style for p in statement.parameter_info}
         target_style = self.default_parameter_style
 
-        # Only convert if the detected style is not supported
-        if detected_style and detected_style not in self.supported_parameter_styles:
+        # Check if any detected style is not supported
+        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+        if unsupported_styles:
+            # Convert to default style if we have unsupported styles
             target_style = self.default_parameter_style
-        elif detected_style:
-            # Use the detected style if it's supported
-            target_style = detected_style
+        elif detected_styles:
+            # Use the first detected style if all are supported
+            # Prefer the first supported style found
+            for style in detected_styles:
+                if style in self.supported_parameter_styles:
+                    target_style = style
+                    break
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)

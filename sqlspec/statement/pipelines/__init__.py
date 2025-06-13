@@ -15,11 +15,11 @@ Key Components:
 """
 
 from sqlspec.statement.pipelines import analyzers, transformers, validators
-from sqlspec.statement.pipelines.aggregator import AggregatedResults, ResultAggregator
 from sqlspec.statement.pipelines.analyzers import StatementAnalysis, StatementAnalyzer
 from sqlspec.statement.pipelines.base import ProcessorProtocol, SQLValidator, StatementPipeline
-from sqlspec.statement.pipelines.context import SQLProcessingContext, StatementPipelineResult
-from sqlspec.statement.pipelines.results import ProcessorResult, ValidationResult
+from sqlspec.statement.pipelines.context import PipelineResult, SQLProcessingContext
+from sqlspec.statement.pipelines.result_types import AnalysisFinding, TransformationLog, ValidationError
+from sqlspec.statement.pipelines.results import ValidationResult
 from sqlspec.statement.pipelines.transformers import (
     CommentRemover,
     ExpressionSimplifier,
@@ -36,7 +36,8 @@ from sqlspec.statement.pipelines.validators import (
 )
 
 __all__ = (
-    "AggregatedResults",
+    # New Result Types
+    "AnalysisFinding",
     # Concrete Transformers
     "CommentRemover",
     # Concrete Validators
@@ -47,10 +48,9 @@ __all__ = (
     "ParameterizeLiterals",
     "PerformanceConfig",
     "PerformanceValidator",
+    # Core Pipeline Components
+    "PipelineResult",
     "ProcessorProtocol",
-    # Result Objects
-    "ProcessorResult",
-    "ResultAggregator",
     "SQLProcessingContext",
     # Base Validator
     "SQLValidator",
@@ -61,7 +61,8 @@ __all__ = (
     "StatementAnalyzer",
     # Core Pipeline & Context
     "StatementPipeline",
-    "StatementPipelineResult",
+    "TransformationLog",
+    "ValidationError",
     "ValidationResult",
     # Module exports
     "analyzers",

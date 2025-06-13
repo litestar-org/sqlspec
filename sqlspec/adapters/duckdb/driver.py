@@ -1,7 +1,7 @@
 # ruff: noqa: PLR6301
 import contextlib
 import uuid
-from collections.abc import Generator, Sequence
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
@@ -49,7 +49,8 @@ class DuckDBDriver(
     """
 
     dialect: "DialectType" = "duckdb"
-    parameter_style: ParameterStyle = ParameterStyle.QMARK
+    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK, ParameterStyle.NUMERIC)
+    default_parameter_style: ParameterStyle = ParameterStyle.QMARK
     __supports_arrow__: ClassVar[bool] = True
     __supports_parquet__: ClassVar[bool] = True
 
@@ -81,16 +82,16 @@ class DuckDBDriver(
         statement: SQL,
         connection: Optional["DuckDBConnection"] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "Union[SelectResultDict, DMLResultDict, ScriptResultDict]":
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
         if statement.is_many:
-            sql, params = statement.compile(placeholder_style=self.parameter_style)
+            sql, params = statement.compile(placeholder_style=self.default_parameter_style)
             return self._execute_many(sql, params, connection=connection, **kwargs)
 
-        sql, params = statement.compile(placeholder_style=self.parameter_style)
+        sql, params = statement.compile(placeholder_style=self.default_parameter_style)
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
@@ -100,53 +101,32 @@ class DuckDBDriver(
         statement: SQL,
         connection: Optional["DuckDBConnection"] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "Union[SelectResultDict, DMLResultDict]":
         conn = self._connection(connection)
 
         if self.instrumentation_config.log_queries:
             logger.debug("Executing SQL: %s", sql)
 
-        # Parameters are already in the correct format from compile()
-        converted_params = parameters
+        if self.instrumentation_config.log_parameters and parameters:
+            logger.debug("Query parameters: %s", parameters)
 
-        if self.instrumentation_config.log_parameters and converted_params:
-            logger.debug("Query parameters: %s", converted_params)
-
-        # Use connection.execute() which returns better result info for DuckDB
-        result = conn.execute(sql, converted_params or [])
+        # Use connection.execute() which returns a DuckDBPyRelation
+        result = conn.execute(sql, parameters or [])
 
         if self.returns_rows(statement.expression):
             # For SELECT statements, fetch data and return with columns
-            with self._get_cursor(conn) as cursor:
-                cursor.execute(sql, converted_params or [])
-                fetched_data = cursor.fetchall()
-                column_names = [col[0] for col in cursor.description or []]
-                return {"data": fetched_data, "columns": column_names, "rowcount": cursor.rowcount}
-        else:
-            # For INSERT/UPDATE/DELETE, try to get row count from connection result
-            rowcount = -1
+            fetched_data = result.fetchall()
+            column_names = [col[0] for col in result.description or []]
+            return {
+                "data": fetched_data,
+                "column_names": column_names,
+                "rows_affected": len(fetched_data),
+            }
 
-            # DuckDB connection.execute() returns a DuckDBPyResult
-            # For DML operations, we can try to get the count
-            try:
-                # Some DML operations might return a result with count information
-                if hasattr(result, "fetchone"):
-                    count_result = result.fetchone()
-                    if count_result and len(count_result) > 0:
-                        # INSERT/UPDATE/DELETE typically return count as first column
-                        rowcount = count_result[0] if isinstance(count_result[0], int) else -1
-            except Exception:
-                # If fetching fails, fall back to cursor rowcount
-                try:
-                    with self._get_cursor(conn) as cursor:
-                        cursor.execute(sql, converted_params or [])
-                        if hasattr(cursor, "rowcount") and cursor.rowcount is not None and cursor.rowcount >= 0:
-                            rowcount = cursor.rowcount
-                except Exception:  # noqa: S110
-                    # Rowcount determination failed, will use default of 0
-                    pass
-
-            return {"rowcount": rowcount}
+        # For DML statements, get affected rows from the result
+        row = result.fetchone()
+        rows_affected = row[0] if row else 0
+        return {"rows_affected": rows_affected}
 
     def _execute_many(
         self,
@@ -154,40 +134,16 @@ class DuckDBDriver(
         param_list: Any,
         connection: Optional["DuckDBConnection"] = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "DMLResultDict":
         conn = self._connection(connection)
         if self.instrumentation_config.log_queries:
             logger.debug("Executing SQL (executemany): %s", sql)
         if self.instrumentation_config.log_parameters and param_list:
             logger.debug("Query parameters (batch): %s", param_list)
 
-        total_rowcount = 0
-
-        # Convert parameter list to proper format for executemany
-        if param_list and isinstance(param_list, Sequence):
-            for param_set in param_list:
-                if isinstance(param_set, (list, tuple)):
-                    result = conn.execute(sql, list(param_set))
-                else:
-                    result = conn.execute(sql, [param_set])
-
-                # Try to get row count from this execution
-                try:
-                    if hasattr(result, "fetchone"):
-                        count_result = result.fetchone()
-                        if count_result and len(count_result) > 0:
-                            if isinstance(count_result[0], int):
-                                total_rowcount += count_result[0]
-                            else:
-                                total_rowcount += 1  # Assume 1 row affected if not int
-                        else:
-                            total_rowcount += 1  # Assume 1 row affected if no result
-                    else:
-                        total_rowcount += 1  # Assume 1 row affected if no fetchone
-                except Exception:
-                    total_rowcount += 1  # Assume 1 row affected on error
-
-        return {"rowcount": total_rowcount if param_list else 0}
+        with self._get_cursor(conn) as cursor:
+            cursor.executemany(sql, param_list or [])
+            return {"rows_affected": cursor.rowcount}
 
     def _execute_script(
         self,
@@ -198,13 +154,18 @@ class DuckDBDriver(
         conn = self._connection(connection)
         if self.instrumentation_config.log_queries:
             logger.debug("Executing SQL script: %s", script)
+
+        # Use a cursor to execute the script
         with self._get_cursor(conn) as cursor:
             cursor.execute(script)
-        result: ScriptResultDict = {
-            "statements_executed": -1,  # DuckDB doesn't provide this info
-            "status_message": "SCRIPT EXECUTED",
+
+        # DuckDB does not provide detailed results from script execution,
+        # so we return a success message.
+        return {
+            "statements_executed": -1,  # Not supported
+            "status_message": "Script executed successfully.",
+            "description": "The script was sent to the database.",
         }
-        return result
 
     def _wrap_select_result(
         self,
@@ -214,7 +175,6 @@ class DuckDBDriver(
         **kwargs: Any,
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "duckdb_wrap_select", "database"):
-            # result must be a dict with keys: data, column_names, rows_affected
             fetched_tuples = result["data"]
             column_names = result["column_names"]
             rows_affected = result["rows_affected"]
@@ -225,18 +185,18 @@ class DuckDBDriver(
                 logger.debug("Query returned %d rows", len(rows_as_dicts))
 
             if schema_type:
-                converted_data_seq = self.to_schema(data=rows_as_dicts, schema_type=schema_type)
-                converted_data_list = list(converted_data_seq) if converted_data_seq is not None else []
+                converted_data = self.to_schema(data=rows_as_dicts, schema_type=schema_type)
                 return SQLResult[ModelDTOT](
                     statement=statement,
-                    data=converted_data_list,
+                    data=list(converted_data),
                     column_names=column_names,
                     rows_affected=rows_affected,
                     operation_type="SELECT",
                 )
+
             return SQLResult[RowT](
                 statement=statement,
-                data=cast("list[RowT]", rows_as_dicts),
+                data=rows_as_dicts,  # type: ignore[arg-type]
                 column_names=column_names,
                 rows_affected=rows_affected,
                 operation_type="SELECT",
@@ -250,41 +210,35 @@ class DuckDBDriver(
     ) -> SQLResult[RowT]:
         with instrument_operation(self, "duckdb_wrap_execute", "database"):
             operation_type = "UNKNOWN"
-            with wrap_exceptions(wrap_exceptions=False, suppress=AttributeError):
-                if statement.expression:
-                    operation_type = str(statement.expression.key).upper()
+            if statement.expression:
+                operation_type = str(statement.expression.key).upper()
 
-            # Handle TypedDict results
-            if isinstance(result, dict):
-                # Check if this is a ScriptResultDict
-                if "statements_executed" in result:
-                    return SQLResult[RowT](
-                        statement=statement,
-                        data=cast("list[RowT]", []),
-                        rows_affected=0,
-                        operation_type=operation_type or "SCRIPT",
-                        metadata={"status_message": result["status_message"]},
-                    )
+            # Check if this is a ScriptResultDict
+            if "statements_executed" in result:
+                script_result = cast("ScriptResultDict", result)
+                return SQLResult[RowT](
+                    statement=statement,
+                    data=[],
+                    rows_affected=0,
+                    operation_type=operation_type or "SCRIPT",
+                    metadata={"status_message": script_result.get("status_message", "")},
+                )
 
-                # Check if this is a DMLResultDict
-                if "rows_affected" in result:
-                    rows_affected = result["rows_affected"]
-                    status_message = result["status_message"]
+            # Otherwise, assume DMLResultDict
+            dml_result = cast("DMLResultDict", result)
+            rows_affected = dml_result.get("rows_affected", -1)
+            status_message = dml_result.get("status_message", "")
 
-                    if self.instrumentation_config.log_results_count:
-                        logger.debug("Execute operation affected %d rows", rows_affected)
+            if self.instrumentation_config.log_results_count:
+                logger.debug("Execute operation affected %d rows", rows_affected)
 
-                    return SQLResult[RowT](
-                        statement=statement,
-                        data=cast("list[RowT]", []),
-                        rows_affected=rows_affected,
-                        operation_type=operation_type,
-                        metadata={"status_message": status_message},
-                    )
-
-            # This shouldn't happen with TypedDict approach
-            msg = f"Unexpected result type: {type(result)}"
-            raise ValueError(msg)
+            return SQLResult[RowT](
+                statement=statement,
+                data=[],
+                rows_affected=rows_affected,
+                operation_type=operation_type,
+                metadata={"status_message": status_message},
+            )
 
     # ============================================================================
     # DuckDB Native Arrow Support
@@ -313,7 +267,7 @@ class DuckDBDriver(
 
         with wrap_exceptions():
             # Use DuckDB's native execute() with parameters for optimal performance
-            sql_string, parameters = sql_obj.compile(placeholder_style=self.parameter_style)
+            sql_string, parameters = sql_obj.compile(placeholder_style=self.default_parameter_style)
 
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing DuckDB Arrow query: %s", sql_string)
@@ -358,14 +312,18 @@ class DuckDBDriver(
     # DuckDB Native Storage Operations (Override base implementations)
     # ============================================================================
 
-    def _has_native_capability(self, operation: str, uri: str, format: Optional[str] = None) -> bool:
+    def _has_native_capability(self, operation: str, uri: str = "", format: str = "") -> bool:
         """Check if DuckDB has native capability for the operation."""
         # DuckDB has excellent native support for many formats and operations
-        if operation == "export" and format in {"parquet", "csv", "json"}:
-            return True
-        if operation == "import" and format in {"parquet", "csv", "json"}:
-            return True
-        return bool(operation == "read" and format == "parquet")
+        if format:
+            format_lower = format.lower()
+            if operation == "export" and format_lower in {"parquet", "csv", "json"}:
+                return True
+            if operation == "import" and format_lower in {"parquet", "csv", "json"}:
+                return True
+            if operation == "read" and format_lower == "parquet":
+                return True
+        return False
 
     def _export_native(self, query: str, destination_uri: str, format: str, **options: Any) -> int:
         """Enhanced DuckDB native COPY TO with advanced options support."""
@@ -427,7 +385,7 @@ class DuckDBDriver(
             if self.instrumentation_config.log_results_count:
                 logger.debug("Exported %d rows to %s", rows_exported, destination_uri)
 
-            return rows_exported
+            return rows_exported if rows_exported is not None else 0
 
     def _import_native(self, source_uri: str, table_name: str, format: str, mode: str, **options: Any) -> int:
         """Use DuckDB's native reading capabilities for efficient import."""
@@ -466,7 +424,7 @@ class DuckDBDriver(
             count_result = connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
             return count_result[0] if count_result else 0
 
-    def _read_parquet_native(  # pyright: ignore[reportIncompatibleMethodOverride]
+    def _read_parquet_native(
         self, source_uri: str, columns: Optional[list[str]] = None, **options: Any
     ) -> "ArrowResult":
         """Enhanced DuckDB native Parquet reader with multiple file and filter support."""
@@ -501,9 +459,9 @@ class DuckDBDriver(
                     if len(filter_spec) == filter_spec_parts:
                         col, op, val = filter_spec
                         if isinstance(val, str):
-                            where_clauses.append(f"{col} {op} '{val}'")
+                            where_clauses.append(f"'{col}' {op} '{val}'")
                         else:
-                            where_clauses.append(f"{col} {op} {val}")
+                            where_clauses.append(f"'{col}' {op} {val}")
                 if where_clauses:
                     query += " WHERE " + " AND ".join(where_clauses)
 
@@ -640,3 +598,14 @@ class DuckDBDriver(
             finally:
                 with contextlib.suppress(Exception):
                     connection.unregister(temp_name)
+
+    def read_parquet_direct(
+        self, source_uri: str, columns: "Optional[list[str]]" = None, **options: Any
+    ) -> "ArrowResult":
+        """Read Parquet file directly using database's native capabilities."""
+        if not self._has_native_capability("read", source_uri, "parquet"):
+            msg = (
+                f"{self.__class__.__name__} does not support direct Parquet reading. Use import_from_storage() instead."
+            )
+            raise NotImplementedError(msg)
+        return self._read_parquet_native(source_uri, columns, **options)

@@ -8,7 +8,7 @@ import pytest
 from sqlspec.adapters.asyncpg import AsyncpgDriver
 from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -67,7 +67,7 @@ def test_asyncpg_driver_supports_arrow(asyncpg_driver: AsyncpgDriver) -> None:
 
 def test_asyncpg_driver_placeholder_style(asyncpg_driver: AsyncpgDriver) -> None:
     """Test AsyncPG driver placeholder style detection."""
-    placeholder_style = asyncpg_driver.parameter_style
+    placeholder_style = asyncpg_driver.default_parameter_style
     assert placeholder_style == ParameterStyle.NUMERIC
 
 
@@ -107,7 +107,15 @@ async def test_asyncpg_driver_execute_statement_select(
 
     # Verify connection methods were called
     mock_asyncpg_connection.fetch.assert_called_once_with("SELECT * FROM users WHERE id = $1", 1)
-    assert result == [mock_record]
+    
+    # Result should be a SelectResultDict
+    assert isinstance(result, dict)
+    assert "data" in result
+    assert "column_names" in result
+    assert "rows_affected" in result
+    assert result["data"] == [mock_record]
+    assert result["column_names"] == ["id", "name"]
+    assert result["rows_affected"] == 1
 
 
 @pytest.mark.asyncio
@@ -126,7 +134,13 @@ async def test_asyncpg_driver_execute_statement_insert(
 
     # Verify connection methods were called
     mock_asyncpg_connection.execute.assert_called_once_with("INSERT INTO users (name) VALUES ($1)", "John")
-    assert result == "INSERT 0 1"
+    
+    # Result should be a DMLResultDict
+    assert isinstance(result, dict)
+    assert "rows_affected" in result
+    assert "status_message" in result
+    assert result["rows_affected"] == 1
+    assert result["status_message"] == "INSERT 0 1"
 
 
 @pytest.mark.asyncio
@@ -148,7 +162,13 @@ async def test_asyncpg_driver_execute_statement_script(
 
     # Verify connection execute was called
     mock_asyncpg_connection.execute.assert_called_once()
-    assert script_result == "CREATE TABLE"
+    
+    # Result should be a ScriptResultDict
+    assert isinstance(script_result, dict)
+    assert "statements_executed" in script_result
+    assert "status_message" in script_result
+    assert script_result["statements_executed"] == -1  # AsyncPG doesn't provide statement count
+    assert script_result["status_message"] == "CREATE TABLE"
 
 
 @pytest.mark.asyncio
@@ -173,8 +193,13 @@ async def test_asyncpg_driver_execute_statement_many(
     mock_asyncpg_connection.executemany.assert_called_once_with(
         "INSERT INTO users (name) VALUES ($1)", [("John",), ("Jane",), ("Bob",)]
     )
-    # Driver now returns dict format for executemany operations
-    assert result == {"rowcount": 3, "data": [], "columns": []}
+    
+    # Result should be a DMLResultDict
+    assert isinstance(result, dict)
+    assert "rows_affected" in result
+    assert "status_message" in result
+    assert result["rows_affected"] == 0  # executemany returns None, so no rows parsed
+    assert result["status_message"] == "OK"
 
 
 @pytest.mark.asyncio
@@ -200,7 +225,12 @@ async def test_asyncpg_driver_execute_statement_parameter_processing(
 
     # Verify parameters were processed correctly
     mock_asyncpg_connection.fetch.assert_called_once_with("SELECT * FROM users WHERE id = $1 AND name = $2", 1, "John")
-    assert result == [mock_record]
+    
+    # Result should be a SelectResultDict
+    assert isinstance(result, dict)
+    assert result["data"] == [mock_record]
+    assert result["column_names"] == ["id", "name"]
+    assert result["rows_affected"] == 1
 
 
 @pytest.mark.asyncio
@@ -222,10 +252,17 @@ async def test_asyncpg_driver_wrap_select_result(asyncpg_driver: AsyncpgDriver) 
     # Create SQL statement
     statement = SQL("SELECT id, name FROM users")
 
+    # Create SelectResultDict input
+    select_result: SelectResultDict = {
+        "data": records,
+        "column_names": ["id", "name"],
+        "rows_affected": len(records),
+    }
+    
     # Wrap result
     result: Union[SQLResult[Any], SQLResult[dict[str, Any]]] = await asyncpg_driver._wrap_select_result(
         statement=statement,
-        result=records,
+        result=select_result,
     )
 
     # Verify result
@@ -233,7 +270,7 @@ async def test_asyncpg_driver_wrap_select_result(asyncpg_driver: AsyncpgDriver) 
     assert result.statement is statement
     assert result.column_names == ["id", "name"]
     # Data should be converted to dict format
-    assert result.total_count == 2
+    assert result.num_rows == 2
 
 
 @pytest.mark.asyncio
@@ -245,10 +282,17 @@ async def test_asyncpg_driver_wrap_select_result_empty(asyncpg_driver: AsyncpgDr
     # Create SQL statement
     statement = SQL("SELECT * FROM empty_table")
 
+    # Create SelectResultDict input
+    select_result: SelectResultDict = {
+        "data": records,
+        "column_names": [],
+        "rows_affected": 0,
+    }
+    
     # Wrap result
     result: Union[SQLResult[Any], SQLResult[dict[str, Any]]] = await asyncpg_driver._wrap_select_result(
         statement=statement,
-        result=records,
+        result=select_result,
     )
 
     # Verify result
@@ -280,10 +324,17 @@ async def test_asyncpg_driver_wrap_select_result_with_schema_type(asyncpg_driver
     # Create SQL statement
     statement = SQL("SELECT id, name FROM users")
 
+    # Create SelectResultDict input
+    select_result: SelectResultDict = {
+        "data": records,
+        "column_names": ["id", "name"],
+        "rows_affected": len(records),
+    }
+    
     # Wrap result with schema type
     result = await asyncpg_driver._wrap_select_result(
         statement=statement,
-        result=records,
+        result=select_result,
         schema_type=User,
     )
 
@@ -299,10 +350,16 @@ async def test_asyncpg_driver_wrap_execute_result(asyncpg_driver: AsyncpgDriver)
     # Create SQL statement
     statement = SQL("UPDATE users SET active = 1", config=asyncpg_driver.config)
 
-    # Wrap result with status string
+    # Create DMLResultDict input
+    dml_result: DMLResultDict = {
+        "rows_affected": 3,
+        "status_message": "UPDATE 3",
+    }
+    
+    # Wrap result with DMLResultDict
     result = await asyncpg_driver._wrap_execute_result(
         statement=statement,
-        result="UPDATE 3",
+        result=dml_result,
     )
 
     # Verify result
@@ -318,17 +375,23 @@ async def test_asyncpg_driver_wrap_execute_result_script(asyncpg_driver: Asyncpg
     # Create SQL statement (DDL allowed with strict_mode=False)
     statement = SQL("CREATE TABLE test (id INTEGER)", config=asyncpg_driver.config)
 
+    # Create ScriptResultDict input
+    script_result: ScriptResultDict = {
+        "statements_executed": -1,
+        "status_message": "CREATE TABLE",
+    }
+    
     # Wrap result for script
     result = await asyncpg_driver._wrap_execute_result(
         statement=statement,
-        result="CREATE TABLE",
+        result=script_result,
     )
 
     # Verify result
     assert isinstance(result, SQLResult)
     assert result.statement is statement
     assert result.rows_affected == 0
-    assert result.operation_type == "CREATE"
+    assert result.operation_type == "SCRIPT"  # Scripts are now labeled as "SCRIPT" not "CREATE"
 
 
 @pytest.mark.asyncio
@@ -337,16 +400,22 @@ async def test_asyncpg_driver_wrap_execute_result_integer(asyncpg_driver: Asyncp
     # Create SQL statement
     statement = SQL("INSERT INTO users VALUES (1, 'test')", config=asyncpg_driver.config)
 
-    # Wrap result with integer
+    # Create DMLResultDict input
+    dml_result: DMLResultDict = {
+        "rows_affected": 5,
+        "status_message": "INSERT 0 5",
+    }
+    
+    # Wrap result with DMLResultDict
     result = await asyncpg_driver._wrap_execute_result(
         statement=statement,
-        result=5,
+        result=dml_result,
     )
 
     # Verify result
     assert isinstance(result, SQLResult)
     assert result.statement is statement
-    assert result.rows_affected == 0  # Can't parse integer as status message
+    assert result.rows_affected == 5
     assert result.operation_type == "INSERT"
 
 
@@ -406,10 +475,16 @@ async def test_asyncpg_driver_operation_type_detection(asyncpg_driver: AsyncpgDr
     for sql, expected_op_type in test_cases:
         statement = SQL(sql, config=asyncpg_driver.config)
 
-        # Test with string result
+        # Create DMLResultDict for each test case
+        dml_result: DMLResultDict = {
+            "rows_affected": 0,
+            "status_message": "COMMAND COMPLETED",
+        }
+        
+        # Test with DMLResultDict
         result = await asyncpg_driver._wrap_execute_result(
             statement=statement,
-            result="COMMAND COMPLETED",
+            result=dml_result,
         )
 
         assert result.operation_type == expected_op_type
@@ -512,9 +587,15 @@ async def test_asyncpg_driver_status_string_parsing(asyncpg_driver: AsyncpgDrive
     for status_string, sql_text, expected_op, expected_rows in test_cases:
         statement = SQL(sql_text, config=asyncpg_driver.config)
 
+        # Create DMLResultDict for each test case
+        dml_result: DMLResultDict = {
+            "rows_affected": expected_rows,
+            "status_message": status_string,
+        }
+        
         result = await asyncpg_driver._wrap_execute_result(
             statement=statement,
-            result=status_string,
+            result=dml_result,
         )
 
         assert result.operation_type == expected_op
@@ -537,5 +618,7 @@ async def test_asyncpg_driver_dict_parameter_handling(
     result_val = await asyncpg_driver._execute_statement(statement=statement)
 
     mock_asyncpg_connection.executemany.assert_called_once()
-    # Driver now returns dict format for executemany operations
-    assert result_val == {"rowcount": 2, "data": [], "columns": []}
+    # Result should be a DMLResultDict
+    assert isinstance(result_val, dict)
+    assert result_val["rows_affected"] == 0  # executemany returns None, so no rows parsed
+    assert result_val["status_message"] == "OK"

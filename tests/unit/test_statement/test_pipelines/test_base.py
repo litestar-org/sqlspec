@@ -8,10 +8,8 @@ from sqlglot import exp
 
 from sqlspec.exceptions import RiskLevel
 from sqlspec.statement.pipelines.base import (
-    AnalysisResult,
     SQLValidator,
     StatementPipeline,
-    TransformationResult,
     UsesExpression,
     ValidationResult,
 )
@@ -92,64 +90,51 @@ def test_validation_result_boolean_conversion() -> None:
     assert bool(unsafe_result) is False
 
 
-def test_transformation_result_initialization() -> None:
-    """Test TransformationResult initialization."""
+def test_processor_result_initialization() -> None:
+    """Test ProcessorResult initialization."""
+    from sqlspec.statement.pipelines.results import ProcessorResult
+    
     expression = sqlglot.parse_one("SELECT 1", read="mysql")
 
     # Test with minimal parameters
-    result1 = TransformationResult(expression=expression, modified=True)
+    result1 = ProcessorResult(expression=expression)
     assert result1.expression is expression
-    assert result1.modified
-    assert result1.notes == []
+    assert result1.validation_result is None
+    assert result1.analysis_result is None
+    assert result1.metadata == {}
 
-    # Test with notes
-    result2 = TransformationResult(
-        expression=expression, modified=False, notes=["No changes needed", "Query already optimized"]
+    # Test with metadata
+    result2 = ProcessorResult(
+        expression=expression, 
+        metadata={"modified": True, "notes": ["No changes needed", "Query already optimized"]}
     )
-    assert not result2.modified
-    assert len(result2.notes) == 2
+    assert result2.metadata["modified"] is True
+    assert len(result2.metadata["notes"]) == 2
 
 
-def test_transformation_result_boolean_conversion() -> None:
-    """Test TransformationResult boolean conversion."""
+def test_processor_result_with_validation() -> None:
+    """Test ProcessorResult with validation result."""
+    from sqlspec.statement.pipelines.results import ProcessorResult
+    
     expression = sqlglot.parse_one("SELECT 1", read="mysql")
 
-    modified_result = TransformationResult(expression=expression, modified=True)
-    unmodified_result = TransformationResult(expression=expression, modified=False)
-
-    assert bool(modified_result) is True
-    assert bool(unmodified_result) is False
-
-
-def test_analysis_result_initialization() -> None:
-    """Test AnalysisResult initialization."""
-    # Test with minimal parameters
-    result1 = AnalysisResult()
-    assert result1.metrics == {}
-    assert result1.warnings == []
-    assert result1.issues == []
-    assert result1.notes == []
-
-    # Test with full parameters
-    result2 = AnalysisResult(
-        metrics={"complexity": 10, "joins": 2},
-        warnings=["High complexity"],
-        issues=["Potential performance issue"],
-        notes=["Analysis completed"],
-    )
-    assert result2.metrics["complexity"] == 10
-    assert len(result2.warnings) == 1
-    assert len(result2.issues) == 1
-    assert len(result2.notes) == 1
+    # Test with validation result
+    validation = ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
+    result3 = ProcessorResult(expression=expression, validation_result=validation)
+    assert result3.validation_result is validation
 
 
-def test_analysis_result_boolean_conversion() -> None:
-    """Test AnalysisResult boolean conversion."""
-    clean_result = AnalysisResult(issues=[])
-    problematic_result = AnalysisResult(issues=["Issue found"])
+def test_statement_pipeline_initialization() -> None:
+    """Test StatementPipeline initialization."""
+    # Create a simple pipeline
+    pipeline = StatementPipeline()
 
-    assert bool(clean_result) is True  # No issues means True
-    assert bool(problematic_result) is False  # Has issues means False
+
+def test_pipeline_configuration() -> None:
+    """Test pipeline configuration handling."""
+    config = SQLConfig(enable_validation=True, enable_transformations=True)
+    pipeline = StatementPipeline()
+    assert pipeline is not None
 
 
 def test_sql_validator_initialization() -> None:

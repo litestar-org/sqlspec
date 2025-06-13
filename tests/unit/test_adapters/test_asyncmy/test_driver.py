@@ -75,7 +75,7 @@ def test_asyncmy_driver_supports_arrow(asyncmy_driver: AsyncmyDriver) -> None:
 
 def test_asyncmy_driver_placeholder_style(asyncmy_driver: AsyncmyDriver) -> None:
     """Test Asyncmy driver placeholder style detection."""
-    placeholder_style = asyncmy_driver.parameter_style
+    placeholder_style = asyncmy_driver.default_parameter_style
     assert placeholder_style == ParameterStyle.POSITIONAL_PYFORMAT
 
 

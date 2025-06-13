@@ -37,7 +37,7 @@ from sqlspec.statement.filters import StatementFilter, apply_filter
 from sqlspec.statement.parameters import ParameterConverter, ParameterStyle, ParameterValidator
 from sqlspec.statement.pipelines import ValidationResult
 from sqlspec.statement.pipelines.base import StatementPipeline
-from sqlspec.statement.pipelines.context import SQLProcessingContext
+from sqlspec.statement.pipelines.context import PipelineResult, SQLProcessingContext
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -50,7 +50,6 @@ if TYPE_CHECKING:
     from sqlspec.statement.parameters import ParameterInfo
     from sqlspec.statement.pipelines import ProcessorProtocol, SQLValidator
     from sqlspec.statement.pipelines.analyzers import StatementAnalysis
-    from sqlspec.statement.pipelines.context import StatementPipelineResult
     from sqlspec.typing import SQLParameterType
 
 __all__ = (
@@ -688,7 +687,14 @@ class SQL:
                     current_expression=self.expression,
                 )
             )
-            return pipeline_result.validation_result or ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
+            # Convert context errors to ValidationResult for backward compatibility
+            if pipeline_result.context.validation_errors:
+                return ValidationResult(
+                    is_safe=False,
+                    risk_level=pipeline_result.context.risk_level,
+                    issues=[error.message for error in pipeline_result.context.validation_errors],
+                )
+            return ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
         if self._config.enable_parsing and self.expression is None:
             try:
                 parsed_expr = self.to_expression(self.sql, self._dialect)
@@ -703,7 +709,14 @@ class SQL:
                         current_expression=parsed_expr,
                     )
                 )
-                return pipeline_result.validation_result or ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
+                # Convert context errors to ValidationResult for backward compatibility
+                if pipeline_result.context.validation_errors:
+                    return ValidationResult(
+                        is_safe=False,
+                        risk_level=pipeline_result.context.risk_level,
+                        issues=[error.message for error in pipeline_result.context.validation_errors],
+                    )
+                return ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
             except SQLValidationError as e:
                 return ValidationResult(is_safe=False, risk_level=RiskLevel.HIGH, issues=[str(e)])
         else:
@@ -1048,9 +1061,9 @@ class SQL:
 
         try:
             pipeline_result = transform_pipeline.execute_pipeline(transform_context)
-            if pipeline_result.final_expression is not expr_to_transform:
+            if pipeline_result.expression is not expr_to_transform:
                 return self.copy(
-                    statement=pipeline_result.final_expression, parameters=pipeline_result.merged_parameters
+                    statement=pipeline_result.expression, parameters=pipeline_result.context.merged_parameters
                 )
         except SQLValidationError as e:
             msg = f"SQL transformation failed due to validation error during pipeline execution: {e}"
@@ -1595,7 +1608,7 @@ class SQL:
             self._check_and_raise_for_strict_mode()
             return None  # Return None since parsing failed
 
-    def _execute_pipeline(self, context: "SQLProcessingContext") -> "StatementPipelineResult":
+    def _execute_pipeline(self, context: "SQLProcessingContext") -> "PipelineResult":
         """Execute the SQL processing pipeline based on configuration."""
         if self._config.enable_parsing and context.current_expression is not None:
             with wrap_exceptions():
@@ -1611,13 +1624,14 @@ class SQL:
 
     @staticmethod
     def _merge_extracted_parameters(
-        pipeline_result: "StatementPipelineResult", context: "SQLProcessingContext"
+        pipeline_result: "PipelineResult", context: "SQLProcessingContext"  # noqa: ARG004
     ) -> None:
         """Merge extracted parameters from pipeline transformers."""
         if not context.extracted_parameters_from_pipeline:
             return
 
-        final_merged_parameters = pipeline_result.merged_parameters
+        # PipelineResult stores parameters in the context
+        final_merged_parameters = context.merged_parameters
         extracted_params = context.extracted_parameters_from_pipeline
 
         if isinstance(final_merged_parameters, dict):
@@ -1627,70 +1641,69 @@ class SQL:
         elif isinstance(final_merged_parameters, list):
             final_merged_parameters.extend(extracted_params)
         else:
-            pipeline_result.merged_parameters = extracted_params
+            context.merged_parameters = extracted_params
 
-    def _run_validation_only(self, context: "SQLProcessingContext") -> "StatementPipelineResult":
+    def _run_validation_only(self, context: "SQLProcessingContext") -> "PipelineResult":
         """Run validation when parsing is disabled but validation is enabled."""
         with wrap_exceptions(suppress=(AttributeError, TypeError)):
             default_validator = _default_validator()
             validation_result = default_validator.validate(context.initial_sql_string, self._dialect, self._config)
 
-        if validation_result is None:
-            validation_result = ValidationResult(
-                is_safe=True,
-                risk_level=RiskLevel.SKIP,
-                issues=["Validation returned None result."],
-            )
+        # Legacy validation result handling - convert to context errors
+        if validation_result is not None and not validation_result.is_safe:
+            from sqlspec.statement.pipelines.result_types import ValidationError as ValError
+            for issue in validation_result.issues:
+                error = ValError(
+                    message=issue,
+                    code="legacy-validation",
+                    risk_level=validation_result.risk_level,
+                    processor="LegacyValidator",
+                    expression=None,
+                )
+                context.validation_errors.append(error)
 
-        return self._create_pipeline_result(context, None, validation_result, None)
+        return PipelineResult(
+            expression=exp.Select(),  # Default empty expression since no parsing
+            context=context,
+        )
 
-    def _create_disabled_result(self, context: "SQLProcessingContext") -> "StatementPipelineResult":
+    def _create_disabled_result(self, context: "SQLProcessingContext") -> "PipelineResult":
         """Create result when both parsing and validation are disabled."""
-        validation_result = ValidationResult(
-            is_safe=True, risk_level=RiskLevel.SKIP, issues=["Parsing and Validation disabled"]
+        # No need to add any errors - both parsing and validation are disabled
+        return PipelineResult(
+            expression=exp.Select(),  # Default empty expression
+            context=context,
         )
-        return self._create_pipeline_result(context, None, validation_result, None)
 
-    @staticmethod
-    def _create_pipeline_result(
-        context: "SQLProcessingContext",
-        transformed_expression: "Optional[Expression]",
-        validation_result: "ValidationResult",
-        analysis_result: "Optional[Any]",
-    ) -> "StatementPipelineResult":
-        """Create a pipeline result with the given components."""
-        from sqlspec.statement.pipelines.context import StatementPipelineResult
-
-        return StatementPipelineResult(
-            final_expression=transformed_expression,
-            validation_result=validation_result,
-            analysis_result=analysis_result,
-            parameter_info=context.parameter_info,
-            merged_parameters=context.merged_parameters,
-            input_sql_had_placeholders=context.input_sql_had_placeholders,
-        )
 
     def _build_processed_state(
-        self, context: "SQLProcessingContext", pipeline_result: "StatementPipelineResult"
+        self, context: "SQLProcessingContext", pipeline_result: "PipelineResult"
     ) -> "_ProcessedState":
         """Build the final processed state from context and pipeline results."""
-        validation_result = pipeline_result.validation_result
-        if validation_result is None:
+        # Create ValidationResult from context errors for backward compatibility
+        validation_result = None
+        if context.validation_errors:
+            validation_result = ValidationResult(
+                is_safe=not context.has_errors,
+                risk_level=context.risk_level,
+                issues=[error.message for error in context.validation_errors],
+            )
+        else:
             validation_result = ValidationResult(
                 is_safe=True,
-                risk_level=RiskLevel.SKIP,
-                issues=["Pipeline returned None validation result."],
+                risk_level=RiskLevel.SAFE,
+                issues=[],
             )
 
         processed_state = _ProcessedState(
             raw_sql_input=context.initial_sql_string,
             raw_parameters_input=context.initial_parameters,
-            initial_expression=context.current_expression,
-            transformed_expression=pipeline_result.final_expression,
-            final_parameter_info=pipeline_result.parameter_info,
-            final_merged_parameters=pipeline_result.merged_parameters,
+            initial_expression=context.initial_expression,
+            transformed_expression=pipeline_result.expression,
+            final_parameter_info=context.parameter_info,
+            final_merged_parameters=context.merged_parameters,
             validation_result=validation_result,
-            analysis_result=pipeline_result.analysis_result,
+            analysis_result=None,  # Legacy field, no longer used
             input_had_placeholders=context.input_sql_had_placeholders,
             config_snapshot=self._config,
         )

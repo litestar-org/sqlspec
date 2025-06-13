@@ -1,13 +1,13 @@
 # ruff: noqa: PLR6301
 # Base class for validators
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING
 
 from sqlglot import exp
 
 from sqlspec.exceptions import RiskLevel
 from sqlspec.statement.pipelines.base import ProcessorProtocol
-from sqlspec.statement.pipelines.results import ProcessorResult, ValidationResult
+from sqlspec.statement.pipelines.result_types import ValidationError
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -15,70 +15,55 @@ if TYPE_CHECKING:
 __all__ = ("BaseValidator",)
 
 
-class BaseValidator(ProcessorProtocol[exp.Expression], ABC):
+class BaseValidator(ProcessorProtocol, ABC):
     """Base class for all validators."""
 
-    def process(self, context: "SQLProcessingContext") -> "ProcessorResult":
-        """Process the SQL context through this validator.
+    def process(self, expression: "exp.Expression", context: "SQLProcessingContext") -> "exp.Expression":
+        """Process the SQL expression through this validator.
 
         Args:
-            context: The SQL processing context
+            expression: The SQL expression to validate.
+            context: The SQL processing context.
 
         Returns:
-            A ProcessorResult containing the outcome of the validation.
+            The expression unchanged (validators don't transform).
         """
-        # Call the abstract process method that returns ProcessorResult
-        result = self._process_internal(context)
-
-        # Return in the expected tuple format
-        if result.expression is None:
-            result.expression = context.current_expression or exp.Placeholder()
-
-        return result
+        # Call the abstract validate method that adds errors to context
+        self.validate(expression, context)
+        return expression
 
     @abstractmethod
-    def _process_internal(self, context: "SQLProcessingContext") -> ProcessorResult:
-        """Internal process method to be implemented by subclasses.
+    def validate(self, expression: "exp.Expression", context: "SQLProcessingContext") -> None:
+        """Validate the expression and add any errors to the context.
 
         Args:
-            context: The SQL processing context
-
-        Returns:
-            ProcessorResult with validation findings
+            expression: The SQL expression to validate.
+            context: The SQL processing context.
         """
         raise NotImplementedError
 
-    def _create_result(
+    def add_error(
         self,
-        expression: "Optional[exp.Expression]",
-        is_safe: bool,
+        context: "SQLProcessingContext",
+        message: str,
+        code: str,
         risk_level: RiskLevel,
-        issues: "Optional[list[str]]" = None,
-        warnings: "Optional[list[str]]" = None,
-        metadata: "Optional[dict[str, Any]]" = None,
-    ) -> ProcessorResult:
-        """Helper to create a ProcessorResult with ValidationResult.
+        expression: "exp.Expression | None" = None,
+    ) -> None:
+        """Helper to add a validation error to the context.
 
         Args:
-            expression: The expression (usually unchanged for validators)
-            is_safe: Whether the SQL is safe
-            risk_level: The risk level
-            issues: List of issues found
-            warnings: List of warnings
-            metadata: Additional metadata
-
-        Returns:
-            ProcessorResult with validation information
+            context: The SQL processing context.
+            message: The error message.
+            code: The error code.
+            risk_level: The risk level.
+            expression: The specific expression with the error (optional).
         """
-        validation_result = ValidationResult(
-            is_safe=is_safe,
+        error = ValidationError(
+            message=message,
+            code=code,
             risk_level=risk_level,
-            issues=issues,
-            warnings=warnings,
-        )
-
-        return ProcessorResult(
+            processor=self.__class__.__name__,
             expression=expression,
-            validation_result=validation_result,
-            metadata=metadata,
         )
+        context.validation_errors.append(error)

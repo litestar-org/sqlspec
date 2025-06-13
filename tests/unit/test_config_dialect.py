@@ -386,7 +386,7 @@ class TestDialectValidation:
         dialects = ["sqlite", Dialect.get_or_raise("postgres"), None]
 
         for dialect in dialects:
-            sql = SQL("SELECT 1", dialect=dialect)
+            sql = SQL("SELECT 1", dialect=dialect)  # type: ignore[arg-type]
             # Should not raise during initialization
             assert sql._dialect == dialect
 

@@ -145,14 +145,12 @@ class SelectBuilder(
         Returns:
             The current builder instance for method chaining.
         """
-        self._hints.append(
-            {
-                "hint": hint,
-                "location": location,
-                "table": table,
-                "dialect": dialect,
-            }
-        )
+        self._hints.append({
+            "hint": hint,
+            "location": location,
+            "table": table,
+            "dialect": dialect,
+        })
         return self
 
     def build(self) -> "SafeQuery":
@@ -205,7 +203,7 @@ class SelectBuilder(
                         pattern = rf"\b{re.escape(table)}\b(\s+AS\s+\w+)?"
 
                         def replacement_func(match: re.Match) -> str:
-                            alias_part = match.group(1) if match.group(1) else ""
+                            alias_part = match.group(1) or ""
                             return f"/*+ {hint} */ {table}{alias_part}"  # noqa: B023
 
                         modified_sql = re.sub(pattern, replacement_func, modified_sql, flags=re.IGNORECASE, count=1)

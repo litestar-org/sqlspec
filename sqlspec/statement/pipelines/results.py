@@ -1,17 +1,11 @@
 """Result objects for the SQL processing pipeline."""
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from sqlglot import exp
-
     from sqlspec.exceptions import RiskLevel
-    from sqlspec.statement.pipelines.analyzers import StatementAnalysis
 
-__all__ = (
-    "ProcessorResult",
-    "ValidationResult",
-)
+__all__ = ("ValidationResult",)
 
 
 class ValidationResult:
@@ -52,18 +46,3 @@ class ValidationResult:
     def __bool__(self) -> bool:
         return self.is_safe
 
-
-class ProcessorResult:
-    """Result from a processor with validation and analysis information."""
-
-    def __init__(
-        self,
-        expression: "Optional[exp.Expression]" = None,
-        validation_result: "Optional[ValidationResult]" = None,
-        analysis_result: "Optional[StatementAnalysis]" = None,
-        metadata: "Optional[dict[str, Any]]" = None,
-    ) -> None:
-        self.expression = expression
-        self.validation_result = validation_result
-        self.analysis_result = analysis_result
-        self.metadata = metadata or {}

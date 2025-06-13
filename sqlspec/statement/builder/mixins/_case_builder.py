@@ -23,14 +23,15 @@ class CaseBuilderMixin:
         Returns:
             CaseBuilder: A CaseBuilder instance for building the CASE expression.
         """
-        return CaseBuilder(self, alias)  # type: ignore[arg-type]
+        builder = cast("QueryBuilder[RowT]", self)  # pyright: ignore
+        return CaseBuilder(builder, alias)
 
 
 @dataclass
 class CaseBuilder:
     """Builder for CASE expressions."""
 
-    _parent: "QueryBuilder[RowT]"
+    _parent: "QueryBuilder[RowT]"  # pyright: ignore
     _alias: Optional[str]
     _case_expr: exp.Case
 
@@ -56,7 +57,7 @@ class CaseBuilder:
             CaseBuilder: The current builder instance for method chaining.
         """
         cond_expr = exp.condition(condition) if isinstance(condition, str) else condition
-        param_name = self._parent._add_parameter(value)  # pyright: ignore
+        param_name = self._parent.add_parameter(value)[1]
         value_expr = exp.Placeholder(this=param_name)
 
         when_clause = exp.When(this=cond_expr, then=value_expr)
@@ -75,7 +76,7 @@ class CaseBuilder:
         Returns:
             CaseBuilder: The current builder instance for method chaining.
         """
-        param_name = self._parent._add_parameter(value)  # pyright: ignore
+        param_name = self._parent.add_parameter(value)[1]
         value_expr = exp.Placeholder(this=param_name)
         self._case_expr.set("default", value_expr)
         return self

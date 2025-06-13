@@ -552,7 +552,8 @@ class PerformanceValidator(BaseValidator):
 
         return "unknown"
 
-    def _find_connected_components(self, graph: "dict[str, set[str]]", nodes: "set[str]") -> "list[set[str]]":
+    @staticmethod
+    def _find_connected_components(graph: "dict[str, set[str]]", nodes: "set[str]") -> "list[set[str]]":
         """Find connected components in join graph.
 
         Args:

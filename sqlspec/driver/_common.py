@@ -221,7 +221,7 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
 
         # Determine the target style from the SQL if not provided
         if target_style is None:
-            target_style = self.parameter_style
+            target_style = self.default_parameter_style
 
         # Override target style based on what's actually in the SQL
         # This handles cases where the driver supports multiple styles

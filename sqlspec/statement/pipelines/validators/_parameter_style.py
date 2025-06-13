@@ -117,10 +117,12 @@ class ParameterStyleValidator(ProcessorProtocol[exp.Expression]):
 
         return ProcessorResult(expression=context.current_expression, validation_result=validation_result)
 
-    def _raise_mixed_style_error(self, msg: "str") -> "None":
+    @staticmethod
+    def _raise_mixed_style_error(msg: "str") -> "None":
         """Raise MixedParameterStyleError with the given message."""
         raise MixedParameterStyleError(msg)
 
-    def _raise_unsupported_style_error(self, msg: "str") -> "None":
+    @staticmethod
+    def _raise_unsupported_style_error(msg: "str") -> "None":
         """Raise UnsupportedParameterStyleError with the given message."""
         raise UnsupportedParameterStyleError(msg)

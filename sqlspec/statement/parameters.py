@@ -27,8 +27,6 @@ __all__ = (
     "ParameterStyle",
     "ParameterValidator",
     "SQLParameterType",
-    "convert_parameters",
-    "detect_parameter_style",
 )
 
 logger = logging.getLogger("sqlspec.sql.parameters")
@@ -690,47 +688,3 @@ class ParameterConverter:
             return "%s"
         # Fallback to original
         return param_info.placeholder_text
-
-
-_validator = ParameterValidator()
-_converter = ParameterConverter()
-
-
-def detect_parameter_style(sql: str) -> "ParameterStyle":
-    """Detect the parameter style of a SQL string.
-
-    Args:
-        sql: SQL string to analyze
-
-    Returns:
-        Detected parameter style
-
-    This is a convenience function using the module-level validator.
-    """
-    parameters = _validator.extract_parameters(sql)
-    return _validator.get_parameter_style(parameters)
-
-
-def convert_parameters(
-    sql: str,
-    parameters: "SQLParameterType" = None,
-    args: "Optional[Sequence[Any]]" = None,
-    kwargs: "Optional[Mapping[str, Any]]" = None,
-    validate: bool = True,
-) -> tuple[str, "list[ParameterInfo]", "SQLParameterType", "NormalizationInfo"]:
-    """Convert parameters for a SQL statement and transform SQL for parsing.
-
-    This is a convenience function using the module-level converter.
-
-    Args:
-        sql: SQL string to analyze
-        parameters: Primary parameters
-        args: Positional arguments
-        kwargs: Keyword arguments
-        validate: Whether to validate parameters
-
-    Returns:
-        Tuple of (transformed_sql, parameter_info_list, merged_parameters, placeholder_map)
-
-    """
-    return _converter.convert_parameters(sql, parameters, args, kwargs, validate)
