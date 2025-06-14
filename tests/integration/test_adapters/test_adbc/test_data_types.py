@@ -52,11 +52,7 @@ def adbc_postgresql_types_session(postgres_service: PostgresService) -> Generato
 @pytest.fixture
 def adbc_sqlite_types_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session for data type testing."""
-    config = AdbcConfig(
-        uri=":memory:",
-        driver_name="adbc_driver_sqlite",
-        statement_config=SQLConfig(strict_mode=False),
-    )
+    config = AdbcConfig(uri=":memory:", driver_name="adbc_driver_sqlite", statement_config=SQLConfig(strict_mode=False))
 
     with config.provide_session() as session:
         # Create table with SQLite data types
@@ -85,24 +81,13 @@ def test_postgresql_basic_types(adbc_postgresql_types_session: AdbcDriver) -> No
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id
         """,
-        (
-            "Test text",
-            "Test varchar",
-            42,
-            9876543210,
-            3.14159,
-            123.45,
-            True,
-        ),
+        ("Test text", "Test varchar", 42, 9876543210, 3.14159, 123.45, True),
     )
 
     inserted_id = result.data[0]["id"]
 
     # Retrieve and verify
-    select_result = adbc_postgresql_types_session.execute(
-        "SELECT * FROM test_types WHERE id = $1",
-        (inserted_id,),
-    )
+    select_result = adbc_postgresql_types_session.execute("SELECT * FROM test_types WHERE id = $1", (inserted_id,))
 
     assert len(select_result.data) == 1
     row = select_result.data[0]
@@ -127,19 +112,11 @@ def test_sqlite_basic_types(adbc_sqlite_types_session: AdbcDriver) -> None:
         (text_col, int_col, real_col, numeric_col)
         VALUES (?, ?, ?, ?)
         """,
-        (
-            "Test text",
-            42,
-            3.14159,
-            123.45,
-        ),
+        ("Test text", 42, 3.14159, 123.45),
     )
 
     # Retrieve and verify
-    select_result = adbc_sqlite_types_session.execute(
-        "SELECT * FROM test_types WHERE int_col = ?",
-        (42,),
-    )
+    select_result = adbc_sqlite_types_session.execute("SELECT * FROM test_types WHERE int_col = ?", (42,))
 
     assert len(select_result.data) == 1
     row = select_result.data[0]
@@ -174,8 +151,7 @@ def test_postgresql_date_time_types(adbc_postgresql_types_session: AdbcDriver) -
 
     # Retrieve and verify
     select_result = adbc_postgresql_types_session.execute(
-        "SELECT date_col, time_col, timestamp_col FROM test_types WHERE id = $1",
-        (inserted_id,),
+        "SELECT date_col, time_col, timestamp_col FROM test_types WHERE id = $1", (inserted_id,)
     )
 
     row = select_result.data[0]
@@ -214,8 +190,7 @@ def test_postgresql_null_values(adbc_postgresql_types_session: AdbcDriver) -> No
 
     # Retrieve and verify NULLs
     select_result = adbc_postgresql_types_session.execute(
-        "SELECT text_col, int_col, bool_col, date_col FROM test_types WHERE id = $1",
-        (inserted_id,),
+        "SELECT text_col, int_col, bool_col, date_col FROM test_types WHERE id = $1", (inserted_id,)
     )
 
     row = select_result.data[0]
@@ -233,10 +208,7 @@ def test_sqlite_blob_type(adbc_sqlite_types_session: AdbcDriver) -> None:
     binary_data = b"Hello, this is binary data!"
 
     # Insert BLOB
-    adbc_sqlite_types_session.execute(
-        "INSERT INTO test_types (blob_col) VALUES (?)",
-        (binary_data,),
-    )
+    adbc_sqlite_types_session.execute("INSERT INTO test_types (blob_col) VALUES (?)", (binary_data,))
 
     # Retrieve and verify
     select_result = adbc_sqlite_types_session.execute("SELECT blob_col FROM test_types WHERE blob_col IS NOT NULL")
@@ -274,8 +246,7 @@ def test_postgresql_advanced_types(adbc_postgresql_types_session: AdbcDriver) ->
 
     # Retrieve and verify
     select_result = adbc_postgresql_types_session.execute(
-        "SELECT json_col, array_col FROM test_types WHERE id = $1",
-        (inserted_id,),
+        "SELECT json_col, array_col FROM test_types WHERE id = $1", (inserted_id,)
     )
 
     row = select_result.data[0]

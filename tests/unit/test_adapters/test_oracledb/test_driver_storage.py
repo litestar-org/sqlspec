@@ -40,9 +40,7 @@ def oracle_driver(mock_oracle_connection: MagicMock) -> OracleSyncDriver:
     config = SQLConfig(strict_mode=False)
     instrumentation_config = InstrumentationConfig()
     return OracleSyncDriver(
-        connection=mock_oracle_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_oracle_connection, config=config, instrumentation_config=instrumentation_config
     )
 
 

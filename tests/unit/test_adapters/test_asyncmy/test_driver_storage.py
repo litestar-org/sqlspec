@@ -43,9 +43,7 @@ def asyncmy_driver(mock_asyncmy_connection: AsyncMock) -> AsyncmyDriver:
     config = SQLConfig(strict_mode=False)
     instrumentation_config = InstrumentationConfig()
     return AsyncmyDriver(
-        connection=mock_asyncmy_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_asyncmy_connection, config=config, instrumentation_config=instrumentation_config
     )
 
 

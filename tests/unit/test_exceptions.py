@@ -623,11 +623,7 @@ def test_specialized_inheritance() -> None:
     assert isinstance(missing_dep, ImportError)
 
     # Repository exceptions should inherit from RepositoryError
-    repository_exceptions = [
-        IntegrityError("test"),
-        NotFoundError("test"),
-        MultipleResultsFoundError("test"),
-    ]
+    repository_exceptions = [IntegrityError("test"), NotFoundError("test"), MultipleResultsFoundError("test")]
 
     for repo_exception in repository_exceptions:
         assert isinstance(repo_exception, RepositoryError)
@@ -643,10 +639,7 @@ def test_specialized_inheritance() -> None:
         assert isinstance(param_exception, ParameterError)
 
     # Validation exceptions should inherit from SQLValidationError
-    validation_exceptions: list[SQLValidationError] = [
-        SQLInjectionError("test"),
-        UnsafeSQLError("test"),
-    ]
+    validation_exceptions: list[SQLValidationError] = [SQLInjectionError("test"), UnsafeSQLError("test")]
 
     for validation_exception in validation_exceptions:
         assert isinstance(validation_exception, SQLValidationError)
@@ -748,12 +741,7 @@ def test_wrap_exceptions_various_exception_types(exception_type: type[Exception]
 
 def test_exception_with_empty_messages() -> None:
     """Test exceptions with empty messages."""
-    exceptions = [
-        SQLSpecError(""),
-        SQLValidationError(""),
-        ParameterError(""),
-        RepositoryError(""),
-    ]
+    exceptions = [SQLSpecError(""), SQLValidationError(""), ParameterError(""), RepositoryError("")]
 
     for exception in exceptions:
         assert str(exception) == ""

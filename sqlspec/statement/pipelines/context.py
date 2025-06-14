@@ -4,11 +4,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from sqlglot import exp
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.result_types import (
-    AnalysisFinding,
-    TransformationLog,
-    ValidationError,
-)
+from sqlspec.statement.pipelines.result_types import AnalysisFinding, TransformationLog, ValidationError
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType

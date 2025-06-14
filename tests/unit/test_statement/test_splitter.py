@@ -2,11 +2,7 @@
 
 import pytest
 
-from sqlspec.statement.splitter import (
-    OracleDialectConfig,
-    StatementSplitter,
-    split_sql_script,
-)
+from sqlspec.statement.splitter import OracleDialectConfig, StatementSplitter, split_sql_script
 
 
 class TestOracleSplitter:

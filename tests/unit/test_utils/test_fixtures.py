@@ -243,10 +243,7 @@ def test_open_fixture_filename_construction(temp_fixtures_dir: Path, fixture_nam
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("fixture_name", "expected_filename"),
-    [
-        ("async_simple", "async_simple.json"),
-        ("async_with_underscore", "async_with_underscore.json"),
-    ],
+    [("async_simple", "async_simple.json"), ("async_with_underscore", "async_with_underscore.json")],
     ids=["async_simple_name", "async_with_underscore"],
 )
 async def test_open_fixture_async_filename_construction(

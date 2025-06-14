@@ -73,11 +73,7 @@ def test_memory_database_connection() -> None:
 @pytest.mark.xdist_group("duckdb")
 def test_connection_with_performance_settings() -> None:
     """Test DuckDB connection with performance optimization settings."""
-    config = create_permissive_config(
-        memory_limit="512MB",
-        threads=2,
-        enable_object_cache=True,
-    )
+    config = create_permissive_config(memory_limit="512MB", threads=2, enable_object_cache=True)
 
     with config.provide_session() as session:
         # Test that performance settings don't interfere with basic operations
@@ -118,17 +114,10 @@ def test_connection_with_data_processing_settings() -> None:
 def test_connection_with_instrumentation() -> None:
     """Test DuckDB connection with instrumentation configuration."""
     instrumentation = InstrumentationConfig(
-        log_queries=True,
-        log_parameters=True,
-        log_results_count=True,
-        log_pool_operations=True,
+        log_queries=True, log_parameters=True, log_results_count=True, log_pool_operations=True
     )
     statement_config = SQLConfig(strict_mode=False, enable_validation=False)
-    config = DuckDBConfig(
-        database=":memory:",
-        statement_config=statement_config,
-        instrumentation=instrumentation,
-    )
+    config = DuckDBConfig(database=":memory:", statement_config=statement_config, instrumentation=instrumentation)
 
     with config.provide_session() as session:
         # Test that instrumentation doesn't interfere with operations
@@ -149,11 +138,7 @@ def test_connection_with_hook() -> None:
         conn.execute("SET threads = 1")
 
     statement_config = SQLConfig(strict_mode=False, enable_validation=False)
-    config = DuckDBConfig(
-        database=":memory:",
-        statement_config=statement_config,
-        on_connection_create=connection_hook,
-    )
+    config = DuckDBConfig(database=":memory:", statement_config=statement_config, on_connection_create=connection_hook)
 
     with config.provide_session() as session:
         assert hook_executed is True

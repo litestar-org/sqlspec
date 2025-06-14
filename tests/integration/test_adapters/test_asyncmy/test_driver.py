@@ -287,12 +287,7 @@ async def test_asyncmy_transactions(asyncmy_session: AsyncmyDriver) -> None:
 async def test_asyncmy_complex_queries(asyncmy_session: AsyncmyDriver) -> None:
     """Test complex SQL queries."""
     # Insert test data
-    test_data = [
-        ("Alice", 25),
-        ("Bob", 30),
-        ("Charlie", 35),
-        ("Diana", 28),
-    ]
+    test_data = [("Alice", 25), ("Bob", 30), ("Charlie", 35), ("Diana", 28)]
 
     await asyncmy_session.execute_many("INSERT INTO test_table (name, value) VALUES (%s, %s)", test_data)
 

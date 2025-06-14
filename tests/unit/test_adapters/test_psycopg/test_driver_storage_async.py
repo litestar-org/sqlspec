@@ -39,9 +39,7 @@ def psycopg_async_driver(mock_psycopg_async_connection: AsyncMock) -> PsycopgAsy
     config = SQLConfig(strict_mode=False)
     instrumentation_config = InstrumentationConfig()
     return PsycopgAsyncDriver(
-        connection=mock_psycopg_async_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_psycopg_async_connection, config=config, instrumentation_config=instrumentation_config
     )
 
 

@@ -86,8 +86,7 @@ async def test_asyncmy_to_parquet(asyncmy_arrow_session: AsyncmyDriver) -> None:
         output_path = Path(tmpdir) / "test_output.parquet"
 
         await asyncmy_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE is_active = true",
-            str(output_path),
+            "SELECT * FROM test_arrow WHERE is_active = true", str(output_path)
         )
 
         assert output_path.exists()
@@ -107,8 +106,7 @@ async def test_asyncmy_to_parquet(asyncmy_arrow_session: AsyncmyDriver) -> None:
 async def test_asyncmy_arrow_with_parameters(asyncmy_arrow_session: AsyncmyDriver) -> None:
     """Test fetch_arrow_table with parameters on AsyncMy."""
     result = await asyncmy_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE value >= %s AND value <= %s ORDER BY value",
-        (200, 400),
+        "SELECT * FROM test_arrow WHERE value >= %s AND value <= %s ORDER BY value", (200, 400)
     )
 
     assert isinstance(result, ArrowResult)
@@ -121,10 +119,7 @@ async def test_asyncmy_arrow_with_parameters(asyncmy_arrow_session: AsyncmyDrive
 @pytest.mark.xdist_group("mysql")
 async def test_asyncmy_arrow_empty_result(asyncmy_arrow_session: AsyncmyDriver) -> None:
     """Test fetch_arrow_table with empty result on AsyncMy."""
-    result = await asyncmy_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE value > %s",
-        (1000,),
-    )
+    result = await asyncmy_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow WHERE value > %s", (1000,))
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows == 0
@@ -182,8 +177,7 @@ async def test_asyncmy_arrow_large_dataset(asyncmy_arrow_session: AsyncmyDriver)
             (f"Item {i}", i * 10, float(i * 2.5), i % 2 == 0) for i in range(batch_start, batch_start + batch_size)
         ]
         await asyncmy_arrow_session.execute_many(
-            "INSERT INTO test_arrow (name, value, price, is_active) VALUES (%s, %s, %s, %s)",
-            batch_data,
+            "INSERT INTO test_arrow (name, value, price, is_active) VALUES (%s, %s, %s, %s)", batch_data
         )
 
     result = await asyncmy_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
@@ -203,9 +197,7 @@ async def test_asyncmy_parquet_export_options(asyncmy_arrow_session: AsyncmyDriv
 
         # Export with compression
         await asyncmy_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE value <= 300",
-            str(output_path),
-            compression="snappy",
+            "SELECT * FROM test_arrow WHERE value <= 300", str(output_path), compression="snappy"
         )
 
         assert output_path.exists()

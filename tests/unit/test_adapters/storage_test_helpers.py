@@ -28,8 +28,7 @@ def create_mock_arrow_table(num_rows: int = 2, columns: Optional[list[str]] = No
 
 
 def create_mock_sql_result(
-    data: Optional[list[dict[str, Any]]] = None,
-    columns: Optional[list[str]] = None,
+    data: Optional[list[dict[str, Any]]] = None, columns: Optional[list[str]] = None
 ) -> SQLResult:
     """Create a mock SQLResult for testing."""
     if data is None:
@@ -271,9 +270,5 @@ class StorageTestMixin:
         instrumentation_config = InstrumentationConfig()
         return cast(
             "DriverT",
-            self.driver_class(
-                connection=mock_connection,
-                config=config,
-                instrumentation_config=instrumentation_config,
-            ),
+            self.driver_class(connection=mock_connection, config=config, instrumentation_config=instrumentation_config),
         )

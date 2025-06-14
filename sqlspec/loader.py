@@ -23,10 +23,29 @@ __all__ = ("SQLFile", "SQLFileLoader")
 
 logger = get_logger("loader")
 
-# Matches: -- name: query_name
-QUERY_NAME_PATTERN = re.compile(r"^\s*--\s*name\s*:\s*(\w+)\s*$", re.MULTILINE | re.IGNORECASE)
+# Matches: -- name: query_name (supports hyphens and special suffixes)
+# We capture the name plus any trailing special characters
+QUERY_NAME_PATTERN = re.compile(r"^\s*--\s*name\s*:\s*([\w-]+[^\w\s]*)\s*$", re.MULTILINE | re.IGNORECASE)
 
 MIN_QUERY_PARTS = 3
+
+
+def _normalize_query_name(name: str) -> str:
+    """Normalize query name to be a valid Python identifier.
+
+    - Strips trailing special characters (like $, !, etc from aiosql)
+    - Replaces hyphens with underscores
+
+    Args:
+        name: Raw query name from SQL file
+
+    Returns:
+        Normalized query name suitable as Python identifier
+    """
+    # First strip any trailing special characters
+    name = re.sub(r"[^\w-]+$", "", name)
+    # Then replace hyphens with underscores
+    return name.replace("-", "_")
 
 
 @dataclass
@@ -79,12 +98,7 @@ class SQLFileLoader:
         ```
     """
 
-    def __init__(
-        self,
-        *,
-        encoding: str = "utf-8",
-        storage_registry: StorageRegistry = storage_registry,
-    ) -> None:
+    def __init__(self, *, encoding: str = "utf-8", storage_registry: StorageRegistry = storage_registry) -> None:
         """Initialize the SQL file loader.
 
         Args:
@@ -187,18 +201,21 @@ class SQLFileLoader:
             if i + 1 >= len(parts):
                 break
 
-            query_name = parts[i].strip()
+            raw_query_name = parts[i].strip()
             sql_text = parts[i + 1].strip()
 
-            if not query_name or not sql_text:
+            if not raw_query_name or not sql_text:
                 continue
 
             clean_sql = SQLFileLoader._strip_leading_comments(sql_text)
 
             if clean_sql:
+                # Normalize to Python-compatible identifier
+                query_name = _normalize_query_name(raw_query_name)
+
                 if query_name in queries:
                     # Duplicate query name
-                    raise SQLFileParseError(file_path, file_path, ValueError(f"Duplicate query name: {query_name}"))
+                    raise SQLFileParseError(file_path, file_path, ValueError(f"Duplicate query name: {raw_query_name}"))
                 queries[query_name] = clean_sql
 
         if not queries:
@@ -218,13 +235,7 @@ class SQLFileLoader:
         correlation_id = CorrelationContext.get()
         start_time = time.perf_counter()
 
-        logger.info(
-            "Loading SQL files",
-            extra={
-                "file_count": len(paths),
-                "correlation_id": correlation_id,
-            },
-        )
+        logger.info("Loading SQL files", extra={"file_count": len(paths), "correlation_id": correlation_id})
 
         loaded_count = 0
         query_count_before = len(self._queries)
@@ -376,6 +387,7 @@ class SQLFileLoader:
 
         Args:
             name: Name of the query (from -- name: in SQL file).
+                  Hyphens in names are automatically converted to underscores.
             parameters: Parameters for the SQL query (aiosql-compatible).
             **kwargs: Additional parameters to pass to the SQL object.
 
@@ -387,23 +399,28 @@ class SQLFileLoader:
         """
         correlation_id = CorrelationContext.get()
 
+        # Normalize query name for lookup
+        safe_name = _normalize_query_name(name)
+
         logger.debug(
             "Retrieving SQL query: %s",
             name,
             extra={
                 "query_name": name,
+                "safe_name": safe_name,
                 "has_parameters": parameters is not None,
                 "correlation_id": correlation_id,
             },
         )
 
-        if name not in self._queries:
+        if safe_name not in self._queries:
             available = ", ".join(sorted(self._queries.keys())) if self._queries else "none"
             logger.error(
                 "Query not found: %s",
                 name,
                 extra={
                     "query_name": name,
+                    "safe_name": safe_name,
                     "available_queries": len(self._queries),
                     "correlation_id": correlation_id,
                 },
@@ -416,7 +433,7 @@ class SQLFileLoader:
             sql_kwargs["parameters"] = parameters
 
         # Get source file for additional context
-        source_file = self._query_to_file.get(name, "unknown")
+        source_file = self._query_to_file.get(safe_name, "unknown")
 
         logger.debug(
             "Found query %s from %s",
@@ -424,13 +441,14 @@ class SQLFileLoader:
             source_file,
             extra={
                 "query_name": name,
+                "safe_name": safe_name,
                 "source_file": source_file,
-                "sql_length": len(self._queries[name]),
+                "sql_length": len(self._queries[safe_name]),
                 "correlation_id": correlation_id,
             },
         )
 
-        return SQL(self._queries[name], **sql_kwargs)
+        return SQL(self._queries[safe_name], **sql_kwargs)
 
     def get_file(self, path: Union[str, Path]) -> "Optional[SQLFile]":
         """Get a loaded SQLFile object by path.
@@ -447,13 +465,14 @@ class SQLFileLoader:
         """Get the SQLFile object that contains a query.
 
         Args:
-            name: Query name.
+            name: Query name (hyphens are converted to underscores).
 
         Returns:
             SQLFile object if query exists, None otherwise.
         """
-        if name in self._query_to_file:
-            file_path = self._query_to_file[name]
+        safe_name = _normalize_query_name(name)
+        if safe_name in self._query_to_file:
+            file_path = self._query_to_file[safe_name]
             return self._files.get(file_path)
         return None
 
@@ -477,12 +496,13 @@ class SQLFileLoader:
         """Check if a query exists.
 
         Args:
-            name: Query name to check.
+            name: Query name to check (hyphens are converted to underscores).
 
         Returns:
             True if query exists.
         """
-        return name in self._queries
+        safe_name = _normalize_query_name(name)
+        return safe_name in self._queries
 
     def clear_cache(self) -> None:
         """Clear all cached files and queries."""
@@ -494,7 +514,7 @@ class SQLFileLoader:
         """Get raw SQL text for a query.
 
         Args:
-            name: Query name.
+            name: Query name (hyphens are converted to underscores).
 
         Returns:
             Raw SQL text.
@@ -502,6 +522,7 @@ class SQLFileLoader:
         Raises:
             SQLFileNotFoundError: If query not found.
         """
-        if name not in self._queries:
+        safe_name = _normalize_query_name(name)
+        if safe_name not in self._queries:
             raise SQLFileNotFoundError(name)
-        return self._queries[name]
+        return self._queries[safe_name]

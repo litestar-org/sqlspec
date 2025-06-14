@@ -21,10 +21,7 @@ class TestSQLFile:
     def test_sql_file_creation(self) -> None:
         """Test creating a SQLFile object."""
         content = "SELECT * FROM users WHERE id = :user_id"
-        sql_file = SQLFile(
-            content=content,
-            path="/sql/get_user.sql",
-        )
+        sql_file = SQLFile(content=content, path="/sql/get_user.sql")
 
         assert sql_file.content == content
         assert sql_file.path == "/sql/get_user.sql"
@@ -35,19 +32,14 @@ class TestSQLFile:
     def test_sql_file_with_metadata(self) -> None:
         """Test creating a SQLFile with metadata."""
         sql_file = SQLFile(
-            content="SELECT * FROM orders",
-            path="/sql/complex_query.sql",
-            metadata={"author": "test", "version": "1.0"},
+            content="SELECT * FROM orders", path="/sql/complex_query.sql", metadata={"author": "test", "version": "1.0"}
         )
 
         assert sql_file.metadata == {"author": "test", "version": "1.0"}
 
     def test_sql_file_checksum_calculation(self) -> None:
         """Test that checksum is calculated correctly."""
-        sql_file1 = SQLFile(
-            content="SELECT 1",
-            path="/sql/query1.sql",
-        )
+        sql_file1 = SQLFile(content="SELECT 1", path="/sql/query1.sql")
         sql_file2 = SQLFile(
             content="SELECT 1",  # Same content
             path="/sql/query2.sql",
@@ -347,3 +339,92 @@ class TestSQLFileExceptions:
         assert error.path == "/sql/bad.sql"
         assert error.original_error == original
         assert "Failed to parse SQL file 'bad.sql' at /sql/bad.sql: Invalid syntax" in str(error)
+
+
+class TestSQLFileLoaderWithFixtures:
+    """Tests for SQLFileLoader with real fixture files."""
+
+    def test_postgres_collection_privileges_parsing(self) -> None:
+        """Test parsing PostgreSQL collection-privileges.sql with hyphenated query names."""
+        loader = SQLFileLoader()
+        fixture_path = Path(__file__).parent.parent / "fixtures" / "postgres" / "collection-privileges.sql"
+
+        # Load the SQL file - the loader now automatically converts hyphens to underscores
+        loader.load_sql(str(fixture_path))
+
+        # Should have loaded the file
+        sql_file = loader.get_file(str(fixture_path))
+        assert sql_file is not None
+        assert sql_file.path == str(fixture_path)
+        assert "-- name: collection-postgres-pglogical-schema-usage-privilege" in sql_file.content
+
+        # Should have parsed multiple named queries
+        queries = loader.list_queries()
+        assert len(queries) >= 3  # At least 3 named queries in the file
+
+        # Check specific queries are present (with underscores)
+        assert "collection_postgres_pglogical_schema_usage_privilege" in queries
+        assert "collection_postgres_pglogical_privileges" in queries
+        assert "collection_postgres_user_schemas_without_privilege" in queries
+
+        # But we can also use the original hyphenated names!
+        assert loader.has_query("collection-postgres-pglogical-schema-usage-privilege")
+
+        # Verify query content using hyphenated name
+        schema_query = loader.get_sql("collection-postgres-pglogical-schema-usage-privilege")
+        assert isinstance(schema_query, SQL)
+        sql_text = schema_query.to_sql()
+        assert "pg_catalog.has_schema_privilege" in sql_text
+        assert ":PKEY" in sql_text
+        assert ":DMA_SOURCE_ID" in sql_text
+        assert ":DMA_MANUAL_ID" in sql_text
+
+    def test_loading_directory_with_mixed_files(self) -> None:
+        """Test loading a directory containing both named query files and script files."""
+        loader = SQLFileLoader()
+        fixtures_path = Path(__file__).parent.parent / "fixtures"
+
+        # Load all SQL files in the postgres subdirectory (has named queries)
+        postgres_path = fixtures_path / "postgres"
+        if postgres_path.exists() and postgres_path.is_dir():
+            loader.load_sql(str(postgres_path))
+
+            # Should have loaded queries from collection-privileges.sql
+            queries = loader.list_queries()
+            # Look for normalized query names (with underscores)
+            postgres_queries = [q for q in queries if "collection_postgres" in q]
+            assert len(postgres_queries) >= 3
+
+            # Files should be loaded
+            files = loader.list_files()
+            assert any("collection-privileges.sql" in f for f in files)
+
+    def test_oracle_ddl_as_whole_file_content(self) -> None:
+        """Test handling Oracle DDL file without named queries."""
+        loader = SQLFileLoader()
+        fixture_path = Path(__file__).parent.parent / "fixtures" / "oracle.ddl.sql"
+
+        # Method 1: Direct file reading for scripts without named queries
+        content = loader._read_file_content(str(fixture_path))
+        assert "CREATE TABLE" in content
+        assert "VECTOR(768, FLOAT32)" in content
+
+        # Create a SQL object from the entire content as a script
+        # Disable parsing to avoid errors with Oracle-specific syntax
+        from sqlspec.statement.sql import SQLConfig
+
+        config = SQLConfig(enable_parsing=False, enable_validation=False, strict_mode=False)
+        stmt = SQL(content, dialect="oracle", config=config).as_script()
+        assert stmt.is_script is True
+
+        # Method 2: Programmatically add as a named query
+        loader.add_named_sql("oracle_ddl_script", content)
+
+        # Now we can retrieve it as a named query (but it may have parsing issues)
+        # So let's just verify it was added
+        assert "oracle_ddl_script" in loader.list_queries()
+
+        # We can get the raw text back
+        raw_text = loader.get_query_text("oracle_ddl_script")
+        assert "CREATE TABLE" in raw_text
+        assert "VECTOR(768, FLOAT32)" in raw_text

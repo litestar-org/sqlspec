@@ -31,11 +31,7 @@ def duckdb_driver(mock_duckdb_connection: Mock) -> DuckDBDriver:
     """Create a DuckDB driver with mocked connection."""
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
     instrumentation_config = InstrumentationConfig()
-    return DuckDBDriver(
-        connection=mock_duckdb_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
-    )
+    return DuckDBDriver(connection=mock_duckdb_connection, config=config, instrumentation_config=instrumentation_config)
 
 
 def test_duckdb_driver_initialization(mock_duckdb_connection: Mock) -> None:
@@ -44,9 +40,7 @@ def test_duckdb_driver_initialization(mock_duckdb_connection: Mock) -> None:
     instrumentation_config = InstrumentationConfig(log_queries=True)
 
     driver = DuckDBDriver(
-        connection=mock_duckdb_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_duckdb_connection, config=config, instrumentation_config=instrumentation_config
     )
 
     # Test driver attributes are set correctly
@@ -261,9 +255,7 @@ def test_duckdb_driver_logging_configuration(duckdb_driver: DuckDBDriver, mock_d
     statement = SQL("SELECT * FROM users WHERE id = ?", parameters=[1])
 
     # Execute with logging enabled
-    result = duckdb_driver._execute_statement(
-        statement=statement,
-    )
+    result = duckdb_driver._execute_statement(statement=statement)
 
     # Verify execution worked - result should be fetched data and columns
     assert isinstance(result, dict)

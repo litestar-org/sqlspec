@@ -83,12 +83,7 @@ class AsyncmyDriver(
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
-        self,
-        sql: str,
-        parameters: Any,
-        statement: SQL,
-        connection: "Optional[AsyncmyConnection]" = None,
-        **kwargs: Any,
+        self, sql: str, parameters: Any, statement: SQL, connection: "Optional[AsyncmyConnection]" = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict]:
         async with instrument_operation_async(self, "asyncmy_execute", "database"):
             conn = self._connection(connection)
@@ -117,11 +112,7 @@ class AsyncmyDriver(
                     # For SELECT queries, fetch data and return SelectResultDict
                     data = await cursor.fetchall()
                     column_names = [desc[0] for desc in cursor.description or []]
-                    result: SelectResultDict = {
-                        "data": data,
-                        "column_names": column_names,
-                        "rows_affected": len(data),
-                    }
+                    result: SelectResultDict = {"data": data, "column_names": column_names, "rows_affected": len(data)}
                     return result
 
                 # For DML/DDL queries, return DMLResultDict
@@ -132,11 +123,7 @@ class AsyncmyDriver(
                 return dml_result
 
     async def _execute_many(
-        self,
-        sql: str,
-        param_list: Any,
-        connection: "Optional[AsyncmyConnection]" = None,
-        **kwargs: Any,
+        self, sql: str, param_list: Any, connection: "Optional[AsyncmyConnection]" = None, **kwargs: Any
     ) -> DMLResultDict:
         async with instrument_operation_async(self, "asyncmy_execute_many", "database"):
             conn = self._connection(connection)
@@ -165,10 +152,7 @@ class AsyncmyDriver(
                 return result
 
     async def _execute_script(
-        self,
-        script: str,
-        connection: "Optional[AsyncmyConnection]" = None,
-        **kwargs: Any,
+        self, script: str, connection: "Optional[AsyncmyConnection]" = None, **kwargs: Any
     ) -> ScriptResultDict:
         async with instrument_operation_async(self, "asyncmy_execute_script", "database"):
             conn = self._connection(connection)
@@ -188,18 +172,11 @@ class AsyncmyDriver(
                         await cursor.execute(statement)
                         statements_executed += 1
 
-            result: ScriptResultDict = {
-                "statements_executed": statements_executed,
-                "status_message": "SCRIPT EXECUTED",
-            }
+            result: ScriptResultDict = {"statements_executed": statements_executed, "status_message": "SCRIPT EXECUTED"}
             return result
 
     async def _wrap_select_result(
-        self,
-        statement: SQL,
-        result: SelectResultDict,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
+        self, statement: SQL, result: SelectResultDict, schema_type: "Optional[type[ModelDTOT]]" = None, **kwargs: Any
     ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
         async with instrument_operation_async(self, "asyncmy_wrap_select", "database"):
             data = result["data"]
@@ -208,11 +185,7 @@ class AsyncmyDriver(
 
             if not data:
                 return SQLResult[RowT](
-                    statement=statement,
-                    data=[],
-                    column_names=column_names,
-                    rows_affected=0,
-                    operation_type="SELECT",
+                    statement=statement, data=[], column_names=column_names, rows_affected=0, operation_type="SELECT"
                 )
 
             rows_as_dicts = [dict(zip(column_names, row)) for row in data]
@@ -239,10 +212,7 @@ class AsyncmyDriver(
             )
 
     async def _wrap_execute_result(
-        self,
-        statement: SQL,
-        result: Union[DMLResultDict, ScriptResultDict],
-        **kwargs: Any,
+        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
     ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "asyncmy_wrap_execute", "database"):
             operation_type = "UNKNOWN"

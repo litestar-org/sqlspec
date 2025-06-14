@@ -149,12 +149,7 @@ class MockAsyncBackend(InstrumentedObjectStore):
 def mock_backend() -> MockAsyncBackend:
     """Create a mock async backend with instrumentation enabled."""
     config = InstrumentationConfig(
-        debug_mode=True,
-        log_service_operations=True,
-        log_queries=True,
-        log_parameters=True,
-        log_results_count=True,
-        log_runtime=True,
+        log_service_operations=True, log_queries=True, log_parameters=True, log_results_count=True, log_runtime=True
     )
     return MockAsyncBackend(instrumentation_config=config)
 
@@ -162,7 +157,7 @@ def mock_backend() -> MockAsyncBackend:
 @pytest.fixture
 def correlation_context() -> str:
     """Set up correlation context for testing."""
-    correlation_id = "test-correlation-123"
+    correlation_id: str = "test-correlation-123"
     CorrelationContext.set(correlation_id)
     yield correlation_id
     CorrelationContext.clear()
@@ -307,7 +302,6 @@ class TestAsyncInstrumentationPatterns:
     async def test_async_methods_work_without_instrumentation(self, mock_backend: MockAsyncBackend) -> None:
         """Test that async methods work properly even with instrumentation disabled."""
         # Disable instrumentation
-        mock_backend.instrumentation_config.debug_mode = False
         mock_backend.instrumentation_config.log_service_operations = False
 
         # Call async methods and verify they still work

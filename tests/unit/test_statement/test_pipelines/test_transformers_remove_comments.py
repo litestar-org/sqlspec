@@ -35,7 +35,8 @@ class TestCommentRemover:
         transformer = CommentRemover()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        assert context.current_expression is not None
+        transformed_expression = transformer.process(context.current_expression, context)
 
         # Convert back to SQL to check comments are removed
         result_sql = transformed_expression.sql()
@@ -57,7 +58,8 @@ class TestCommentRemover:
         transformer = CommentRemover()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        assert context.current_expression is not None
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
         assert "/* This is a" not in result_sql
@@ -76,7 +78,8 @@ class TestCommentRemover:
         transformer = CommentRemover()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        assert context.current_expression is not None
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
         assert "'This -- is not a comment'" in result_sql
@@ -93,7 +96,8 @@ class TestCommentRemover:
         transformer = CommentRemover()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        assert context.current_expression is not None
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
         # Should remove comment content
@@ -112,7 +116,8 @@ class TestCommentRemover:
         transformer = CommentRemover()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        assert context.current_expression is not None
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
         assert "SELECT" in result_sql
@@ -134,7 +139,8 @@ class TestCommentRemover:
         transformer = CommentRemover()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        assert context.current_expression is not None
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
         assert "-- Comment in subquery" not in result_sql
@@ -155,7 +161,8 @@ class TestCommentRemover:
         transformer = CommentRemover()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        assert context.current_expression is not None
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
         assert "-- User and profile info" not in result_sql
@@ -179,7 +186,8 @@ class TestCommentRemover:
         transformer = CommentRemover()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        assert context.current_expression is not None
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
         assert "-- Final comment" not in result_sql
@@ -198,7 +206,8 @@ class TestCommentRemover:
         transformer = CommentRemover()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        assert context.current_expression is not None
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
         assert "-- Initial comment" not in result_sql
@@ -223,7 +232,8 @@ class TestCommentRemover:
         transformer = CommentRemover()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        assert context.current_expression is not None
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
 
@@ -250,7 +260,8 @@ class TestCommentRemover:
         transformer = CommentRemover()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        assert context.current_expression is not None
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
         assert "-- Single line comment" not in result_sql
@@ -272,7 +283,8 @@ class TestCommentRemover:
         transformer = CommentRemover()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        assert context.current_expression is not None
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
         assert "-- Comment with @#$%^&*()" not in result_sql
@@ -291,7 +303,8 @@ class TestCommentRemover:
         transformer = CommentRemover()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        assert context.current_expression is not None
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
         # Should be essentially the same (modulo formatting)
@@ -314,7 +327,8 @@ class TestCommentRemover:
         transformer = CommentRemover()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        assert context.current_expression is not None
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
         assert "-- Count all records" not in result_sql
@@ -340,7 +354,8 @@ class TestCommentRemover:
         transformer = CommentRemover()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        assert context.current_expression is not None
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
         assert "-- Under 18" not in result_sql

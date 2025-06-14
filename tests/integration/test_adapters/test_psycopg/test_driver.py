@@ -292,12 +292,7 @@ def test_psycopg_transactions(psycopg_session: PsycopgSyncDriver) -> None:
 def test_psycopg_complex_queries(psycopg_session: PsycopgSyncDriver) -> None:
     """Test complex SQL queries."""
     # Insert test data
-    test_data = [
-        ("Alice", 25),
-        ("Bob", 30),
-        ("Charlie", 35),
-        ("Diana", 28),
-    ]
+    test_data = [("Alice", 25), ("Bob", 30), ("Charlie", 35), ("Diana", 28)]
 
     psycopg_session.execute_many("INSERT INTO test_table (name, value) VALUES (%s, %s)", test_data)
 

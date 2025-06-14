@@ -141,17 +141,17 @@ def test_oracledb_config_driver_type() -> None:
 
 
 def test_oracledb_config_is_async() -> None:
-    """Test OracleDB config __is_async__ attribute."""
+    """Test OracleDB config is_async attribute."""
     config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
-    assert config.__is_async__ is False
-    assert OracleSyncConfig.__is_async__ is False
+    assert config.is_async is False
+    assert OracleSyncConfig.is_async is False
 
 
 def test_oracledb_config_supports_connection_pooling() -> None:
-    """Test OracleDB config __supports_connection_pooling__ attribute."""
+    """Test OracleDB config supports_connection_pooling attribute."""
     config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
-    assert config.__supports_connection_pooling__ is True
-    assert OracleSyncConfig.__supports_connection_pooling__ is True
+    assert config.supports_connection_pooling is True
+    assert OracleSyncConfig.supports_connection_pooling is True
 
 
 def test_oracledb_config_from_pool_config() -> None:

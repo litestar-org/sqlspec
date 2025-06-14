@@ -34,10 +34,7 @@ class TestDialectPropagationSync:
         mock_cursor.fetchall.return_value = []
 
         # Create driver
-        driver = SqliteDriver(
-            connection=mock_connection,
-            config=SQLConfig(),
-        )
+        driver = SqliteDriver(connection=mock_connection, config=SQLConfig())
 
         # Verify driver has correct dialect
         assert driver.dialect == "sqlite"
@@ -69,10 +66,7 @@ class TestDialectPropagationSync:
         mock_cursor.fetchall.return_value = []
 
         # Create driver
-        driver = DuckDBDriver(
-            connection=mock_connection,
-            config=SQLConfig(),
-        )
+        driver = DuckDBDriver(connection=mock_connection, config=SQLConfig())
 
         # Create a query builder
         query = SelectBuilder(dialect="duckdb").from_("users").where("id = 1")
@@ -102,10 +96,7 @@ class TestDialectPropagationSync:
         mock_cursor.__enter__.return_value = mock_cursor
 
         # Create driver
-        driver = PsycopgSyncDriver(
-            connection=mock_connection,
-            config=SQLConfig(),
-        )
+        driver = PsycopgSyncDriver(connection=mock_connection, config=SQLConfig())
 
         # Execute script and verify dialect
         with patch.object(driver, "_execute_statement") as mock_execute:
@@ -129,13 +120,7 @@ class TestDialectPropagationAsync:
     async def test_asyncpg_dialect_propagation_through_execute(self) -> None:
         """Test that AsyncPG dialect propagates through execute calls."""
         config = AsyncpgConfig(
-            pool_config={
-                "host": "localhost",
-                "port": 5432,
-                "database": "test",
-                "user": "test",
-                "password": "test",
-            }
+            pool_config={"host": "localhost", "port": 5432, "database": "test", "user": "test", "password": "test"}
         )
 
         # Verify config has correct dialect
@@ -148,10 +133,7 @@ class TestDialectPropagationAsync:
         mock_connection.fetch.return_value = []
 
         # Create driver
-        driver = AsyncpgDriver(
-            connection=mock_connection,
-            config=SQLConfig(),
-        )
+        driver = AsyncpgDriver(connection=mock_connection, config=SQLConfig())
 
         # Execute a query and verify dialect is passed through
         with patch.object(driver, "_execute_statement") as mock_execute:
@@ -180,11 +162,7 @@ class TestDialectInSQLProcessing:
         """Test that SQLProcessingContext properly handles dialect."""
 
         # Create context with dialect
-        context = SQLProcessingContext(
-            initial_sql_string="SELECT * FROM users",
-            dialect="postgres",
-            config=SQLConfig(),
-        )
+        context = SQLProcessingContext(initial_sql_string="SELECT * FROM users", dialect="postgres", config=SQLConfig())
 
         assert context.dialect == "postgres"
         assert context.initial_sql_string == "SELECT * FROM users"
@@ -215,10 +193,7 @@ class TestDialectInSQLProcessing:
             dialect: DialectType = "sqlite"
 
         mock_connection = Mock()
-        driver = TestDriver(
-            connection=mock_connection,
-            config=SQLConfig(),
-        )
+        driver = TestDriver(connection=mock_connection, config=SQLConfig())
 
         # Test convert_to_dialect with string input
         with patch("sqlspec.driver.mixins._sql_translator.parse_one") as mock_parse:
@@ -274,10 +249,7 @@ class TestDialectErrorHandling:
         """Test potential dialect mismatches are handled."""
         # Create driver with one dialect
         mock_connection = Mock()
-        driver = SqliteDriver(
-            connection=mock_connection,
-            config=SQLConfig(),
-        )
+        driver = SqliteDriver(connection=mock_connection, config=SQLConfig())
 
         # Create SQL with different dialect
         sql = SQL("SELECT 1", dialect="postgres")

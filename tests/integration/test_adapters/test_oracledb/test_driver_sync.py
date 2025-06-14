@@ -249,3 +249,44 @@ def test_sync_to_parquet(oracle_sync_session: OracleSyncConfig) -> None:
         driver.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
         )
+
+
+@pytest.mark.xdist_group("oracle")
+def test_oracle_ddl_script_parsing(oracle_sync_session: OracleSyncConfig) -> None:
+    """Test that the Oracle 23AI DDL script can be parsed and prepared for execution."""
+    from pathlib import Path
+
+    from sqlspec.statement.sql import SQL, SQLConfig
+
+    # Load the Oracle DDL script
+    fixture_path = Path(__file__).parent.parent.parent.parent.parent / "fixtures" / "oracle.ddl.sql"
+    assert fixture_path.exists(), f"Fixture file not found at {fixture_path}"
+
+    with open(fixture_path) as f:
+        oracle_ddl = f.read()
+
+    # Configure for Oracle dialect with parsing enabled
+    config = SQLConfig(
+        enable_parsing=True,
+        enable_validation=False,  # Disable validation to focus on script handling
+        strict_mode=False,
+    )
+
+    with oracle_sync_session.provide_session():
+        # Test that the script can be processed as a SQL object
+        stmt = SQL(oracle_ddl, config=config, dialect="oracle").as_script()
+
+        # Verify it's recognized as a script
+        assert stmt.is_script is True
+
+        # Verify the SQL output contains key Oracle features
+        sql_output = stmt.to_sql()
+        assert "ALTER SESSION SET CONTAINER" in sql_output
+        assert "CREATE TABLE" in sql_output
+        assert "VECTOR(768, FLOAT32)" in sql_output
+        assert "JSON" in sql_output
+        assert "INMEMORY PRIORITY HIGH" in sql_output
+
+        # Note: We don't actually execute the full DDL script in tests
+        # as it requires specific Oracle setup and permissions.
+        # The test verifies that the script can be parsed and prepared.

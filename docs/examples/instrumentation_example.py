@@ -47,8 +47,6 @@ def main() -> None:
                 log_queries=True,
                 log_runtime=True,
                 log_results_count=True,
-                # Enable debug mode
-                debug_mode=True,
                 slow_query_threshold_ms=100.0,
             ),
         )
@@ -81,10 +79,7 @@ def main() -> None:
     print("\n=== Async PostgreSQL Example ===")
 
     AsyncpgConfig(
-        pool_config={
-            "min_size": 5,
-            "max_size": 20,
-        },
+        pool_config={"min_size": 5, "max_size": 20},
         instrumentation=InstrumentationConfig(
             # Full telemetry
             enable_opentelemetry=True,
@@ -99,8 +94,6 @@ def main() -> None:
             # Performance tuning
             slow_query_threshold_ms=500.0,
             slow_pool_operation_ms=1000.0,
-            # Debug capabilities
-            debug_mode=False,  # Disabled for production
             debug_sql_ast=False,
             debug_parameter_binding=False,
             # Custom fields

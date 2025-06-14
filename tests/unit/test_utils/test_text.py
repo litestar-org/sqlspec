@@ -50,12 +50,7 @@ def test_check_email_unicode_domains() -> None:
 
 def test_check_email_special_characters() -> None:
     """Test check_email with special characters in local part."""
-    special_emails = [
-        "user.name@example.com",
-        "user+tag@example.com",
-        "user_name@example.com",
-        "user-name@example.com",
-    ]
+    special_emails = ["user.name@example.com", "user+tag@example.com", "user_name@example.com", "user-name@example.com"]
 
     for email in special_emails:
         result = check_email(email)

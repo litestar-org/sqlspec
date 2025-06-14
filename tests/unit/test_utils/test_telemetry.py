@@ -183,9 +183,7 @@ def test_instrument_operation_timing_measurement(mock_driver: Mock) -> None:
 
 
 @pytest.mark.asyncio
-async def test_instrument_operation_async_without_instrumentation_config(
-    driver_without_instrumentation: Mock,
-) -> None:
+async def test_instrument_operation_async_without_instrumentation_config(driver_without_instrumentation: Mock) -> None:
     """Test that async instrument_operation works when driver has no instrumentation."""
     executed = False
 

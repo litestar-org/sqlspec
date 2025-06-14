@@ -56,14 +56,12 @@ class DatabaseConfig:
     session_provider: "Callable[[Any], AsyncGenerator[DriverT, None]]" = field(init=False, repr=False, hash=False)  # pyright: ignore[reportGeneralTypeIssues]
     before_send_handler: "BeforeMessageSendHookHandler" = field(init=False, repr=False, hash=False)
     lifespan_handler: "Callable[[Litestar], AbstractAsyncContextManager[None]]" = field(
-        init=False,
-        repr=False,
-        hash=False,
+        init=False, repr=False, hash=False
     )
     annotation: "type[Union[SyncConfigT, AsyncConfigT]]" = field(init=False, repr=False, hash=False)  # type: ignore[valid-type]   # pyright: ignore[reportGeneralTypeIssues]
 
     def __post_init__(self) -> None:
-        if not self.config.support_connection_pooling and self.pool_key == DEFAULT_POOL_KEY:  # type: ignore[union-attr,unused-ignore]
+        if not self.config.supports_connection_pooling and self.pool_key == DEFAULT_POOL_KEY:  # type: ignore[union-attr,unused-ignore]
             """If the database configuration does not support connection pooling, the pool key must be unique.  We just automatically generate a unique identify so it won't conflict with other configs that may get added"""
             self.pool_key = f"_{self.pool_key}_{id(self.config)}"
         if self.commit_mode == "manual":

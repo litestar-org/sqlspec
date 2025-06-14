@@ -95,8 +95,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         "user",
     )
 
-    __is_async__: ClassVar[bool] = True
-    __supports_connection_pooling__: ClassVar[bool] = True
+    is_async: ClassVar[bool] = True
+    supports_connection_pooling: ClassVar[bool] = True
 
     # Driver class reference for dialect resolution
     driver_class: ClassVar[type[AsyncpgDriver]] = AsyncpgDriver
@@ -218,9 +218,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         self.json_serializer = json_serializer
         self.json_deserializer = json_deserializer
 
-        super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig(),
-        )
+        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
 
     @property
     def connection_type(self) -> type[AsyncpgConnection]:  # type: ignore[override]
@@ -380,9 +378,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                 )
 
             yield self.driver_type(
-                connection=connection,
-                config=statement_config,
-                instrumentation_config=self.instrumentation,
+                connection=connection, config=statement_config, instrumentation_config=self.instrumentation
             )
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool[Record]":

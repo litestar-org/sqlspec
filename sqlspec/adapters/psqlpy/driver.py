@@ -61,10 +61,7 @@ class PsqlpyDriver(
         )
 
     async def _execute_statement(
-        self,
-        statement: SQL,
-        connection: Optional[PsqlpyConnection] = None,
-        **kwargs: Any,
+        self, statement: SQL, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
@@ -79,12 +76,7 @@ class PsqlpyDriver(
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
-        self,
-        sql: str,
-        parameters: Any,
-        statement: SQL,
-        connection: Optional[PsqlpyConnection] = None,
-        **kwargs: Any,
+        self, sql: str, parameters: Any, statement: SQL, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict]:
         async with instrument_operation_async(self, "psqlpy_execute", "database"):
             conn = self._connection(connection)
@@ -98,25 +90,14 @@ class PsqlpyDriver(
                 query_result = await conn.fetch(sql, parameters=parameters)
                 dict_rows: list[dict[str, Any]] = query_result or []
                 column_names = list(dict_rows[0].keys()) if dict_rows else []
-                return {
-                    "data": dict_rows,
-                    "column_names": column_names,
-                    "rows_affected": len(dict_rows),
-                }
+                return {"data": dict_rows, "column_names": column_names, "rows_affected": len(dict_rows)}
 
             # For non-SELECT statements
             rows_affected = await conn.execute(sql, parameters=parameters)
-            return {
-                "rows_affected": -1 if rows_affected is None else rows_affected,
-                "status_message": "OK",
-            }
+            return {"rows_affected": -1 if rows_affected is None else rows_affected, "status_message": "OK"}
 
     async def _execute_many(
-        self,
-        sql: str,
-        param_list: Any,
-        connection: Optional[PsqlpyConnection] = None,
-        **kwargs: Any,
+        self, sql: str, param_list: Any, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
         async with instrument_operation_async(self, "psqlpy_execute_many", "database"):
             conn = self._connection(connection)
@@ -126,16 +107,10 @@ class PsqlpyDriver(
                 logger.debug("Psqlpy query parameters (batch): %s", param_list)
 
             rows_affected = await conn.execute_many(sql, param_list or [])
-            return {
-                "rows_affected": -1 if rows_affected is None else rows_affected,
-                "status_message": "OK",
-            }
+            return {"rows_affected": -1 if rows_affected is None else rows_affected, "status_message": "OK"}
 
     async def _execute_script(
-        self,
-        script: str,
-        connection: Optional[PsqlpyConnection] = None,
-        **kwargs: Any,
+        self, script: str, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
     ) -> ScriptResultDict:
         async with instrument_operation_async(self, "psqlpy_execute_script", "database"):
             conn = self._connection(connection)
@@ -150,11 +125,7 @@ class PsqlpyDriver(
             }
 
     async def _wrap_select_result(
-        self,
-        statement: SQL,
-        result: SelectResultDict,
-        schema_type: Optional[type[ModelDTOT]] = None,
-        **kwargs: Any,
+        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         async with instrument_operation_async(self, "psqlpy_wrap_select", "database"):
             dict_rows = result["data"]
@@ -182,10 +153,7 @@ class PsqlpyDriver(
             )
 
     async def _wrap_execute_result(
-        self,
-        statement: SQL,
-        result: Union[DMLResultDict, ScriptResultDict],
-        **kwargs: Any,
+        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
     ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "psqlpy_async_wrap_execute", "database"):
             operation_type = "UNKNOWN"

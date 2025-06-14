@@ -1,16 +1,7 @@
 # ruff: noqa: PLR6301
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    ClassVar,
-    Generic,
-    Optional,
-    TypeVar,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional, TypeVar, Union, cast
 
 from sqlspec.typing import ConnectionT, Counter, Gauge, PoolT  # pyright: ignore
 from sqlspec.utils.logging import get_logger
@@ -81,15 +72,14 @@ class InstrumentationConfig:
     log_service_operations: bool = True
     """Whether to log service layer operations."""
 
+    log_storage_operations: bool = True
+    """Whether to log storage operations (e.g., file I/O, caching)."""
     # Sampling configuration
     trace_sample_rate: float = 1.0
     """Sampling rate for traces (0.0 to 1.0)."""
 
     log_sample_rate: float = 1.0
     """Sampling rate for logs (0.0 to 1.0)."""
-
-    debug_mode: bool = False
-    """Enable debug-level logging with additional details."""
 
     log_format: str = "structured"
     """Log format: 'structured' (JSON) or 'simple' (text)."""
@@ -161,18 +151,17 @@ class InstrumentationConfig:
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Protocol defining the interface for database configurations."""
 
+    is_async: "ClassVar[bool]" = field(init=False, default=False)
+    supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
     connection_type: "type[ConnectionT]" = field(init=False)
-    driver_type: "type[DriverT]" = field(init=False)
+    driver_type: "type[DriverT]" = field(init=False, repr=False, hash=False, compare=False)
+    driver_class: "ClassVar[type[DriverT]]" = field(init=False, repr=False, hash=False, compare=False)  # type: ignore[misc]
     pool_instance: "Optional[PoolT]" = field(default=None)
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
     default_row_type: "type[Any]" = field(init=False)
     _pool_metrics: Optional[dict[str, Any]] = field(default=None, init=False, repr=False, hash=False, compare=False)
-    _dialect: "Optional[DialectType]" = field(default=None, init=False, repr=False, hash=False, compare=False)
-    __is_async__: "ClassVar[bool]" = False
-    __supports_connection_pooling__: "ClassVar[bool]" = False
-    driver_class: "ClassVar[type[DriverT]]" = field(init=False, repr=False, hash=False, compare=False)  # type: ignore[misc]
+    _dialect: "DialectType" = field(default=None, init=False, repr=False, hash=False, compare=False)
 
-    # Parameter style support information
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ()
     """Parameter styles supported by this database adapter (e.g., ('qmark', 'named_colon'))."""
 
@@ -217,18 +206,14 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
     @abstractmethod
     def provide_connection(
-        self,
-        *args: Any,
-        **kwargs: Any,
+        self, *args: Any, **kwargs: Any
     ) -> "Union[AbstractContextManager[ConnectionT], AbstractAsyncContextManager[ConnectionT]]":
         """Provide a database connection context manager."""
         raise NotImplementedError
 
     @abstractmethod
     def provide_session(
-        self,
-        *args: Any,
-        **kwargs: Any,
+        self, *args: Any, **kwargs: Any
     ) -> "Union[AbstractContextManager[DriverT], AbstractAsyncContextManager[DriverT]]":
         """Provide a database session context manager."""
         raise NotImplementedError
@@ -251,22 +236,10 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
     @abstractmethod
     def provide_pool(
-        self,
-        *args: Any,
-        **kwargs: Any,
+        self, *args: Any, **kwargs: Any
     ) -> "Union[PoolT, Awaitable[PoolT], AbstractContextManager[PoolT], AbstractAsyncContextManager[PoolT]]":
         """Provide pool instance."""
         raise NotImplementedError
-
-    @property
-    def is_async(self) -> bool:
-        """Return whether the configuration is for an async database."""
-        return self.__is_async__
-
-    @property
-    def support_connection_pooling(self) -> bool:
-        """Return whether the configuration supports connection pooling."""
-        return self.__supports_connection_pooling__
 
     def instrument_sync_operation(
         self,
@@ -312,8 +285,8 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for a sync database configurations that do not implement a pool."""
 
-    __is_async__ = False
-    __supports_connection_pooling__ = False
+    is_async = False
+    supports_connection_pooling = False
     pool_instance: None = None
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
 
@@ -342,8 +315,8 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for an async database configurations that do not implement a pool."""
 
-    __is_async__ = True
-    __supports_connection_pooling__ = False
+    is_async: "ClassVar[bool]" = field(init=False, default=True)
+    supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
     pool_instance: None = None
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
 
@@ -378,8 +351,8 @@ class GenericPoolConfig:
 class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Generic Sync Database Configuration."""
 
-    __is_async__ = False
-    __supports_connection_pooling__ = True
+    is_async: "ClassVar[bool]" = field(init=False, default=False)
+    supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=True)
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
 
     def create_pool(self) -> PoolT:
@@ -457,8 +430,8 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
 class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Generic Async Database Configuration."""
 
-    __is_async__ = True
-    __supports_connection_pooling__ = True
+    is_async: "ClassVar[bool]" = field(init=False, default=True)
+    supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=True)
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
 
     async def create_pool(self) -> PoolT:

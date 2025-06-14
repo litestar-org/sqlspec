@@ -39,11 +39,7 @@ def sqlite_driver(mock_sqlite_connection: Mock) -> SqliteDriver:
     """Create a SQLite driver with mocked connection."""
     config = SQLConfig()
     instrumentation_config = InstrumentationConfig()
-    return SqliteDriver(
-        connection=mock_sqlite_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
-    )
+    return SqliteDriver(connection=mock_sqlite_connection, config=config, instrumentation_config=instrumentation_config)
 
 
 def test_sqlite_driver_initialization(mock_sqlite_connection: Mock) -> None:
@@ -52,9 +48,7 @@ def test_sqlite_driver_initialization(mock_sqlite_connection: Mock) -> None:
     instrumentation_config = InstrumentationConfig(log_queries=True)
 
     driver = SqliteDriver(
-        connection=mock_sqlite_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_sqlite_connection, config=config, instrumentation_config=instrumentation_config
     )
 
     # Test driver attributes are set correctly
@@ -112,9 +106,7 @@ def test_sqlite_driver_execute_statement_select(sqlite_driver: SqliteDriver, moc
 
 
 def test_sqlite_driver_to_parquet(
-    sqlite_driver: SqliteDriver,
-    mock_sqlite_connection: Mock,
-    monkeypatch: "pytest.MonkeyPatch",
+    sqlite_driver: SqliteDriver, mock_sqlite_connection: Mock, monkeypatch: "pytest.MonkeyPatch"
 ) -> None:
     """Test to_parquet writes correct data to a Parquet file."""
     mock_cursor = mock_sqlite_connection.cursor.return_value.__enter__.return_value
@@ -143,11 +135,7 @@ def test_sqlite_driver_to_parquet(
         # Patch pyarrow.parquet.write_table to actually write
         orig_write_table = pq.write_table
 
-        def patched_write_table(
-            table: pa.Table,
-            where: str,
-            **kwargs: "Any",
-        ) -> None:
+        def patched_write_table(table: pa.Table, where: str, **kwargs: "Any") -> None:
             # Actually write using the real function
             return orig_write_table(table, where, **kwargs)
 

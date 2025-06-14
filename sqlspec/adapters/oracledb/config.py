@@ -27,12 +27,7 @@ if TYPE_CHECKING:
     from oracledb.pool import AsyncConnectionPool, ConnectionPool
 
 
-__all__ = (
-    "CONNECTION_FIELDS",
-    "POOL_FIELDS",
-    "OracleAsyncConfig",
-    "OracleSyncConfig",
-)
+__all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "OracleAsyncConfig", "OracleSyncConfig")
 
 logger = logging.getLogger(__name__)
 
@@ -114,8 +109,8 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         "wallet_password",
     )
 
-    __is_async__: ClassVar[bool] = False
-    __supports_connection_pooling__: ClassVar[bool] = True
+    is_async: ClassVar[bool] = False
+    supports_connection_pooling: ClassVar[bool] = True
 
     # Driver class reference for dialect resolution
     driver_class: ClassVar[type[OracleSyncDriver]] = OracleSyncDriver
@@ -246,9 +241,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
-        super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig(),
-        )
+        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
 
     @property
     def connection_type(self) -> type[OracleSyncConnection]:  # type: ignore[override]
@@ -328,9 +321,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
                 )
 
             driver = self.driver_type(
-                connection=conn,
-                config=statement_config,
-                instrumentation_config=self.instrumentation,
+                connection=conn, config=statement_config, instrumentation_config=self.instrumentation
             )
             yield driver
 
@@ -454,8 +445,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         "wallet_password",
     )
 
-    __is_async__: ClassVar[bool] = True
-    __supports_connection_pooling__: ClassVar[bool] = True
+    is_async: ClassVar[bool] = True
+    supports_connection_pooling: ClassVar[bool] = True
 
     # Driver class reference for dialect resolution
     driver_class: ClassVar[type[OracleAsyncDriver]] = OracleAsyncDriver
@@ -586,9 +577,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
-        super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig(),
-        )
+        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
 
     @property
     def connection_type(self) -> type[OracleAsyncConnection]:  # type: ignore[override]
@@ -731,9 +720,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
                 )
 
             driver = self.driver_type(
-                connection=conn,
-                config=statement_config,
-                instrumentation_config=self.instrumentation,
+                connection=conn, config=statement_config, instrumentation_config=self.instrumentation
             )
             yield driver
 

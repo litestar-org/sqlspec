@@ -8,19 +8,11 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Optional
 
 from sqlglot import exp
-from sqlglot.expressions import (
-    EQ,
-    Binary,
-    Func,
-    Literal,
-    Or,
-    Subquery,
-    Union,
-)
+from sqlglot.expressions import EQ, Binary, Func, Literal, Or, Subquery, Union
 
 from sqlspec.exceptions import RiskLevel
 from sqlspec.statement.pipelines.base import ProcessorProtocol
-from sqlspec.statement.pipelines.results import ProcessorResult, ValidationResult
+from sqlspec.statement.pipelines.result_types import ValidationError
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -167,14 +159,10 @@ SUSPICIOUS_FUNCTIONS = [
 ]
 
 
-class SecurityValidator(ProcessorProtocol[exp.Expression]):
+class SecurityValidator(ProcessorProtocol):
     """Unified security validator that performs comprehensive security checks in a single pass."""
 
-    def __init__(
-        self,
-        config: Optional["SecurityValidatorConfig"] = None,
-        **kwargs: Any,
-    ) -> None:
+    def __init__(self, config: Optional["SecurityValidatorConfig"] = None, **kwargs: Any) -> None:
         """Initialize the security validator with configuration."""
         self.config = config or SecurityValidatorConfig()
         self._compiled_patterns: dict[str, re.Pattern[str]] = {}
@@ -190,12 +178,10 @@ class SecurityValidator(ProcessorProtocol[exp.Expression]):
             with contextlib.suppress(re.error):
                 self._compiled_patterns[f"custom_suspicious_{i}"] = re.compile(pattern, re.IGNORECASE)
 
-    def process(self, context: "SQLProcessingContext") -> "ProcessorResult":
+    def process(self, expression: exp.Expression, context: "SQLProcessingContext") -> None:
         """Process the SQL expression and detect security issues in a single pass."""
         if not context.current_expression:
-            return ProcessorResult(
-                expression=None, validation_result=ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
-            )
+            return
 
         security_issues: list[SecurityIssue] = []
         visited_nodes: set[int] = set()
@@ -257,36 +243,35 @@ class SecurityValidator(ProcessorProtocol[exp.Expression]):
                     )
 
         # Determine overall risk level
-        risk_level = RiskLevel.SKIP
         if security_issues:
-            risk_level = max(issue.risk_level for issue in security_issues)
+            max(issue.risk_level for issue in security_issues)
 
-        # Create validation result
-        is_safe = risk_level == RiskLevel.SKIP
-        validation_result = ValidationResult(
-            is_safe=is_safe,
-            risk_level=risk_level,
-            issues=[issue.description for issue in security_issues],
-        )
+        # Create validation errors
+        for issue in security_issues:
+            error = ValidationError(
+                message=issue.description,
+                code="security-issue",
+                risk_level=issue.risk_level,
+                processor="SecurityValidator",
+                expression=expression,
+            )
+            context.validation_errors.append(error)
 
         # Store metadata in context for access by caller
-        context.set_additional_data(
-            "security_validator",
-            {
-                "security_issues": security_issues,
-                "checks_performed": [
-                    "injection" if self.config.check_injection else None,
-                    "tautology" if self.config.check_tautology else None,
-                    "keywords" if self.config.check_keywords else None,
-                    "combined" if self.config.check_combined_patterns else None,
-                ],
-                "total_issues": len(security_issues),
-                "issue_breakdown": {
-                    issue_type.name: sum(1 for issue in security_issues if issue.issue_type == issue_type)
-                    for issue_type in SecurityIssueType
-                },
+        context.metadata["security_validator"] = {
+            "security_issues": security_issues,
+            "checks_performed": [
+                "injection" if self.config.check_injection else None,
+                "tautology" if self.config.check_tautology else None,
+                "keywords" if self.config.check_keywords else None,
+                "combined" if self.config.check_combined_patterns else None,
+            ],
+            "total_issues": len(security_issues),
+            "issue_breakdown": {
+                issue_type.name: sum(1 for issue in security_issues if issue.issue_type == issue_type)
+                for issue_type in SecurityIssueType
             },
-        )
+        }
 
         # Filter issues by confidence threshold
         filtered_issues = [
@@ -295,41 +280,37 @@ class SecurityValidator(ProcessorProtocol[exp.Expression]):
 
         # Update validation result with filtered issues
         if filtered_issues != security_issues:
-            # Re-determine risk level with filtered issues
-            risk_level = RiskLevel.SKIP
-            if filtered_issues:
-                risk_level = max(issue.risk_level for issue in filtered_issues)
-
-            validation_result = ValidationResult(
-                is_safe=(risk_level == RiskLevel.SKIP),
-                risk_level=risk_level,
-                issues=[issue.description for issue in filtered_issues],
-            )
+            # Clear previous errors and add filtered ones
+            context.validation_errors = []
+            for issue in filtered_issues:
+                error = ValidationError(
+                    message=issue.description,
+                    code="security-issue",
+                    risk_level=issue.risk_level,
+                    processor="SecurityValidator",
+                    expression=expression,
+                )
+                context.validation_errors.append(error)
 
             # Update metadata with filtered issues
-            context.set_additional_data(
-                "security_validator",
-                {
-                    "security_issues": filtered_issues,
-                    "total_issues_found": len(security_issues),
-                    "issues_after_confidence_filter": len(filtered_issues),
-                    "confidence_threshold": self.config.min_confidence_threshold,
-                    "checks_performed": [
-                        "injection" if self.config.check_injection else None,
-                        "tautology" if self.config.check_tautology else None,
-                        "keywords" if self.config.check_keywords else None,
-                        "combined" if self.config.check_combined_patterns else None,
-                        "ast_anomalies" if self.config.check_ast_anomalies else None,
-                        "structural" if self.config.check_structural_attacks else None,
-                    ],
-                    "issue_breakdown": {
-                        issue_type.name: sum(1 for issue in filtered_issues if issue.issue_type == issue_type)
-                        for issue_type in SecurityIssueType
-                    },
+            context.metadata["security_validator"] = {
+                "security_issues": filtered_issues,
+                "total_issues_found": len(security_issues),
+                "issues_after_confidence_filter": len(filtered_issues),
+                "confidence_threshold": self.config.min_confidence_threshold,
+                "checks_performed": [
+                    "injection" if self.config.check_injection else None,
+                    "tautology" if self.config.check_tautology else None,
+                    "keywords" if self.config.check_keywords else None,
+                    "combined" if self.config.check_combined_patterns else None,
+                    "ast_anomalies" if self.config.check_ast_anomalies else None,
+                    "structural" if self.config.check_structural_attacks else None,
+                ],
+                "issue_breakdown": {
+                    issue_type.name: sum(1 for issue in filtered_issues if issue.issue_type == issue_type)
+                    for issue_type in SecurityIssueType
                 },
-            )
-
-        return ProcessorResult(expression=context.current_expression, validation_result=validation_result)
+            }
 
     def _check_injection_patterns(
         self, node: "exp.Expression", context: "SQLProcessingContext"
@@ -455,11 +436,7 @@ class SecurityValidator(ProcessorProtocol[exp.Expression]):
                     location=table_node.sql(),
                     pattern_matched="system_schema_access",
                     recommendation="Restrict access to system schemas",
-                    metadata={
-                        "database_type": db_type,
-                        "schema": schema_name,
-                        "table": table_name,
-                    },
+                    metadata={"database_type": db_type, "schema": schema_name, "table": table_name},
                 )
 
         return None
@@ -663,10 +640,7 @@ class SecurityValidator(ProcessorProtocol[exp.Expression]):
                         description="Classic SQL injection pattern detected (Tautology + UNION)",
                         pattern_matched="classic_sqli",
                         recommendation="This appears to be a deliberate SQL injection attempt",
-                        metadata={
-                            "attack_components": ["tautology", "union"],
-                            "confidence": "high",
-                        },
+                        metadata={"attack_components": ["tautology", "union"], "confidence": "high"},
                     )
                 )
 
@@ -686,10 +660,7 @@ class SecurityValidator(ProcessorProtocol[exp.Expression]):
                     description="Data extraction attempt detected (Multiple functions + System schema)",
                     pattern_matched="data_extraction",
                     recommendation="Block queries attempting to extract system information",
-                    metadata={
-                        "suspicious_functions": suspicious_func_count,
-                        "targets_system_schema": True,
-                    },
+                    metadata={"suspicious_functions": suspicious_func_count, "targets_system_schema": True},
                 )
             )
 

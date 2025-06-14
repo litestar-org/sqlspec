@@ -53,8 +53,7 @@ async def test_asyncmy_execute_many_basic(asyncmy_batch_session: AsyncmyDriver) 
     ]
 
     result = await asyncmy_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)",
-        parameters,
+        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -73,24 +72,13 @@ async def test_asyncmy_execute_many_update(asyncmy_batch_session: AsyncmyDriver)
     # First insert some data
     await asyncmy_batch_session.execute_many(
         "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)",
-        [
-            ("Update 1", 10, "X"),
-            ("Update 2", 20, "Y"),
-            ("Update 3", 30, "Z"),
-        ],
+        [("Update 1", 10, "X"), ("Update 2", 20, "Y"), ("Update 3", 30, "Z")],
     )
 
     # Now update with execute_many
-    update_params = [
-        (100, "Update 1"),
-        (200, "Update 2"),
-        (300, "Update 3"),
-    ]
+    update_params = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
 
-    result = await asyncmy_batch_session.execute_many(
-        "UPDATE test_batch SET value = %s WHERE name = %s",
-        update_params,
-    )
+    result = await asyncmy_batch_session.execute_many("UPDATE test_batch SET value = %s WHERE name = %s", update_params)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
@@ -106,8 +94,7 @@ async def test_asyncmy_execute_many_update(asyncmy_batch_session: AsyncmyDriver)
 async def test_asyncmy_execute_many_empty(asyncmy_batch_session: AsyncmyDriver) -> None:
     """Test execute_many with empty parameter list on AsyncMy."""
     result = await asyncmy_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)",
-        [],
+        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)", []
     )
 
     assert isinstance(result, SQLResult)
@@ -130,8 +117,7 @@ async def test_asyncmy_execute_many_mixed_types(asyncmy_batch_session: AsyncmyDr
     ]
 
     result = await asyncmy_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)",
-        parameters,
+        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -165,16 +151,9 @@ async def test_asyncmy_execute_many_delete(asyncmy_batch_session: AsyncmyDriver)
     )
 
     # Delete specific items by name
-    delete_params = [
-        ("Delete 1",),
-        ("Delete 2",),
-        ("Delete 4",),
-    ]
+    delete_params = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
 
-    result = await asyncmy_batch_session.execute_many(
-        "DELETE FROM test_batch WHERE name = %s",
-        delete_params,
-    )
+    result = await asyncmy_batch_session.execute_many("DELETE FROM test_batch WHERE name = %s", delete_params)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
@@ -197,8 +176,7 @@ async def test_asyncmy_execute_many_moderate_batch(asyncmy_batch_session: Asyncm
     moderate_batch = [(f"Item {i}", i * 10, f"CAT{i % 3}") for i in range(100)]
 
     result = await asyncmy_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)",
-        moderate_batch,
+        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)", moderate_batch
     )
 
     assert isinstance(result, SQLResult)
@@ -210,8 +188,7 @@ async def test_asyncmy_execute_many_moderate_batch(asyncmy_batch_session: Asyncm
 
     # Verify some specific values
     sample_result = await asyncmy_batch_session.execute(
-        "SELECT * FROM test_batch WHERE name IN (%s, %s, %s) ORDER BY value",
-        ("Item 10", "Item 50", "Item 99"),
+        "SELECT * FROM test_batch WHERE name IN (%s, %s, %s) ORDER BY value", ("Item 10", "Item 50", "Item 99")
     )
     assert len(sample_result.data) == 3
     assert sample_result.data[0]["value"] == 100  # Item 10
@@ -225,11 +202,7 @@ async def test_asyncmy_execute_many_with_sql_object(asyncmy_batch_session: Async
     """Test execute_many with SQL object on AsyncMy."""
     from sqlspec.statement.sql import SQL
 
-    parameters = [
-        ("SQL Obj 1", 111, "SOB"),
-        ("SQL Obj 2", 222, "SOB"),
-        ("SQL Obj 3", 333, "SOB"),
-    ]
+    parameters = [("SQL Obj 1", 111, "SOB"), ("SQL Obj 2", 222, "SOB"), ("SQL Obj 3", 333, "SOB")]
 
     sql_obj = SQL("INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)").as_many(parameters)
 
@@ -240,8 +213,7 @@ async def test_asyncmy_execute_many_with_sql_object(asyncmy_batch_session: Async
 
     # Verify data
     check_result = await asyncmy_batch_session.execute(
-        "SELECT COUNT(*) as count FROM test_batch WHERE category = %s",
-        ("SOB",),
+        "SELECT COUNT(*) as count FROM test_batch WHERE category = %s", ("SOB",)
     )
     assert check_result.data[0]["count"] == 3
 
@@ -260,16 +232,9 @@ async def test_asyncmy_execute_many_with_mysql_functions(asyncmy_batch_session: 
         )
     """)
 
-    parameters = [
-        ("MySQL Feature 1",),
-        ("MySQL Feature 2",),
-        ("MySQL Feature 3",),
-    ]
+    parameters = [("MySQL Feature 1",), ("MySQL Feature 2",), ("MySQL Feature 3",)]
 
-    result = await asyncmy_batch_session.execute_many(
-        "INSERT INTO test_mysql_features (name) VALUES (%s)",
-        parameters,
-    )
+    result = await asyncmy_batch_session.execute_many("INSERT INTO test_mysql_features (name) VALUES (%s)", parameters)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
@@ -295,16 +260,9 @@ async def test_asyncmy_execute_many_with_on_duplicate_key(asyncmy_batch_session:
     """)
 
     # First batch - initial inserts
-    initial_params = [
-        (1, "Item 1"),
-        (2, "Item 2"),
-        (3, "Item 3"),
-    ]
+    initial_params = [(1, "Item 1"), (2, "Item 2"), (3, "Item 3")]
 
-    await asyncmy_batch_session.execute_many(
-        "INSERT INTO test_duplicate (id, name) VALUES (%s, %s)",
-        initial_params,
-    )
+    await asyncmy_batch_session.execute_many("INSERT INTO test_duplicate (id, name) VALUES (%s, %s)", initial_params)
 
     # Second batch - with duplicates using ON DUPLICATE KEY UPDATE
     duplicate_params = [
@@ -352,8 +310,7 @@ async def test_asyncmy_execute_many_with_json(asyncmy_batch_session: AsyncmyDriv
         ]
 
         result = await asyncmy_batch_session.execute_many(
-            "INSERT INTO test_json (name, metadata) VALUES (%s, %s)",
-            parameters,
+            "INSERT INTO test_json (name, metadata) VALUES (%s, %s)", parameters
         )
 
         assert isinstance(result, SQLResult)
@@ -391,15 +348,10 @@ async def test_asyncmy_execute_many_with_constraints(asyncmy_batch_session: Asyn
     """)
 
     # First batch should succeed
-    success_params = [
-        ("unique1", 100),
-        ("unique2", 200),
-        ("unique3", 300),
-    ]
+    success_params = [("unique1", 100), ("unique2", 200), ("unique3", 300)]
 
     result = await asyncmy_batch_session.execute_many(
-        "INSERT INTO test_unique (unique_name, value) VALUES (%s, %s)",
-        success_params,
+        "INSERT INTO test_unique (unique_name, value) VALUES (%s, %s)", success_params
     )
 
     assert isinstance(result, SQLResult)
@@ -414,8 +366,7 @@ async def test_asyncmy_execute_many_with_constraints(asyncmy_batch_session: Asyn
 
     with pytest.raises(Exception):  # MySQL will raise an integrity error
         await asyncmy_batch_session.execute_many(
-            "INSERT INTO test_unique (unique_name, value) VALUES (%s, %s)",
-            duplicate_params,
+            "INSERT INTO test_unique (unique_name, value) VALUES (%s, %s)", duplicate_params
         )
 
     # Verify original data is still there

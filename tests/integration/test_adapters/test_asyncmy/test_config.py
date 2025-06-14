@@ -147,17 +147,17 @@ def test_asyncmy_config_driver_type() -> None:
 
 
 def test_asyncmy_config_is_async() -> None:
-    """Test Asyncmy config __is_async__ attribute."""
+    """Test Asyncmy config is_async attribute."""
     config = AsyncmyConfig(host="localhost", port=3306, user="test_user", password="test_password", database="test_db")
-    assert config.__is_async__ is True
-    assert AsyncmyConfig.__is_async__ is True
+    assert config.is_async is True
+    assert AsyncmyConfig.is_async is True
 
 
 def test_asyncmy_config_supports_connection_pooling() -> None:
-    """Test Asyncmy config __supports_connection_pooling__ attribute."""
+    """Test Asyncmy config supports_connection_pooling attribute."""
     config = AsyncmyConfig(host="localhost", port=3306, user="test_user", password="test_password", database="test_db")
-    assert config.__supports_connection_pooling__ is True
-    assert AsyncmyConfig.__supports_connection_pooling__ is True
+    assert config.supports_connection_pooling is True
+    assert AsyncmyConfig.supports_connection_pooling is True
 
 
 def test_asyncmy_config_from_pool_config() -> None:

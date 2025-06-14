@@ -58,10 +58,7 @@ def test_apply_filter_function() -> None:
 @pytest.fixture
 def test_dates() -> dict[str, datetime]:
     """Test datetime values."""
-    return {
-        "before": datetime(2023, 12, 31, 23, 59, 59),
-        "after": datetime(2023, 1, 1, 0, 0, 0),
-    }
+    return {"before": datetime(2023, 12, 31, 23, 59, 59), "after": datetime(2023, 1, 1, 0, 0, 0)}
 
 
 def test_before_after_filter_initialization(test_dates: dict[str, datetime]) -> None:
@@ -131,10 +128,7 @@ def test_before_after_filter_unique_parameter_names(test_dates: dict[str, dateti
 @pytest.fixture
 def on_before_after_test_dates() -> dict[str, datetime]:
     """Test datetime values."""
-    return {
-        "on_or_before": datetime(2023, 12, 31, 23, 59, 59),
-        "on_or_after": datetime(2023, 1, 1, 0, 0, 0),
-    }
+    return {"on_or_before": datetime(2023, 12, 31, 23, 59, 59), "on_or_after": datetime(2023, 1, 1, 0, 0, 0)}
 
 
 def test_on_before_after_filter_initialization(on_before_after_test_dates: dict[str, datetime]) -> None:
@@ -289,11 +283,7 @@ def test_not_in_collection_filter_parameter_prefix() -> None:
 
 @pytest.mark.parametrize(
     ("values", "expected_behavior"),
-    [
-        ([1, 2, 3], "has_any_clause"),
-        ([], "always_false"),
-        (None, "unchanged"),
-    ],
+    [([1, 2, 3], "has_any_clause"), ([], "always_false"), (None, "unchanged")],
     ids=["has_values", "empty_list", "none_values"],
 )
 def test_any_collection_filter_application(values: Any, expected_behavior: str) -> None:
@@ -494,12 +484,7 @@ def test_search_filter_initialization() -> None:
 
 
 @pytest.mark.parametrize(
-    ("ignore_case", "expected_operator"),
-    [
-        (False, "LIKE"),
-        (True, "ILIKE"),
-    ],
-    ids=["case_sensitive", "case_insensitive"],
+    ("ignore_case", "expected_operator"), [(False, "LIKE"), (True, "ILIKE")], ids=["case_sensitive", "case_insensitive"]
 )
 def test_search_filter_case_sensitivity(ignore_case: bool, expected_operator: str) -> None:
     """Test SearchFilter case sensitivity."""

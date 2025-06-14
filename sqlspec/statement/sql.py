@@ -38,6 +38,7 @@ from sqlspec.statement.parameters import ParameterConverter, ParameterStyle, Par
 from sqlspec.statement.pipelines import ValidationResult
 from sqlspec.statement.pipelines.base import StatementPipeline
 from sqlspec.statement.pipelines.context import PipelineResult, SQLProcessingContext
+from sqlspec.statement.pipelines.result_types import ValidationError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -45,17 +46,13 @@ if TYPE_CHECKING:
 
     from sqlglot.dialects.dialect import DialectType
     from sqlglot.expressions import Condition, Expression
-    from sqlglot.schema import Schema as SQLGlotSchema
 
     from sqlspec.statement.parameters import ParameterInfo
     from sqlspec.statement.pipelines import ProcessorProtocol, SQLValidator
     from sqlspec.statement.pipelines.analyzers import StatementAnalysis
     from sqlspec.typing import SQLParameterType
 
-__all__ = (
-    "SQL",
-    "Statement",
-)
+__all__ = ("SQL", "Statement")
 
 logger = get_logger("statement.sql")
 
@@ -72,7 +69,9 @@ class _ProcessedState:
     transformed_expression: "Optional[exp.Expression]"
     final_parameter_info: "list[ParameterInfo]"
     final_merged_parameters: "SQLParameterType"
-    validation_result: "Optional[ValidationResult]"
+    validation_errors: "list[ValidationError]"
+    has_validation_errors: "bool"
+    validation_risk_level: "RiskLevel"
     analysis_result: "Optional[StatementAnalysis]"
     input_had_placeholders: "bool"
     config_snapshot: "SQLConfig"
@@ -98,17 +97,15 @@ class SQLConfig:
     enable_normalization: bool = True
     strict_mode: bool = True
     cache_parsed_expression: bool = True
-    debug_mode: bool = False
 
     # Component lists for explicit staging
-    transformers: "Optional[list[ProcessorProtocol[exp.Expression]]]" = None
-    validators: "Optional[list[ProcessorProtocol[exp.Expression]]]" = None
-    analyzers: "Optional[list[ProcessorProtocol[exp.Expression]]]" = None
+    transformers: "Optional[list[ProcessorProtocol]]" = None
+    validators: "Optional[list[ProcessorProtocol]]" = None
+    analyzers: "Optional[list[ProcessorProtocol]]" = None
 
     # Other configs
     parameter_converter: ParameterConverter = field(default_factory=ParameterConverter)
     parameter_validator: ParameterValidator = field(default_factory=ParameterValidator)
-    sqlglot_schema: "Optional[SQLGlotSchema]" = None
     analysis_cache_size: int = 1000
     input_sql_had_placeholders: bool = False  # Populated by SQL.__init__
 
@@ -144,18 +141,14 @@ class SQLConfig:
         from sqlspec.statement.pipelines import StatementPipeline
         from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
         from sqlspec.statement.pipelines.transformers import CommentRemover, ParameterizeLiterals
-        from sqlspec.statement.pipelines.validators import (
-            DMLSafetyValidator,
-            PerformanceValidator,
-            SecurityValidator,
-        )
+        from sqlspec.statement.pipelines.validators import DMLSafetyValidator, PerformanceValidator, SecurityValidator
 
         # Determine components for each stage
         # If explicit lists are given, use them
 
-        final_transformers: list[ProcessorProtocol[exp.Expression]] = []
-        final_validators: list[ProcessorProtocol[exp.Expression]] = []
-        final_analyzers: list[ProcessorProtocol[exp.Expression]] = []
+        final_transformers: list[ProcessorProtocol] = []
+        final_validators: list[ProcessorProtocol] = []
+        final_analyzers: list[ProcessorProtocol] = []
 
         if self.transformers is not None:
             final_transformers.extend(self.transformers)
@@ -196,6 +189,19 @@ class SQL:
 
     Parameter binding is the merging of parameters, filters, and kwargs.
 
+    Validation:
+        The SQL class provides multiple ways to access validation results:
+
+        Properties (recommended):
+        - `is_safe`: Boolean indicating if the SQL is safe to execute
+        - `has_errors`: Boolean indicating if validation errors exist
+        - `risk_level`: The highest risk level from validation
+        - `validation_errors`: List of ValidationError objects with details
+
+    Methods:
+        - `validate_detailed()`: Returns list of ValidationError objects
+        - `validate()`: Returns ValidationResult (deprecated, use properties)
+
     Note:
         After applying a filter, only the filter's parameters will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
 
@@ -205,12 +211,16 @@ class SQL:
         ... )
         >>> sql, params = stmt.to_sql(), stmt.get_parameters()
 
-        >>> stmt = SQL(
-        ...     "SELECT * FROM users WHERE name = :name", name="John"
-        ... )
-        >>> sql = stmt.to_sql(
-        ...     placeholder_style="pyformat_named"
-        ... )  # %(name)s
+        >>> # Validation example (recommended approach)
+        >>> stmt = SQL("DROP TABLE users")
+        >>> if not stmt.is_safe:
+        ...     for error in stmt.validation_errors:
+        ...         print(f"{error.code}: {error.message}")
+
+        >>> # Using validate_detailed()
+        >>> errors = stmt.validate_detailed()
+        >>> if errors:
+        ...     print(f"Found {len(errors)} validation errors")
 
         >>> from sqlspec.sql.filters import SearchFilter
         >>> stmt = stmt.append_filter(SearchFilter("name", "John"))
@@ -261,11 +271,7 @@ class SQL:
             actual_parameters = None
         if isinstance(statement, SQL):
             self._copy_from_existing(
-                existing=statement,
-                parameters=actual_parameters,
-                kwargs=kwargs,
-                dialect=dialect,
-                config=config,
+                existing=statement, parameters=actual_parameters, kwargs=kwargs, dialect=dialect, config=config
             )
             if actual_filters:
                 self._apply_filters(actual_filters)
@@ -315,10 +321,7 @@ class SQL:
             raise ParameterError(msg)
         current_stmt_for_filtering = self
         for f in filters_to_apply:
-            temp_config = replace(
-                current_stmt_for_filtering._config,
-                enable_validation=False,
-            )
+            temp_config = replace(current_stmt_for_filtering._config, enable_validation=False)
             temp_stmt = current_stmt_for_filtering.copy(config=temp_config)
             filtered_stmt = apply_filter(temp_stmt, f)
             # Copy both SQL and parameters from the filtered statement
@@ -389,6 +392,10 @@ class SQL:
     def sql(self) -> str:
         """The SQL string, potentially modified by sanitization or filters."""
         processed = self._ensure_processed()
+        # If parsing is disabled, always return the raw SQL input
+        if not self._config.enable_parsing:
+            return processed.raw_sql_input
+        # Otherwise, return the transformed expression if available
         if processed.transformed_expression is not None:
             return processed.transformed_expression.sql(dialect=self._dialect)
         return processed.raw_sql_input
@@ -427,10 +434,34 @@ class SQL:
         return processed.final_parameter_info
 
     @property
-    def validation_result(self) -> "Optional[ValidationResult]":
-        """Get the validation result if validation was performed."""
+    def validation_errors(self) -> "list[ValidationError]":
+        """Get validation errors from processing.
+
+        Returns:
+            List of validation errors found during processing.
+        """
         processed = self._ensure_processed()
-        return processed.validation_result
+        return processed.validation_errors
+
+    @property
+    def has_errors(self) -> bool:
+        """Check if validation found any errors.
+
+        Returns:
+            True if validation errors were found, False otherwise.
+        """
+        processed = self._ensure_processed()
+        return processed.has_validation_errors
+
+    @property
+    def risk_level(self) -> "RiskLevel":
+        """Get the highest risk level from validation.
+
+        Returns:
+            The highest risk level found during validation.
+        """
+        processed = self._ensure_processed()
+        return processed.validation_risk_level
 
     @property
     def is_safe(self) -> bool:
@@ -439,8 +470,8 @@ class SQL:
         Returns:
             True if the statement is safe, False otherwise.
         """
-        processed = self._ensure_processed()
-        return processed.validation_result.is_safe if processed.validation_result is not None else True
+        self._ensure_processed()
+        return not self.has_errors
 
     @property
     def expected_result_type(self) -> Optional[type]:
@@ -622,8 +653,7 @@ class SQL:
         return self.parameters
 
     def compile(
-        self,
-        placeholder_style: "Optional[Union[ParameterStyle, str]]" = None,
+        self, placeholder_style: "Optional[Union[ParameterStyle, str]]" = None
     ) -> "tuple[str, SQLParameterType]":
         """Compile SQL statement and parameters together for execution.
 
@@ -664,6 +694,10 @@ class SQL:
         and raise SQLValidationError if the configuration and result warrant it.
         The validation is run if not already cached or if cache is considered stale
         (e.g., after filters have been applied).
+
+        .. note::
+            Consider using the `is_safe`, `has_errors`, or `validation_errors` properties
+            directly instead of calling validate() and checking the returned ValidationResult.
 
         Returns:
             The ValidationResult instance.
@@ -723,6 +757,28 @@ class SQL:
             validator = _default_validator()
             return validator.validate(self.sql, self._dialect, self.config)
 
+    def validate_detailed(self) -> "list[ValidationError]":
+        """Validate SQL and return detailed validation errors.
+
+        This method provides a modern alternative to the validate() method,
+        returning typed ValidationError objects directly instead of a ValidationResult.
+
+        Returns:
+            List of ValidationError objects containing detailed information about
+            any validation issues found. Empty list if no errors.
+
+        Example:
+            >>> sql = SQL("DROP TABLE users")
+            >>> errors = sql.validate_detailed()
+            >>> for error in errors:
+            ...     print(
+            ...         f"{error.code}: {error.message} (risk: {error.risk_level})"
+            ...     )
+            ddl-not-allowed: DDL operation 'DROP' is not allowed (risk: critical)
+        """
+        self._ensure_processed()
+        return list(self.validation_errors)  # Return a copy to prevent modification
+
     def _get_validation_only_pipeline(self) -> "StatementPipeline":
         """Get a pipeline with only validation components, no transformers or analyzers."""
 
@@ -740,20 +796,20 @@ class SQL:
         if self._processed_state is None:
             return
 
-        validation_result = self._processed_state.validation_result
+        # Use new fields directly instead of validation_result
         if (
-            validation_result is not None
-            and not validation_result.is_safe
+            self._processed_state.has_validation_errors
             and self._config.strict_mode
-            and validation_result.risk_level is not None
-            and validation_result.risk_level.value >= RiskLevel.HIGH.value
+            and self._processed_state.validation_risk_level.value >= RiskLevel.HIGH.value
         ):
-            error_msg = f"SQL validation failed with risk level {validation_result.risk_level}:\n"
-            error_msg += "Issues:\n" + "\n".join([f"- {issue}" for issue in validation_result.issues or []])
-            if validation_result.warnings:
-                error_msg += "\nWarnings:\n" + "\n".join([f"- {warn}" for warn in validation_result.warnings])
+            error_msg = f"SQL validation failed with risk level {self._processed_state.validation_risk_level}:\n"
+            error_msg += "Issues:\n"
+            for error in self._processed_state.validation_errors:
+                error_msg += f"- [{error.code}] {error.message}\n"
             # Use the raw SQL input instead of calling to_sql() to avoid recursion
-            raise SQLValidationError(error_msg, self._processed_state.raw_sql_input, validation_result.risk_level)
+            raise SQLValidationError(
+                error_msg, self._processed_state.raw_sql_input, self._processed_state.validation_risk_level
+            )
 
     def _transform_sql_placeholders(
         self,
@@ -1331,14 +1387,7 @@ class SQL:
         else:
             hashable_params = (self.parameters,)
 
-        return hash(
-            (
-                str(self._sql),
-                hashable_params,
-                self._dialect,
-                hash(str(self._config)),
-            )
-        )
+        return hash((str(self._sql), hashable_params, self._dialect, hash(str(self._config))))
 
     def as_many(self, parameters: "Optional[SQLParameterType]" = None) -> "SQL":
         """Create a copy of this SQL statement marked for batch execution.
@@ -1352,13 +1401,11 @@ class SQL:
             A new SQL instance with is_many=True and the provided parameters.
 
         Example:
-            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many(
-            ...     [
-            ...         ["John"],
-            ...         ["Jane"],
-            ...         ["Bob"],
-            ...     ]
-            ... )
+            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many([
+            ...     ["John"],
+            ...     ["Jane"],
+            ...     ["Bob"],
+            ... ])
             >>> # This creates a statement ready for executemany with 3 parameter sets
         """
         # Use provided parameters or keep existing ones (use _raw_parameters to avoid validation)
@@ -1384,6 +1431,9 @@ class SQL:
             final_parameter_info=[],
             final_merged_parameters=many_parameters,
             validation_result=None,
+            validation_errors=[],
+            has_validation_errors=False,
+            validation_risk_level=RiskLevel.SAFE,
             analysis_result=None,
             input_had_placeholders=False,
             config_snapshot=executemany_config,
@@ -1592,6 +1642,14 @@ class SQL:
         except SQLValidationError as e:
             # Create failed state for validation errors during parsing
             validation_result = ValidationResult(is_safe=False, risk_level=e.risk_level, issues=[str(e)])
+            # Create a ValidationError for the parsing failure
+            parsing_error = ValidationError(
+                message=str(e),
+                code="parsing-error",
+                risk_level=e.risk_level,
+                processor="SQL._parse_initial_expression",
+                expression=None,
+            )
             processed = _ProcessedState(
                 raw_sql_input=context.initial_sql_string,
                 raw_parameters_input=context.initial_parameters,
@@ -1600,6 +1658,9 @@ class SQL:
                 final_parameter_info=context.parameter_info,
                 final_merged_parameters=context.merged_parameters,
                 validation_result=validation_result,
+                validation_errors=[parsing_error],
+                has_validation_errors=True,
+                validation_risk_level=e.risk_level,
                 analysis_result=None,
                 input_had_placeholders=context.input_sql_had_placeholders,
                 config_snapshot=self._config,
@@ -1623,15 +1684,13 @@ class SQL:
         return self._create_disabled_result(context)
 
     @staticmethod
-    def _merge_extracted_parameters(
-        pipeline_result: "PipelineResult", context: "SQLProcessingContext"  # noqa: ARG004
-    ) -> None:
+    def _merge_extracted_parameters(pipeline_result: "PipelineResult", context: "SQLProcessingContext") -> None:
         """Merge extracted parameters from pipeline transformers."""
         if not context.extracted_parameters_from_pipeline:
             return
 
         # PipelineResult stores parameters in the context
-        final_merged_parameters = context.merged_parameters
+        final_merged_parameters = pipeline_result.context.merged_parameters
         extracted_params = context.extracted_parameters_from_pipeline
 
         if isinstance(final_merged_parameters, dict):
@@ -1641,7 +1700,7 @@ class SQL:
         elif isinstance(final_merged_parameters, list):
             final_merged_parameters.extend(extracted_params)
         else:
-            context.merged_parameters = extracted_params
+            pipeline_result.context.merged_parameters = extracted_params
 
     def _run_validation_only(self, context: "SQLProcessingContext") -> "PipelineResult":
         """Run validation when parsing is disabled but validation is enabled."""
@@ -1652,6 +1711,7 @@ class SQL:
         # Legacy validation result handling - convert to context errors
         if validation_result is not None and not validation_result.is_safe:
             from sqlspec.statement.pipelines.result_types import ValidationError as ValError
+
             for issue in validation_result.issues:
                 error = ValError(
                     message=issue,
@@ -1667,7 +1727,8 @@ class SQL:
             context=context,
         )
 
-    def _create_disabled_result(self, context: "SQLProcessingContext") -> "PipelineResult":
+    @staticmethod
+    def _create_disabled_result(context: "SQLProcessingContext") -> "PipelineResult":
         """Create result when both parsing and validation are disabled."""
         # No need to add any errors - both parsing and validation are disabled
         return PipelineResult(
@@ -1675,38 +1736,67 @@ class SQL:
             context=context,
         )
 
-
     def _build_processed_state(
         self, context: "SQLProcessingContext", pipeline_result: "PipelineResult"
     ) -> "_ProcessedState":
         """Build the final processed state from context and pipeline results."""
+        # Use the context from pipeline_result which contains all the updates from the pipeline
+        final_context = pipeline_result.context
+
+        # Extract validation errors directly from the final context
+        validation_errors = list(final_context.validation_errors)  # Make a copy
+        has_validation_errors = bool(validation_errors)
+
+        # Determine risk level - SKIP if validation disabled, otherwise from context
+        validation_risk_level = RiskLevel.SKIP if not self._config.enable_validation else final_context.risk_level
         # Create ValidationResult from context errors for backward compatibility
         validation_result = None
-        if context.validation_errors:
+        if validation_errors:
             validation_result = ValidationResult(
-                is_safe=not context.has_errors,
-                risk_level=context.risk_level,
-                issues=[error.message for error in context.validation_errors],
+                is_safe=not has_validation_errors,
+                risk_level=validation_risk_level,
+                issues=[error.message for error in validation_errors],
             )
         else:
+            # When validation is disabled or no errors, use SKIP level
             validation_result = ValidationResult(
                 is_safe=True,
-                risk_level=RiskLevel.SAFE,
+                risk_level=RiskLevel.SKIP if not self._config.enable_validation else RiskLevel.SAFE,
                 issues=[],
             )
 
+        # When parsing is disabled, don't store a transformed expression
+        # For empty input strings, we want to keep the empty SELECT
+        # Otherwise, filter out empty SELECT expressions that were created as defaults
+        transformed_expr = None
+        if (
+            self._config.enable_parsing
+            and pipeline_result.expression is not None
+            and (
+                not context.initial_sql_string.strip()
+                or not (
+                    isinstance(pipeline_result.expression, exp.Select)
+                    and not pipeline_result.expression.expressions
+                    and not pipeline_result.expression.args.get("from")
+                )
+            )
+        ):
+            transformed_expr = pipeline_result.expression
         processed_state = _ProcessedState(
             raw_sql_input=context.initial_sql_string,
             raw_parameters_input=context.initial_parameters,
             initial_expression=context.initial_expression,
-            transformed_expression=pipeline_result.expression,
-            final_parameter_info=context.parameter_info,
-            final_merged_parameters=context.merged_parameters,
+            transformed_expression=transformed_expr,
+            final_parameter_info=final_context.parameter_info,
+            final_merged_parameters=final_context.merged_parameters,
             validation_result=validation_result,
+            validation_errors=validation_errors,
+            has_validation_errors=has_validation_errors,
+            validation_risk_level=validation_risk_level,
             analysis_result=None,  # Legacy field, no longer used
-            input_had_placeholders=context.input_sql_had_placeholders,
+            input_had_placeholders=final_context.input_sql_had_placeholders,
             config_snapshot=self._config,
         )
-        self._normalization_info = context.extra_info
+        self._normalization_info = final_context.extra_info
 
         return processed_state

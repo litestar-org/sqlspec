@@ -10,14 +10,7 @@ from typing import Any, TypeVar
 
 import pytest
 
-from sqlspec.utils.sync_tools import (
-    CapacityLimiter,
-    async_,
-    await_,
-    ensure_async_,
-    run_,
-    with_ensure_async_,
-)
+from sqlspec.utils.sync_tools import CapacityLimiter, async_, await_, ensure_async_, run_, with_ensure_async_
 
 T = TypeVar("T")
 
@@ -186,11 +179,7 @@ async def test_capacity_limiter_concurrent_access() -> None:
             results.append(f"worker_{worker_id}_finished")
 
     # Start multiple workers
-    await asyncio.gather(
-        worker(1),
-        worker(2),
-        worker(3),
-    )
+    await asyncio.gather(worker(1), worker(2), worker(3))
 
     # Check that workers were limited
     assert len(results) == 6
@@ -237,12 +226,7 @@ def test_run_with_arguments() -> None:
     """Test run_ with various argument patterns."""
 
     async def async_func_with_args(a: int, b: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return {
-            "a": a,
-            "b": b,
-            "args": args,
-            "kwargs": kwargs,
-        }
+        return {"a": a, "b": b, "args": args, "kwargs": kwargs}
 
     # Create a new event loop for this test to avoid reusing existing ones
     import asyncio

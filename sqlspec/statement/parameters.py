@@ -14,20 +14,10 @@ from typing import Any, Final, Optional, Union
 
 from typing_extensions import TypedDict
 
-from sqlspec.exceptions import (
-    ExtraParameterError,
-    MissingParameterError,
-    ParameterStyleMismatchError,
-)
+from sqlspec.exceptions import ExtraParameterError, MissingParameterError, ParameterStyleMismatchError
 from sqlspec.typing import SQLParameterType
 
-__all__ = (
-    "ParameterConverter",
-    "ParameterInfo",
-    "ParameterStyle",
-    "ParameterValidator",
-    "SQLParameterType",
-)
+__all__ = ("ParameterConverter", "ParameterInfo", "ParameterStyle", "ParameterValidator", "SQLParameterType")
 
 logger = logging.getLogger("sqlspec.sql.parameters")
 
@@ -555,9 +545,7 @@ class ParameterConverter:
 
     @staticmethod
     def _merge_mixed_parameters(
-        parameters_info: "list[ParameterInfo]",
-        args: "Sequence[Any]",
-        kwargs: "Mapping[str, Any]",
+        parameters_info: "list[ParameterInfo]", args: "Sequence[Any]", kwargs: "Mapping[str, Any]"
     ) -> dict[str, Any]:
         """Merge args and kwargs for mixed parameter styles.
 
@@ -614,10 +602,7 @@ class ParameterConverter:
         return None
 
     def _denormalize_sql(
-        self,
-        rendered_sql: str,
-        final_parameter_info: "list[ParameterInfo]",
-        target_style: "ParameterStyle",
+        self, rendered_sql: str, final_parameter_info: "list[ParameterInfo]", target_style: "ParameterStyle"
     ) -> str:
         """Internal method to convert SQL from canonical format to target style.
 

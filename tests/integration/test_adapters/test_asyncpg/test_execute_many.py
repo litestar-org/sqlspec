@@ -53,8 +53,7 @@ async def test_asyncpg_execute_many_basic(asyncpg_batch_session: AsyncpgDriver) 
     ]
 
     result = await asyncpg_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)",
-        parameters,
+        "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -73,24 +72,13 @@ async def test_asyncpg_execute_many_update(asyncpg_batch_session: AsyncpgDriver)
     # First insert some data
     await asyncpg_batch_session.execute_many(
         "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)",
-        [
-            ("Update 1", 10, "X"),
-            ("Update 2", 20, "Y"),
-            ("Update 3", 30, "Z"),
-        ],
+        [("Update 1", 10, "X"), ("Update 2", 20, "Y"), ("Update 3", 30, "Z")],
     )
 
     # Now update with execute_many
-    update_params = [
-        (100, "Update 1"),
-        (200, "Update 2"),
-        (300, "Update 3"),
-    ]
+    update_params = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
 
-    result = await asyncpg_batch_session.execute_many(
-        "UPDATE test_batch SET value = $1 WHERE name = $2",
-        update_params,
-    )
+    result = await asyncpg_batch_session.execute_many("UPDATE test_batch SET value = $1 WHERE name = $2", update_params)
 
     assert isinstance(result, SQLResult)
 
@@ -105,8 +93,7 @@ async def test_asyncpg_execute_many_update(asyncpg_batch_session: AsyncpgDriver)
 async def test_asyncpg_execute_many_empty(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with empty parameter list on AsyncPG."""
     result = await asyncpg_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)",
-        [],
+        "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)", []
     )
 
     assert isinstance(result, SQLResult)
@@ -129,8 +116,7 @@ async def test_asyncpg_execute_many_mixed_types(asyncpg_batch_session: AsyncpgDr
     ]
 
     result = await asyncpg_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)",
-        parameters,
+        "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -163,16 +149,9 @@ async def test_asyncpg_execute_many_delete(asyncpg_batch_session: AsyncpgDriver)
     )
 
     # Delete specific items by name
-    delete_params = [
-        ("Delete 1",),
-        ("Delete 2",),
-        ("Delete 4",),
-    ]
+    delete_params = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
 
-    result = await asyncpg_batch_session.execute_many(
-        "DELETE FROM test_batch WHERE name = $1",
-        delete_params,
-    )
+    result = await asyncpg_batch_session.execute_many("DELETE FROM test_batch WHERE name = $1", delete_params)
 
     assert isinstance(result, SQLResult)
 
@@ -194,8 +173,7 @@ async def test_asyncpg_execute_many_large_batch(asyncpg_batch_session: AsyncpgDr
     large_batch = [(f"Item {i}", i * 10, f"CAT{i % 3}") for i in range(1000)]
 
     result = await asyncpg_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)",
-        large_batch,
+        "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)", large_batch
     )
 
     assert isinstance(result, SQLResult)
@@ -206,8 +184,7 @@ async def test_asyncpg_execute_many_large_batch(asyncpg_batch_session: AsyncpgDr
 
     # Verify some specific values
     sample_result = await asyncpg_batch_session.execute(
-        "SELECT * FROM test_batch WHERE name = ANY($1) ORDER BY value",
-        (["Item 100", "Item 500", "Item 999"],),
+        "SELECT * FROM test_batch WHERE name = ANY($1) ORDER BY value", (["Item 100", "Item 500", "Item 999"],)
     )
     assert len(sample_result) == 3
     assert sample_result[0]["value"] == 1000  # Item 100
@@ -221,11 +198,7 @@ async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: Async
     """Test execute_many with SQL object on AsyncPG."""
     from sqlspec.statement.sql import SQL
 
-    parameters = [
-        ("SQL Obj 1", 111, "SOB"),
-        ("SQL Obj 2", 222, "SOB"),
-        ("SQL Obj 3", 333, "SOB"),
-    ]
+    parameters = [("SQL Obj 1", 111, "SOB"), ("SQL Obj 2", 222, "SOB"), ("SQL Obj 3", 333, "SOB")]
 
     sql_obj = SQL("INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)").as_many(parameters)
 
@@ -235,8 +208,7 @@ async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: Async
 
     # Verify data
     check_result = await asyncpg_batch_session.execute(
-        "SELECT COUNT(*) as count FROM test_batch WHERE category = $1",
-        ("SOB",),
+        "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("SOB",)
     )
     assert check_result[0]["count"] == 3
 
@@ -245,18 +217,13 @@ async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: Async
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many_with_returning(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with RETURNING clause on AsyncPG."""
-    parameters = [
-        ("Return 1", 111, "RET"),
-        ("Return 2", 222, "RET"),
-        ("Return 3", 333, "RET"),
-    ]
+    parameters = [("Return 1", 111, "RET"), ("Return 2", 222, "RET"), ("Return 3", 333, "RET")]
 
     # Note: executemany with RETURNING may not work the same as single execute
     # This test verifies the behavior
     try:
         result = await asyncpg_batch_session.execute_many(
-            "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3) RETURNING id, name",
-            parameters,
+            "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3) RETURNING id, name", parameters
         )
 
         assert isinstance(result, SQLResult)
@@ -269,13 +236,11 @@ async def test_asyncpg_execute_many_with_returning(asyncpg_batch_session: Asyncp
         # executemany with RETURNING might not be supported
         # Fall back to regular insert and verify
         await asyncpg_batch_session.execute_many(
-            "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)",
-            parameters,
+            "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)", parameters
         )
 
         check_result = await asyncpg_batch_session.execute(
-            "SELECT COUNT(*) as count FROM test_batch WHERE category = $1",
-            ("RET",),
+            "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("RET",)
         )
         assert check_result[0]["count"] == 3
 
@@ -301,8 +266,7 @@ async def test_asyncpg_execute_many_with_arrays(asyncpg_batch_session: AsyncpgDr
     ]
 
     result = await asyncpg_batch_session.execute_many(
-        "INSERT INTO test_arrays (name, tags, scores) VALUES ($1, $2, $3)",
-        parameters,
+        "INSERT INTO test_arrays (name, tags, scores) VALUES ($1, $2, $3)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -340,8 +304,7 @@ async def test_asyncpg_execute_many_with_json(asyncpg_batch_session: AsyncpgDriv
     ]
 
     result = await asyncpg_batch_session.execute_many(
-        "INSERT INTO test_json (name, metadata) VALUES ($1, $2)",
-        parameters,
+        "INSERT INTO test_json (name, metadata) VALUES ($1, $2)", parameters
     )
 
     assert isinstance(result, SQLResult)

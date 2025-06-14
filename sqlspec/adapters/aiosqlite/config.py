@@ -25,15 +25,7 @@ __all__ = ("CONNECTION_FIELDS", "AiosqliteConfig")
 logger = logging.getLogger(__name__)
 
 CONNECTION_FIELDS = frozenset(
-    {
-        "database",
-        "timeout",
-        "detect_types",
-        "isolation_level",
-        "check_same_thread",
-        "cached_statements",
-        "uri",
-    }
+    {"database", "timeout", "detect_types", "isolation_level", "check_same_thread", "cached_statements", "uri"}
 )
 
 
@@ -56,8 +48,8 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
         "uri",
     )
 
-    __is_async__: ClassVar[bool] = True
-    __supports_connection_pooling__: ClassVar[bool] = False
+    is_async: ClassVar[bool] = True
+    supports_connection_pooling: ClassVar[bool] = False
 
     # Driver class reference for dialect resolution
     driver_class: ClassVar[type[AiosqliteDriver]] = AiosqliteDriver
@@ -71,7 +63,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
 
     def __init__(
         self,
-        database: str,
+        database: str = ":memory:",
         statement_config: Optional[SQLConfig] = None,
         instrumentation: Optional[InstrumentationConfig] = None,
         default_row_type: type[DictRow] = DictRow,
@@ -119,9 +111,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
-        super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig(),
-        )
+        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
 
     @property
     def connection_type(self) -> type[AiosqliteConnection]:  # type: ignore[override]
@@ -245,9 +235,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
                 )
 
             yield self.driver_type(
-                connection=connection,
-                config=statement_config,
-                instrumentation_config=self.instrumentation,
+                connection=connection, config=statement_config, instrumentation_config=self.instrumentation
             )
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> None:

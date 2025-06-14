@@ -39,11 +39,7 @@ def sqlite_driver(mock_sqlite_connection: MagicMock) -> SqliteDriver:
     """Create a SQLite driver with mocked connection."""
     config = SQLConfig(strict_mode=False)
     instrumentation_config = InstrumentationConfig()
-    return SqliteDriver(
-        connection=mock_sqlite_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
-    )
+    return SqliteDriver(connection=mock_sqlite_connection, config=config, instrumentation_config=instrumentation_config)
 
 
 class TestSQLiteStorageOperations:

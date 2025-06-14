@@ -370,7 +370,7 @@ class TestFSSpecBackend:
     def test_instrumentation_logging(self, caplog: pytest.LogCaptureFixture) -> None:
         """Test that operations are properly instrumented."""
         with patch("sqlspec.typing.FSSPEC_INSTALLED", True):
-            config = InstrumentationConfig(log_service_operations=True, debug_mode=True)
+            config = InstrumentationConfig(log_service_operations=True)
             mock_fs = MagicMock()
             mock_fs.protocol = "s3"
             mock_fs.cat.return_value = b"test data"

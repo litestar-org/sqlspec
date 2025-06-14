@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Optional
 from sqlglot import exp
 
 from sqlspec.statement.pipelines.base import ProcessorProtocol
-from sqlspec.statement.pipelines.results import ProcessorResult
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -13,7 +12,7 @@ if TYPE_CHECKING:
 __all__ = ("HintRemover",)
 
 
-class HintRemover(ProcessorProtocol[exp.Expression]):
+class HintRemover(ProcessorProtocol):
     """Removes SQL hints from expressions using SQLGlot's AST traversal.
 
     This transformer removes SQL hints while preserving standard comments:
@@ -30,19 +29,16 @@ class HintRemover(ProcessorProtocol[exp.Expression]):
     """
 
     def __init__(
-        self,
-        enabled: bool = True,
-        remove_oracle_hints: bool = True,
-        remove_mysql_version_comments: bool = True,
+        self, enabled: bool = True, remove_oracle_hints: bool = True, remove_mysql_version_comments: bool = True
     ) -> None:
         self.enabled = enabled
         self.remove_oracle_hints = remove_oracle_hints
         self.remove_mysql_version_comments = remove_mysql_version_comments
 
-    def process(self, context: "SQLProcessingContext") -> "ProcessorResult":
+    def process(self, expression: exp.Expression, context: "SQLProcessingContext") -> exp.Expression:
         """Removes SQL hints from the expression using SQLGlot AST traversal."""
         if not self.enabled or context.current_expression is None:
-            return ProcessorResult(expression=context.current_expression)
+            return expression
 
         hints_removed_count = 0
 
@@ -78,8 +74,6 @@ class HintRemover(ProcessorProtocol[exp.Expression]):
         transformed_expression = context.current_expression.transform(_remove_hint_node, copy=True)
         context.current_expression = transformed_expression or exp.Anonymous(this="")
 
-        metadata = {
-            "type": "transformer",
-            "hints_removed": hints_removed_count,
-        }
-        return ProcessorResult(expression=context.current_expression, metadata=metadata)
+        context.metadata["hints_removed"] = hints_removed_count
+
+        return context.current_expression

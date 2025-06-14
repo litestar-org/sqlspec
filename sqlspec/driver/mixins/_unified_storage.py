@@ -183,10 +183,7 @@ class SyncStorageMixin(StorageMixinBase):
         return self._fetch_arrow_table(sql_obj, connection=connection, **kwargs)
 
     def _fetch_arrow_table(
-        self,
-        sql_obj: SQL,
-        connection: "Optional[ConnectionT]" = None,
-        **kwargs: Any,
+        self, sql_obj: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> "ArrowResult":
         """Protected method for driver-specific Arrow table fetching.
 
@@ -205,10 +202,7 @@ class SyncStorageMixin(StorageMixinBase):
         return self._fetch_arrow_table_fallback(sql_obj, connection=connection, **kwargs)
 
     def _fetch_arrow_table_fallback(
-        self,
-        sql_obj: SQL,
-        connection: "Optional[ConnectionT]" = None,
-        **kwargs: Any,
+        self, sql_obj: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> "ArrowResult":
         """Generic fallback for Arrow table fetching.
 
@@ -334,11 +328,7 @@ class SyncStorageMixin(StorageMixinBase):
     # ============================================================================
 
     def export_to_storage(
-        self,
-        query: "Statement",
-        destination_uri: str,
-        format: "Optional[str]" = None,
-        **options: Any,
+        self, query: "Statement", destination_uri: str, format: "Optional[str]" = None, **options: Any
     ) -> int:
         """Export query results to storage with intelligent routing.
 
@@ -357,11 +347,7 @@ class SyncStorageMixin(StorageMixinBase):
             return self._export_to_storage(query, destination_uri, format, **options)
 
     def _export_to_storage(
-        self,
-        query: "Statement",
-        destination_uri: str,
-        format: "Optional[str]" = None,
-        **options: Any,
+        self, query: "Statement", destination_uri: str, format: "Optional[str]" = None, **options: Any
     ) -> int:
         """Protected method for export operation implementation.
 
@@ -407,12 +393,7 @@ class SyncStorageMixin(StorageMixinBase):
         return self._export_via_backend(query_obj, backend, path, file_format, **options)
 
     def import_from_storage(
-        self,
-        source_uri: str,
-        table_name: str,
-        format: "Optional[str]" = None,
-        mode: str = "create",
-        **options: Any,
+        self, source_uri: str, table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
     ) -> int:
         """Import data from storage with intelligent routing.
 
@@ -440,12 +421,7 @@ class SyncStorageMixin(StorageMixinBase):
             return self._import_from_storage(source_uri, table_name, format, mode, **options)
 
     def _import_from_storage(
-        self,
-        source_uri: str,
-        table_name: str,
-        format: "Optional[str]" = None,
-        mode: str = "create",
-        **options: Any,
+        self, source_uri: str, table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
     ) -> int:
         """Protected method for import operation implementation.
 
@@ -693,10 +669,7 @@ class AsyncStorageMixin(StorageMixinBase):
         return await self._fetch_arrow_table(sql_obj, connection=connection, **kwargs)
 
     async def _fetch_arrow_table(
-        self,
-        sql_obj: SQL,
-        connection: "Optional[ConnectionT]" = None,
-        **kwargs: Any,
+        self, sql_obj: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> "ArrowResult":
         """Protected async method for driver-specific Arrow table fetching.
 
@@ -715,10 +688,7 @@ class AsyncStorageMixin(StorageMixinBase):
         return await self._fetch_arrow_table_fallback(sql_obj, connection=connection, **kwargs)
 
     async def _fetch_arrow_table_fallback(
-        self,
-        sql_obj: SQL,
-        connection: "Optional[ConnectionT]" = None,
-        **kwargs: Any,
+        self, sql_obj: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> "ArrowResult":
         """Generic async fallback for Arrow table fetching.
 
@@ -814,11 +784,7 @@ class AsyncStorageMixin(StorageMixinBase):
     # ============================================================================
 
     async def export_to_storage(
-        self,
-        query: "Statement",
-        destination_uri: str,
-        format: "Optional[str]" = None,
-        **options: Any,
+        self, query: "Statement", destination_uri: str, format: "Optional[str]" = None, **options: Any
     ) -> int:
         """Async export query results to storage with intelligent routing.
 
@@ -834,20 +800,12 @@ class AsyncStorageMixin(StorageMixinBase):
             Number of rows exported
         """
         async with instrument_operation_async(
-            self,
-            "export_to_storage",
-            "storage",
-            destination_uri=destination_uri,
-            format=format,
+            self, "export_to_storage", "storage", destination_uri=destination_uri, format=format
         ):
             return await self._export_to_storage(query, destination_uri, format, **options)
 
     async def _export_to_storage(
-        self,
-        query: "Statement",
-        destination_uri: str,
-        format: "Optional[str]" = None,
-        **options: Any,
+        self, query: "Statement", destination_uri: str, format: "Optional[str]" = None, **options: Any
     ) -> int:
         """Protected async method for export operation implementation.
 
@@ -887,12 +845,7 @@ class AsyncStorageMixin(StorageMixinBase):
         return await self._export_via_backend(query_str, backend, path, file_format, **options)
 
     async def import_from_storage(
-        self,
-        source_uri: str,
-        table_name: str,
-        format: "Optional[str]" = None,
-        mode: str = "create",
-        **options: Any,
+        self, source_uri: str, table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
     ) -> int:
         """Async import data from storage with intelligent routing.
 
@@ -920,12 +873,7 @@ class AsyncStorageMixin(StorageMixinBase):
             return await self._import_from_storage(source_uri, table_name, format, mode, **options)
 
     async def _import_from_storage(
-        self,
-        source_uri: str,
-        table_name: str,
-        format: "Optional[str]" = None,
-        mode: str = "create",
-        **options: Any,
+        self, source_uri: str, table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
     ) -> int:
         """Protected async method for import operation implementation.
 

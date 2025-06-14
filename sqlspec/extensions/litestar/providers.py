@@ -9,15 +9,7 @@ You should not have modify this module very often and should only be invoked und
 import datetime
 import inspect
 from collections.abc import Callable
-from typing import (
-    Any,
-    Literal,
-    NamedTuple,
-    Optional,
-    TypedDict,
-    Union,
-    cast,
-)
+from typing import Any, Literal, NamedTuple, Optional, TypedDict, Union, cast
 from uuid import UUID
 
 from litestar.di import Provide
@@ -260,10 +252,7 @@ def _create_statement_filters(
 
         def provide_search_filter(
             search_string: StringOrNone = Parameter(
-                title="Field to search",
-                query="searchString",
-                default=None,
-                required=False,
+                title="Field to search", query="searchString", default=None, required=False
             ),
             ignore_case: BooleanOrNone = Parameter(
                 title="Search should be case sensitive",
@@ -287,16 +276,10 @@ def _create_statement_filters(
 
         def provide_order_by(
             field_name: StringOrNone = Parameter(
-                title="Order by field",
-                query="orderBy",
-                default=sort_field,
-                required=False,
+                title="Order by field", query="orderBy", default=sort_field, required=False
             ),
             sort_order: SortOrderOrNone = Parameter(
-                title="Field to search",
-                query="sortOrder",
-                default=config.get("sort_order", "desc"),
-                required=False,
+                title="Field to search", query="sortOrder", default=config.get("sort_order", "desc"), required=False
             ),
         ) -> OrderByFilter:
             return OrderByFilter(field_name=field_name, sort_order=sort_order)  # type: ignore[arg-type]
@@ -512,8 +495,7 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
 
     # Set both signature and annotations
     provide_filters.__signature__ = inspect.Signature(  # type: ignore
-        parameters=list(parameters.values()),
-        return_annotation=list[FilterTypes],
+        parameters=list(parameters.values()), return_annotation=list[FilterTypes]
     )
     provide_filters.__annotations__ = annotations
     provide_filters.__annotations__["return"] = list[FilterTypes]

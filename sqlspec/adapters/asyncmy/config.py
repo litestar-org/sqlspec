@@ -45,14 +45,7 @@ CONNECTION_FIELDS = frozenset(
     }
 )
 
-POOL_FIELDS = CONNECTION_FIELDS.union(
-    {
-        "minsize",
-        "maxsize",
-        "echo",
-        "pool_recycle",
-    }
-)
+POOL_FIELDS = CONNECTION_FIELDS.union({"minsize", "maxsize", "echo", "pool_recycle"})
 
 
 class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver]):  # pyright: ignore
@@ -84,8 +77,8 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         "user",
     )
 
-    __is_async__: ClassVar[bool] = True
-    __supports_connection_pooling__: ClassVar[bool] = True
+    is_async: ClassVar[bool] = True
+    supports_connection_pooling: ClassVar[bool] = True
 
     # Driver class reference for dialect resolution
     driver_class: ClassVar[type[AsyncmyDriver]] = AsyncmyDriver
@@ -190,7 +183,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         self.default_row_type = default_row_type
 
         super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig(),  # pyright: ignore
+            instrumentation=instrumentation or InstrumentationConfig()  # pyright: ignore
         )
 
     @property
@@ -337,9 +330,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
                 )
 
             yield self.driver_type(
-                connection=connection,
-                config=statement_config,
-                instrumentation_config=self.instrumentation,
+                connection=connection, config=statement_config, instrumentation_config=self.instrumentation
             )
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool":  # pyright: ignore

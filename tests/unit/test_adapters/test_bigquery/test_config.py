@@ -114,14 +114,14 @@ def test_bigquery_config_driver_type() -> None:
 
 
 def test_bigquery_config_is_async() -> None:
-    """Test BigQuery config __is_async__ attribute."""
+    """Test BigQuery config is_async attribute."""
     config = BigQueryConfig(project="test-project", dataset_id="test_dataset")
-    assert config.__is_async__ is False
-    assert BigQueryConfig.__is_async__ is False
+    assert config.is_async is False
+    assert BigQueryConfig.is_async is False
 
 
 def test_bigquery_config_supports_connection_pooling() -> None:
-    """Test BigQuery config __supports_connection_pooling__ attribute."""
+    """Test BigQuery config supports_connection_pooling attribute."""
     config = BigQueryConfig(project="test-project", dataset_id="test_dataset")
-    assert config.__supports_connection_pooling__ is False
-    assert BigQueryConfig.__supports_connection_pooling__ is False
+    assert config.supports_connection_pooling is False
+    assert BigQueryConfig.supports_connection_pooling is False

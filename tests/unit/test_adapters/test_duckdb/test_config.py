@@ -82,9 +82,7 @@ def test_duckdb_config_initialization() -> None:
     custom_instrumentation = InstrumentationConfig(log_queries=True)
 
     config = DuckDBConfig(
-        database=":memory:",
-        statement_config=custom_statement_config,
-        instrumentation=custom_instrumentation,
+        database=":memory:", statement_config=custom_statement_config, instrumentation=custom_instrumentation
     )
     assert config.statement_config is custom_statement_config
     assert config.instrumentation.log_queries is True
@@ -110,17 +108,17 @@ def test_duckdb_config_driver_type() -> None:
 
 
 def test_duckdb_config_is_async() -> None:
-    """Test DuckDB config __is_async__ attribute."""
+    """Test DuckDB config is_async attribute."""
     config = DuckDBConfig(database=":memory:")
-    assert config.__is_async__ is False
-    assert DuckDBConfig.__is_async__ is False
+    assert config.is_async is False
+    assert DuckDBConfig.is_async is False
 
 
 def test_duckdb_config_supports_connection_pooling() -> None:
-    """Test DuckDB config __supports_connection_pooling__ attribute."""
+    """Test DuckDB config supports_connection_pooling attribute."""
     config = DuckDBConfig(database=":memory:")
-    assert config.__supports_connection_pooling__ is False
-    assert DuckDBConfig.__supports_connection_pooling__ is False
+    assert config.supports_connection_pooling is False
+    assert DuckDBConfig.supports_connection_pooling is False
 
 
 def test_duckdb_config_from_connection_config() -> None:

@@ -114,17 +114,17 @@ def test_adbc_config_driver_type() -> None:
 
 
 def test_adbc_config_is_async() -> None:
-    """Test ADBC config __is_async__ attribute."""
+    """Test ADBC config is_async attribute."""
     config = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory")
-    assert config.__is_async__ is False
-    assert AdbcConfig.__is_async__ is False
+    assert config.is_async is False
+    assert AdbcConfig.is_async is False
 
 
 def test_adbc_config_supports_connection_pooling() -> None:
-    """Test ADBC config __supports_connection_pooling__ attribute."""
+    """Test ADBC config supports_connection_pooling attribute."""
     config = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory")
-    assert config.__supports_connection_pooling__ is False
-    assert AdbcConfig.__supports_connection_pooling__ is False
+    assert config.supports_connection_pooling is False
+    assert AdbcConfig.supports_connection_pooling is False
 
 
 def test_adbc_config_from_connection_config() -> None:

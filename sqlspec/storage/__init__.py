@@ -12,8 +12,4 @@ from sqlspec.storage.registry import StorageRegistry
 
 storage_registry = StorageRegistry()
 
-__all__ = (
-    "ObjectStoreProtocol",
-    "StorageRegistry",
-    "storage_registry",
-)
+__all__ = ("ObjectStoreProtocol", "StorageRegistry", "storage_registry")

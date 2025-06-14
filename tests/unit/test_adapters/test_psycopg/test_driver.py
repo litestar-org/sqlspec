@@ -53,9 +53,7 @@ def psycopg_sync_driver(mock_psycopg_sync_connection: PsycopgSyncConnection) -> 
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
     instrumentation_config = InstrumentationConfig()
     return PsycopgSyncDriver(
-        connection=mock_psycopg_sync_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_psycopg_sync_connection, config=config, instrumentation_config=instrumentation_config
     )
 
 
@@ -65,9 +63,7 @@ def psycopg_async_driver(mock_psycopg_async_connection: AsyncMock) -> PsycopgAsy
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
     instrumentation_config = InstrumentationConfig()
     return PsycopgAsyncDriver(
-        connection=mock_psycopg_async_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_psycopg_async_connection, config=config, instrumentation_config=instrumentation_config
     )
 
 
@@ -77,9 +73,7 @@ def test_psycopg_sync_driver_initialization(mock_psycopg_sync_connection: Psycop
     instrumentation_config = InstrumentationConfig(log_queries=True)
 
     driver = PsycopgSyncDriver(
-        connection=mock_psycopg_sync_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_psycopg_sync_connection, config=config, instrumentation_config=instrumentation_config
     )
 
     # Test driver attributes are set correctly
@@ -96,9 +90,7 @@ def test_psycopg_async_driver_initialization(mock_psycopg_async_connection: Asyn
     instrumentation_config = InstrumentationConfig(log_queries=True)
 
     driver = PsycopgAsyncDriver(
-        connection=mock_psycopg_async_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_psycopg_async_connection, config=config, instrumentation_config=instrumentation_config
     )
 
     # Test driver attributes are set correctly

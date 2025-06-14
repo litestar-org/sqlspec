@@ -4,12 +4,11 @@ from sqlglot import exp
 
 from sqlspec.statement.pipelines.base import ProcessorProtocol
 from sqlspec.statement.pipelines.context import SQLProcessingContext
-from sqlspec.statement.pipelines.results import ProcessorResult
 
 __all__ = ("CommentRemover",)
 
 
-class CommentRemover(ProcessorProtocol[exp.Expression]):
+class CommentRemover(ProcessorProtocol):
     """Removes standard SQL comments from expressions using SQLGlot's AST traversal.
 
     This transformer removes SQL comments while preserving functionality:
@@ -27,16 +26,13 @@ class CommentRemover(ProcessorProtocol[exp.Expression]):
         enabled: Whether comment removal is enabled.
     """
 
-    def __init__(
-        self,
-        enabled: bool = True,
-    ) -> None:
+    def __init__(self, enabled: bool = True) -> None:
         self.enabled = enabled
 
-    def process(self, context: SQLProcessingContext) -> "ProcessorResult":
+    def process(self, expression: exp.Expression, context: SQLProcessingContext) -> exp.Expression:
         """Process the expression to remove comments using SQLGlot AST traversal."""
         if not self.enabled or context.current_expression is None:
-            return ProcessorResult(expression=context.current_expression)
+            return expression
 
         comments_removed_count = 0
 
@@ -65,9 +61,6 @@ class CommentRemover(ProcessorProtocol[exp.Expression]):
         cleaned_expression = context.current_expression.transform(_remove_comments, copy=True)
         context.current_expression = cleaned_expression
 
-        metadata = {
-            "type": "transformer",
-            "comments_removed": comments_removed_count,
-            "original_sql": context.initial_sql_string,
-        }
-        return ProcessorResult(expression=cleaned_expression, metadata=metadata)
+        context.metadata["comments_removed"] = comments_removed_count
+
+        return cleaned_expression

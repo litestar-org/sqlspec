@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Optional
 
 from sqlglot import expressions as exp
 
+from sqlspec.exceptions import RiskLevel
 from sqlspec.statement.pipelines.validators.base import BaseValidator
 
 if TYPE_CHECKING:
@@ -256,4 +257,3 @@ class DMLSafetyValidator(BaseValidator):
             tables.append(expression.this.name)
 
         return tables
-

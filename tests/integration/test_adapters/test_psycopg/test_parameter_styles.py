@@ -60,15 +60,10 @@ def psycopg_params_session(postgres_service: PostgresService) -> "Generator[Psyc
     ],
 )
 def test_psycopg_pyformat_parameter_types(
-    psycopg_params_session: PsycopgSyncDriver,
-    params: Any,
-    expected_count: int,
+    psycopg_params_session: PsycopgSyncDriver, params: Any, expected_count: int
 ) -> None:
     """Test different parameter types with Psycopg pyformat style."""
-    result = psycopg_params_session.execute(
-        "SELECT * FROM test_params WHERE name = %s",
-        params,
-    )
+    result = psycopg_params_session.execute("SELECT * FROM test_params WHERE name = %s", params)
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -86,10 +81,7 @@ def test_psycopg_pyformat_parameter_types(
     ],
 )
 def test_psycopg_parameter_styles(
-    psycopg_params_session: PsycopgSyncDriver,
-    params: Any,
-    style: str,
-    query: str,
+    psycopg_params_session: PsycopgSyncDriver, params: Any, style: str, query: str
 ) -> None:
     """Test different parameter styles with Psycopg."""
     result = psycopg_params_session.execute(query, params)
@@ -104,8 +96,7 @@ def test_psycopg_parameter_styles(
 def test_psycopg_multiple_parameters_pyformat(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test queries with multiple parameters using pyformat style."""
     result = psycopg_params_session.execute(
-        "SELECT * FROM test_params WHERE value >= %s AND value <= %s ORDER BY value",
-        (50, 150),
+        "SELECT * FROM test_params WHERE value >= %s AND value <= %s ORDER BY value", (50, 150)
     )
 
     assert isinstance(result, SQLResult)
@@ -132,9 +123,7 @@ def test_psycopg_multiple_parameters_named(psycopg_params_session: PsycopgSyncDr
 def test_psycopg_null_parameters(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test handling of NULL parameters on Psycopg."""
     # Query for NULL values
-    result = psycopg_params_session.execute(
-        "SELECT * FROM test_params WHERE description IS NULL",
-    )
+    result = psycopg_params_session.execute("SELECT * FROM test_params WHERE description IS NULL")
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -144,14 +133,10 @@ def test_psycopg_null_parameters(psycopg_params_session: PsycopgSyncDriver) -> N
 
     # Test inserting NULL with parameters
     psycopg_params_session.execute(
-        "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)",
-        ("null_param_test", 400, None),
+        "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)", ("null_param_test", 400, None)
     )
 
-    null_result = psycopg_params_session.execute(
-        "SELECT * FROM test_params WHERE name = %s",
-        ("null_param_test",),
-    )
+    null_result = psycopg_params_session.execute("SELECT * FROM test_params WHERE name = %s", ("null_param_test",))
     assert len(null_result.data) == 1
     assert null_result.data[0]["description"] is None
 
@@ -162,10 +147,7 @@ def test_psycopg_parameter_escaping(psycopg_params_session: PsycopgSyncDriver) -
     # This should safely search for a literal string with quotes
     malicious_input = "'; DROP TABLE test_params; --"
 
-    result = psycopg_params_session.execute(
-        "SELECT * FROM test_params WHERE name = %s",
-        (malicious_input,),
-    )
+    result = psycopg_params_session.execute("SELECT * FROM test_params WHERE name = %s", (malicious_input,))
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -179,10 +161,7 @@ def test_psycopg_parameter_escaping(psycopg_params_session: PsycopgSyncDriver) -
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_like(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test parameters with LIKE operations."""
-    result = psycopg_params_session.execute(
-        "SELECT * FROM test_params WHERE name LIKE %s",
-        ("test%",),
-    )
+    result = psycopg_params_session.execute("SELECT * FROM test_params WHERE name LIKE %s", ("test%",))
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -190,8 +169,7 @@ def test_psycopg_parameter_with_like(psycopg_params_session: PsycopgSyncDriver) 
 
     # Test with named parameter
     named_result = psycopg_params_session.execute(
-        "SELECT * FROM test_params WHERE name LIKE %(pattern)s",
-        {"pattern": "test1%"},
+        "SELECT * FROM test_params WHERE name LIKE %(pattern)s", {"pattern": "test1%"}
     )
     assert len(named_result.data) == 1
     assert named_result.data[0]["name"] == "test1"
@@ -203,17 +181,12 @@ def test_psycopg_parameter_with_any_array(psycopg_params_session: PsycopgSyncDri
     # Insert additional test data
     psycopg_params_session.execute_many(
         "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)",
-        [
-            ("alpha", 10, "Alpha test"),
-            ("beta", 20, "Beta test"),
-            ("gamma", 30, "Gamma test"),
-        ],
+        [("alpha", 10, "Alpha test"), ("beta", 20, "Beta test"), ("gamma", 30, "Gamma test")],
     )
 
     # Test ANY with array parameter
     result = psycopg_params_session.execute(
-        "SELECT * FROM test_params WHERE name = ANY(%s) ORDER BY name",
-        (["alpha", "beta", "test1"],),
+        "SELECT * FROM test_params WHERE name = ANY(%s) ORDER BY name", (["alpha", "beta", "test1"],)
     )
 
     assert isinstance(result, SQLResult)
@@ -264,11 +237,7 @@ def test_psycopg_parameter_data_types(psycopg_params_session: PsycopgSyncDriver)
     """)
 
     # Test different data types
-    test_data = [
-        (42, 3.14, "hello", True, [1, 2, 3]),
-        (-100, -2.5, "world", False, [4, 5, 6]),
-        (0, 0.0, "", None, []),
-    ]
+    test_data = [(42, 3.14, "hello", True, [1, 2, 3]), (-100, -2.5, "world", False, [4, 5, 6]), (0, 0.0, "", None, [])]
 
     for data in test_data:
         psycopg_params_session.execute(
@@ -282,10 +251,7 @@ def test_psycopg_parameter_data_types(psycopg_params_session: PsycopgSyncDriver)
     assert len(all_data_result.data) == 3  # We inserted 3 rows
 
     # Now test with specific parameters - use int comparison only to avoid float precision issues
-    result = psycopg_params_session.execute(
-        "SELECT * FROM test_types WHERE int_val = %s",
-        (42,),
-    )
+    result = psycopg_params_session.execute("SELECT * FROM test_types WHERE int_val = %s", (42,))
 
     assert len(result.data) == 1
     assert result.data[0]["text_val"] == "hello"
@@ -299,28 +265,20 @@ def test_psycopg_parameter_edge_cases(psycopg_params_session: PsycopgSyncDriver)
     """Test edge cases for Psycopg parameters."""
     # Empty string parameter
     psycopg_params_session.execute(
-        "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)",
-        ("", 999, "Empty name test"),
+        "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)", ("", 999, "Empty name test")
     )
 
-    empty_result = psycopg_params_session.execute(
-        "SELECT * FROM test_params WHERE name = %s",
-        ("",),
-    )
+    empty_result = psycopg_params_session.execute("SELECT * FROM test_params WHERE name = %s", ("",))
     assert len(empty_result.data) == 1
     assert empty_result.data[0]["value"] == 999
 
     # Very long string parameter
     long_string = "x" * 1000
     psycopg_params_session.execute(
-        "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)",
-        ("long_test", 1000, long_string),
+        "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)", ("long_test", 1000, long_string)
     )
 
-    long_result = psycopg_params_session.execute(
-        "SELECT * FROM test_params WHERE description = %s",
-        (long_string,),
-    )
+    long_result = psycopg_params_session.execute("SELECT * FROM test_params WHERE description = %s", (long_string,))
     assert len(long_result.data) == 1
     assert len(long_result.data[0]["description"]) == 1000
 
@@ -330,8 +288,7 @@ def test_psycopg_parameter_with_postgresql_functions(psycopg_params_session: Psy
     """Test parameters with PostgreSQL functions."""
     # Test with string functions
     result = psycopg_params_session.execute(
-        "SELECT * FROM test_params WHERE LENGTH(name) > %s AND UPPER(name) LIKE %s",
-        (4, "TEST%"),
+        "SELECT * FROM test_params WHERE LENGTH(name) > %s AND UPPER(name) LIKE %s", (4, "TEST%")
     )
 
     assert isinstance(result, SQLResult)
@@ -373,8 +330,7 @@ def test_psycopg_parameter_with_json(psycopg_params_session: PsycopgSyncDriver) 
 
     for name, metadata in json_data:
         psycopg_params_session.execute(
-            "INSERT INTO test_json (name, metadata) VALUES (%s, %s)",
-            (name, json.dumps(metadata)),
+            "INSERT INTO test_json (name, metadata) VALUES (%s, %s)", (name, json.dumps(metadata))
         )
 
     # Test querying JSON with parameters
@@ -388,8 +344,7 @@ def test_psycopg_parameter_with_json(psycopg_params_session: PsycopgSyncDriver) 
 
     # Test with named parameters
     named_result = psycopg_params_session.execute(
-        "SELECT name FROM test_json WHERE (metadata->>'value')::INTEGER > %(min_value)s",
-        {"min_value": 150},
+        "SELECT name FROM test_json WHERE (metadata->>'value')::INTEGER > %(min_value)s", {"min_value": 150}
     )
     assert len(named_result.data) >= 1
 
@@ -416,23 +371,18 @@ def test_psycopg_parameter_with_arrays(psycopg_params_session: PsycopgSyncDriver
 
     for name, tags, scores in array_data:
         psycopg_params_session.execute(
-            "INSERT INTO test_arrays (name, tags, scores) VALUES (%s, %s, %s)",
-            (name, tags, scores),
+            "INSERT INTO test_arrays (name, tags, scores) VALUES (%s, %s, %s)", (name, tags, scores)
         )
 
     # Test querying arrays with parameters
-    result = psycopg_params_session.execute(
-        "SELECT name FROM test_arrays WHERE %s = ANY(tags)",
-        ("tag2",),
-    )
+    result = psycopg_params_session.execute("SELECT name FROM test_arrays WHERE %s = ANY(tags)", ("tag2",))
 
     assert len(result.data) == 1
     assert result.data[0]["name"] == "Array 1"
 
     # Test with named parameters
     named_result = psycopg_params_session.execute(
-        "SELECT name FROM test_arrays WHERE array_length(scores, 1) > %(min_length)s",
-        {"min_length": 1},
+        "SELECT name FROM test_arrays WHERE array_length(scores, 1) > %(min_length)s", {"min_length": 1}
     )
     assert len(named_result.data) == 2  # Array 1 and Array 2
 
@@ -479,22 +429,19 @@ def test_psycopg_parameter_with_copy_operations(psycopg_params_session: PsycopgS
     """Test parameters in queries alongside COPY operations."""
     # First use parameters to find specific data
     filter_result = psycopg_params_session.execute(
-        "SELECT COUNT(*) as count FROM test_params WHERE value >= %s",
-        (100,),
+        "SELECT COUNT(*) as count FROM test_params WHERE value >= %s", (100,)
     )
     filter_result.data[0]["count"]
 
     # Insert data that would be suitable for COPY operations
     batch_data = [(f"Copy Item {i}", i * 50, "COPY_DATA") for i in range(10)]
     psycopg_params_session.execute_many(
-        "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)",
-        batch_data,
+        "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)", batch_data
     )
 
     # Use parameters to verify the data was inserted correctly
     verify_result = psycopg_params_session.execute(
-        "SELECT COUNT(*) as count FROM test_params WHERE description = %s AND value >= %s",
-        ("COPY_DATA", 100),
+        "SELECT COUNT(*) as count FROM test_params WHERE description = %s AND value >= %s", ("COPY_DATA", 100)
     )
 
     assert verify_result.data[0]["count"] >= 8  # Should have items with value >= 100
@@ -505,8 +452,7 @@ def test_psycopg_parameter_mixed_styles_same_query(psycopg_params_session: Psyco
     """Test edge case where mixing parameter styles might occur."""
     # This should work with named parameters
     result = psycopg_params_session.execute(
-        "SELECT * FROM test_params WHERE name = %(name)s AND value > %(min_value)s",
-        {"name": "test1", "min_value": 50},
+        "SELECT * FROM test_params WHERE name = %(name)s AND value > %(min_value)s", {"name": "test1", "min_value": 50}
     )
 
     assert isinstance(result, SQLResult)

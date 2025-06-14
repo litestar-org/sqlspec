@@ -61,12 +61,7 @@ POOL_FIELDS = CONNECTION_FIELDS.union(
     }
 )
 
-__all__ = (
-    "CONNECTION_FIELDS",
-    "POOL_FIELDS",
-    "PsycopgAsyncConfig",
-    "PsycopgSyncConfig",
-)
+__all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "PsycopgAsyncConfig", "PsycopgSyncConfig")
 
 
 class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool, PsycopgSyncDriver]):
@@ -103,8 +98,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         "user",
     )
 
-    __is_async__: ClassVar[bool] = False
-    __supports_connection_pooling__: ClassVar[bool] = True
+    is_async: ClassVar[bool] = False
+    supports_connection_pooling: ClassVar[bool] = True
 
     # Driver class reference for dialect resolution
     driver_class: ClassVar[type[PsycopgSyncDriver]] = PsycopgSyncDriver
@@ -223,9 +218,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
-        super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig(),
-        )
+        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
 
     @property
     def connection_type(self) -> "type[PsycopgSyncConnection]":  # type: ignore[override]
@@ -402,9 +395,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 )
 
             driver = self.driver_type(
-                connection=conn,
-                config=statement_config,
-                instrumentation_config=self.instrumentation,
+                connection=conn, config=statement_config, instrumentation_config=self.instrumentation
             )
             yield driver
 
@@ -453,8 +444,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         "user",
     )
 
-    __is_async__: ClassVar[bool] = True
-    __supports_connection_pooling__: ClassVar[bool] = True
+    is_async: ClassVar[bool] = True
+    supports_connection_pooling: ClassVar[bool] = True
 
     # Driver class reference for dialect resolution
     driver_class: ClassVar[type[PsycopgAsyncDriver]] = PsycopgAsyncDriver
@@ -573,9 +564,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
-        super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig(),
-        )
+        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
 
     @property
     def connection_type(self) -> "type[PsycopgAsyncConnection]":  # type: ignore[override]
@@ -759,9 +748,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
                 )
 
             driver = self.driver_type(
-                connection=conn,
-                config=statement_config,
-                instrumentation_config=self.instrumentation,
+                connection=conn, config=statement_config, instrumentation_config=self.instrumentation
             )
             yield driver
 

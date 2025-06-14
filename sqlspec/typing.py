@@ -155,9 +155,7 @@ def get_type_adapter(f: "type[T]") -> "TypeAdapter[T]":
         :class:`pydantic.TypeAdapter`[:class:`typing.TypeVar`[T]]
     """
     if PYDANTIC_USE_FAILFAST:
-        return TypeAdapter(
-            Annotated[f, FailFast()],
-        )
+        return TypeAdapter(Annotated[f, FailFast()])
     return TypeAdapter(f)
 
 
@@ -326,8 +324,7 @@ def is_schema_without_field(obj: "Any", field_name: str) -> "TypeGuard[Supported
 
 
 def is_schema_or_dict_with_field(
-    obj: "Any",
-    field_name: str,
+    obj: "Any", field_name: str
 ) -> "TypeGuard[Union[SupportedSchemaModel, dict[str, Any]]]":
     """Check if a value is a msgspec Struct, Pydantic model, or dict with a specific field.
 
@@ -342,8 +339,7 @@ def is_schema_or_dict_with_field(
 
 
 def is_schema_or_dict_without_field(
-    obj: "Any",
-    field_name: str,
+    obj: "Any", field_name: str
 ) -> "TypeGuard[Union[SupportedSchemaModel, dict[str, Any]]]":
     """Check if a value is a msgspec Struct, Pydantic model, or dict without a specific field.
 
@@ -372,8 +368,7 @@ def is_dataclass(obj: "Any") -> "TypeGuard[DataclassProtocol]":
 
 
 def is_dataclass_with_field(
-    obj: "Any",
-    field_name: str,
+    obj: "Any", field_name: str
 ) -> "TypeGuard[object]":  # Can't specify dataclass type directly
     """Check if an object is a dataclass and has a specific field.
 
@@ -501,8 +496,7 @@ def dataclass_to_dict(
 
 
 def schema_dump(
-    data: "Union[dict[str, Any],   DataclassProtocol, Struct, BaseModel]",
-    exclude_unset: bool = True,
+    data: "Union[dict[str, Any],   DataclassProtocol, Struct, BaseModel]", exclude_unset: bool = True
 ) -> "dict[str, Any]":
     """Dump a data object to a dictionary.
 
@@ -687,9 +681,7 @@ if TYPE_CHECKING:
         from aiosql.types import (  # noqa: TC004 # pyright: ignore[reportMissingImports]
             DriverAdapterProtocol as AiosqlProtocol,
         )
-        from aiosql.types import (
-            ParamType as AiosqlParamType,  # noqa: TC004 # pyright: ignore[reportMissingImports]
-        )
+        from aiosql.types import ParamType as AiosqlParamType  # noqa: TC004 # pyright: ignore[reportMissingImports]
         from aiosql.types import (
             SQLOperationType as AiosqlSQLOperationType,  # noqa: TC004 # pyright: ignore[reportMissingImports]
         )

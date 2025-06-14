@@ -285,12 +285,7 @@ async def test_asyncpg_transactions(asyncpg_session: AsyncpgDriver) -> None:
 async def test_asyncpg_complex_queries(asyncpg_session: AsyncpgDriver) -> None:
     """Test complex SQL queries."""
     # Insert test data
-    test_data = [
-        ("Alice", 25),
-        ("Bob", 30),
-        ("Charlie", 35),
-        ("Diana", 28),
-    ]
+    test_data = [("Alice", 25), ("Bob", 30), ("Charlie", 35), ("Diana", 28)]
 
     await asyncpg_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", test_data)
 
@@ -508,3 +503,145 @@ async def test_asyncpg_json_operations(asyncpg_session: AsyncpgDriver) -> None:
 
     # Clean up
     await asyncpg_session.execute_script("DROP TABLE json_test")
+
+
+@pytest.mark.xdist_group("postgres")
+async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDriver) -> None:
+    """Test the exact asset_maintenance_alert query with full PostgreSQL features.
+
+    This tests the specific query pattern with:
+    - WITH clause (CTE) containing INSERT...RETURNING
+    - INSERT INTO with SELECT subquery
+    - ON CONFLICT ON CONSTRAINT with DO NOTHING
+    - RETURNING clause inside CTE
+    - LEFT JOIN with to_jsonb function
+    - Named parameters (:date_start, :date_end)
+    """
+    # Create required tables
+    await asyncpg_session.execute_script("""
+        CREATE TABLE alert_definition (
+            id SERIAL PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL
+        );
+
+        CREATE TABLE asset_maintenance (
+            id SERIAL PRIMARY KEY,
+            responsible_id INTEGER NOT NULL,
+            planned_date_start DATE,
+            cancelled BOOLEAN DEFAULT FALSE
+        );
+
+        CREATE TABLE users (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL
+        );
+
+        CREATE TABLE alert_users (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            asset_maintenance_id INTEGER NOT NULL,
+            alert_definition_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT unique_alert UNIQUE (user_id, asset_maintenance_id, alert_definition_id),
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (asset_maintenance_id) REFERENCES asset_maintenance(id),
+            FOREIGN KEY (alert_definition_id) REFERENCES alert_definition(id)
+        );
+    """)
+
+    # Insert test data
+    await asyncpg_session.execute("INSERT INTO alert_definition (name) VALUES ($1)", ("maintenances_today",))
+
+    # Insert users
+    await asyncpg_session.execute_many(
+        "INSERT INTO users (name, email) VALUES ($1, $2)",
+        [("John Doe", "john@example.com"), ("Jane Smith", "jane@example.com"), ("Bob Wilson", "bob@example.com")],
+    )
+
+    # Get user IDs
+    users_result = await asyncpg_session.execute("SELECT id, name FROM users ORDER BY id")
+    user_ids = {row["name"]: row["id"] for row in users_result}
+
+    # Insert asset maintenance records
+    from datetime import date
+
+    await asyncpg_session.execute_many(
+        "INSERT INTO asset_maintenance (responsible_id, planned_date_start, cancelled) VALUES ($1, $2, $3)",
+        [
+            (user_ids["John Doe"], date(2024, 1, 15), False),  # Within date range
+            (user_ids["Jane Smith"], date(2024, 1, 16), False),  # Within date range
+            (user_ids["Bob Wilson"], date(2024, 1, 17), False),  # Within date range
+            (user_ids["John Doe"], date(2024, 1, 18), True),  # Cancelled - should be excluded
+            (user_ids["Jane Smith"], date(2024, 1, 10), False),  # Outside date range
+            (user_ids["Bob Wilson"], date(2024, 1, 20), False),  # Outside date range
+        ],
+    )
+
+    # Execute the exact query as provided
+    result = await asyncpg_session.execute(
+        """
+        -- name: asset_maintenance_alert
+        -- Get a list of maintenances that are happening between 2 dates and insert the alert to be sent into the database, returns inserted data
+        with inserted_data as (
+            insert into alert_users (user_id, asset_maintenance_id, alert_definition_id)
+            select responsible_id, id, (select id from alert_definition where name = 'maintenances_today') from asset_maintenance
+            where planned_date_start is not null
+            and planned_date_start between :date_start and :date_end
+            and cancelled = False ON CONFLICT ON CONSTRAINT unique_alert DO NOTHING
+            returning *)
+        select inserted_data.*, to_jsonb(users.*) as user
+        from inserted_data
+        left join users on users.id = inserted_data.user_id
+    """,
+        {"date_start": date(2024, 1, 15), "date_end": date(2024, 1, 17)},
+    )
+
+    assert isinstance(result, SQLResult)
+    assert result.data is not None
+    assert len(result.data) == 3  # Should return 3 records
+
+    # Verify the data structure
+    for row in result.data:
+        assert "user_id" in row
+        assert "asset_maintenance_id" in row
+        assert "alert_definition_id" in row
+        assert "user" in row  # The to_jsonb result
+
+        # Verify the user JSON object
+        user_json = row["user"]
+        assert isinstance(user_json, (dict, str))  # Could be dict or JSON string depending on driver
+        if isinstance(user_json, str):
+            import json
+
+            user_json = json.loads(user_json)
+
+        assert "name" in user_json
+        assert "email" in user_json
+        assert user_json["name"] in ["John Doe", "Jane Smith", "Bob Wilson"]
+        assert "@example.com" in user_json["email"]
+
+    # Test idempotency - running the same query again should return no rows
+    result2 = await asyncpg_session.execute(
+        """
+        with inserted_data as (
+            insert into alert_users (user_id, asset_maintenance_id, alert_definition_id)
+            select responsible_id, id, (select id from alert_definition where name = 'maintenances_today') from asset_maintenance
+            where planned_date_start is not null
+            and planned_date_start between :date_start and :date_end
+            and cancelled = False ON CONFLICT ON CONSTRAINT unique_alert DO NOTHING
+            returning *)
+        select inserted_data.*, to_jsonb(users.*) as user
+        from inserted_data
+        left join users on users.id = inserted_data.user_id
+    """,
+        {"date_start": date(2024, 1, 15), "date_end": date(2024, 1, 17)},
+    )
+
+    assert result2.data is not None
+    assert len(result2.data) == 0  # No new rows should be inserted/returned
+
+    # Verify the records are actually in the database
+    count_result = await asyncpg_session.execute("SELECT COUNT(*) as count FROM alert_users")
+    assert count_result.data is not None
+    assert count_result.data[0]["count"] == 3

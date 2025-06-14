@@ -394,12 +394,7 @@ def test_insert_wrong_expression_type() -> None:
 # SQL injection prevention tests
 @pytest.mark.parametrize(
     "malicious_value",
-    [
-        "'; DROP TABLE users; --",
-        "1; DELETE FROM users; --",
-        "' OR '1'='1",
-        "<script>alert('xss')</script>",
-    ],
+    ["'; DROP TABLE users; --", "1; DELETE FROM users; --", "' OR '1'='1", "<script>alert('xss')</script>"],
     ids=["sql_injection_drop", "sql_injection_delete", "sql_injection_or", "xss_attempt"],
 )
 def test_insert_prevents_sql_injection_in_values(malicious_value: str) -> None:

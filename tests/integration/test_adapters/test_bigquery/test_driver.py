@@ -292,12 +292,7 @@ def test_bigquery_complex_queries(bigquery_session: BigQueryDriver, bigquery_ser
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
 
     # Insert test data
-    test_data = [
-        (1, "Alice", 25),
-        (2, "Bob", 30),
-        (3, "Charlie", 35),
-        (4, "Diana", 28),
-    ]
+    test_data = [(1, "Alice", 25), (2, "Bob", 30), (3, "Charlie", 35), (4, "Diana", 28)]
 
     bigquery_session.execute_many(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", test_data)
 

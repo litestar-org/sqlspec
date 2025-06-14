@@ -47,10 +47,7 @@ def sync_service_example() -> None:
             # Insert multiple rows
             service.execute_many(
                 "INSERT INTO users (name, email) VALUES (?, ?)",
-                parameters=[
-                    ("Bob", "bob@example.com"),
-                    ("Charlie", "charlie@example.com"),
-                ],
+                parameters=[("Bob", "bob@example.com"), ("Charlie", "charlie@example.com")],
             )
 
             # Select all users
@@ -116,11 +113,7 @@ async def async_service_example() -> None:
             # Insert multiple rows
             await service.execute_many(
                 "INSERT INTO products (name, price) VALUES (?, ?)",
-                parameters=[
-                    ("Mouse", 29.99),
-                    ("Keyboard", 79.99),
-                    ("Monitor", 299.99),
-                ],
+                parameters=[("Mouse", 29.99), ("Keyboard", 79.99), ("Monitor", 299.99)],
             )
 
             # Select all products

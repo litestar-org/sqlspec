@@ -23,10 +23,7 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
 
     __slots__ = ("_config", "_plugin_configs")
 
-    def __init__(
-        self,
-        config: Union["SyncConfigT", "AsyncConfigT", "DatabaseConfig", list["DatabaseConfig"]],
-    ) -> None:
+    def __init__(self, config: Union["SyncConfigT", "AsyncConfigT", "DatabaseConfig", list["DatabaseConfig"]]) -> None:
         """Initialize ``SQLSpecPlugin``.
 
         Args:
@@ -63,10 +60,7 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
         """
         logger.info(
             "Initializing SQLSpec plugin",
-            extra={
-                "config_count": len(self._plugin_configs),
-                "correlation_id": CorrelationContext.get(),
-            },
+            extra={"config_count": len(self._plugin_configs), "correlation_id": CorrelationContext.get()},
         )
 
         self._validate_dependency_keys()
@@ -74,10 +68,7 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
         def store_sqlspec_in_state() -> None:
             app_config.state.sqlspec = self
             logger.debug(
-                "SQLSpec plugin stored in application state",
-                extra={
-                    "correlation_id": CorrelationContext.get(),
-                },
+                "SQLSpec plugin stored in application state", extra={"correlation_id": CorrelationContext.get()}
             )
 
         app_config.on_startup.append(store_sqlspec_in_state)
@@ -99,23 +90,11 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
 
             if not has_correlation_middleware:
                 app_config.middleware.append(CorrelationMiddleware)  # pyright: ignore
-                logger.info(
-                    "Added correlation tracking middleware",
-                    extra={"correlation_id": CorrelationContext.get()},
-                )
+                logger.info("Added correlation tracking middleware", extra={"correlation_id": CorrelationContext.get()})
 
         # Register types for injection
         app_config.signature_types.extend(
-            [
-                SQLSpec,
-                ConnectionT,
-                PoolT,
-                DriverT,
-                DatabaseConfig,
-                DatabaseConfigProtocol,
-                SyncConfigT,
-                AsyncConfigT,
-            ]
+            [SQLSpec, ConnectionT, PoolT, DriverT, DatabaseConfig, DatabaseConfigProtocol, SyncConfigT, AsyncConfigT]
         )
 
         for c in self._plugin_configs:
@@ -130,7 +109,7 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
                     c.connection_key: Provide(c.connection_provider),
                     c.pool_key: Provide(c.pool_provider),
                     c.session_key: Provide(c.session_provider),
-                },
+                }
             )
 
         return app_config
@@ -144,8 +123,7 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
         return [c.annotation for c in self.config]
 
     def get_annotation(
-        self,
-        key: "Union[str, SyncConfigT, AsyncConfigT, type[Union[SyncConfigT, AsyncConfigT]]]",
+        self, key: "Union[str, SyncConfigT, AsyncConfigT, type[Union[SyncConfigT, AsyncConfigT]]]"
     ) -> "type[Union[SyncConfigT, AsyncConfigT]]":
         """Return the annotation for the given configuration.
 

@@ -64,12 +64,13 @@ class TestDMLSafetyValidator:
         context.initial_sql_string = "CREATE TABLE test (id INT)"
         context.current_expression = parse_one(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        # Process returns the expression, validation errors are in context
+        expression = validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.CRITICAL
-        assert len(result.issues) == 1
-        assert "DDL operation 'CREATE' is not allowed" in result.issues[0]
+        assert len(context.validation_errors) == 1
+        error = context.validation_errors[0]
+        assert error.risk_level == RiskLevel.CRITICAL
+        assert "DDL operation 'CREATE' is not allowed" in error.message
 
     def test_ddl_allowed_when_enabled(self, context: SQLProcessingContext) -> None:
         """Test that DDL is allowed when prevent_ddl is False."""
@@ -79,10 +80,11 @@ class TestDMLSafetyValidator:
         context.initial_sql_string = "CREATE TABLE test (id INT)"
         context.current_expression = parse_one(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        # Process returns the expression, validation errors are in context
+        expression = validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.SKIP
+        # No validation errors should be added when DDL is allowed
+        assert len(context.validation_errors) == 0
 
     def test_risky_dml_detection(self, context: SQLProcessingContext) -> None:
         """Test detection of risky DML operations."""
@@ -93,11 +95,13 @@ class TestDMLSafetyValidator:
         context.initial_sql_string = "DELETE FROM users"
         context.current_expression = parse_one(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        # Process returns the expression, validation errors are in context
+        expression = validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.HIGH
-        assert any("DELETE without WHERE clause affects all rows" in issue for issue in result.issues)
+        assert len(context.validation_errors) == 1
+        error = context.validation_errors[0]
+        assert error.risk_level == RiskLevel.HIGH
+        assert "DELETE without WHERE clause affects all rows" in error.message
 
     def test_allowed_operations_filtering(self, context: SQLProcessingContext) -> None:
         """Test that only allowed operations are permitted."""
@@ -131,11 +135,13 @@ class TestDMLSafetyValidator:
         context.initial_sql_string = "UPDATE users SET active = false"
         context.current_expression = parse_one(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        # Process returns the expression, validation errors are in context
+        expression = validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.HIGH
-        assert any("UPDATE without WHERE clause affects all rows" in issue for issue in result.issues)
+        assert len(context.validation_errors) == 1
+        error = context.validation_errors[0]
+        assert error.risk_level == RiskLevel.HIGH
+        assert "UPDATE without WHERE clause affects all rows" in error.message
 
     def test_truncate_detection(self, context: SQLProcessingContext) -> None:
         """Test detection of TRUNCATE statements."""
@@ -145,11 +151,13 @@ class TestDMLSafetyValidator:
         context.initial_sql_string = "TRUNCATE TABLE users"
         context.current_expression = parse_one(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        # Process returns the expression, validation errors are in context
+        expression = validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.CRITICAL  # TRUNCATE is DDL
-        assert any("DDL operation 'TRUNCATETABLE' is not allowed" in issue for issue in result.issues)
+        assert len(context.validation_errors) == 1
+        error = context.validation_errors[0]
+        assert error.risk_level == RiskLevel.CRITICAL  # TRUNCATE is DDL
+        assert "DDL operation 'TRUNCATETABLE' is not allowed" in error.message
 
     def test_multiple_issues_aggregation(self, context: SQLProcessingContext) -> None:
         """Test that multiple issues are properly aggregated."""

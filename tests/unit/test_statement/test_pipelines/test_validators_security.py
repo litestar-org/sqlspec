@@ -383,10 +383,7 @@ class TestSecurityValidator:
     def test_disabled_checks(self) -> "None":
         """Test that disabled checks don't run."""
         config = SecurityValidatorConfig(
-            check_injection=False,
-            check_tautology=False,
-            check_keywords=True,
-            check_combined_patterns=False,
+            check_injection=False, check_tautology=False, check_keywords=True, check_combined_patterns=False
         )
         validator = SecurityValidator(config)
 
@@ -427,9 +424,7 @@ class TestSecurityValidator:
     def test_risk_level_calculation(self, validator: "SecurityValidator") -> "None":
         """Test that highest risk level is returned."""
         config = SecurityValidatorConfig(
-            injection_risk_level=RiskLevel.HIGH,
-            tautology_risk_level=RiskLevel.LOW,
-            keyword_risk_level=RiskLevel.MEDIUM,
+            injection_risk_level=RiskLevel.HIGH, tautology_risk_level=RiskLevel.LOW, keyword_risk_level=RiskLevel.MEDIUM
         )
         validator = SecurityValidator(config)
 

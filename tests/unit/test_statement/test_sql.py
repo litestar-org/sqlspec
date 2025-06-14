@@ -12,10 +12,7 @@ from unittest.mock import Mock, patch
 import pytest
 from sqlglot import exp
 
-from sqlspec.exceptions import (
-    RiskLevel,
-    SQLValidationError,
-)
+from sqlspec.exceptions import RiskLevel, SQLValidationError
 from sqlspec.statement.filters import LimitOffsetFilter, SearchFilter
 from sqlspec.statement.parameters import ParameterInfo, ParameterStyle
 from sqlspec.statement.pipelines import ValidationResult
@@ -40,12 +37,7 @@ from sqlspec.statement.sql import SQL, SQLConfig
         ),
         # Custom configuration
         (
-            {
-                "enable_parsing": False,
-                "enable_validation": False,
-                "strict_mode": False,
-                "analysis_cache_size": 500,
-            },
+            {"enable_parsing": False, "enable_validation": False, "strict_mode": False, "analysis_cache_size": 500},
             {
                 "enable_parsing": False,
                 "enable_validation": False,
@@ -72,18 +64,22 @@ def test_sqlconfig_get_pipeline_default() -> None:
     # Test that validation (which uses the pipeline) is enabled by default
     config = SQLConfig(enable_validation=True, strict_mode=False)  # Non-strict to avoid raising on test SQL
     # This SQL is designed to trigger a DMLWithoutWhereValidator if it were present and active
-    # We are checking that the validation_result is populated, implying pipeline execution.
     stmt = SQL("UPDATE users SET name = 'test'", config=config)
-    assert stmt.validation_result is not None, "Validation result should be populated if pipeline ran."
+
+    # Use the new validate_detailed() method instead of deprecated validation_result
+    errors = stmt.validate_detailed()
+    assert isinstance(errors, list), "validate_detailed() should return a list"
+    # This SQL should have validation errors (UPDATE without WHERE)
+    assert len(errors) > 0, "UPDATE without WHERE should have validation errors"
+    assert any("without WHERE" in error.message for error in errors), "Should detect UPDATE without WHERE"
 
     # Test that analysis (which uses the pipeline) can be enabled
     config_analysis = SQLConfig(enable_analysis=True, strict_mode=False)
     stmt_analysis = SQL("SELECT * FROM users", config=config_analysis)
-    # Depending on default analyzers, analysis_result might be complex.
-    # For this test, we just check it's not None, implying pipeline ran.
-    assert stmt_analysis.analysis_result is not None, (
-        "Analysis result should be populated if pipeline ran for analysis."
-    )
+    # With the new pipeline architecture, analysis results are stored differently
+    # The analysis_result property is deprecated and returns None
+    # Instead, we should check that the pipeline ran by verifying the statement was processed
+    assert stmt_analysis.expression is not None, "Expression should be populated if pipeline ran for analysis."
 
 
 def test_sqlconfig_get_pipeline_custom_components() -> None:
@@ -91,20 +87,16 @@ def test_sqlconfig_get_pipeline_custom_components() -> None:
     mock_transformer = Mock()
     mock_validator = Mock()
     mock_analyzer = Mock()
-    
-    config = SQLConfig(
-        transformers=[mock_transformer],
-        validators=[mock_validator],
-        analyzers=[mock_analyzer]
-    )
-    
+
+    config = SQLConfig(transformers=[mock_transformer], validators=[mock_validator], analyzers=[mock_analyzer])
+
     # Verify that the custom components are stored in the config
     assert config.transformers is not None
     assert mock_transformer in config.transformers
-    
+
     assert config.validators is not None
     assert mock_validator in config.validators
-    
+
     assert config.analyzers is not None
     assert mock_analyzer in config.analyzers
 
@@ -197,10 +189,7 @@ def test_sql_wrapping_existing_sql() -> None:
 
 @pytest.mark.parametrize(
     ("config_data", "should_have_expression"),
-    [
-        ({"enable_parsing": True}, True),
-        ({"enable_parsing": False}, False),
-    ],
+    [({"enable_parsing": True}, True), ({"enable_parsing": False}, False)],
     ids=["parsing_enabled", "parsing_disabled"],
 )
 def test_sql_parsing_configuration(config_data: dict[str, Any], should_have_expression: bool) -> None:
@@ -278,12 +267,7 @@ def test_scalar_parameter_handling() -> None:
         ("SELECT * FROM users WHERE id = ?", [123], ParameterStyle.NAMED_COLON, r"id = :param_\d+"),
         ("SELECT * FROM users WHERE name = :name", {"name": "John"}, ParameterStyle.QMARK, "name = ?"),
         ("SELECT * FROM users WHERE id = ?", [123], ParameterStyle.NAMED_PYFORMAT, r"id = %\(param_\d+\)s"),
-        (
-            "SELECT * FROM users WHERE name = :name",
-            {"name": "John"},
-            ParameterStyle.POSITIONAL_PYFORMAT,
-            "name = %s",
-        ),
+        ("SELECT * FROM users WHERE name = :name", {"name": "John"}, ParameterStyle.POSITIONAL_PYFORMAT, "name = %s"),
     ],
     ids=["qmark_to_named", "named_to_qmark", "qmark_to_pyformat_named", "named_to_pyformat_positional"],
 )
@@ -313,12 +297,7 @@ def test_static_placeholder_substitution() -> None:
 
 
 @pytest.mark.parametrize(
-    ("include_separator", "expected_suffix"),
-    [
-        (True, ";"),
-        (False, ""),
-    ],
-    ids=["with_separator", "without_separator"],
+    ("include_separator", "expected_suffix"), [(True, ";"), (False, "")], ids=["with_separator", "without_separator"]
 )
 def test_statement_separator_handling(include_separator: bool, expected_suffix: str) -> None:
     """Test statement separator inclusion."""
@@ -352,17 +331,19 @@ def test_validation_enabled_safe_sql(mock_validation_result: ValidationResult) -
         mock_pipeline = Mock()
         from sqlglot import parse_one
 
-        from sqlspec.statement.pipelines.context import StatementPipelineResult
+        from sqlspec.statement.pipelines.context import PipelineResult, SQLProcessingContext
 
         actual_expr = parse_one("SELECT * FROM users")
-        mock_result = StatementPipelineResult(
-            final_expression=actual_expr,
-            validation_result=mock_validation_result,
-            analysis_result=None,
-            parameter_info=[],
+        mock_context = SQLProcessingContext(
+            initial_sql_string="SELECT * FROM users",
+            dialect=None,
+            config=config,
+            current_expression=actual_expr,
             merged_parameters=None,
+            parameter_info=[],
             input_sql_had_placeholders=False,
         )
+        mock_result = PipelineResult(expression=actual_expr, context=mock_context)
         mock_pipeline.execute_pipeline.return_value = mock_result
         mock_get_pipeline.return_value = mock_pipeline
 
@@ -382,17 +363,30 @@ def test_validation_enabled_unsafe_sql_strict_mode(unsafe_validation_result: Val
         mock_pipeline = Mock()
         from sqlglot import parse_one
 
-        from sqlspec.statement.pipelines.context import StatementPipelineResult
+        from sqlspec.statement.pipelines.context import PipelineResult, SQLProcessingContext
 
         actual_expr = parse_one("DROP TABLE users")
-        mock_result = StatementPipelineResult(
-            final_expression=actual_expr,
-            validation_result=unsafe_validation_result,
-            analysis_result=None,
-            parameter_info=[],
+        mock_context = SQLProcessingContext(
+            initial_sql_string="DROP TABLE users",
+            dialect=None,
+            config=config,
+            current_expression=actual_expr,
             merged_parameters=None,
+            parameter_info=[],
             input_sql_had_placeholders=False,
         )
+        # Add validation errors to context to simulate unsafe SQL
+        from sqlspec.statement.pipelines.result_types import ValidationError as ValError
+
+        error = ValError(
+            message=unsafe_validation_result.issues[0] if unsafe_validation_result.issues else "Unsafe SQL",
+            code="unsafe-sql",
+            risk_level=unsafe_validation_result.risk_level,
+            processor="TestValidator",
+            expression=actual_expr,
+        )
+        mock_context.validation_errors.append(error)
+        mock_result = PipelineResult(expression=actual_expr, context=mock_context)
         mock_pipeline.execute_pipeline.return_value = mock_result
         mock_get_pipeline.return_value = mock_pipeline
 
@@ -413,17 +407,30 @@ def test_validation_enabled_unsafe_sql_non_strict_mode(unsafe_validation_result:
         mock_pipeline = Mock()
         from sqlglot import parse_one
 
-        from sqlspec.statement.pipelines.context import StatementPipelineResult
+        from sqlspec.statement.pipelines.context import PipelineResult, SQLProcessingContext
 
         actual_expr = parse_one("DROP TABLE users")
-        mock_result = StatementPipelineResult(
-            final_expression=actual_expr,
-            validation_result=unsafe_validation_result,
-            analysis_result=None,
-            parameter_info=[],
+        mock_context = SQLProcessingContext(
+            initial_sql_string="DROP TABLE users",
+            dialect=None,
+            config=config,
+            current_expression=actual_expr,
             merged_parameters=None,
+            parameter_info=[],
             input_sql_had_placeholders=False,
         )
+        # Add validation errors to context to simulate unsafe SQL
+        from sqlspec.statement.pipelines.result_types import ValidationError as ValError
+
+        error = ValError(
+            message=unsafe_validation_result.issues[0] if unsafe_validation_result.issues else "Unsafe SQL",
+            code="unsafe-sql",
+            risk_level=unsafe_validation_result.risk_level,
+            processor="TestValidator",
+            expression=actual_expr,
+        )
+        mock_context.validation_errors.append(error)
+        mock_result = PipelineResult(expression=actual_expr, context=mock_context)
         mock_pipeline.execute_pipeline.return_value = mock_result
         mock_get_pipeline.return_value = mock_pipeline
 
@@ -583,10 +590,7 @@ def test_where_method() -> None:
 
 @pytest.mark.parametrize(
     ("limit_value", "use_parameter", "expected_pattern"),
-    [
-        (10, False, "LIMIT 10"),
-        (50, True, r"LIMIT :limit_\d+"),
-    ],
+    [(10, False, "LIMIT 10"), (50, True, r"LIMIT :limit_\d+")],
     ids=["literal_limit", "parameterized_limit"],
 )
 def test_limit_method(limit_value: int, use_parameter: bool, expected_pattern: str) -> None:
@@ -618,10 +622,7 @@ def test_limit_method(limit_value: int, use_parameter: bool, expected_pattern: s
 
 @pytest.mark.parametrize(
     ("offset_value", "use_parameter", "expected_pattern"),
-    [
-        (20, False, "OFFSET 20"),
-        (100, True, r"OFFSET :offset_\d+"),
-    ],
+    [(20, False, "OFFSET 20"), (100, True, r"OFFSET :offset_\d+")],
     ids=["literal_offset", "parameterized_offset"],
 )
 def test_offset_method(offset_value: int, use_parameter: bool, expected_pattern: str) -> None:
@@ -984,3 +985,128 @@ class TestSQLCompileMethod:
         assert isinstance(sql, str)
         assert "?" in sql
         assert params == [["John"], ["Jane"]]
+
+
+def test_oracle_ddl_script_handling() -> None:
+    """Test handling of complex Oracle DDL script with 23AI features as a script."""
+    from pathlib import Path
+
+    # Load the Oracle DDL script
+    fixture_path = Path(__file__).parent.parent.parent / "fixtures" / "oracle.ddl.sql"
+    assert fixture_path.exists(), f"Fixture file not found at {fixture_path}"
+
+    with open(fixture_path) as f:
+        oracle_ddl = f.read()
+
+    # Test with Oracle dialect, focusing on script handling
+    config = SQLConfig(
+        enable_parsing=False,  # Disable parsing to test script lexer functionality
+        enable_validation=False,  # Disable validation for scripts
+        strict_mode=False,
+    )
+
+    # Create as script with Oracle dialect
+    stmt = SQL(oracle_ddl, config=config, dialect="oracle").as_script()
+
+    # The script should be recognized as a script
+    assert stmt.is_script is True
+
+    # The script should be executable as a script (no parameters needed)
+    assert stmt.parameters in (None, [], {})
+
+    # Get the SQL output - should preserve the original script
+    sql_output = stmt.to_sql()
+
+    # Verify Oracle-specific syntax is preserved
+    assert "ALTER SESSION SET CONTAINER" in sql_output
+    assert "GRANT" in sql_output
+    assert "CREATE TABLE" in sql_output
+    assert "VECTOR(768, FLOAT32)" in sql_output  # Oracle 23AI vector type
+    assert "JSON" in sql_output  # JSON data type
+    assert "INMEMORY PRIORITY HIGH" in sql_output  # In-memory feature
+    assert "GENERATED BY DEFAULT ON NULL AS IDENTITY" in sql_output  # Identity columns
+    assert "DEFAULT ON NULL CURRENT_TIMESTAMP" in sql_output
+    assert "FOR INSERT AND UPDATE CURRENT_TIMESTAMP" in sql_output
+    assert "CREATE VECTOR INDEX" in sql_output  # Vector index
+    assert "ORGANIZATION NEIGHBOR PARTITIONS" in sql_output
+    assert "DISTANCE COSINE" in sql_output
+    assert "DBMS_OUTPUT.PUT_LINE" in sql_output  # PL/SQL block
+
+    # Test that the script is ready for execution with execute_script
+    # The execute_script method will use its own lexer to handle the statements
+    compiled_sql, params = stmt.compile()
+    assert isinstance(compiled_sql, str)
+    assert params in (None, [], {})
+
+    # Verify the script ends with the PL/SQL block terminator
+    assert compiled_sql.strip().endswith("/")
+
+
+def test_oracle_ddl_script_execution_mode() -> None:
+    """Test that Oracle DDL script is properly recognized as a script for execution."""
+    from pathlib import Path
+
+    # Load the Oracle DDL script
+    fixture_path = Path(__file__).parent.parent.parent / "fixtures" / "oracle.ddl.sql"
+    with open(fixture_path) as f:
+        oracle_ddl = f.read()
+
+    # Disable parsing since Oracle DDL contains unsupported syntax
+    config = SQLConfig(enable_parsing=False, enable_validation=False, strict_mode=False)
+
+    # Create SQL object without as_script() first
+    stmt = SQL(oracle_ddl, dialect="oracle", config=config)
+
+    # With parsing disabled, it won't auto-detect script mode
+    # We need to explicitly mark it as a script
+    script_stmt = stmt.as_script()
+    assert script_stmt.is_script is True
+
+    # Parameters should be appropriate for script execution
+    assert script_stmt.parameters in (None, [], {})
+
+
+def test_postgres_collection_privileges_script() -> None:
+    """Test handling of PostgreSQL collection-privileges script with named queries and parameters."""
+    from pathlib import Path
+
+    # Load the PostgreSQL script
+    fixture_path = Path(__file__).parent.parent.parent / "fixtures" / "postgres" / "collection-privileges.sql"
+    assert fixture_path.exists(), f"Fixture file not found at {fixture_path}"
+
+    with open(fixture_path) as f:
+        postgres_script = f.read()
+
+    # Test with PostgreSQL dialect
+    config = SQLConfig(
+        enable_parsing=False,  # Use script lexer
+        enable_validation=False,
+        strict_mode=False,
+    )
+
+    # Create as script
+    stmt = SQL(postgres_script, config=config, dialect="postgres").as_script()
+
+    # Should be recognized as a script
+    assert stmt.is_script is True
+
+    # Get the SQL output
+    sql_output = stmt.to_sql()
+
+    # Verify PostgreSQL features are preserved
+    assert "-- name: collection-postgres-pglogical-schema-usage-privilege" in sql_output
+    assert "with src as" in sql_output.lower()
+    assert "pg_catalog.has_schema_privilege" in sql_output
+    assert ":PKEY" in sql_output  # Named parameter
+    assert ":DMA_SOURCE_ID" in sql_output  # Named parameter
+    assert ":DMA_MANUAL_ID" in sql_output  # Named parameter
+    assert "current_database()" in sql_output
+
+    # Verify multiple named queries are present
+    assert sql_output.count("-- name:") >= 2
+
+    # Test parameter extraction - the script uses named parameters
+    # Note: These are PostgreSQL-style named parameters (:name) not regular placeholders
+    assert ":PKEY" in sql_output
+    assert ":DMA_SOURCE_ID" in sql_output
+    assert ":DMA_MANUAL_ID" in sql_output

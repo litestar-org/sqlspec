@@ -40,9 +40,7 @@ def aiosqlite_driver(mock_aiosqlite_connection: AsyncMock) -> AiosqliteDriver:
     config = SQLConfig(strict_mode=False)
     instrumentation_config = InstrumentationConfig()
     return AiosqliteDriver(
-        connection=mock_aiosqlite_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_aiosqlite_connection, config=config, instrumentation_config=instrumentation_config
     )
 
 

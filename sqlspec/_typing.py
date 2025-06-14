@@ -7,16 +7,7 @@ This is used to ensure compatibility when one or more of the libraries are insta
 from collections.abc import Iterable, Mapping
 from enum import Enum
 from importlib.util import find_spec
-from typing import (
-    Any,
-    ClassVar,
-    Final,
-    Optional,
-    Protocol,
-    Union,
-    cast,
-    runtime_checkable,
-)
+from typing import Any, ClassVar, Final, Optional, Protocol, Union, cast, runtime_checkable
 
 from typing_extensions import Literal, TypeVar, dataclass_transform
 
@@ -232,10 +223,7 @@ class ArrowTableResult(Protocol):
         return None
 
     def from_pydict(
-        self,
-        mapping: dict[str, Any],
-        schema: "Optional[Any]" = None,
-        metadata: "Optional[Mapping[str, Any]]" = None,
+        self, mapping: dict[str, Any], schema: "Optional[Any]" = None, metadata: "Optional[Mapping[str, Any]]" = None
     ) -> Any:
         return None
 
@@ -417,9 +405,7 @@ try:
     from aiosql.types import (  # pyright: ignore[reportMissingImports, reportAssignmentType]
         DriverAdapterProtocol as AiosqlProtocol,  # pyright: ignore[reportMissingImports, reportAssignmentType]
     )
-    from aiosql.types import (
-        ParamType as AiosqlParamType,  # pyright: ignore[reportMissingImports, reportAssignmentType]
-    )
+    from aiosql.types import ParamType as AiosqlParamType  # pyright: ignore[reportMissingImports, reportAssignmentType]
     from aiosql.types import (
         SQLOperationType as AiosqlSQLOperationType,  # pyright: ignore[reportMissingImports, reportAssignmentType]
     )

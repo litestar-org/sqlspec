@@ -13,10 +13,7 @@ from sqlspec.statement.sql import SQLConfig
 @pytest.fixture
 def sqlite_params_session() -> "Generator[SqliteDriver, None, None]":
     """Create a SQLite session for parameter style testing."""
-    config = SqliteConfig(
-        database=":memory:",
-        statement_config=SQLConfig(strict_mode=False),
-    )
+    config = SqliteConfig(database=":memory:", statement_config=SQLConfig(strict_mode=False))
 
     with config.provide_session() as session:
         # Create test table
@@ -48,16 +45,9 @@ def sqlite_params_session() -> "Generator[SqliteDriver, None, None]":
         (["test1"], 1),  # List parameter
     ],
 )
-def test_sqlite_qmark_parameter_types(
-    sqlite_params_session: SqliteDriver,
-    params: Any,
-    expected_count: int,
-) -> None:
+def test_sqlite_qmark_parameter_types(sqlite_params_session: SqliteDriver, params: Any, expected_count: int) -> None:
     """Test different parameter types with SQLite qmark style."""
-    result = sqlite_params_session.execute(
-        "SELECT * FROM test_params WHERE name = ?",
-        params,
-    )
+    result = sqlite_params_session.execute("SELECT * FROM test_params WHERE name = ?", params)
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -73,12 +63,7 @@ def test_sqlite_qmark_parameter_types(
         ({"name": "test1"}, "named_colon", "SELECT * FROM test_params WHERE name = :name"),
     ],
 )
-def test_sqlite_parameter_styles(
-    sqlite_params_session: SqliteDriver,
-    params: Any,
-    style: str,
-    query: str,
-) -> None:
+def test_sqlite_parameter_styles(sqlite_params_session: SqliteDriver, params: Any, style: str, query: str) -> None:
     """Test different parameter styles with SQLite."""
     result = sqlite_params_session.execute(query, params)
 
@@ -91,8 +76,7 @@ def test_sqlite_parameter_styles(
 def test_sqlite_multiple_parameters_qmark(sqlite_params_session: SqliteDriver) -> None:
     """Test queries with multiple parameters using qmark style."""
     result = sqlite_params_session.execute(
-        "SELECT * FROM test_params WHERE value >= ? AND value <= ? ORDER BY value",
-        (50, 150),
+        "SELECT * FROM test_params WHERE value >= ? AND value <= ? ORDER BY value", (50, 150)
     )
 
     assert isinstance(result, SQLResult)
@@ -117,9 +101,7 @@ def test_sqlite_multiple_parameters_named(sqlite_params_session: SqliteDriver) -
 def test_sqlite_null_parameters(sqlite_params_session: SqliteDriver) -> None:
     """Test handling of NULL parameters on SQLite."""
     # Query for NULL values
-    result = sqlite_params_session.execute(
-        "SELECT * FROM test_params WHERE description IS NULL",
-    )
+    result = sqlite_params_session.execute("SELECT * FROM test_params WHERE description IS NULL")
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -129,14 +111,10 @@ def test_sqlite_null_parameters(sqlite_params_session: SqliteDriver) -> None:
 
     # Test inserting NULL with parameters
     sqlite_params_session.execute(
-        "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)",
-        ("null_param_test", 400, None),
+        "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)", ("null_param_test", 400, None)
     )
 
-    null_result = sqlite_params_session.execute(
-        "SELECT * FROM test_params WHERE name = ?",
-        ("null_param_test",),
-    )
+    null_result = sqlite_params_session.execute("SELECT * FROM test_params WHERE name = ?", ("null_param_test",))
     assert len(null_result.data) == 1
     assert null_result.data[0]["description"] is None
 
@@ -146,10 +124,7 @@ def test_sqlite_parameter_escaping(sqlite_params_session: SqliteDriver) -> None:
     # This should safely search for a literal string with quotes
     malicious_input = "'; DROP TABLE test_params; --"
 
-    result = sqlite_params_session.execute(
-        "SELECT * FROM test_params WHERE name = ?",
-        (malicious_input,),
-    )
+    result = sqlite_params_session.execute("SELECT * FROM test_params WHERE name = ?", (malicious_input,))
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -162,10 +137,7 @@ def test_sqlite_parameter_escaping(sqlite_params_session: SqliteDriver) -> None:
 
 def test_sqlite_parameter_with_like(sqlite_params_session: SqliteDriver) -> None:
     """Test parameters with LIKE operations."""
-    result = sqlite_params_session.execute(
-        "SELECT * FROM test_params WHERE name LIKE ?",
-        ("test%",),
-    )
+    result = sqlite_params_session.execute("SELECT * FROM test_params WHERE name LIKE ?", ("test%",))
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -173,8 +145,7 @@ def test_sqlite_parameter_with_like(sqlite_params_session: SqliteDriver) -> None
 
     # Test with named parameter
     named_result = sqlite_params_session.execute(
-        "SELECT * FROM test_params WHERE name LIKE :pattern",
-        {"pattern": "test1%"},
+        "SELECT * FROM test_params WHERE name LIKE :pattern", {"pattern": "test1%"}
     )
     assert len(named_result.data) == 1
     assert named_result.data[0]["name"] == "test1"
@@ -185,17 +156,12 @@ def test_sqlite_parameter_with_in_clause(sqlite_params_session: SqliteDriver) ->
     # Insert additional test data
     sqlite_params_session.execute_many(
         "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)",
-        [
-            ("alpha", 10, "Alpha test"),
-            ("beta", 20, "Beta test"),
-            ("gamma", 30, "Gamma test"),
-        ],
+        [("alpha", 10, "Alpha test"), ("beta", 20, "Beta test"), ("gamma", 30, "Gamma test")],
     )
 
     # Test IN clause with multiple values (tricky with parameters)
     result = sqlite_params_session.execute(
-        "SELECT * FROM test_params WHERE name IN (?, ?, ?) ORDER BY name",
-        ("alpha", "beta", "test1"),
+        "SELECT * FROM test_params WHERE name IN (?, ?, ?) ORDER BY name", ("alpha", "beta", "test1")
     )
 
     assert isinstance(result, SQLResult)
@@ -243,23 +209,15 @@ def test_sqlite_parameter_data_types(sqlite_params_session: SqliteDriver) -> Non
     """)
 
     # Test different data types
-    test_data = [
-        (1, 42, 3.14, "hello", b"binary_data"),
-        (2, -100, -2.5, "world", b"more_binary"),
-        (3, 0, 0.0, "", b""),
-    ]
+    test_data = [(1, 42, 3.14, "hello", b"binary_data"), (2, -100, -2.5, "world", b"more_binary"), (3, 0, 0.0, "", b"")]
 
     for data in test_data:
         sqlite_params_session.execute(
-            "INSERT INTO test_types (id, int_val, real_val, text_val, blob_val) VALUES (?, ?, ?, ?, ?)",
-            data,
+            "INSERT INTO test_types (id, int_val, real_val, text_val, blob_val) VALUES (?, ?, ?, ?, ?)", data
         )
 
     # Verify data with parameters
-    result = sqlite_params_session.execute(
-        "SELECT * FROM test_types WHERE int_val = ? AND real_val = ?",
-        (42, 3.14),
-    )
+    result = sqlite_params_session.execute("SELECT * FROM test_types WHERE int_val = ? AND real_val = ?", (42, 3.14))
 
     assert len(result.data) == 1
     assert result.data[0]["text_val"] == "hello"
@@ -270,28 +228,20 @@ def test_sqlite_parameter_edge_cases(sqlite_params_session: SqliteDriver) -> Non
     """Test edge cases for SQLite parameters."""
     # Empty string parameter
     sqlite_params_session.execute(
-        "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)",
-        ("", 999, "Empty name test"),
+        "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)", ("", 999, "Empty name test")
     )
 
-    empty_result = sqlite_params_session.execute(
-        "SELECT * FROM test_params WHERE name = ?",
-        ("",),
-    )
+    empty_result = sqlite_params_session.execute("SELECT * FROM test_params WHERE name = ?", ("",))
     assert len(empty_result.data) == 1
     assert empty_result.data[0]["value"] == 999
 
     # Very long string parameter
     long_string = "x" * 1000
     sqlite_params_session.execute(
-        "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)",
-        ("long_test", 1000, long_string),
+        "INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)", ("long_test", 1000, long_string)
     )
 
-    long_result = sqlite_params_session.execute(
-        "SELECT * FROM test_params WHERE description = ?",
-        (long_string,),
-    )
+    long_result = sqlite_params_session.execute("SELECT * FROM test_params WHERE description = ?", (long_string,))
     assert len(long_result.data) == 1
     assert len(long_result.data[0]["description"]) == 1000
 
@@ -300,8 +250,7 @@ def test_sqlite_parameter_with_functions(sqlite_params_session: SqliteDriver) ->
     """Test parameters with SQLite functions."""
     # Test with string functions
     result = sqlite_params_session.execute(
-        "SELECT * FROM test_params WHERE LENGTH(name) > ? AND UPPER(name) LIKE ?",
-        (4, "TEST%"),
+        "SELECT * FROM test_params WHERE LENGTH(name) > ? AND UPPER(name) LIKE ?", (4, "TEST%")
     )
 
     assert isinstance(result, SQLResult)
@@ -311,8 +260,7 @@ def test_sqlite_parameter_with_functions(sqlite_params_session: SqliteDriver) ->
 
     # Test with math functions
     math_result = sqlite_params_session.execute(
-        "SELECT name, value, ROUND(value * ?, 2) as multiplied FROM test_params WHERE value >= ?",
-        (1.5, 100),
+        "SELECT name, value, ROUND(value * ?, 2) as multiplied FROM test_params WHERE value >= ?", (1.5, 100)
     )
     assert len(math_result.data) >= 3
     for row in math_result.data:

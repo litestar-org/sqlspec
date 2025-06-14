@@ -16,11 +16,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator, MutableMapping
     from logging import LoggerAdapter
 
-__all__ = (
-    "CorrelationContext",
-    "correlation_context",
-    "get_correlation_adapter",
-)
+__all__ = ("CorrelationContext", "correlation_context", "get_correlation_adapter")
 
 
 class CorrelationContext:

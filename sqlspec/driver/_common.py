@@ -2,30 +2,14 @@
 
 from abc import ABC
 from collections.abc import Mapping, Sequence
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    ClassVar,
-    Generic,
-    Optional,
-)
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional
 
 from sqlglot import exp
 
 from sqlspec.config import InstrumentationConfig
 from sqlspec.exceptions import NotFoundError
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import (
-    ConnectionT,
-    Counter,
-    DictRow,
-    Gauge,
-    Histogram,
-    RowT,
-    T,
-    Tracer,
-    trace,
-)
+from sqlspec.typing import ConnectionT, Counter, DictRow, Gauge, Histogram, RowT, T, Tracer, trace
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -99,7 +83,7 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             logger.warning("OpenTelemetry not installed, skipping OpenTelemetry setup.")
             return
         self._tracer = trace.get_tracer(
-            self.instrumentation_config.service_name,
+            self.instrumentation_config.service_name
             # __version__ # Consider adding version here if available
         )
 

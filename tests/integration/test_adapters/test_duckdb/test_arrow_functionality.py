@@ -16,10 +16,7 @@ from sqlspec.statement.sql import SQLConfig
 @pytest.fixture
 def duckdb_arrow_session() -> "Generator[DuckDBDriver, None, None]":
     """Create a DuckDB session for Arrow testing."""
-    config = DuckDBConfig(
-        database=":memory:",
-        statement_config=SQLConfig(strict_mode=False),
-    )
+    config = DuckDBConfig(database=":memory:", statement_config=SQLConfig(strict_mode=False))
 
     with config.provide_session() as session:
         # Create test table with various data types
@@ -75,10 +72,7 @@ def test_duckdb_to_parquet(duckdb_arrow_session: DuckDBDriver) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir) / "test_output.parquet"
 
-        duckdb_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE is_active = true",
-            str(output_path),
-        )
+        duckdb_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE is_active = true", str(output_path))
 
         assert output_path.exists()
 
@@ -95,8 +89,7 @@ def test_duckdb_to_parquet(duckdb_arrow_session: DuckDBDriver) -> None:
 def test_duckdb_arrow_with_parameters(duckdb_arrow_session: DuckDBDriver) -> None:
     """Test fetch_arrow_table with parameters on DuckDB."""
     result = duckdb_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE value >= ? AND value <= ? ORDER BY value",
-        (200, 400),
+        "SELECT * FROM test_arrow WHERE value >= ? AND value <= ? ORDER BY value", (200, 400)
     )
 
     assert isinstance(result, ArrowResult)
@@ -107,10 +100,7 @@ def test_duckdb_arrow_with_parameters(duckdb_arrow_session: DuckDBDriver) -> Non
 
 def test_duckdb_arrow_empty_result(duckdb_arrow_session: DuckDBDriver) -> None:
     """Test fetch_arrow_table with empty result on DuckDB."""
-    result = duckdb_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE value > ?",
-        (1000,),
-    )
+    result = duckdb_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow WHERE value > ?", (1000,))
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows == 0
@@ -160,8 +150,7 @@ def test_duckdb_arrow_large_dataset(duckdb_arrow_session: DuckDBDriver) -> None:
     large_data = [(i, f"Item {i}", i * 10, float(i * 2.5), i % 2 == 0) for i in range(100, 1000)]
 
     duckdb_arrow_session.execute_many(
-        "INSERT INTO test_arrow (id, name, value, price, is_active) VALUES (?, ?, ?, ?, ?)",
-        large_data,
+        "INSERT INTO test_arrow (id, name, value, price, is_active) VALUES (?, ?, ?, ?, ?)", large_data
     )
 
     result = duckdb_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
@@ -179,9 +168,7 @@ def test_duckdb_parquet_export_options(duckdb_arrow_session: DuckDBDriver) -> No
 
         # Export with compression
         duckdb_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE value <= 300",
-            str(output_path),
-            compression="snappy",
+            "SELECT * FROM test_arrow WHERE value <= 300", str(output_path), compression="snappy"
         )
 
         assert output_path.exists()
@@ -230,11 +217,7 @@ def test_duckdb_arrow_with_json_data(duckdb_arrow_session: DuckDBDriver) -> None
     # Insert JSON data
     duckdb_arrow_session.execute_many(
         "INSERT INTO test_json (id, data) VALUES (?, ?)",
-        [
-            (1, '{"name": "Alice", "age": 30}'),
-            (2, '{"name": "Bob", "age": 25}'),
-            (3, '{"name": "Charlie", "age": 35}'),
-        ],
+        [(1, '{"name": "Alice", "age": 30}'), (2, '{"name": "Bob", "age": 25}'), (3, '{"name": "Charlie", "age": 35}')],
     )
 
     # Query with JSON extraction using DuckDB's json_extract_string function
@@ -290,10 +273,7 @@ def test_duckdb_arrow_with_parquet_integration(duckdb_arrow_session: DuckDBDrive
         parquet_path = Path(tmpdir) / "source_data.parquet"
 
         # First export to Parquet
-        duckdb_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE is_active = true",
-            str(parquet_path),
-        )
+        duckdb_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE is_active = true", str(parquet_path))
 
         # Then query the Parquet file directly in DuckDB
         result = duckdb_arrow_session.fetch_arrow_table(f"""
@@ -322,14 +302,12 @@ def test_duckdb_arrow_streaming_large_dataset(duckdb_arrow_session: DuckDBDriver
     large_data = [(i, f"Item {i}", i * 10, float(i * 2.5), i % 2 == 0) for i in range(10000, 15000)]
 
     duckdb_arrow_session.execute_many(
-        "INSERT INTO test_arrow (id, name, value, price, is_active) VALUES (?, ?, ?, ?, ?)",
-        large_data,
+        "INSERT INTO test_arrow (id, name, value, price, is_active) VALUES (?, ?, ?, ?, ?)", large_data
     )
 
     # Test streaming with batch_size
     result = duckdb_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE id >= 10000 ORDER BY id",
-        batch_size=1000,
+        "SELECT * FROM test_arrow WHERE id >= 10000 ORDER BY id", batch_size=1000
     )
 
     assert isinstance(result, ArrowResult)
@@ -377,10 +355,7 @@ def test_duckdb_enhanced_parquet_export_with_partitioning(duckdb_arrow_session: 
 
         # Export with partitioning by is_active column
         rows_exported = duckdb_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow",
-            str(output_path),
-            format="parquet",
-            partition_by="is_active",
+            "SELECT * FROM test_arrow", str(output_path), format="parquet", partition_by="is_active"
         )
 
         assert rows_exported == 5  # All products
@@ -419,15 +394,9 @@ def test_duckdb_multiple_parquet_files_reading(duckdb_arrow_session: DuckDBDrive
         file2 = Path(tmpdir) / "data2.parquet"
 
         # Export different subsets to different files
-        duckdb_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE value <= 200",
-            str(file1),
-        )
+        duckdb_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE value <= 200", str(file1))
 
-        duckdb_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE value > 200",
-            str(file2),
-        )
+        duckdb_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE value > 200", str(file2))
 
         # Test reading with glob pattern
         result = duckdb_arrow_session.fetch_arrow_table(f"""

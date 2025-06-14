@@ -9,15 +9,7 @@ from files using aiosql while leveraging all of SQLSpec's advanced features.
 import logging
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    ClassVar,
-    Optional,
-    TypeVar,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypeVar, Union, cast
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.service import SqlspecService
@@ -33,11 +25,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("sqlspec.extensions.aiosql")
 
-__all__ = (
-    "AiosqlAsyncAdapter",
-    "AiosqlService",
-    "AiosqlSyncAdapter",
-)
+__all__ = ("AiosqlAsyncAdapter", "AiosqlService", "AiosqlSyncAdapter")
 
 T = TypeVar("T")
 
@@ -179,12 +167,7 @@ class AiosqlSyncAdapter:
         return SQL(sql, parameters=parameters, config=config, dialect=normalized_dialect)
 
     def select(
-        self,
-        conn: Any,
-        query_name: str,
-        sql: str,
-        parameters: "Any",
-        record_class: Optional[Any] = None,
+        self, conn: Any, query_name: str, sql: str, parameters: "Any", record_class: Optional[Any] = None
     ) -> Generator[Any, None, None]:
         """Execute a SELECT query and return results as generator.
 
@@ -227,12 +210,7 @@ class AiosqlSyncAdapter:
             yield from result.data
 
     def select_one(
-        self,
-        conn: Any,
-        query_name: str,
-        sql: str,
-        parameters: "Any",
-        record_class: Optional[Any] = None,
+        self, conn: Any, query_name: str, sql: str, parameters: "Any", record_class: Optional[Any] = None
     ) -> Optional[RowT]:
         """Execute a SELECT query and return first result.
 
@@ -273,13 +251,7 @@ class AiosqlSyncAdapter:
             return cast("Optional[RowT]", result.data[0])
         return None
 
-    def select_value(
-        self,
-        conn: Any,
-        query_name: str,
-        sql: str,
-        parameters: "Any",
-    ) -> Optional[Any]:
+    def select_value(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Optional[Any]:
         """Execute a SELECT query and return first value of first row.
 
         Args:
@@ -305,13 +277,7 @@ class AiosqlSyncAdapter:
         return row
 
     @contextmanager
-    def select_cursor(
-        self,
-        conn: Any,
-        query_name: str,
-        sql: str,
-        parameters: "Any",
-    ) -> Generator[Any, None, None]:
+    def select_cursor(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Generator[Any, None, None]:
         """Execute a SELECT query and return cursor context manager.
 
         Args:
@@ -347,13 +313,7 @@ class AiosqlSyncAdapter:
 
         yield CursorLike(result)
 
-    def insert_update_delete(
-        self,
-        conn: Any,
-        query_name: str,
-        sql: str,
-        parameters: "Any",
-    ) -> int:
+    def insert_update_delete(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> int:
         """Execute INSERT/UPDATE/DELETE and return affected rows.
 
         Args:
@@ -375,13 +335,7 @@ class AiosqlSyncAdapter:
 
         return getattr(result, "rows_affected", 0)
 
-    def insert_update_delete_many(
-        self,
-        conn: Any,
-        query_name: str,
-        sql: str,
-        parameters: "Any",
-    ) -> int:
+    def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> int:
         """Execute INSERT/UPDATE/DELETE with many parameter sets.
 
         Args:
@@ -402,13 +356,7 @@ class AiosqlSyncAdapter:
 
         return getattr(result, "rows_affected", 0)
 
-    def insert_returning(
-        self,
-        conn: Any,
-        query_name: str,
-        sql: str,
-        parameters: "Any",
-    ) -> Optional[Any]:
+    def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Optional[Any]:
         """Execute INSERT with RETURNING and return result.
 
         Args:
@@ -510,12 +458,7 @@ class AiosqlAsyncAdapter:
         return SQL(sql, parameters=parameters, config=config, dialect=normalized_dialect)
 
     async def select(
-        self,
-        conn: Any,
-        query_name: str,
-        sql: str,
-        parameters: "Any",
-        record_class: Optional[Any] = None,
+        self, conn: Any, query_name: str, sql: str, parameters: "Any", record_class: Optional[Any] = None
     ) -> list[Any]:
         """Execute a SELECT query and return results as list.
 
@@ -559,12 +502,7 @@ class AiosqlAsyncAdapter:
         return []
 
     async def select_one(
-        self,
-        conn: Any,
-        query_name: str,
-        sql: str,
-        parameters: "Any",
-        record_class: Optional[Any] = None,
+        self, conn: Any, query_name: str, sql: str, parameters: "Any", record_class: Optional[Any] = None
     ) -> Optional[Any]:
         """Execute a SELECT query and return first result.
 
@@ -607,13 +545,7 @@ class AiosqlAsyncAdapter:
             return result.data[0]
         return None
 
-    async def select_value(
-        self,
-        conn: Any,
-        query_name: str,
-        sql: str,
-        parameters: "Any",
-    ) -> Optional[Any]:
+    async def select_value(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Optional[Any]:
         """Execute a SELECT query and return first value of first row.
 
         Args:
@@ -639,13 +571,7 @@ class AiosqlAsyncAdapter:
         return row
 
     @asynccontextmanager
-    async def select_cursor(
-        self,
-        conn: Any,
-        query_name: str,
-        sql: str,
-        parameters: "Any",
-    ) -> AsyncGenerator[Any, None]:
+    async def select_cursor(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> AsyncGenerator[Any, None]:
         """Execute a SELECT query and return cursor context manager.
 
         Args:
@@ -680,13 +606,7 @@ class AiosqlAsyncAdapter:
 
         yield AsyncCursorLike(result)
 
-    async def insert_update_delete(
-        self,
-        conn: Any,
-        query_name: str,
-        sql: str,
-        parameters: "Any",
-    ) -> None:
+    async def insert_update_delete(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> None:
         """Execute INSERT/UPDATE/DELETE.
 
         Args:
@@ -706,13 +626,7 @@ class AiosqlAsyncAdapter:
 
         await self.driver.execute(sql_obj, connection=conn)
 
-    async def insert_update_delete_many(
-        self,
-        conn: Any,
-        query_name: str,
-        sql: str,
-        parameters: "Any",
-    ) -> None:
+    async def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> None:
         """Execute INSERT/UPDATE/DELETE with many parameter sets.
 
         Args:
@@ -731,13 +645,7 @@ class AiosqlAsyncAdapter:
 
         await self.driver.execute_many(sql_obj, parameters=parameters, connection=conn)
 
-    async def insert_returning(
-        self,
-        conn: Any,
-        query_name: str,
-        sql: str,
-        parameters: "Any",
-    ) -> Optional[Any]:
+    async def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Optional[Any]:
         """Execute INSERT with RETURNING and return result.
 
         Args:
@@ -806,14 +714,10 @@ class AiosqlService(
             for method in ["aexecute", "aselect", "aexecute_many"]
         ):
             return AiosqlAsyncAdapter(
-                self.driver,
-                default_filters=self.default_filters,
-                allow_sqlspec_filters=self.allow_sqlspec_filters,
+                self.driver, default_filters=self.default_filters, allow_sqlspec_filters=self.allow_sqlspec_filters
             )
         return AiosqlSyncAdapter(
-            self.driver,
-            default_filters=self.default_filters,
-            allow_sqlspec_filters=self.allow_sqlspec_filters,
+            self.driver, default_filters=self.default_filters, allow_sqlspec_filters=self.allow_sqlspec_filters
         )
 
     def load_queries(self, sql_path: str, **aiosql_kwargs: Any) -> Any:

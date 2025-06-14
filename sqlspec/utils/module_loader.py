@@ -5,10 +5,7 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any, Optional
 
-__all__ = (
-    "import_string",
-    "module_to_os_path",
-)
+__all__ = ("import_string", "module_to_os_path")
 
 
 def module_to_os_path(dotted_path: str = "app") -> "Path":

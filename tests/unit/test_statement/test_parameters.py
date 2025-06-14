@@ -9,17 +9,8 @@ from unittest.mock import patch
 
 import pytest
 
-from sqlspec.exceptions import (
-    ExtraParameterError,
-    MissingParameterError,
-    ParameterStyleMismatchError,
-)
-from sqlspec.statement.parameters import (
-    ParameterConverter,
-    ParameterInfo,
-    ParameterStyle,
-    ParameterValidator,
-)
+from sqlspec.exceptions import ExtraParameterError, MissingParameterError, ParameterStyleMismatchError
+from sqlspec.statement.parameters import ParameterConverter, ParameterInfo, ParameterStyle, ParameterValidator
 
 
 def test_parameter_style_values() -> None:
@@ -232,11 +223,7 @@ def test_determine_parameter_input_type(validator: ParameterValidator, sql: str,
         ("SELECT * FROM users WHERE id = ?", [123], True),
         ("SELECT * FROM users WHERE name = :name", {"name": "John"}, True),
         ("SELECT * FROM users WHERE id = ? AND active = ?", [123, True], True),
-        (
-            "SELECT * FROM users WHERE name = :name AND email = :email",
-            {"name": "John", "email": "john@test.com"},
-            True,
-        ),
+        ("SELECT * FROM users WHERE name = :name AND email = :email", {"name": "John", "email": "john@test.com"}, True),
         ("SELECT * FROM users", None, True),
         ("SELECT * FROM users", [], True),
         # Invalid cases - style mismatch

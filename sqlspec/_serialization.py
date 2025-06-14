@@ -42,21 +42,14 @@ except ImportError:
 
         def encode_json(data: Any) -> str:  # pragma: no cover
             return _encode_json(
-                data,
-                default=_type_to_string,
-                option=OPT_SERIALIZE_NUMPY | OPT_NAIVE_UTC | OPT_SERIALIZE_UUID,
+                data, default=_type_to_string, option=OPT_SERIALIZE_NUMPY | OPT_NAIVE_UTC | OPT_SERIALIZE_UUID
             ).decode("utf-8")
 
     except ImportError:
         from json import dumps as encode_json  # type: ignore[assignment]
         from json import loads as decode_json  # type: ignore[assignment]
 
-__all__ = (
-    "convert_date_to_iso",
-    "convert_datetime_to_gmt_iso",
-    "decode_json",
-    "encode_json",
-)
+__all__ = ("convert_date_to_iso", "convert_datetime_to_gmt_iso", "decode_json", "encode_json")
 
 
 def convert_datetime_to_gmt_iso(dt: datetime.datetime) -> str:  # pragma: no cover

@@ -25,12 +25,7 @@ def psycopg_arrow_session(postgres_service: PostgresService) -> "Generator[Psyco
         user=postgres_service.user,
         password=postgres_service.password,
         dbname=postgres_service.database,
-        statement_config=SQLConfig(
-            strict_mode=False,
-            enable_validation=False,
-            enable_parsing=True,  # Explicitly enable parsing
-            debug_mode=True,
-        ),
+        statement_config=SQLConfig(strict_mode=False, enable_validation=False, enable_parsing=True),
         instrumentation=InstrumentationConfig(
             log_queries=True,
             log_parameters=True,
@@ -161,8 +156,7 @@ def test_psycopg_arrow_with_parameters(psycopg_arrow_session: PsycopgSyncDriver)
 
     # Try with a list instead of tuple
     result = psycopg_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE value >= %s AND value <= %s ORDER BY value",
-        [200, 400],
+        "SELECT * FROM test_arrow WHERE value >= %s AND value <= %s ORDER BY value", [200, 400]
     )
 
     assert isinstance(result, ArrowResult)
@@ -174,10 +168,7 @@ def test_psycopg_arrow_with_parameters(psycopg_arrow_session: PsycopgSyncDriver)
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_arrow_empty_result(psycopg_arrow_session: PsycopgSyncDriver) -> None:
     """Test fetch_arrow_table with empty result on Psycopg."""
-    result = psycopg_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE value > %s",
-        (1000,),
-    )
+    result = psycopg_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow WHERE value > %s", (1000,))
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows == 0
@@ -230,8 +221,7 @@ def test_psycopg_arrow_large_dataset(psycopg_arrow_session: PsycopgSyncDriver) -
     large_data = [(f"Item {i}", i * 10, float(i * 2.5), i % 2 == 0) for i in range(100, 1000)]
 
     psycopg_arrow_session.execute_many(
-        "INSERT INTO test_arrow (name, value, price, is_active) VALUES (%s, %s, %s, %s)",
-        large_data,
+        "INSERT INTO test_arrow (name, value, price, is_active) VALUES (%s, %s, %s, %s)", large_data
     )
 
     result = psycopg_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
@@ -250,10 +240,7 @@ def test_psycopg_parquet_export_options(psycopg_arrow_session: PsycopgSyncDriver
 
         # Export with compression
         psycopg_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE value <= 300",
-            str(output_path),
-            format="parquet",
-            compression="snappy",
+            "SELECT * FROM test_arrow WHERE value <= 300", str(output_path), format="parquet", compression="snappy"
         )
 
         assert output_path.exists()
@@ -308,12 +295,7 @@ def test_psycopg_arrow_with_copy_operations(psycopg_arrow_session: PsycopgSyncDr
         # Use COPY to load data (if supported)
         try:
             # TODO: we need to make sure this works on our mixin
-            psycopg_arrow_session.import_from_storage(
-                str(csv_path),
-                "test_arrow",
-                strategy="append",
-                format="csv",
-            )
+            psycopg_arrow_session.import_from_storage(str(csv_path), "test_arrow", strategy="append", format="csv")
 
             # Now test Arrow export
             result = psycopg_arrow_session.fetch_arrow_table(

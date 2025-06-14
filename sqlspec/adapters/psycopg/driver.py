@@ -8,12 +8,7 @@ from sqlglot.dialects.dialect import DialectType
 
 from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
-from sqlspec.driver.mixins import (
-    AsyncStorageMixin,
-    SQLTranslatorMixin,
-    SyncStorageMixin,
-    ToSchemaMixin,
-)
+from sqlspec.driver.mixins import AsyncStorageMixin, SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
 from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
@@ -68,10 +63,7 @@ class PsycopgSyncDriver(
             yield cursor
 
     def _execute_statement(
-        self,
-        statement: SQL,
-        connection: Optional[PsycopgSyncConnection] = None,
-        **kwargs: Any,
+        self, statement: SQL, connection: Optional[PsycopgSyncConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
@@ -145,11 +137,7 @@ class PsycopgSyncDriver(
                 return dml_result
 
     def _execute_many(
-        self,
-        sql: str,
-        param_list: Any,
-        connection: Optional[PsycopgSyncConnection] = None,
-        **kwargs: Any,
+        self, sql: str, param_list: Any, connection: Optional[PsycopgSyncConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
         with instrument_operation(self, "psycopg_execute_many", "database"):
             conn = self._connection(connection)
@@ -167,10 +155,7 @@ class PsycopgSyncDriver(
                 return result
 
     def _execute_script(
-        self,
-        script: str,
-        connection: Optional[PsycopgSyncConnection] = None,
-        **kwargs: Any,
+        self, script: str, connection: Optional[PsycopgSyncConnection] = None, **kwargs: Any
     ) -> ScriptResultDict:
         with instrument_operation(self, "psycopg_execute_script", "database"):
             conn = self._connection(connection)
@@ -186,11 +171,7 @@ class PsycopgSyncDriver(
                 return result
 
     def _wrap_select_result(
-        self,
-        statement: SQL,
-        result: SelectResultDict,
-        schema_type: Optional[type[ModelDTOT]] = None,
-        **kwargs: Any,
+        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "psycopg_wrap_select", "database"):
             # result must be a dict with keys: data, column_names, rows_affected
@@ -222,10 +203,7 @@ class PsycopgSyncDriver(
             )
 
     def _wrap_execute_result(
-        self,
-        statement: SQL,
-        result: Union[DMLResultDict, ScriptResultDict],
-        **kwargs: Any,
+        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
     ) -> SQLResult[RowT]:
         with instrument_operation(self, "psycopg_wrap_execute", "database"):
             operation_type = "UNKNOWN"
@@ -304,10 +282,7 @@ class PsycopgAsyncDriver(
             yield cursor
 
     async def _execute_statement(
-        self,
-        statement: SQL,
-        connection: Optional[PsycopgAsyncConnection] = None,
-        **kwargs: Any,
+        self, statement: SQL, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
@@ -381,11 +356,7 @@ class PsycopgAsyncDriver(
                 return dml_result
 
     async def _execute_many(
-        self,
-        sql: str,
-        param_list: Any,
-        connection: Optional[PsycopgAsyncConnection] = None,
-        **kwargs: Any,
+        self, sql: str, param_list: Any, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
         async with instrument_operation_async(self, "psycopg_async_execute_many", "database"):
             conn = self._connection(connection)
@@ -403,10 +374,7 @@ class PsycopgAsyncDriver(
                 return result
 
     async def _execute_script(
-        self,
-        script: str,
-        connection: Optional[PsycopgAsyncConnection] = None,
-        **kwargs: Any,
+        self, script: str, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
     ) -> ScriptResultDict:
         async with instrument_operation_async(self, "psycopg_async_execute_script", "database"):
             conn = self._connection(connection)
@@ -422,11 +390,7 @@ class PsycopgAsyncDriver(
                 return result
 
     async def _wrap_select_result(
-        self,
-        statement: SQL,
-        result: SelectResultDict,
-        schema_type: Optional[type[ModelDTOT]] = None,
-        **kwargs: Any,
+        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         async with instrument_operation_async(self, "psycopg_wrap_select", "database"):
             # result must be a dict with keys: data, column_names, rows_affected
@@ -458,10 +422,7 @@ class PsycopgAsyncDriver(
             )
 
     async def _wrap_execute_result(
-        self,
-        statement: SQL,
-        result: Union[DMLResultDict, ScriptResultDict],
-        **kwargs: Any,
+        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
     ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "psycopg_wrap_execute", "database"):
             operation_type = "UNKNOWN"

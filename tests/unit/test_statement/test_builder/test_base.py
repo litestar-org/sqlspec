@@ -221,15 +221,7 @@ def test_query_builder_parameter_counter_increment(test_builder: MockQueryBuilde
 
 @pytest.mark.parametrize(
     "parameter_value",
-    [
-        "string_value",
-        42,
-        math.pi,
-        True,
-        None,
-        [1, 2, 3],
-        {"key": "value"},
-    ],
+    ["string_value", 42, math.pi, True, None, [1, 2, 3], {"key": "value"}],
     ids=["string", "int", "float", "bool", "none", "list", "dict"],
 )
 def test_query_builder_parameter_types(test_builder: MockQueryBuilder, parameter_value: Any) -> None:
@@ -566,10 +558,7 @@ def test_where_mixin_where_not_exists_parse_error(mock_parse: Mock, where_mixin:
 # Edge cases and integration tests
 @pytest.mark.parametrize(
     ("column_input", "expected_type"),
-    [
-        ("string_column", str),
-        (exp.column("expr_column"), exp.Column),
-    ],
+    [("string_column", str), (exp.column("expr_column"), exp.Column)],
     ids=["string_column", "expression_column"],
 )
 def test_where_mixin_column_input_types(

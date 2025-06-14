@@ -102,8 +102,8 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         "warehouse",
     )
 
-    __is_async__: ClassVar[bool] = False
-    __supports_connection_pooling__: ClassVar[bool] = False
+    is_async: ClassVar[bool] = False
+    supports_connection_pooling: ClassVar[bool] = False
 
     # Driver class reference for dialect resolution
     driver_class: ClassVar[type[AdbcDriver]] = AdbcDriver
@@ -125,7 +125,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         # Core connection parameters
         uri: Optional[str] = None,
         driver_name: Optional[str] = None,
-        driver: Optional[str] = None,  # Backward compatibility alias for driver_name
         # Database-specific parameters
         db_kwargs: Optional[dict[str, Any]] = None,
         conn_kwargs: Optional[dict[str, Any]] = None,
@@ -220,14 +219,10 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             ...     dataset_id="my_dataset",
             ... )
         """
-        # Handle backward compatibility: prefer driver_name, fall back to driver
-        resolved_driver_name = driver_name
-        if resolved_driver_name is None and driver is not None:
-            resolved_driver_name = driver
 
         # Store connection parameters as instance attributes
         self.uri = uri
-        self.driver_name = resolved_driver_name
+        self.driver_name = driver_name
         self.db_kwargs = db_kwargs
         self.conn_kwargs = conn_kwargs
         self.adbc_driver_manager_entrypoint = adbc_driver_manager_entrypoint
@@ -263,7 +258,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self.on_connection_create = on_connection_create
         self._dialect: DialectType = None
         super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig(),  # pyright: ignore
+            instrumentation=instrumentation or InstrumentationConfig()  # pyright: ignore
         )
 
     @classmethod
@@ -549,10 +544,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                         target_parameter_style=preferred_style,
                     )
 
-                driver = self.driver_type(
-                    connection=connection,
-                    config=statement_config,
-                )
+                driver = self.driver_type(connection=connection, config=statement_config)
                 yield driver
 
         return session_manager()

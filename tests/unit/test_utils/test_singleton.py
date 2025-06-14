@@ -303,12 +303,7 @@ def test_singleton_with_exception_in_init() -> None:
 
 @pytest.mark.parametrize(
     ("init_args", "init_kwargs"),
-    [
-        ((), {}),
-        ((1, 2, 3), {}),
-        ((), {"a": 1, "b": 2}),
-        ((1, 2), {"c": 3, "d": 4}),
-    ],
+    [((), {}), ((1, 2, 3), {}), ((), {"a": 1, "b": 2}), ((1, 2), {"c": 3, "d": 4})],
     ids=["no_args", "positional_args", "keyword_args", "mixed_args"],
 )
 def test_singleton_with_various_argument_patterns(init_args: tuple[Any, ...], init_kwargs: dict[str, Any]) -> None:

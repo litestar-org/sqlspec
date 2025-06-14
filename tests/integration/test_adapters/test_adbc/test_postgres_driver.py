@@ -196,11 +196,7 @@ def test_parameter_types(adbc_postgresql_session: AdbcDriver) -> None:
 def test_multiple_parameters(adbc_postgresql_session: AdbcDriver) -> None:
     """Test queries with multiple parameters."""
     # Insert test data
-    test_data = [
-        ("Alice", 25, True),
-        ("Bob", 30, False),
-        ("Charlie", 35, True),
-    ]
+    test_data = [("Alice", 25, True), ("Bob", 30, False), ("Charlie", 35, True)]
     adbc_postgresql_session.execute_many(
         "INSERT INTO test_table (name, value) VALUES ($1, $2)", [(name, value) for name, value, _ in test_data]
     )
@@ -280,11 +276,7 @@ def test_execute_many_update(adbc_postgresql_session: AdbcDriver) -> None:
     adbc_postgresql_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", initial_data)
 
     # Update using execute_many
-    updates = [
-        (100, "user1"),
-        (200, "user2"),
-        (300, "user3"),
-    ]
+    updates = [(100, "user1"), (200, "user2"), (300, "user3")]
     result = adbc_postgresql_session.execute_many("UPDATE test_table SET value = $1 WHERE name = $2", updates)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
@@ -320,11 +312,7 @@ def test_execute_many_transaction(adbc_postgresql_session: AdbcDriver) -> None:
     # This test verifies basic behavior
 
     # Insert data using execute_many
-    data = [
-        ("tx_user1", 100),
-        ("tx_user2", 200),
-        ("tx_user3", 300),
-    ]
+    data = [("tx_user1", 100), ("tx_user2", 200), ("tx_user3", 300)]
 
     result = adbc_postgresql_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", data)
     assert isinstance(result, SQLResult)
@@ -783,11 +771,7 @@ def test_arrow_result_format(adbc_postgresql_session: AdbcDriver) -> None:
 def test_fetch_arrow_table(adbc_postgresql_session: AdbcDriver) -> None:
     """Test PostgreSQL fetch_arrow_table functionality."""
     # Insert test data
-    test_data = [
-        ("Alice", 25, 50000.0),
-        ("Bob", 30, 60000.0),
-        ("Charlie", 35, 70000.0),
-    ]
+    test_data = [("Alice", 25, 50000.0), ("Bob", 30, 60000.0), ("Charlie", 35, 70000.0)]
 
     adbc_postgresql_session.execute_script("""
         CREATE TABLE arrow_test (
@@ -884,12 +868,7 @@ def test_arrow_empty_result(adbc_postgresql_session: AdbcDriver) -> None:
 def test_complex_queries(adbc_postgresql_session: AdbcDriver) -> None:
     """Test complex SQL queries with ADBC PostgreSQL."""
     # Insert test data
-    test_data = [
-        ("Alice", 25),
-        ("Bob", 30),
-        ("Charlie", 35),
-        ("Diana", 28),
-    ]
+    test_data = [("Alice", 25), ("Bob", 30), ("Charlie", 35), ("Diana", 28)]
 
     adbc_postgresql_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", test_data)
 

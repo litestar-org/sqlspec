@@ -26,9 +26,7 @@ class InstrumentedService:
     """
 
     def __init__(
-        self,
-        instrumentation_config: Optional["InstrumentationConfig"] = None,
-        service_name: Optional[str] = None,
+        self, instrumentation_config: Optional["InstrumentationConfig"] = None, service_name: Optional[str] = None
     ) -> None:
         """Initialize the instrumented service.
 

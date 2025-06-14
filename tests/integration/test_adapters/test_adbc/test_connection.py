@@ -35,9 +35,7 @@ def test_connection(postgres_service: PostgresService) -> None:
 @xfail_if_driver_missing
 def test_duckdb_connection() -> None:
     """Test ADBC connection to DuckDB."""
-    config = AdbcConfig(
-        driver_name="adbc_driver_duckdb.dbapi.connect",
-    )
+    config = AdbcConfig(driver_name="adbc_driver_duckdb.dbapi.connect")
 
     with config.create_connection() as conn:
         assert conn is not None
@@ -52,10 +50,7 @@ def test_duckdb_connection() -> None:
 @xfail_if_driver_missing
 def test_sqlite_connection() -> None:
     """Test ADBC connection to SQLite."""
-    config = AdbcConfig(
-        uri=":memory:",
-        driver_name="adbc_driver_sqlite.dbapi.connect",
-    )
+    config = AdbcConfig(uri=":memory:", driver_name="adbc_driver_sqlite.dbapi.connect")
 
     with config.create_connection() as conn:
         assert conn is not None

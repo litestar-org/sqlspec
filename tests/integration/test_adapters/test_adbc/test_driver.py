@@ -728,12 +728,7 @@ def test_adbc_arrow_result_format(adbc_postgresql_session: AdbcDriver) -> None:
 def test_adbc_postgresql_complex_queries(adbc_postgresql_session: AdbcDriver) -> None:
     """Test complex SQL queries with ADBC PostgreSQL."""
     # Insert test data
-    test_data = [
-        ("Alice", 25),
-        ("Bob", 30),
-        ("Charlie", 35),
-        ("Diana", 28),
-    ]
+    test_data = [("Alice", 25), ("Bob", 30), ("Charlie", 35), ("Diana", 28)]
 
     adbc_postgresql_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", test_data)
 

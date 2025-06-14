@@ -20,10 +20,7 @@ if TYPE_CHECKING:
 
     from sqlspec.config import InstrumentationConfig
 
-__all__ = (
-    "AsyncInstrumentationMixin",
-    "SyncInstrumentationMixin",
-)
+__all__ = ("AsyncInstrumentationMixin", "SyncInstrumentationMixin")
 
 logger = get_logger("instrumentation")
 
@@ -101,10 +98,7 @@ class BaseInstrumentationMixin:
 
             logger.info(
                 "Prometheus metrics initialized",
-                extra={
-                    "service_name": config.service_name,
-                    "endpoint": config.metrics_endpoint,
-                },
+                extra={"service_name": config.service_name, "endpoint": config.metrics_endpoint},
             )
         except Exception as e:
             logger.exception("Failed to initialize Prometheus metrics", extra={"error": str(e)})
@@ -123,12 +117,7 @@ class BaseInstrumentationMixin:
             from opentelemetry.sdk.trace.export import BatchSpanProcessor  # pyright: ignore
 
             # Create resource with service name
-            resource = Resource.create(
-                {
-                    "service.name": config.service_name,
-                    **config.custom_tags,
-                }
-            )
+            resource = Resource.create({"service.name": config.service_name, **config.custom_tags})
 
             # Create tracer provider
             provider = TracerProvider(resource=resource)
@@ -146,16 +135,12 @@ class BaseInstrumentationMixin:
 
             # Get tracer
             self._tracer = trace.get_tracer(
-                f"{config.service_name}.driver",
-                schema_url="https://opentelemetry.io/schemas/1.11.0",
+                f"{config.service_name}.driver", schema_url="https://opentelemetry.io/schemas/1.11.0"
             )
 
             logger.info(
                 "OpenTelemetry tracing initialized",
-                extra={
-                    "service_name": config.service_name,
-                    "endpoint": config.telemetry_endpoint,
-                },
+                extra={"service_name": config.service_name, "endpoint": config.telemetry_endpoint},
             )
 
         except Exception as e:
@@ -308,24 +293,13 @@ class SyncInstrumentationMixin(BaseInstrumentationMixin):
         if error:
             extra_fields["error"] = str(error)
             extra_fields["error_type"] = type(error).__name__
-            logger.error(
-                "Query execution failed",
-                extra=extra_fields,
-                exc_info=config.debug_mode,
-            )
+            logger.error("Query execution failed", extra=extra_fields)
         else:
             level = logging.WARNING if duration_ms and duration_ms > config.slow_query_threshold_ms else logging.INFO
-            logger.log(
-                level,
-                "Query executed successfully",
-                extra=extra_fields,
-            )
+            logger.log(level, "Query executed successfully", extra=extra_fields)
 
     def log_connection_event(
-        self,
-        event: str,
-        connection_info: "Optional[dict[str, Any]]" = None,
-        error: "Optional[Exception]" = None,
+        self, event: str, connection_info: "Optional[dict[str, Any]]" = None, error: "Optional[Exception]" = None
     ) -> None:
         """Log connection lifecycle events.
 
@@ -340,10 +314,7 @@ class SyncInstrumentationMixin(BaseInstrumentationMixin):
         if not self._instrumentation_config.log_connection_events:
             return
 
-        extra_fields = {
-            "event": event,
-            "correlation_id": CorrelationContext.get(),
-        }
+        extra_fields = {"event": event, "correlation_id": CorrelationContext.get()}
 
         if connection_info:
             extra_fields.update(connection_info)
@@ -351,18 +322,9 @@ class SyncInstrumentationMixin(BaseInstrumentationMixin):
         if error:
             extra_fields["error"] = str(error)
             extra_fields["error_type"] = type(error).__name__
-            logger.error(
-                "Connection event: %s",
-                event,
-                extra=extra_fields,
-                exc_info=self._instrumentation_config.debug_mode,
-            )
+            logger.error("Connection event: %s", event, extra=extra_fields)
         else:
-            logger.info(
-                "Connection event: %s",
-                event,
-                extra=extra_fields,
-            )
+            logger.info("Connection event: %s", event, extra=extra_fields)
 
         # Update metrics
         if self._connection_gauge and event == "created":
@@ -371,10 +333,7 @@ class SyncInstrumentationMixin(BaseInstrumentationMixin):
             self._connection_gauge.dec()
 
     def log_transaction_event(
-        self,
-        event: str,
-        transaction_info: "Optional[dict[str, Any]]" = None,
-        error: "Optional[Exception]" = None,
+        self, event: str, transaction_info: "Optional[dict[str, Any]]" = None, error: "Optional[Exception]" = None
     ) -> None:
         """Log transaction lifecycle events.
 
@@ -389,10 +348,7 @@ class SyncInstrumentationMixin(BaseInstrumentationMixin):
         if not self._instrumentation_config.log_transaction_events:
             return
 
-        extra_fields = {
-            "event": event,
-            "correlation_id": CorrelationContext.get(),
-        }
+        extra_fields = {"event": event, "correlation_id": CorrelationContext.get()}
 
         if transaction_info:
             extra_fields.update(transaction_info)
@@ -400,18 +356,9 @@ class SyncInstrumentationMixin(BaseInstrumentationMixin):
         if error:
             extra_fields["error"] = str(error)
             extra_fields["error_type"] = type(error).__name__
-            logger.error(
-                "Transaction event: %s",
-                event,
-                extra=extra_fields,
-                exc_info=self._instrumentation_config.debug_mode,
-            )
+            logger.error("Transaction event: %s", event, extra=extra_fields)
         else:
-            logger.info(
-                "Transaction event: %s",
-                event,
-                extra=extra_fields,
-            )
+            logger.info("Transaction event: %s", event, extra=extra_fields)
 
 
 class AsyncInstrumentationMixin(BaseInstrumentationMixin):
@@ -436,19 +383,11 @@ class AsyncInstrumentationMixin(BaseInstrumentationMixin):
         """
         # Delegate to sync version - logging is already async-safe
         SyncInstrumentationMixin.log_query_execution(
-            cast("SyncInstrumentationMixin", self),
-            query,
-            parameters,
-            result_count,
-            duration_ms,
-            error,
+            cast("SyncInstrumentationMixin", self), query, parameters, result_count, duration_ms, error
         )
 
     async def log_connection_event(
-        self,
-        event: str,
-        connection_info: "Optional[dict[str, Any]]" = None,
-        error: "Optional[Exception]" = None,
+        self, event: str, connection_info: "Optional[dict[str, Any]]" = None, error: "Optional[Exception]" = None
     ) -> None:
         """Log connection lifecycle events asynchronously.
 
@@ -459,17 +398,11 @@ class AsyncInstrumentationMixin(BaseInstrumentationMixin):
         """
         # Delegate to sync version - logging is already async-safe
         SyncInstrumentationMixin.log_connection_event(
-            cast("SyncInstrumentationMixin", self),
-            event,
-            connection_info,
-            error,
+            cast("SyncInstrumentationMixin", self), event, connection_info, error
         )
 
     async def log_transaction_event(
-        self,
-        event: str,
-        transaction_info: "Optional[dict[str, Any]]" = None,
-        error: "Optional[Exception]" = None,
+        self, event: str, transaction_info: "Optional[dict[str, Any]]" = None, error: "Optional[Exception]" = None
     ) -> None:
         """Log transaction lifecycle events asynchronously.
 
@@ -480,8 +413,5 @@ class AsyncInstrumentationMixin(BaseInstrumentationMixin):
         """
         # Delegate to sync version - logging is already async-safe
         SyncInstrumentationMixin.log_transaction_event(
-            cast("SyncInstrumentationMixin", self),
-            event,
-            transaction_info,
-            error,
+            cast("SyncInstrumentationMixin", self), event, transaction_info, error
         )

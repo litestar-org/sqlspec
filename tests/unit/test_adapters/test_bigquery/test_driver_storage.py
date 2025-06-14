@@ -37,11 +37,7 @@ def bigquery_driver(mock_bigquery_client: MagicMock) -> BigQueryDriver:
     """Create a BigQuery driver with mocked client."""
     config = SQLConfig(strict_mode=False)
     instrumentation_config = InstrumentationConfig()
-    return BigQueryDriver(
-        connection=mock_bigquery_client,
-        config=config,
-        instrumentation_config=instrumentation_config,
-    )
+    return BigQueryDriver(connection=mock_bigquery_client, config=config, instrumentation_config=instrumentation_config)
 
 
 class TestBigQueryStorageOperations:

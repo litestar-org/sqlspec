@@ -91,10 +91,7 @@ def test_bigquery_to_parquet(bigquery_arrow_session: BigQueryDriver, bigquery_se
         output_path = Path(tmpdir) / "test_output.parquet"
 
         table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_arrow`"
-        bigquery_arrow_session.export_to_storage(
-            f"SELECT * FROM {table_name} WHERE is_active = true",
-            str(output_path),
-        )
+        bigquery_arrow_session.export_to_storage(f"SELECT * FROM {table_name} WHERE is_active = true", str(output_path))
 
         assert output_path.exists()
 
@@ -130,8 +127,7 @@ def test_bigquery_arrow_empty_result(bigquery_arrow_session: BigQueryDriver, big
     """Test fetch_arrow_table with empty result on BigQuery."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_arrow`"
     result = bigquery_arrow_session.fetch_arrow_table(
-        f"SELECT * FROM {table_name} WHERE value > @threshold",
-        {"threshold": 1000},
+        f"SELECT * FROM {table_name} WHERE value > @threshold", {"threshold": 1000}
     )
 
     assert isinstance(result, ArrowResult)
@@ -340,12 +336,7 @@ def test_bigquery_parquet_export_with_partitioning(
             config=SQLConfig(strict_mode=False),
         )
 
-        bigquery_arrow_session.export_to_storage(
-            query,
-            str(output_path),
-            format="parquet",
-            compression="snappy",
-        )
+        bigquery_arrow_session.export_to_storage(query, str(output_path), format="parquet", compression="snappy")
 
         assert output_path.exists()
 

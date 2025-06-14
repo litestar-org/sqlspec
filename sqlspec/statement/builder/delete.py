@@ -19,12 +19,7 @@ __all__ = ("DeleteBuilder",)
 
 
 @dataclass(unsafe_hash=True)
-class DeleteBuilder(
-    QueryBuilder[RowT],
-    WhereClauseMixin,
-    ReturningClauseMixin,
-    DeleteFromClauseMixin,
-):
+class DeleteBuilder(QueryBuilder[RowT], WhereClauseMixin, ReturningClauseMixin, DeleteFromClauseMixin):
     """Builder for DELETE statements.
 
     This builder provides a fluent interface for constructing SQL DELETE statements

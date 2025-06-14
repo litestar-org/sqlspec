@@ -42,11 +42,7 @@ def adbc_postgresql_batch_session(postgres_service: PostgresService) -> Generato
 @pytest.fixture
 def adbc_sqlite_batch_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session for batch operation testing."""
-    config = AdbcConfig(
-        uri=":memory:",
-        driver_name="adbc_driver_sqlite",
-        statement_config=SQLConfig(strict_mode=False),
-    )
+    config = AdbcConfig(uri=":memory:", driver_name="adbc_driver_sqlite", statement_config=SQLConfig(strict_mode=False))
 
     with config.provide_session() as session:
         # Create test table
@@ -74,8 +70,7 @@ def test_postgresql_execute_many_basic(adbc_postgresql_batch_session: AdbcDriver
     ]
 
     result = adbc_postgresql_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)",
-        parameters,
+        "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -100,8 +95,7 @@ def test_sqlite_execute_many_basic(adbc_sqlite_batch_session: AdbcDriver) -> Non
     ]
 
     result = adbc_sqlite_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)",
-        parameters,
+        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -120,23 +114,14 @@ def test_postgresql_execute_many_update(adbc_postgresql_batch_session: AdbcDrive
     # First insert some data
     adbc_postgresql_batch_session.execute_many(
         "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)",
-        [
-            ("Update 1", 10, "X"),
-            ("Update 2", 20, "Y"),
-            ("Update 3", 30, "Z"),
-        ],
+        [("Update 1", 10, "X"), ("Update 2", 20, "Y"), ("Update 3", 30, "Z")],
     )
 
     # Now update with execute_many
-    update_params = [
-        (100, "Update 1"),
-        (200, "Update 2"),
-        (300, "Update 3"),
-    ]
+    update_params = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
 
     result = adbc_postgresql_batch_session.execute_many(
-        "UPDATE test_batch SET value = $1 WHERE name = $2",
-        update_params,
+        "UPDATE test_batch SET value = $1 WHERE name = $2", update_params
     )
 
     assert isinstance(result, SQLResult)
@@ -152,8 +137,7 @@ def test_postgresql_execute_many_update(adbc_postgresql_batch_session: AdbcDrive
 def test_postgresql_execute_many_empty(adbc_postgresql_batch_session: AdbcDriver) -> None:
     """Test execute_many with empty parameter list on PostgreSQL."""
     result = adbc_postgresql_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)",
-        [],
+        "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)", []
     )
 
     assert isinstance(result, SQLResult)
@@ -175,8 +159,7 @@ def test_sqlite_execute_many_mixed_types(adbc_sqlite_batch_session: AdbcDriver) 
     ]
 
     result = adbc_sqlite_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)",
-        parameters,
+        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -195,21 +178,15 @@ def test_postgresql_execute_many_transaction(adbc_postgresql_batch_session: Adbc
 
     try:
         # Start transaction (if not auto-commit)
-        parameters = [
-            ("Trans 1", 1000, "T"),
-            ("Trans 2", 2000, "T"),
-            ("Trans 3", 3000, "T"),
-        ]
+        parameters = [("Trans 1", 1000, "T"), ("Trans 2", 2000, "T"), ("Trans 3", 3000, "T")]
 
         adbc_postgresql_batch_session.execute_many(
-            "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)",
-            parameters,
+            "INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)", parameters
         )
 
         # Verify within transaction
         result = adbc_postgresql_batch_session.execute(
-            "SELECT COUNT(*) as count FROM test_batch WHERE category = $1",
-            ("T",),
+            "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("T",)
         )
         assert result.data[0]["count"] == 3
 

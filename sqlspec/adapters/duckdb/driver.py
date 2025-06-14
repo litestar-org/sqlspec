@@ -78,10 +78,7 @@ class DuckDBDriver(
             cursor.close()
 
     def _execute_statement(
-        self,
-        statement: SQL,
-        connection: Optional["DuckDBConnection"] = None,
-        **kwargs: Any,
+        self, statement: SQL, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
     ) -> "Union[SelectResultDict, DMLResultDict, ScriptResultDict]":
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
@@ -95,12 +92,7 @@ class DuckDBDriver(
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
-        self,
-        sql: str,
-        parameters: Any,
-        statement: SQL,
-        connection: Optional["DuckDBConnection"] = None,
-        **kwargs: Any,
+        self, sql: str, parameters: Any, statement: SQL, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
     ) -> "Union[SelectResultDict, DMLResultDict]":
         conn = self._connection(connection)
 
@@ -117,11 +109,7 @@ class DuckDBDriver(
             # For SELECT statements, fetch data and return with columns
             fetched_data = result.fetchall()
             column_names = [col[0] for col in result.description or []]
-            return {
-                "data": fetched_data,
-                "column_names": column_names,
-                "rows_affected": len(fetched_data),
-            }
+            return {"data": fetched_data, "column_names": column_names, "rows_affected": len(fetched_data)}
 
         # For DML statements, get affected rows from the result
         row = result.fetchone()
@@ -129,11 +117,7 @@ class DuckDBDriver(
         return {"rows_affected": rows_affected}
 
     def _execute_many(
-        self,
-        sql: str,
-        param_list: Any,
-        connection: Optional["DuckDBConnection"] = None,
-        **kwargs: Any,
+        self, sql: str, param_list: Any, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
     ) -> "DMLResultDict":
         conn = self._connection(connection)
         if self.instrumentation_config.log_queries:
@@ -146,10 +130,7 @@ class DuckDBDriver(
             return {"rows_affected": cursor.rowcount}
 
     def _execute_script(
-        self,
-        script: str,
-        connection: Optional["DuckDBConnection"] = None,
-        **kwargs: Any,
+        self, script: str, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
     ) -> "ScriptResultDict":
         conn = self._connection(connection)
         if self.instrumentation_config.log_queries:
@@ -168,11 +149,7 @@ class DuckDBDriver(
         }
 
     def _wrap_select_result(
-        self,
-        statement: SQL,
-        result: "SelectResultDict",
-        schema_type: Optional[type[ModelDTOT]] = None,
-        **kwargs: Any,
+        self, statement: SQL, result: "SelectResultDict", schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "duckdb_wrap_select", "database"):
             fetched_tuples = result["data"]
@@ -203,10 +180,7 @@ class DuckDBDriver(
             )
 
     def _wrap_execute_result(
-        self,
-        statement: SQL,
-        result: "Union[DMLResultDict, ScriptResultDict]",
-        **kwargs: Any,
+        self, statement: SQL, result: "Union[DMLResultDict, ScriptResultDict]", **kwargs: Any
     ) -> SQLResult[RowT]:
         with instrument_operation(self, "duckdb_wrap_execute", "database"):
             operation_type = "UNKNOWN"
@@ -244,12 +218,7 @@ class DuckDBDriver(
     # DuckDB Native Arrow Support
     # ============================================================================
 
-    def _fetch_arrow_table(
-        self,
-        sql_obj: SQL,
-        connection: "Optional[Any]" = None,
-        **kwargs: Any,
-    ) -> "ArrowResult":
+    def _fetch_arrow_table(self, sql_obj: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         """Enhanced DuckDB native Arrow table fetching with streaming support.
 
         DuckDB has excellent native Arrow support through execute().arrow()
@@ -474,10 +443,7 @@ class DuckDBDriver(
             if self.instrumentation_config.log_results_count:
                 logger.debug("Read %d rows from Parquet source: %s", arrow_table.num_rows, source_uri)
 
-            return ArrowResult(
-                statement=SQL(query),
-                data=arrow_table,
-            )
+            return ArrowResult(statement=SQL(query), data=arrow_table)
 
     def _write_parquet_native(self, data: Union[str, "ArrowTable"], destination_uri: str, **options: Any) -> None:
         """Enhanced DuckDB native Parquet writer with advanced options."""

@@ -45,8 +45,7 @@ async def test_asyncpg_to_parquet(asyncpg_arrow_session: AsyncpgDriver) -> None:
         output_path = Path(tmpdir) / "test_output.parquet"
 
         await asyncpg_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE is_active = true",
-            str(output_path),
+            "SELECT * FROM test_arrow WHERE is_active = true", str(output_path)
         )
 
         assert output_path.exists()
@@ -137,8 +136,7 @@ async def test_asyncpg_arrow_large_dataset(asyncpg_arrow_session: AsyncpgDriver)
     large_data = [(f"Item {i}", i * 10, float(i * 2.5), i % 2 == 0) for i in range(100, 1000)]
 
     await asyncpg_arrow_session.execute_many(
-        "INSERT INTO test_arrow (name, value, price, is_active) VALUES ($1, $2, $3, $4)",
-        large_data,
+        "INSERT INTO test_arrow (name, value, price, is_active) VALUES ($1, $2, $3, $4)", large_data
     )
 
     result = await asyncpg_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
@@ -158,9 +156,7 @@ async def test_asyncpg_parquet_export_options(asyncpg_arrow_session: AsyncpgDriv
 
         # Export with compression
         await asyncpg_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE value <= 300",
-            str(output_path),
-            compression="snappy",
+            "SELECT * FROM test_arrow WHERE value <= 300", str(output_path), compression="snappy"
         )
 
         assert output_path.exists()

@@ -7,12 +7,7 @@ import sqlglot
 from sqlglot import exp
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.base import (
-    SQLValidator,
-    StatementPipeline,
-    UsesExpression,
-    ValidationResult,
-)
+from sqlspec.statement.pipelines.base import SQLValidator, StatementPipeline, UsesExpression, ValidationResult
 from sqlspec.statement.sql import SQLConfig
 
 
@@ -90,49 +85,19 @@ def test_validation_result_boolean_conversion() -> None:
     assert bool(unsafe_result) is False
 
 
-def test_processor_result_initialization() -> None:
-    """Test ProcessorResult initialization."""
-    from sqlspec.statement.pipelines.results import ProcessorResult
-    
-    expression = sqlglot.parse_one("SELECT 1", read="mysql")
-
-    # Test with minimal parameters
-    result1 = ProcessorResult(expression=expression)
-    assert result1.expression is expression
-    assert result1.validation_result is None
-    assert result1.analysis_result is None
-    assert result1.metadata == {}
-
-    # Test with metadata
-    result2 = ProcessorResult(
-        expression=expression, 
-        metadata={"modified": True, "notes": ["No changes needed", "Query already optimized"]}
-    )
-    assert result2.metadata["modified"] is True
-    assert len(result2.metadata["notes"]) == 2
-
-
-def test_processor_result_with_validation() -> None:
-    """Test ProcessorResult with validation result."""
-    from sqlspec.statement.pipelines.results import ProcessorResult
-    
-    expression = sqlglot.parse_one("SELECT 1", read="mysql")
-
-    # Test with validation result
-    validation = ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
-    result3 = ProcessorResult(expression=expression, validation_result=validation)
-    assert result3.validation_result is validation
+# ProcessorResult tests removed - ProcessorResult class no longer exists in the codebase
+# The new pipeline architecture uses PipelineResult and SQLProcessingContext instead
 
 
 def test_statement_pipeline_initialization() -> None:
     """Test StatementPipeline initialization."""
     # Create a simple pipeline
-    pipeline = StatementPipeline()
+    StatementPipeline()
 
 
 def test_pipeline_configuration() -> None:
     """Test pipeline configuration handling."""
-    config = SQLConfig(enable_validation=True, enable_transformations=True)
+    SQLConfig(enable_validation=True, enable_transformations=True)
     pipeline = StatementPipeline()
     assert pipeline is not None
 
@@ -181,12 +146,11 @@ def test_sql_validator_process_with_disabled_validation() -> None:
         initial_sql_string="SELECT 1", dialect="mysql", config=config, current_expression=expression
     )
 
-    result_expression, validation_result = validator.process(context)
+    result_expression = validator.process(expression, context)
 
     assert result_expression is expression
-    assert validation_result is not None
-    assert validation_result.is_safe
-    assert validation_result.risk_level == RiskLevel.SKIP
+    # When validation is disabled, no errors should be added to context
+    assert len(context.validation_errors) == 0
 
 
 def test_transformer_pipeline_initialization() -> None:
@@ -218,21 +182,22 @@ def test_transformer_pipeline_execute_empty() -> None:
 
     result = pipeline.execute_pipeline(context)
 
-    assert result.final_expression is expression
-    assert result.validation_result is not None
-    assert result.validation_result.is_safe
-    assert result.validation_result.risk_level == RiskLevel.SKIP
+    assert result.expression is expression
+    assert result.context is context
+    # When validation is disabled (default), no errors should be added
+    assert len(result.validation_errors) == 0
+    assert result.risk_level == RiskLevel.SAFE
 
 
 def test_transformer_pipeline_execute_with_mock_components() -> None:
     """Test StatementPipeline.execute_pipeline with mock components."""
     from sqlspec.statement.pipelines.context import SQLProcessingContext
 
-    # Create mock processor
+    # Create mock processor with correct signature
     class MockProcessor:
-        def process(self, context: SQLProcessingContext) -> tuple[exp.Expression, Optional[ValidationResult]]:
-            # Return modified expression and no validation issues
-            return context.current_expression or exp.Placeholder(), None
+        def process(self, expression: exp.Expression, context: SQLProcessingContext) -> exp.Expression:
+            # Return the expression unchanged
+            return expression
 
     pipeline = StatementPipeline()
     # Add mock transformers
@@ -247,9 +212,10 @@ def test_transformer_pipeline_execute_with_mock_components() -> None:
 
     result = pipeline.execute_pipeline(context)
 
-    assert result.final_expression is expression
-    assert result.validation_result is not None
-    assert result.validation_result.is_safe
+    assert result.expression is expression
+    assert result.context is context
+    # With no validators, should have no errors
+    assert len(result.validation_errors) == 0
 
 
 def test_risk_level_comparison() -> None:
@@ -292,34 +258,33 @@ def test_validation_result_aggregation() -> None:
 
 
 def test_transformer_pipeline_validation_aggregation() -> None:
-    """Test validation result aggregation in StatementPipeline."""
+    """Test validation error aggregation in StatementPipeline."""
     from sqlspec.statement.pipelines.context import SQLProcessingContext
+    from sqlspec.statement.pipelines.result_types import ValidationError
 
-    # Create mock processors that return validation results
-    class MockValidatingProcessor:
-        def __init__(
-            self,
-            is_safe: bool,
-            risk_level: RiskLevel,
-            issues: Optional[list[str]] = None,
-            warnings: Optional[list[str]] = None,
-        ) -> None:
-            self.is_safe = is_safe
+    # Create mock validators that add errors to context
+    class MockValidator:
+        def __init__(self, error_message: str, risk_level: RiskLevel) -> None:
+            self.error_message = error_message
             self.risk_level = risk_level
-            self.issues = issues or []
-            self.warnings = warnings or []
 
-        def process(self, context: SQLProcessingContext) -> tuple[exp.Expression, Optional[ValidationResult]]:
-            validation_result = ValidationResult(
-                is_safe=self.is_safe, risk_level=self.risk_level, issues=self.issues, warnings=self.warnings
+        def process(self, expression: exp.Expression, context: SQLProcessingContext) -> exp.Expression:
+            # Add validation error to context
+            error = ValidationError(
+                message=self.error_message,
+                code="mock-error",
+                risk_level=self.risk_level,
+                processor=self.__class__.__name__,
+                expression=expression,
             )
-            return context.current_expression or exp.Placeholder(), validation_result
+            context.validation_errors.append(error)
+            return expression
 
     pipeline = StatementPipeline()
     pipeline.validators = [  # type: ignore[list-item]
-        MockValidatingProcessor(True, RiskLevel.SAFE, warnings=["Warning 1"]),  # type: ignore[list-item]
-        MockValidatingProcessor(False, RiskLevel.MEDIUM, issues=["Issue 1"]),  # type: ignore[list-item]
-        MockValidatingProcessor(True, RiskLevel.LOW, warnings=["Warning 2"]),  # type: ignore[list-item]
+        MockValidator("Warning 1", RiskLevel.LOW),  # type: ignore[list-item]
+        MockValidator("Issue 1", RiskLevel.MEDIUM),  # type: ignore[list-item]
+        MockValidator("Warning 2", RiskLevel.LOW),  # type: ignore[list-item]
     ]
 
     config = SQLConfig()
@@ -331,11 +296,11 @@ def test_transformer_pipeline_validation_aggregation() -> None:
 
     result = pipeline.execute_pipeline(context)
 
-    # The current StatementPipeline implementation appears to have issues with validation aggregation
-    # For now, we'll test that the pipeline runs without errors and returns a validation result
-    assert result.validation_result is not None
-    assert isinstance(result.validation_result, ValidationResult)
-    # Note: The actual aggregation behavior may need to be fixed in a separate task
+    # Check that all errors were collected
+    assert len(result.validation_errors) == 3
+    assert result.has_errors is True
+    # Risk level should be the highest (MEDIUM)
+    assert result.risk_level == RiskLevel.MEDIUM
 
 
 def test_uses_expression_error_handling() -> None:
@@ -378,11 +343,5 @@ def test_pipeline_component_slots() -> None:
     ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
     assert hasattr(ValidationResult, "__slots__")
 
-    # Test TransformationResult slots
-    expression = sqlglot.parse_one("SELECT 1", read="mysql")
-    TransformationResult(expression=expression, modified=False)
-    assert hasattr(TransformationResult, "__slots__")
-
-    # Test AnalysisResult slots
-    AnalysisResult()
-    assert hasattr(AnalysisResult, "__slots__")
+    # TransformationResult and AnalysisResult no longer exist in the new architecture
+    # The new pipeline uses context objects to collect results instead

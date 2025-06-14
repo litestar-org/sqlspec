@@ -150,8 +150,8 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         "threads",
     )
 
-    __is_async__: ClassVar[bool] = False
-    __supports_connection_pooling__: ClassVar[bool] = False
+    is_async: ClassVar[bool] = False
+    supports_connection_pooling: ClassVar[bool] = False
 
     # Driver class reference for dialect resolution
     driver_class: ClassVar[type[DuckDBDriver]] = DuckDBDriver
@@ -330,9 +330,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         self.secrets = secrets or []
         self.on_connection_create = on_connection_create
 
-        super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig(),
-        )
+        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
 
     @property
     def connection_type(self) -> type[DuckDBConnection]:  # type: ignore[override]
@@ -554,9 +552,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                     )
 
                 driver = self.driver_type(
-                    connection=connection,
-                    config=statement_config,
-                    instrumentation_config=self.instrumentation,
+                    connection=connection, config=statement_config, instrumentation_config=self.instrumentation
                 )
                 yield driver
 

@@ -10,9 +10,7 @@ from sqlspec.adapters.duckdb import DuckDBDriver
 from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.result import ArrowResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from tests.unit.test_adapters.storage_test_helpers import (
-    create_mock_arrow_table,
-)
+from tests.unit.test_adapters.storage_test_helpers import create_mock_arrow_table
 
 
 @pytest.fixture
@@ -40,11 +38,7 @@ def duckdb_driver(mock_duckdb_connection: MagicMock) -> DuckDBDriver:
     """Create a DuckDB driver with mocked connection."""
     config = SQLConfig(strict_mode=False)
     instrumentation_config = InstrumentationConfig()
-    return DuckDBDriver(
-        connection=mock_duckdb_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
-    )
+    return DuckDBDriver(connection=mock_duckdb_connection, config=config, instrumentation_config=instrumentation_config)
 
 
 class TestDuckDBStorageOperations:

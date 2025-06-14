@@ -19,12 +19,7 @@ _SNAKE_CASE_HYPHEN_SPACE = re.compile(r"[.\s@-]+", re.UNICODE)
 # Collapse multiple underscores
 _SNAKE_CASE_MULTIPLE_UNDERSCORES = re.compile(r"__+", re.UNICODE)
 
-__all__ = (
-    "camelize",
-    "check_email",
-    "slugify",
-    "snake_case",
-)
+__all__ = ("camelize", "check_email", "slugify", "snake_case")
 
 
 def check_email(email: str) -> str:

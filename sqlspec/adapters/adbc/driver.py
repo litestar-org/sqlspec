@@ -236,10 +236,7 @@ class AdbcDriver(
         return param_info.placeholder_text
 
     def _execute_statement(
-        self,
-        statement: SQL,
-        connection: Optional["AdbcConnection"] = None,
-        **kwargs: Any,
+        self, statement: SQL, connection: Optional["AdbcConnection"] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
@@ -270,12 +267,7 @@ class AdbcDriver(
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
-        self,
-        sql: str,
-        parameters: Any,
-        statement: SQL,
-        connection: Optional["AdbcConnection"] = None,
-        **kwargs: Any,
+        self, sql: str, parameters: Any, statement: SQL, connection: Optional["AdbcConnection"] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
@@ -328,11 +320,7 @@ class AdbcDriver(
             return dml_result
 
     def _execute_many(
-        self,
-        sql: str,
-        param_list: Any,
-        connection: Optional["AdbcConnection"] = None,
-        **kwargs: Any,
+        self, sql: str, param_list: Any, connection: Optional["AdbcConnection"] = None, **kwargs: Any
     ) -> DMLResultDict:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
@@ -356,10 +344,7 @@ class AdbcDriver(
             return result
 
     def _execute_script(
-        self,
-        script: str,
-        connection: Optional["AdbcConnection"] = None,
-        **kwargs: Any,
+        self, script: str, connection: Optional["AdbcConnection"] = None, **kwargs: Any
     ) -> ScriptResultDict:
         conn = self._connection(connection)
         if self.instrumentation_config.log_queries:
@@ -376,18 +361,11 @@ class AdbcDriver(
                         logger.debug("Executing statement: %s", statement)
                     cursor.execute(statement)
 
-        result: ScriptResultDict = {
-            "statements_executed": len(statements),
-            "status_message": "SCRIPT EXECUTED",
-        }
+        result: ScriptResultDict = {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
         return result
 
     def _wrap_select_result(
-        self,
-        statement: SQL,
-        result: SelectResultDict,
-        schema_type: Optional[type[ModelDTOT]] = None,
-        **kwargs: Any,
+        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "adbc_wrap_select", "database"):
             # result must be a dict with keys: data, column_names, rows_affected
@@ -421,10 +399,7 @@ class AdbcDriver(
             )
 
     def _wrap_execute_result(
-        self,
-        statement: SQL,
-        result: Union[DMLResultDict, ScriptResultDict],
-        **kwargs: Any,
+        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
     ) -> SQLResult[RowT]:
         with instrument_operation(self, "adbc_wrap_execute", "database"):
             operation_type = "UNKNOWN"
@@ -468,12 +443,7 @@ class AdbcDriver(
     # ADBC Native Arrow Support
     # ============================================================================
 
-    def _fetch_arrow_table(
-        self,
-        sql_obj: SQL,
-        connection: "Optional[Any]" = None,
-        **kwargs: Any,
-    ) -> "ArrowResult":
+    def _fetch_arrow_table(self, sql_obj: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         """ADBC native Arrow table fetching.
 
         ADBC has excellent native Arrow support through cursor.fetch_arrow_table()

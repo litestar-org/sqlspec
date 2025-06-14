@@ -12,10 +12,7 @@ from sqlspec.statement.sql import SQLConfig
 @pytest.fixture
 async def aiosqlite_batch_session() -> "AsyncGenerator[AiosqliteDriver, None]":
     """Create an AIOSQLite session for batch operation testing."""
-    config = AiosqliteConfig(
-        database=":memory:",
-        statement_config=SQLConfig(strict_mode=False),
-    )
+    config = AiosqliteConfig(database=":memory:", statement_config=SQLConfig(strict_mode=False))
 
     async with config.provide_session() as session:
         # Create test table
@@ -42,8 +39,7 @@ async def test_aiosqlite_execute_many_basic(aiosqlite_batch_session: AiosqliteDr
     ]
 
     result = await aiosqlite_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)",
-        parameters,
+        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -61,24 +57,13 @@ async def test_aiosqlite_execute_many_update(aiosqlite_batch_session: AiosqliteD
     # First insert some data
     await aiosqlite_batch_session.execute_many(
         "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)",
-        [
-            ("Update 1", 10, "X"),
-            ("Update 2", 20, "Y"),
-            ("Update 3", 30, "Z"),
-        ],
+        [("Update 1", 10, "X"), ("Update 2", 20, "Y"), ("Update 3", 30, "Z")],
     )
 
     # Now update with execute_many
-    update_params = [
-        (100, "Update 1"),
-        (200, "Update 2"),
-        (300, "Update 3"),
-    ]
+    update_params = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
 
-    result = await aiosqlite_batch_session.execute_many(
-        "UPDATE test_batch SET value = ? WHERE name = ?",
-        update_params,
-    )
+    result = await aiosqlite_batch_session.execute_many("UPDATE test_batch SET value = ? WHERE name = ?", update_params)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
@@ -93,8 +78,7 @@ async def test_aiosqlite_execute_many_update(aiosqlite_batch_session: AiosqliteD
 async def test_aiosqlite_execute_many_empty(aiosqlite_batch_session: AiosqliteDriver) -> None:
     """Test execute_many with empty parameter list on AIOSQLite."""
     result = await aiosqlite_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)",
-        [],
+        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)", []
     )
 
     assert isinstance(result, SQLResult)
@@ -116,8 +100,7 @@ async def test_aiosqlite_execute_many_mixed_types(aiosqlite_batch_session: Aiosq
     ]
 
     result = await aiosqlite_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)",
-        parameters,
+        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -129,10 +112,7 @@ async def test_aiosqlite_execute_many_mixed_types(aiosqlite_batch_session: Aiosq
     assert null_result.data[0]["name"] == "Another Item"
 
     # Verify float value was stored correctly
-    float_result = await aiosqlite_batch_session.execute(
-        "SELECT * FROM test_batch WHERE name = ?",
-        ("Float Item",),
-    )
+    float_result = await aiosqlite_batch_session.execute("SELECT * FROM test_batch WHERE name = ?", ("Float Item",))
     assert len(float_result.data) == 1
     assert float_result.data[0]["value"] == 78.5
 
@@ -153,16 +133,9 @@ async def test_aiosqlite_execute_many_delete(aiosqlite_batch_session: AiosqliteD
     )
 
     # Delete specific items by name
-    delete_params = [
-        ("Delete 1",),
-        ("Delete 2",),
-        ("Delete 4",),
-    ]
+    delete_params = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
 
-    result = await aiosqlite_batch_session.execute_many(
-        "DELETE FROM test_batch WHERE name = ?",
-        delete_params,
-    )
+    result = await aiosqlite_batch_session.execute_many("DELETE FROM test_batch WHERE name = ?", delete_params)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
@@ -184,8 +157,7 @@ async def test_aiosqlite_execute_many_large_batch(aiosqlite_batch_session: Aiosq
     large_batch = [(f"Item {i}", i * 10, f"CAT{i % 3}") for i in range(1000)]
 
     result = await aiosqlite_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)",
-        large_batch,
+        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)", large_batch
     )
 
     assert isinstance(result, SQLResult)
@@ -197,8 +169,7 @@ async def test_aiosqlite_execute_many_large_batch(aiosqlite_batch_session: Aiosq
 
     # Verify some specific values
     sample_result = await aiosqlite_batch_session.execute(
-        "SELECT * FROM test_batch WHERE name IN (?, ?, ?) ORDER BY value",
-        ("Item 100", "Item 500", "Item 999"),
+        "SELECT * FROM test_batch WHERE name IN (?, ?, ?) ORDER BY value", ("Item 100", "Item 500", "Item 999")
     )
     assert len(sample_result.data) == 3
     assert sample_result.data[0]["value"] == 1000  # Item 100
@@ -211,11 +182,7 @@ async def test_aiosqlite_execute_many_with_sql_object(aiosqlite_batch_session: A
     """Test execute_many with SQL object on AIOSQLite."""
     from sqlspec.statement.sql import SQL
 
-    parameters = [
-        ("SQL Obj 1", 111, "SOB"),
-        ("SQL Obj 2", 222, "SOB"),
-        ("SQL Obj 3", 333, "SOB"),
-    ]
+    parameters = [("SQL Obj 1", 111, "SOB"), ("SQL Obj 2", 222, "SOB"), ("SQL Obj 3", 333, "SOB")]
 
     sql_obj = SQL("INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)").as_many(parameters)
 
@@ -226,8 +193,7 @@ async def test_aiosqlite_execute_many_with_sql_object(aiosqlite_batch_session: A
 
     # Verify data
     check_result = await aiosqlite_batch_session.execute(
-        "SELECT COUNT(*) as count FROM test_batch WHERE category = ?",
-        ("SOB",),
+        "SELECT COUNT(*) as count FROM test_batch WHERE category = ?", ("SOB",)
     )
     assert check_result.data[0]["count"] == 3
 
@@ -236,15 +202,10 @@ async def test_aiosqlite_execute_many_with_sql_object(aiosqlite_batch_session: A
 async def test_aiosqlite_execute_many_with_transactions(aiosqlite_batch_session: AiosqliteDriver) -> None:
     """Test execute_many with transaction behavior on AIOSQLite."""
     # AIOSQLite typically runs in autocommit mode, but test behavior
-    parameters = [
-        ("Trans 1", 1000, "T"),
-        ("Trans 2", 2000, "T"),
-        ("Trans 3", 3000, "T"),
-    ]
+    parameters = [("Trans 1", 1000, "T"), ("Trans 2", 2000, "T"), ("Trans 3", 3000, "T")]
 
     result = await aiosqlite_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)",
-        parameters,
+        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -268,15 +229,10 @@ async def test_aiosqlite_execute_many_with_constraints(aiosqlite_batch_session: 
     """)
 
     # First batch should succeed
-    success_params = [
-        (1, "unique1", 100),
-        (2, "unique2", 200),
-        (3, "unique3", 300),
-    ]
+    success_params = [(1, "unique1", 100), (2, "unique2", 200), (3, "unique3", 300)]
 
     result = await aiosqlite_batch_session.execute_many(
-        "INSERT INTO test_unique (id, unique_name, value) VALUES (?, ?, ?)",
-        success_params,
+        "INSERT INTO test_unique (id, unique_name, value) VALUES (?, ?, ?)", success_params
     )
 
     assert isinstance(result, SQLResult)
@@ -291,8 +247,7 @@ async def test_aiosqlite_execute_many_with_constraints(aiosqlite_batch_session: 
 
     with pytest.raises(Exception):  # SQLite will raise an integrity error
         await aiosqlite_batch_session.execute_many(
-            "INSERT INTO test_unique (id, unique_name, value) VALUES (?, ?, ?)",
-            duplicate_params,
+            "INSERT INTO test_unique (id, unique_name, value) VALUES (?, ?, ?)", duplicate_params
         )
 
     # Verify data - SQLite might have inserted the first row before the constraint violation
@@ -322,8 +277,7 @@ async def test_aiosqlite_execute_many_with_json(aiosqlite_batch_session: Aiosqli
     ]
 
     result = await aiosqlite_batch_session.execute_many(
-        "INSERT INTO test_json (name, metadata) VALUES (?, ?)",
-        parameters,
+        "INSERT INTO test_json (name, metadata) VALUES (?, ?)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -357,15 +311,10 @@ async def test_aiosqlite_execute_many_with_sqlite_features(aiosqlite_batch_sessi
     """)
 
     try:
-        parameters = [
-            ("Gen 1", 10),
-            ("Gen 2", 20),
-            ("Gen 3", 30),
-        ]
+        parameters = [("Gen 1", 10), ("Gen 2", 20), ("Gen 3", 30)]
 
         result = await aiosqlite_batch_session.execute_many(
-            "INSERT INTO test_generated (name, base_value) VALUES (?, ?)",
-            parameters,
+            "INSERT INTO test_generated (name, base_value) VALUES (?, ?)", parameters
         )
 
         assert isinstance(result, SQLResult)
@@ -390,15 +339,10 @@ async def test_aiosqlite_execute_many_with_sqlite_features(aiosqlite_batch_sessi
             )
         """)
 
-        simple_params = [
-            ("Simple 1", 10),
-            ("Simple 2", 20),
-            ("Simple 3", 30),
-        ]
+        simple_params = [("Simple 1", 10), ("Simple 2", 20), ("Simple 3", 30)]
 
         await aiosqlite_batch_session.execute_many(
-            "INSERT INTO test_regular (name, value) VALUES (?, ?)",
-            simple_params,
+            "INSERT INTO test_regular (name, value) VALUES (?, ?)", simple_params
         )
 
         check_result = await aiosqlite_batch_session.execute("SELECT COUNT(*) as count FROM test_regular")
@@ -424,8 +368,7 @@ async def test_aiosqlite_execute_many_with_full_text_search(aiosqlite_batch_sess
         ]
 
         result = await aiosqlite_batch_session.execute_many(
-            "INSERT INTO test_fts (title, content) VALUES (?, ?)",
-            parameters,
+            "INSERT INTO test_fts (title, content) VALUES (?, ?)", parameters
         )
 
         assert isinstance(result, SQLResult)
@@ -433,8 +376,7 @@ async def test_aiosqlite_execute_many_with_full_text_search(aiosqlite_batch_sess
 
         # Test FTS search
         search_result = await aiosqlite_batch_session.execute(
-            "SELECT title FROM test_fts WHERE test_fts MATCH ?",
-            ("SQLite",),
+            "SELECT title FROM test_fts WHERE test_fts MATCH ?", ("SQLite",)
         )
         assert len(search_result.data) == 1
         assert search_result.data[0]["title"] == "First Article"
@@ -456,8 +398,7 @@ async def test_aiosqlite_execute_many_performance(aiosqlite_batch_session: Aiosq
     start_time = time.time()
 
     result = await aiosqlite_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)",
-        batch_data,
+        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)", batch_data
     )
 
     end_time = time.time()

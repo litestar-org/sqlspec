@@ -10,20 +10,14 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-__all__ = (
-    "instrument_operation",
-    "instrument_operation_async",
-)
+__all__ = ("instrument_operation", "instrument_operation_async")
 
 logger = get_logger("telemetry")
 
 
 @contextmanager
 def instrument_operation(
-    driver_obj: Any,
-    operation_name: str,
-    operation_type: str = "database",
-    **custom_tags: Any,
+    driver_obj: Any, operation_name: str, operation_type: str = "database", **custom_tags: Any
 ) -> Generator[None, None, None]:
     """Context manager for instrumenting synchronous operations.
 
@@ -53,10 +47,7 @@ def instrument_operation(
         logger.info(
             "Starting %s operation",
             operation_name,
-            extra={
-                "operation_type": operation_type,
-                "correlation_id": correlation_id,
-            },
+            extra={"operation_type": operation_type, "correlation_id": correlation_id},
         )
 
     span = None
@@ -142,10 +133,7 @@ def instrument_operation(
 
 @asynccontextmanager
 async def instrument_operation_async(
-    driver_obj: Any,
-    operation_name: str,
-    operation_type: str = "database",
-    **custom_tags: Any,
+    driver_obj: Any, operation_name: str, operation_type: str = "database", **custom_tags: Any
 ) -> "AsyncGenerator[None, None]":
     """Context manager for instrumenting asynchronous operations.
 
@@ -175,10 +163,7 @@ async def instrument_operation_async(
         logger.info(
             "Starting %s operation",
             operation_name,
-            extra={
-                "operation_type": operation_type,
-                "correlation_id": correlation_id,
-            },
+            extra={"operation_type": operation_type, "correlation_id": correlation_id},
         )
 
     span = None

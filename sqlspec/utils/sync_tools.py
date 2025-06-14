@@ -3,15 +3,7 @@ import functools
 import inspect
 import sys
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Generic,
-    Optional,
-    TypeVar,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Generic, Optional, TypeVar, Union, cast
 
 from typing_extensions import ParamSpec
 
@@ -96,8 +88,7 @@ def run_(async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -
 
 
 def await_(
-    async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]",
-    raise_sync_error: bool = True,
+    async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]", raise_sync_error: bool = True
 ) -> "Callable[ParamSpecT, ReturnT]":
     """Convert an async function to a blocking one, running in the main async loop.
 
@@ -154,9 +145,7 @@ def await_(
 
 
 def async_(
-    function: "Callable[ParamSpecT, ReturnT]",
-    *,
-    limiter: "Optional[CapacityLimiter]" = None,
+    function: "Callable[ParamSpecT, ReturnT]", *, limiter: "Optional[CapacityLimiter]" = None
 ) -> "Callable[ParamSpecT, Awaitable[ReturnT]]":
     """Convert a blocking function to an async one using asyncio.to_thread().
 
@@ -170,10 +159,7 @@ def async_(
     """
 
     @functools.wraps(function)
-    async def wrapper(
-        *args: "ParamSpecT.args",
-        **kwargs: "ParamSpecT.kwargs",
-    ) -> "ReturnT":
+    async def wrapper(*args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
         partial_f = functools.partial(function, *args, **kwargs)
         used_limiter = limiter or _default_limiter
         async with used_limiter:

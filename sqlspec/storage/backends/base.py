@@ -36,9 +36,7 @@ class InstrumentedObjectStore(ABC):
     """
 
     def __init__(
-        self,
-        instrumentation_config: InstrumentationConfig | None = None,
-        backend_name: str | None = None,
+        self, instrumentation_config: InstrumentationConfig | None = None, backend_name: str | None = None
     ) -> None:
         """Initialize the instrumented storage backend.
 
@@ -54,7 +52,7 @@ class InstrumentedObjectStore(ABC):
 
     def _log_operation_start(self, op_name: str, msg: str, *args: Any, **kwargs: Any) -> None:
         """Log the start of an operation if debug mode is enabled."""
-        if self.instrumentation_config.debug_mode:
+        if self.instrumentation_config.log_storage_operations:
             extra = kwargs.setdefault("extra", {})
             extra["correlation_id"] = CorrelationContext.get()
             extra["backend"] = self.backend_type
@@ -62,7 +60,7 @@ class InstrumentedObjectStore(ABC):
 
     def _log_operation_success(self, op_name: str, msg: str, *args: Any, **kwargs: Any) -> None:
         """Log the successful completion of an operation."""
-        if self.instrumentation_config.log_service_operations:
+        if self.instrumentation_config.log_storage_operations:
             extra = kwargs.setdefault("extra", {})
             extra["correlation_id"] = CorrelationContext.get()
             extra["backend"] = self.backend_type
@@ -74,7 +72,7 @@ class InstrumentedObjectStore(ABC):
         extra["correlation_id"] = CorrelationContext.get()
         extra["backend"] = self.backend_type
         extra["error_type"] = type(e).__name__
-        self.logger.exception(msg, *args, **kwargs)
+        self.logger.error(msg, *args, **kwargs)
 
     @property
     def backend_type(self) -> str:
@@ -107,11 +105,7 @@ class InstrumentedObjectStore(ABC):
                 raise
             else:
                 self._log_operation_success(
-                    op_name,
-                    "Read %d bytes from %s",
-                    len(data),
-                    path,
-                    extra={"path": path, "size_bytes": len(data)},
+                    op_name, "Read %d bytes from %s", len(data), path, extra={"path": path, "size_bytes": len(data)}
                 )
                 return data
 
@@ -201,10 +195,7 @@ class InstrumentedObjectStore(ABC):
             self, op_name, "storage", prefix=prefix, recursive=recursive, backend=self.backend_type
         ):
             self._log_operation_start(
-                op_name,
-                "Listing objects with prefix %s",
-                prefix,
-                extra={"prefix": prefix, "recursive": recursive},
+                op_name, "Listing objects with prefix %s", prefix, extra={"prefix": prefix, "recursive": recursive}
             )
             try:
                 objects = self._list_objects(prefix, recursive, **kwargs)
@@ -246,11 +237,7 @@ class InstrumentedObjectStore(ABC):
                 raise
             else:
                 self._log_operation_start(
-                    op_name,
-                    "Checked existence of %s: %s",
-                    path,
-                    exists,
-                    extra={"path": path, "exists": exists},
+                    op_name, "Checked existence of %s: %s", path, exists, extra={"path": path, "exists": exists}
                 )
                 return exists
 
@@ -393,11 +380,7 @@ class InstrumentedObjectStore(ABC):
                     "Read Arrow table from %s (%d rows)",
                     path,
                     len(table),
-                    extra={
-                        "path": path,
-                        "row_count": len(table),
-                        "column_count": len(table.columns),
-                    },
+                    extra={"path": path, "row_count": len(table), "column_count": len(table.columns)},
                 )
                 return table
 
@@ -412,13 +395,7 @@ class InstrumentedObjectStore(ABC):
         op_name = "storage.write_arrow"
         log_attrs = {"path": path, "row_count": len(table)}
         with instrument_operation(self, op_name, "storage", **log_attrs, backend=self.backend_type):
-            self._log_operation_start(
-                op_name,
-                "Writing Arrow table to %s (%d rows)",
-                path,
-                len(table),
-                extra=log_attrs,
-            )
+            self._log_operation_start(op_name, "Writing Arrow table to %s (%d rows)", path, len(table), extra=log_attrs)
             try:
                 self._write_arrow(path, table, **kwargs)
                 self._log_operation_success(
@@ -521,12 +498,7 @@ class InstrumentedObjectStore(ABC):
         log_attrs = {"path": path, "char_count": len(data), "encoding": encoding}
         async with instrument_operation_async(self, op_name, "storage", **log_attrs, backend=self.backend_type):
             self._log_operation_start(
-                op_name,
-                "Async writing %d characters to %s (encoding: %s)",
-                len(data),
-                path,
-                encoding,
-                extra=log_attrs,
+                op_name, "Async writing %d characters to %s (encoding: %s)", len(data), path, encoding, extra=log_attrs
             )
             try:
                 await self._write_text_async(path, data, encoding, **kwargs)
@@ -545,11 +517,7 @@ class InstrumentedObjectStore(ABC):
             try:
                 exists = await self._exists_async(path, **kwargs)
                 self._log_operation_success(
-                    op_name,
-                    "Async checked existence of %s: %s",
-                    path,
-                    exists,
-                    extra={"path": path, "exists": exists},
+                    op_name, "Async checked existence of %s: %s", path, exists, extra={"path": path, "exists": exists}
                 )
             except Exception as e:
                 self._log_operation_error(
@@ -630,10 +598,7 @@ class InstrumentedObjectStore(ABC):
             try:
                 metadata = await self._get_metadata_async(path, **kwargs)
                 self._log_operation_success(
-                    op_name,
-                    "Async got metadata for %s",
-                    path,
-                    extra={"path": path, "metadata": metadata},
+                    op_name, "Async got metadata for %s", path, extra={"path": path, "metadata": metadata}
                 )
             except Exception as e:
                 self._log_operation_error(op_name, e, "Failed to async get metadata for %s", path, extra={"path": path})
@@ -652,11 +617,7 @@ class InstrumentedObjectStore(ABC):
                     "Async read Arrow table with %d rows from %s",
                     table.num_rows,
                     path,
-                    extra={
-                        "path": path,
-                        "num_rows": table.num_rows,
-                        "num_columns": table.num_columns,
-                    },
+                    extra={"path": path, "num_rows": table.num_rows, "num_columns": table.num_columns},
                 )
             except Exception as e:
                 self._log_operation_error(
@@ -668,27 +629,15 @@ class InstrumentedObjectStore(ABC):
     async def write_arrow_async(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
         """Async write Arrow table."""
         op_name = "storage.write_arrow_async"
-        log_attrs = {
-            "path": path,
-            "num_rows": table.num_rows,
-            "num_columns": table.num_columns,
-        }
+        log_attrs = {"path": path, "num_rows": table.num_rows, "num_columns": table.num_columns}
         async with instrument_operation_async(self, op_name, "storage", **log_attrs, backend=self.backend_type):
             self._log_operation_start(
-                op_name,
-                "Async writing Arrow table with %d rows to %s",
-                table.num_rows,
-                path,
-                extra=log_attrs,
+                op_name, "Async writing Arrow table with %d rows to %s", table.num_rows, path, extra=log_attrs
             )
             try:
                 await self._write_arrow_async(path, table, **kwargs)
                 self._log_operation_success(
-                    op_name,
-                    "Async wrote Arrow table with %d rows to %s",
-                    table.num_rows,
-                    path,
-                    extra=log_attrs,
+                    op_name, "Async wrote Arrow table with %d rows to %s", table.num_rows, path, extra=log_attrs
                 )
             except Exception as e:
                 self._log_operation_error(op_name, e, "Failed to async write Arrow table to %s", path, extra=log_attrs)

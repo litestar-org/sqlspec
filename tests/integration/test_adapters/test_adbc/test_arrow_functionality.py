@@ -59,11 +59,7 @@ def adbc_postgresql_arrow_session(postgres_service: PostgresService) -> Generato
 @pytest.fixture
 def adbc_sqlite_arrow_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session for Arrow testing."""
-    config = AdbcConfig(
-        uri=":memory:",
-        driver_name="adbc_driver_sqlite",
-        statement_config=SQLConfig(strict_mode=False),
-    )
+    config = AdbcConfig(uri=":memory:", driver_name="adbc_driver_sqlite", statement_config=SQLConfig(strict_mode=False))
 
     with config.provide_session() as session:
         # Create test table with various data types
@@ -145,8 +141,7 @@ def test_postgresql_to_parquet(adbc_postgresql_arrow_session: AdbcDriver) -> Non
         output_path = Path(tmpdir) / "test_output.parquet"
 
         adbc_postgresql_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE is_active = true",
-            str(output_path),
+            "SELECT * FROM test_arrow WHERE is_active = true", str(output_path)
         )
 
         assert output_path.exists()
@@ -168,10 +163,7 @@ def test_sqlite_to_parquet(adbc_sqlite_arrow_session: AdbcDriver) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir) / "test_output.parquet"
 
-        adbc_sqlite_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE is_active = 1",
-            str(output_path),
-        )
+        adbc_sqlite_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE is_active = 1", str(output_path))
 
         assert output_path.exists()
 
@@ -185,8 +177,7 @@ def test_sqlite_to_parquet(adbc_sqlite_arrow_session: AdbcDriver) -> None:
 def test_postgresql_arrow_with_parameters(adbc_postgresql_arrow_session: AdbcDriver) -> None:
     """Test fetch_arrow_table with parameters on PostgreSQL."""
     result = adbc_postgresql_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE value >= $1 AND value <= $2 ORDER BY value",
-        (200, 400),
+        "SELECT * FROM test_arrow WHERE value >= $1 AND value <= $2 ORDER BY value", (200, 400)
     )
 
     assert isinstance(result, ArrowResult)
@@ -199,10 +190,7 @@ def test_postgresql_arrow_with_parameters(adbc_postgresql_arrow_session: AdbcDri
 @xfail_if_driver_missing
 def test_postgresql_arrow_empty_result(adbc_postgresql_arrow_session: AdbcDriver) -> None:
     """Test fetch_arrow_table with empty result on PostgreSQL."""
-    result = adbc_postgresql_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE value > $1",
-        (1000,),
-    )
+    result = adbc_postgresql_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow WHERE value > $1", (1000,))
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows == 0

@@ -173,17 +173,9 @@ class MergeMatchedClauseMixin:
         update_expressions: list[exp.EQ] = []
         for col, val in set_values.items():
             param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
-            update_expressions.append(
-                exp.EQ(
-                    this=exp.column(col),
-                    expression=exp.var(param_name),
-                )
-            )
+            update_expressions.append(exp.EQ(this=exp.column(col), expression=exp.var(param_name)))
 
-        when_args: dict[str, Any] = {
-            "matched": True,
-            "then": exp.Update(expressions=update_expressions),
-        }
+        when_args: dict[str, Any] = {"matched": True, "then": exp.Update(expressions=update_expressions)}
 
         if condition:
             condition_expr: exp.Expression
@@ -218,10 +210,7 @@ class MergeMatchedClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        when_args: dict[str, Any] = {
-            "matched": True,
-            "then": exp.Delete(),
-        }
+        when_args: dict[str, Any] = {"matched": True, "then": exp.Delete()}
 
         if condition:
             condition_expr: exp.Expression
@@ -297,10 +286,7 @@ class MergeNotMatchedClauseMixin:
             msg = "Cannot specify values without columns for INSERT action."
             raise SQLBuilderError(msg)
 
-        when_args: dict[str, Any] = {
-            "matched": False,
-            "then": exp.Insert(**insert_args),
-        }
+        when_args: dict[str, Any] = {"matched": False, "then": exp.Insert(**insert_args)}
 
         if not by_target:
             when_args["source"] = True
@@ -352,12 +338,7 @@ class MergeNotMatchedBySourceClauseMixin:
         update_expressions: list[exp.EQ] = []
         for col, val in set_values.items():
             param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
-            update_expressions.append(
-                exp.EQ(
-                    this=exp.column(col),
-                    expression=exp.var(param_name),
-                )
-            )
+            update_expressions.append(exp.EQ(this=exp.column(col), expression=exp.var(param_name)))
 
         when_args: dict[str, Any] = {
             "matched": False,
@@ -400,11 +381,7 @@ class MergeNotMatchedBySourceClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        when_args: dict[str, Any] = {
-            "matched": False,
-            "source": True,
-            "then": exp.Delete(),
-        }
+        when_args: dict[str, Any] = {"matched": False, "source": True, "then": exp.Delete()}
 
         if condition:
             condition_expr: exp.Expression

@@ -17,13 +17,7 @@ from sqlspec._serialization import encode_json
 if TYPE_CHECKING:
     from logging import LogRecord
 
-__all__ = (
-    "StructuredFormatter",
-    "correlation_id_var",
-    "get_correlation_id",
-    "get_logger",
-    "set_correlation_id",
-)
+__all__ = ("StructuredFormatter", "correlation_id_var", "get_correlation_id", "get_logger", "set_correlation_id")
 
 # Context variable for correlation ID tracking
 correlation_id_var: ContextVar[str | None] = ContextVar("correlation_id", default=None)
@@ -127,12 +121,7 @@ def get_logger(name: str | None = None) -> logging.Logger:
     return logger
 
 
-def log_with_context(
-    logger: logging.Logger,
-    level: int,
-    message: str,
-    **extra_fields: Any,
-) -> None:
+def log_with_context(logger: logging.Logger, level: int, message: str, **extra_fields: Any) -> None:
     """Log a message with structured extra fields.
 
     Args:
@@ -142,14 +131,6 @@ def log_with_context(
         **extra_fields: Additional fields to include in structured logs
     """
     # Create a LogRecord with extra fields
-    record = logger.makeRecord(
-        logger.name,
-        level,
-        "(unknown file)",
-        0,
-        message,
-        (),
-        None,
-    )
+    record = logger.makeRecord(logger.name, level, "(unknown file)", 0, message, (), None)
     record.extra_fields = extra_fields
     logger.handle(record)

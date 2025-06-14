@@ -37,9 +37,7 @@ def asyncmy_driver(mock_asyncmy_connection: AsyncMock) -> AsyncmyDriver:
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
     instrumentation_config = InstrumentationConfig()
     return AsyncmyDriver(
-        connection=mock_asyncmy_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_asyncmy_connection, config=config, instrumentation_config=instrumentation_config
     )
 
 
@@ -49,9 +47,7 @@ def test_asyncmy_driver_initialization(mock_asyncmy_connection: AsyncMock) -> No
     instrumentation_config = InstrumentationConfig(log_queries=True)
 
     driver = AsyncmyDriver(
-        connection=mock_asyncmy_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_asyncmy_connection, config=config, instrumentation_config=instrumentation_config
     )
 
     # Test driver attributes are set correctly
@@ -85,13 +81,7 @@ async def test_asyncmy_config_dialect_property() -> None:
     from sqlspec.adapters.asyncmy import AsyncmyConfig
 
     config = AsyncmyConfig(
-        pool_config={
-            "host": "localhost",
-            "port": 3306,
-            "database": "test",
-            "user": "test",
-            "password": "test",
-        }
+        pool_config={"host": "localhost", "port": 3306, "database": "test", "user": "test", "password": "test"}
     )
     assert config.dialect == "mysql"
 
@@ -244,9 +234,7 @@ async def test_asyncmy_driver_to_parquet(
     # Mock the execute method for the unified storage mixin fallback
 
     mock_result = SQLResult(
-        statement=statement,
-        data=[{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
-        column_names=["id", "name"],
+        statement=statement, data=[{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}], column_names=["id", "name"]
     )
 
     async def mock_execute(sql_obj) -> SQLResult[dict[str, Any]]:

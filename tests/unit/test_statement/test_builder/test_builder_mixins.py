@@ -511,12 +511,7 @@ def test_pivot_clause_with_alias() -> None:
 def test_pivot_clause_wrong_type() -> None:
     builder = _TestPivotMixin(exp.Insert())
     with pytest.raises(TypeError):
-        builder.pivot(
-            aggregate_function="SUM",
-            aggregate_column="sales",
-            pivot_column="quarter",
-            pivot_values=["Q1"],
-        )
+        builder.pivot(aggregate_function="SUM", aggregate_column="sales", pivot_column="quarter", pivot_values=["Q1"])
 
 
 # --- UnpivotClauseMixin ---
@@ -535,10 +530,7 @@ def test_unpivot_clause_basic() -> None:
     select_expr = exp.Select().from_("quarterly_sales")
     builder = _TestUnpivotMixin(select_expr)
     builder.unpivot(
-        value_column_name="sales",
-        name_column_name="quarter",
-        columns_to_unpivot=["Q1", "Q2", "Q3", "Q4"],
-        alias=None,
+        value_column_name="sales", name_column_name="quarter", columns_to_unpivot=["Q1", "Q2", "Q3", "Q4"], alias=None
     )
     assert isinstance(builder._expression, exp.Select)
     # UNPIVOT should be attached to the table in FROM clause as Pivot with unpivot=True
@@ -556,10 +548,7 @@ def test_unpivot_clause_with_alias() -> None:
     select_expr = exp.Select().from_("monthly_sales")
     builder = _TestUnpivotMixin(select_expr)
     builder.unpivot(
-        value_column_name="amount",
-        name_column_name="month",
-        columns_to_unpivot=["Jan", "Feb"],
-        alias="unpivot_table",
+        value_column_name="amount", name_column_name="month", columns_to_unpivot=["Jan", "Feb"], alias="unpivot_table"
     )
     assert builder._expression is not None
     # UNPIVOT should be attached to the table in FROM clause as Pivot with unpivot=True
@@ -579,11 +568,7 @@ def test_unpivot_clause_with_alias() -> None:
 def test_unpivot_clause_wrong_type() -> None:
     builder = _TestUnpivotMixin(exp.Insert())
     with pytest.raises(TypeError):
-        builder.unpivot(
-            value_column_name="sales",
-            name_column_name="quarter",
-            columns_to_unpivot=["Q1"],
-        )
+        builder.unpivot(value_column_name="sales", name_column_name="quarter", columns_to_unpivot=["Q1"])
 
 
 # --- AggregateFunctionsMixin ---

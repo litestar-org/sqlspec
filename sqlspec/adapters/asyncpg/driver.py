@@ -28,10 +28,7 @@ __all__ = ("AsyncpgConnection", "AsyncpgDriver")
 logger = get_logger("adapters.asyncpg")
 
 if TYPE_CHECKING:
-    AsyncpgConnection: TypeAlias = Union[
-        AsyncpgNativeConnection[Record],
-        PoolConnectionProxy[Record],
-    ]
+    AsyncpgConnection: TypeAlias = Union[AsyncpgNativeConnection[Record], PoolConnectionProxy[Record]]
 else:
     AsyncpgConnection: TypeAlias = Union[AsyncpgNativeConnection, Any]
 
@@ -71,10 +68,7 @@ class AsyncpgDriver(
         )
 
     async def _execute_statement(
-        self,
-        statement: SQL,
-        connection: Optional[AsyncpgConnection] = None,
-        **kwargs: Any,
+        self, statement: SQL, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
@@ -105,12 +99,7 @@ class AsyncpgDriver(
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
-        self,
-        sql: str,
-        parameters: Any,
-        statement: SQL,
-        connection: Optional[AsyncpgConnection] = None,
-        **kwargs: Any,
+        self, sql: str, parameters: Any, statement: SQL, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict]:
         async with instrument_operation_async(self, "asyncpg_execute", "database"):
             conn = self._connection(connection)
@@ -147,18 +136,11 @@ class AsyncpgDriver(
                 if match and len(match.groups()) >= EXPECTED_REGEX_GROUPS:
                     rows_affected = int(match.group(3))
 
-            dml_result: DMLResultDict = {
-                "rows_affected": rows_affected,
-                "status_message": status or "OK",
-            }
+            dml_result: DMLResultDict = {"rows_affected": rows_affected, "status_message": status or "OK"}
             return dml_result
 
     async def _execute_many(
-        self,
-        sql: str,
-        param_list: Any,
-        connection: Optional[AsyncpgConnection] = None,
-        **kwargs: Any,
+        self, sql: str, param_list: Any, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
         async with instrument_operation_async(self, "asyncpg_execute_many", "database"):
             conn = self._connection(connection)
@@ -186,23 +168,13 @@ class AsyncpgDriver(
                 if match and len(match.groups()) >= EXPECTED_REGEX_GROUPS:
                     rows_affected = int(match.group(3))
 
-            dml_result: DMLResultDict = {
-                "rows_affected": rows_affected,
-                "status_message": result or "OK",
-            }
+            dml_result: DMLResultDict = {"rows_affected": rows_affected, "status_message": result or "OK"}
             return dml_result
 
     async def _execute_script(
-        self,
-        script: str,
-        connection: Optional[AsyncpgConnection] = None,
-        **kwargs: Any,
+        self, script: str, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
     ) -> ScriptResultDict:
-        async with instrument_operation_async(
-            self,
-            "asyncpg_execute_script",
-            "database",
-        ):
+        async with instrument_operation_async(self, "asyncpg_execute_script", "database"):
             conn = self._connection(connection)
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing SQL script: %s", script)
@@ -215,11 +187,7 @@ class AsyncpgDriver(
             return result
 
     async def _wrap_select_result(
-        self,
-        statement: SQL,
-        result: SelectResultDict,
-        schema_type: Optional[type[ModelDTOT]] = None,
-        **kwargs: Any,
+        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         async with instrument_operation_async(self, "asyncpg_wrap_select", "database"):
             records = cast("list[Record]", result["data"])
@@ -232,10 +200,7 @@ class AsyncpgDriver(
                 logger.debug("Query returned %d rows", len(rows_as_dicts))
 
             if schema_type:
-                converted_data_seq = self.to_schema(
-                    data=rows_as_dicts,
-                    schema_type=schema_type,
-                )
+                converted_data_seq = self.to_schema(data=rows_as_dicts, schema_type=schema_type)
                 converted_data_list = list(converted_data_seq) if converted_data_seq is not None else []
                 return SQLResult[ModelDTOT](
                     statement=statement,
@@ -254,10 +219,7 @@ class AsyncpgDriver(
             )
 
     async def _wrap_execute_result(
-        self,
-        statement: SQL,
-        result: Union[DMLResultDict, ScriptResultDict],
-        **kwargs: Any,
+        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
     ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "asyncpg_wrap_execute", "database"):
             operation_type = "UNKNOWN"
@@ -283,11 +245,7 @@ class AsyncpgDriver(
             status_message = result.get("status_message", "")
 
             if self.instrumentation_config.log_results_count:
-                logger.debug(
-                    "Execute operation affected %d rows. Status: %s",
-                    rows_affected,
-                    status_message,
-                )
+                logger.debug("Execute operation affected %d rows. Status: %s", rows_affected, status_message)
             return SQLResult[RowT](
                 statement=statement,
                 data=cast("list[RowT]", []),
@@ -296,9 +254,6 @@ class AsyncpgDriver(
                 metadata={"status_message": status_message},
             )
 
-    def _connection(
-        self,
-        connection: Optional[AsyncpgConnection] = None,
-    ) -> AsyncpgConnection:
+    def _connection(self, connection: Optional[AsyncpgConnection] = None) -> AsyncpgConnection:
         """Get the connection to use for the operation."""
         return connection or self.connection

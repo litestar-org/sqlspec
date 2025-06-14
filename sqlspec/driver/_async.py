@@ -1,32 +1,13 @@
 """Asynchronous driver protocol implementation."""
 
 from abc import ABC, abstractmethod
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Optional,
-    Union,
-    cast,
-    overload,
-)
+from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.driver.mixins import AsyncInstrumentationMixin
-from sqlspec.statement.builder import (
-    DeleteBuilder,
-    InsertBuilder,
-    QueryBuilder,
-    SelectBuilder,
-    UpdateBuilder,
-)
+from sqlspec.statement.builder import DeleteBuilder, InsertBuilder, QueryBuilder, SelectBuilder, UpdateBuilder
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
-from sqlspec.typing import (
-    ConnectionT,
-    DictRow,
-    ModelDTOT,
-    RowT,
-    SQLParameterType,
-)
+from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, RowT, SQLParameterType
 from sqlspec.utils.telemetry import instrument_operation_async
 
 if TYPE_CHECKING:
@@ -80,10 +61,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
 
     @abstractmethod
     async def _execute_statement(
-        self,
-        statement: "SQL",
-        connection: "Optional[ConnectionT]" = None,
-        **kwargs: Any,
+        self, statement: "SQL", connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> "Union[SelectResultDict, DMLResultDict, ScriptResultDict]":
         """Actual execution implementation by concrete drivers, using the raw connection.
 
@@ -103,10 +81,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
 
     @abstractmethod
     async def _wrap_execute_result(
-        self,
-        statement: "SQL",
-        result: "Union[DMLResultDict, ScriptResultDict]",
-        **kwargs: Any,
+        self, statement: "SQL", result: "Union[DMLResultDict, ScriptResultDict]", **kwargs: Any
     ) -> "SQLResult[RowT]":
         raise NotImplementedError
 
@@ -185,9 +160,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
                 statement, parameters=parameters, filters=list(filters) or [], config=config or self.config
             )
             result = await self._execute_statement(
-                statement=sql_statement,
-                connection=self._connection(connection),
-                **kwargs,
+                statement=sql_statement, connection=self._connection(connection), **kwargs
             )
             is_select = self.returns_rows(sql_statement.expression)
             # TODO: improve this.  why can't use just use parameter parsing?
@@ -248,31 +221,17 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
                     cache_parsed_expression=script_config.cache_parsed_expression,
                     parameter_converter=script_config.parameter_converter,
                     parameter_validator=script_config.parameter_validator,
-                    sqlglot_schema=script_config.sqlglot_schema,
                     analysis_cache_size=script_config.analysis_cache_size,
                 )
-            sql_statement = SQL(
-                statement,
-                parameters,
-                *filters,
-                dialect=self.dialect,
-                config=script_config,
-            )
+            sql_statement = SQL(statement, parameters, *filters, dialect=self.dialect, config=script_config)
             sql_statement = sql_statement.as_script()
             script_output = await self._execute_statement(
-                statement=sql_statement,
-                connection=self._connection(connection),
-                is_script=True,
-                **kwargs,
+                statement=sql_statement, connection=self._connection(connection), is_script=True, **kwargs
             )
             if isinstance(script_output, str):
                 from sqlspec.statement.result import SQLResult
 
-                result = SQLResult[RowT](
-                    statement=sql_statement,
-                    data=[],
-                    operation_type="SCRIPT",
-                )
+                result = SQLResult[RowT](statement=sql_statement, data=[], operation_type="SCRIPT")
                 result.total_statements = 1
                 result.successful_statements = 1
                 return result

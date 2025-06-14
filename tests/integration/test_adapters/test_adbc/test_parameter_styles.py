@@ -50,11 +50,7 @@ def adbc_postgresql_params_session(postgres_service: PostgresService) -> Generat
 @pytest.fixture
 def adbc_sqlite_params_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session for parameter style testing."""
-    config = AdbcConfig(
-        uri=":memory:",
-        driver_name="adbc_driver_sqlite",
-        statement_config=SQLConfig(strict_mode=False),
-    )
+    config = AdbcConfig(uri=":memory:", driver_name="adbc_driver_sqlite", statement_config=SQLConfig(strict_mode=False))
 
     with config.provide_session() as session:
         # Create test table
@@ -87,9 +83,7 @@ def adbc_sqlite_params_session() -> Generator[AdbcDriver, None, None]:
     ],
 )
 def test_postgresql_parameter_types(
-    adbc_postgresql_params_session: AdbcDriver,
-    params: Any,
-    expected_count: int,
+    adbc_postgresql_params_session: AdbcDriver, params: Any, expected_count: int
 ) -> None:
     """Test different parameter types with PostgreSQL."""
     # PostgreSQL always uses numeric placeholders ($1, $2, etc.)
@@ -102,10 +96,7 @@ def test_postgresql_parameter_types(
             (params["name"],),  # Convert dict to positional tuple
         )
     else:
-        result = adbc_postgresql_params_session.execute(
-            SQL("SELECT * FROM test_params WHERE name = $1"),
-            params,
-        )
+        result = adbc_postgresql_params_session.execute(SQL("SELECT * FROM test_params WHERE name = $1"), params)
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -122,12 +113,7 @@ def test_postgresql_parameter_types(
         ({"name": "test1"}, "named_dict", "SELECT * FROM test_params WHERE name = :name"),
     ],
 )
-def test_sqlite_parameter_styles(
-    adbc_sqlite_params_session: AdbcDriver,
-    params: Any,
-    style: str,
-    query: str,
-) -> None:
+def test_sqlite_parameter_styles(adbc_sqlite_params_session: AdbcDriver, params: Any, style: str, query: str) -> None:
     """Test different parameter styles with SQLite."""
     # SQLite ADBC might have limitations on parameter styles
     if style == "named":
@@ -147,8 +133,7 @@ def test_sqlite_parameter_styles(
 def test_postgresql_multiple_parameters(adbc_postgresql_params_session: AdbcDriver) -> None:
     """Test queries with multiple parameters on PostgreSQL."""
     result = adbc_postgresql_params_session.execute(
-        SQL("SELECT * FROM test_params WHERE value >= $1 AND value <= $2 ORDER BY value"),
-        (50, 150),
+        SQL("SELECT * FROM test_params WHERE value >= $1 AND value <= $2 ORDER BY value"), (50, 150)
     )
 
     assert isinstance(result, SQLResult)
@@ -162,8 +147,7 @@ def test_postgresql_multiple_parameters(adbc_postgresql_params_session: AdbcDriv
 def test_sqlite_multiple_parameters(adbc_sqlite_params_session: AdbcDriver) -> None:
     """Test queries with multiple parameters on SQLite."""
     result = adbc_sqlite_params_session.execute(
-        SQL("SELECT * FROM test_params WHERE value >= ? AND value <= ? ORDER BY value"),
-        (50, 150),
+        SQL("SELECT * FROM test_params WHERE value >= ? AND value <= ? ORDER BY value"), (50, 150)
     )
 
     assert isinstance(result, SQLResult)
@@ -179,14 +163,11 @@ def test_postgresql_null_parameters(adbc_postgresql_params_session: AdbcDriver) 
     """Test handling of NULL parameters on PostgreSQL."""
     # Insert a record with NULL description
     adbc_postgresql_params_session.execute(
-        SQL("INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)"),
-        ("null_test", 300, None),
+        SQL("INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)"), ("null_test", 300, None)
     )
 
     # Query for NULL values
-    result = adbc_postgresql_params_session.execute(
-        SQL("SELECT * FROM test_params WHERE description IS NULL"),
-    )
+    result = adbc_postgresql_params_session.execute(SQL("SELECT * FROM test_params WHERE description IS NULL"))
 
     assert isinstance(result, SQLResult)
     assert result.data is not None

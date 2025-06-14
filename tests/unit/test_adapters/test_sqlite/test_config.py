@@ -96,18 +96,12 @@ def test_sqlite_config_connection_creation(mock_connect: Mock) -> None:
     mock_connection = Mock()
     mock_connect.return_value = mock_connection
 
-    config = SqliteConfig(
-        database="/tmp/test.db",
-        timeout=30.0,
-    )
+    config = SqliteConfig(database="/tmp/test.db", timeout=30.0)
 
     connection = config.create_connection()
 
     # Verify connection creation was called with correct parameters
-    mock_connect.assert_called_once_with(
-        database="/tmp/test.db",
-        timeout=30.0,
-    )
+    mock_connect.assert_called_once_with(database="/tmp/test.db", timeout=30.0)
     assert connection is mock_connection
 
 
@@ -172,18 +166,10 @@ def test_sqlite_config_provide_session(mock_connect: Mock) -> None:
 
 def test_sqlite_config_connection_config_dict() -> None:
     """Test SQLite config connection_config_dict property."""
-    config = SqliteConfig(
-        database="/tmp/test.db",
-        timeout=30.0,
-        check_same_thread=False,
-    )
+    config = SqliteConfig(database="/tmp/test.db", timeout=30.0, check_same_thread=False)
 
     config_dict = config.connection_config_dict
-    expected = {
-        "database": "/tmp/test.db",
-        "timeout": 30.0,
-        "check_same_thread": False,
-    }
+    expected = {"database": "/tmp/test.db", "timeout": 30.0, "check_same_thread": False}
 
     # Check that all expected keys are present
     for key, value in expected.items():
@@ -229,10 +215,7 @@ def test_sqlite_config_uri_database() -> None:
 def test_sqlite_config_isolation_levels() -> None:
     """Test SQLite config with different isolation levels."""
     for isolation_level in [None, "DEFERRED", "IMMEDIATE", "EXCLUSIVE"]:
-        config = SqliteConfig(
-            database=":memory:",
-            isolation_level=isolation_level,
-        )
+        config = SqliteConfig(database=":memory:", isolation_level=isolation_level)
         assert config.isolation_level == isolation_level
 
 
@@ -241,21 +224,14 @@ def test_sqlite_config_detect_types() -> None:
     import sqlite3
 
     for detect_types in [0, sqlite3.PARSE_DECLTYPES, sqlite3.PARSE_COLNAMES]:
-        config = SqliteConfig(
-            database=":memory:",
-            detect_types=detect_types,
-        )
+        config = SqliteConfig(database=":memory:", detect_types=detect_types)
         assert config.detect_types == detect_types
 
 
 def test_sqlite_config_from_connection_config() -> None:
     """Test SQLite config creation from old-style connection_config for backward compatibility."""
     # Test basic backward compatibility
-    connection_config = {
-        "database": "/tmp/test.db",
-        "timeout": 30.0,
-        "check_same_thread": False,
-    }
+    connection_config = {"database": "/tmp/test.db", "timeout": 30.0, "check_same_thread": False}
     config = SqliteConfig.from_connection_config(connection_config)
     assert config.database == "/tmp/test.db"
     assert config.timeout == 30.0

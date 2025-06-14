@@ -363,15 +363,15 @@ class TestObStoreBackend:
         with pytest.raises(StorageOperationFailedError, match="Failed to stream Arrow data"):
             list(backend.stream_arrow("*.parquet"))
 
-    def test_instrumentation_with_debug_mode(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Test instrumentation with debug mode enabled."""
+    def test_instrumentation_with_logging(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Test instrumentation with logging enabled."""
         with patch("sqlspec.typing.OBSTORE_INSTALLED", True):
             mock_store = MagicMock()
             mock_store.read_arrow = MagicMock()
             mock_store.write_arrow = MagicMock()
 
             with patch("obstore.store.from_url", return_value=mock_store):
-                config = InstrumentationConfig(debug_mode=True)
+                config = InstrumentationConfig()
 
                 with caplog.at_level(logging.DEBUG):
                     # Initialize backend with debug mode to trigger debug log

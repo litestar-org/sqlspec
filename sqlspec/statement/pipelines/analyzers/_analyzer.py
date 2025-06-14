@@ -8,7 +8,7 @@ from sqlglot import exp
 from sqlglot.errors import ParseError as SQLGlotParseError
 
 from sqlspec.statement.pipelines.base import ProcessorProtocol
-from sqlspec.statement.pipelines.results import ProcessorResult, ValidationResult
+from sqlspec.statement.pipelines.result_types import AnalysisFinding
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 
@@ -18,10 +18,7 @@ if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
     from sqlspec.statement.sql import SQLConfig
 
-__all__ = (
-    "StatementAnalysis",
-    "StatementAnalyzer",
-)
+__all__ = ("StatementAnalysis", "StatementAnalyzer")
 
 # Constants for statement analysis
 HIGH_SUBQUERY_COUNT_THRESHOLD = 10
@@ -99,7 +96,7 @@ class StatementAnalysis:
     """Number of CTEs (Common Table Expressions)"""
 
 
-class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
+class StatementAnalyzer(ProcessorProtocol):
     """SQL statement analyzer that extracts metadata and insights from SQL statements.
 
     This processor analyzes SQL expressions to extract useful metadata without
@@ -132,49 +129,39 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         self._parse_cache: dict[tuple[str, Optional[str]], exp.Expression] = {}
         self._analysis_cache: dict[str, StatementAnalysis] = {}
 
-    def process(self, context: "SQLProcessingContext") -> "ProcessorResult":
+    def process(self, expression: "exp.Expression", context: "SQLProcessingContext") -> "exp.Expression":
         """Process the SQL expression to extract analysis metadata and store it in the context."""
-        correlation_id = CorrelationContext.get()
+        CorrelationContext.get()
         start_time = time.perf_counter()
 
-        if not context.config.enable_analysis or context.current_expression is None:
-            return ProcessorResult(expression=context.current_expression)
+        if not context.config.enable_analysis:
+            return expression
 
-        if context.config.debug_mode:
-            logger.debug(
-                "Starting SQL analysis",
-                extra={
-                    "sql_type": type(context.current_expression).__name__,
-                    "correlation_id": correlation_id,
-                },
-            )
-
-        analysis_result_obj = self.analyze_expression(
-            context.current_expression, context.dialect, context.config, context.validation_result
-        )
-        context.analysis_result = analysis_result_obj
+        analysis_result_obj = self.analyze_expression(expression, context.dialect, context.config)
 
         duration = time.perf_counter() - start_time
 
-        if context.config.debug_mode:
-            logger.debug(
-                "Completed SQL analysis in %.3fms",
-                duration * 1000,
-                extra={
-                    "duration_ms": duration * 1000,
-                    "statement_type": analysis_result_obj.statement_type,
-                    "table_count": len(analysis_result_obj.tables),
-                    "has_subqueries": analysis_result_obj.uses_subqueries,
-                    "join_count": analysis_result_obj.join_count,
-                    "correlation_id": correlation_id,
-                },
-            )
+        # Add analysis findings to context
+        if analysis_result_obj.complexity_warnings:
+            for warning in analysis_result_obj.complexity_warnings:
+                finding = AnalysisFinding(key="complexity_warning", value=warning, processor=self.__class__.__name__)
+                context.analysis_findings.append(finding)
 
-        return ProcessorResult(
-            expression=context.current_expression,
-            analysis_result=analysis_result_obj,
-            metadata={"duration_ms": duration * 1000},
-        )
+        if analysis_result_obj.complexity_issues:
+            for issue in analysis_result_obj.complexity_issues:
+                finding = AnalysisFinding(key="complexity_issue", value=issue, processor=self.__class__.__name__)
+                context.analysis_findings.append(finding)
+
+        # Store metadata in context
+        context.metadata[self.__class__.__name__] = {
+            "duration_ms": duration * 1000,
+            "statement_type": analysis_result_obj.statement_type,
+            "table_count": len(analysis_result_obj.tables),
+            "has_subqueries": analysis_result_obj.uses_subqueries,
+            "join_count": analysis_result_obj.join_count,
+            "complexity_score": analysis_result_obj.complexity_score,
+        }
+        return expression
 
     def analyze_statement(self, sql_string: str, dialect: "Optional[DialectType]" = None) -> StatementAnalysis:
         """Analyze SQL string and extract components efficiently.
@@ -213,19 +200,12 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
             except (SQLGlotParseError, Exception) as e:
                 logger.warning("Failed to parse SQL statement: %s", e)
                 # Return minimal analysis for bad SQL
-                return StatementAnalysis(
-                    statement_type="Unknown",
-                    expression=exp.Anonymous(this="UNKNOWN"),
-                )
+                return StatementAnalysis(statement_type="Unknown", expression=exp.Anonymous(this="UNKNOWN"))
 
         return self.analyze_expression(expr)
 
     def analyze_expression(
-        self,
-        expression: exp.Expression,
-        dialect: "Optional[DialectType]" = None,
-        config: "Optional[SQLConfig]" = None,
-        validation_result: "Optional[ValidationResult]" = None,
+        self, expression: exp.Expression, dialect: "Optional[DialectType]" = None, config: "Optional[SQLConfig]" = None
     ) -> StatementAnalysis:
         """Analyze a SQLGlot expression directly, potentially using validation results for context."""
         # Check cache first (using expression.sql() as key)
@@ -251,8 +231,8 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
             aggregate_functions=self._extract_aggregate_functions(expression),
         )
 
-        # Enhanced complexity analysis, potentially using validation_result for context
-        self._analyze_complexity(expression, analysis, validation_result)
+        # Enhanced complexity analysis
+        self._analyze_complexity(expression, analysis)
         analysis.complexity_score = self._calculate_comprehensive_complexity_score(analysis)
 
         # Populate additional fields for aggregator compatibility
@@ -266,15 +246,10 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
             self._analysis_cache[cache_key] = analysis
         return analysis
 
-    def _analyze_complexity(
-        self,
-        expression: exp.Expression,
-        analysis: StatementAnalysis,
-        validation_result: "Optional[ValidationResult]" = None,
-    ) -> None:
-        """Perform comprehensive complexity analysis, potentially using validation results."""
+    def _analyze_complexity(self, expression: exp.Expression, analysis: StatementAnalysis) -> None:
+        """Perform comprehensive complexity analysis."""
         # Analyze JOIN complexity
-        join_analysis_res = self._analyze_joins(expression, validation_result)
+        join_analysis_res = self._analyze_joins(expression)
         analysis.join_types = join_analysis_res["join_types"]
         analysis.potential_cartesian_products = join_analysis_res["potential_cartesian_products"]
         analysis.complexity_warnings.extend(join_analysis_res["warnings"])
@@ -299,10 +274,8 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         analysis.complexity_warnings.extend(function_analysis["warnings"])
         analysis.complexity_issues.extend(function_analysis["issues"])
 
-    def _analyze_joins(
-        self, expression: exp.Expression, validation_result: "Optional[ValidationResult]" = None
-    ) -> "dict[str, Any]":
-        """Analyze JOIN operations. Can use validation_result to check for pre-identified cartesian products."""
+    def _analyze_joins(self, expression: exp.Expression) -> "dict[str, Any]":
+        """Analyze JOIN operations for potential issues."""
         join_types: dict[str, int] = {}
         join_nodes = list(expression.find_all(exp.Join))
         join_count = len(join_nodes)
@@ -427,11 +400,7 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         elif total_conditions > self.max_where_conditions // 2:
             warnings.append(f"Complex WHERE clause ({total_conditions} conditions)")
 
-        return {
-            "total_where_conditions": total_conditions,
-            "warnings": warnings,
-            "issues": issues,
-        }
+        return {"total_where_conditions": total_conditions, "warnings": warnings, "issues": issues}
 
     def _analyze_functions(self, expression: exp.Expression) -> "dict[str, Any]":
         """Analyze function usage and complexity."""
@@ -462,11 +431,7 @@ class StatementAnalyzer(ProcessorProtocol[exp.Expression]):
         if nested_functions > NESTED_FUNCTION_THRESHOLD:
             warnings.append(f"Multiple nested function calls ({nested_functions})")
 
-        return {
-            "function_count": function_count,
-            "warnings": warnings,
-            "issues": issues,
-        }
+        return {"function_count": function_count, "warnings": warnings, "issues": issues}
 
     @staticmethod
     def _calculate_comprehensive_complexity_score(analysis: StatementAnalysis) -> int:

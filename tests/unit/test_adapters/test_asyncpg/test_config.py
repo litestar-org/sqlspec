@@ -313,23 +313,14 @@ def test_asyncpg_config_ssl_configuration() -> None:
     ssl_context = ssl.create_default_context()
 
     config = AsyncpgConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        database="test_db",
-        ssl=ssl_context,
+        host="localhost", port=5432, user="test_user", password="test_password", database="test_db", ssl=ssl_context
     )
     assert config.ssl is ssl_context
 
 
 def test_asyncpg_config_server_settings() -> None:
     """Test asyncpg config with server settings."""
-    server_settings = {
-        "application_name": "test_app",
-        "timezone": "UTC",
-        "search_path": "public,test_schema",
-    }
+    server_settings = {"application_name": "test_app", "timezone": "UTC", "search_path": "public,test_schema"}
 
     config = AsyncpgConfig(
         host="localhost",
@@ -358,17 +349,17 @@ def test_asyncpg_config_timeouts() -> None:
 
 
 def test_asyncpg_config_is_async() -> None:
-    """Test asyncpg config __is_async__ attribute."""
+    """Test asyncpg config is_async attribute."""
     config = AsyncpgConfig(host="localhost", port=5432, user="test_user", password="test_password", database="test_db")
-    assert config.__is_async__ is True
-    assert AsyncpgConfig.__is_async__ is True
+    assert config.is_async is True
+    assert AsyncpgConfig.is_async is True
 
 
 def test_asyncpg_config_supports_connection_pooling() -> None:
-    """Test asyncpg config __supports_connection_pooling__ attribute."""
+    """Test asyncpg config supports_connection_pooling attribute."""
     config = AsyncpgConfig(host="localhost", port=5432, user="test_user", password="test_password", database="test_db")
-    assert config.__supports_connection_pooling__ is True
-    assert AsyncpgConfig.__supports_connection_pooling__ is True
+    assert config.supports_connection_pooling is True
+    assert AsyncpgConfig.supports_connection_pooling is True
 
 
 def test_asyncpg_config_dsn_configuration() -> None:
@@ -434,11 +425,7 @@ def test_asyncpg_config_from_pool_config() -> None:
     assert config.extras == {}
 
     # Test with connection config
-    connection_config = {
-        "host": "conn_host",
-        "port": 5433,
-        "connect_timeout": 30.0,
-    }
+    connection_config = {"host": "conn_host", "port": 5433, "connect_timeout": 30.0}
     pool_config_override = {
         "host": "pool_host",  # Should override connection_config
         "port": 5432,
@@ -473,12 +460,7 @@ def test_asyncpg_config_from_pool_config() -> None:
 
 def test_asyncpg_config_with_extras() -> None:
     """Test asyncpg config with minimal configuration and extras."""
-    config = AsyncpgConfig(
-        user="test_user",
-        password="test_password",
-        database="test_db",
-        custom_option="custom_value",
-    )
+    config = AsyncpgConfig(user="test_user", password="test_password", database="test_db", custom_option="custom_value")
 
     # Should work without host/port
     assert config.user == "test_user"

@@ -8,7 +8,8 @@ from sqlspec.exceptions import RiskLevel, SQLValidationError
 from sqlspec.statement.filters import LimitOffsetFilter
 from sqlspec.statement.parameters import ParameterInfo, ParameterStyle
 from sqlspec.statement.pipelines.base import ValidationResult
-from sqlspec.statement.pipelines.context import SQLProcessingContext, StatementPipelineResult
+from sqlspec.statement.pipelines.context import PipelineResult, SQLProcessingContext
+from sqlspec.statement.pipelines.result_types import ValidationError
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -119,14 +120,16 @@ class TestSQLHelperMethods:
         context.current_expression = Mock()
 
         mock_pipeline = Mock()
-        mock_result = StatementPipelineResult(
-            final_expression=context.current_expression,
+        mock_context = SQLProcessingContext(
+            initial_sql_string="SELECT * FROM users WHERE id = ?",
+            dialect=None,
+            config=sql_instance._config,
+            current_expression=context.current_expression,
             merged_parameters=[1],
             parameter_info=[],
-            validation_result=ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP),
-            analysis_result=None,
             input_sql_had_placeholders=False,
         )
+        mock_result = PipelineResult(expression=context.current_expression, context=mock_context)
         mock_pipeline.execute_pipeline.return_value = mock_result
 
         with patch.object(sql_instance._config, "get_statement_pipeline", return_value=mock_pipeline):
@@ -141,54 +144,65 @@ class TestSQLHelperMethods:
         context = sql_dict._prepare_processing_context()
         context.extracted_parameters_from_pipeline = [1, 2, 3]
 
-        pipeline_result = StatementPipelineResult(
-            final_expression=Mock(),
+        mock_context = SQLProcessingContext(
+            initial_sql_string="SELECT * FROM users",
+            dialect=None,
+            config=config,
+            current_expression=Mock(),
             merged_parameters={"existing": "value"},
             parameter_info=[],
-            validation_result=ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP),
-            analysis_result=None,
             input_sql_had_placeholders=False,
         )
+        pipeline_result = PipelineResult(expression=Mock(), context=mock_context)
 
         SQL._merge_extracted_parameters(pipeline_result, context)
 
-        assert pipeline_result.merged_parameters == {"existing": "value", "param_0": 1, "param_1": 2, "param_2": 3}
+        assert pipeline_result.context.merged_parameters == {
+            "existing": "value",
+            "param_0": 1,
+            "param_1": 2,
+            "param_2": 3,
+        }
 
     def test_merge_extracted_parameters_list(self, sql_instance: SQL) -> None:
         """Test _merge_extracted_parameters with list parameters."""
         context = sql_instance._prepare_processing_context()
         context.extracted_parameters_from_pipeline = [4, 5]
 
-        pipeline_result = StatementPipelineResult(
-            final_expression=Mock(),
+        mock_context = SQLProcessingContext(
+            initial_sql_string="SELECT * FROM users WHERE id = ?",
+            dialect=None,
+            config=sql_instance._config,
+            current_expression=Mock(),
             merged_parameters=[1, 2, 3],
             parameter_info=[],
-            validation_result=ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP),
-            analysis_result=None,
             input_sql_had_placeholders=False,
         )
+        pipeline_result = PipelineResult(expression=Mock(), context=mock_context)
 
         SQL._merge_extracted_parameters(pipeline_result, context)
 
-        assert pipeline_result.merged_parameters == [1, 2, 3, 4, 5]
+        assert pipeline_result.context.merged_parameters == [1, 2, 3, 4, 5]
 
     def test_merge_extracted_parameters_none(self, sql_instance: SQL) -> None:
         """Test _merge_extracted_parameters with None parameters."""
         context = sql_instance._prepare_processing_context()
         context.extracted_parameters_from_pipeline = [1, 2]
 
-        pipeline_result = StatementPipelineResult(
-            final_expression=Mock(),
+        mock_context = SQLProcessingContext(
+            initial_sql_string="SELECT * FROM users WHERE id = ?",
+            dialect=None,
+            config=sql_instance._config,
+            current_expression=Mock(),
             merged_parameters=None,
             parameter_info=[],
-            validation_result=ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP),
-            analysis_result=None,
             input_sql_had_placeholders=False,
         )
+        pipeline_result = PipelineResult(expression=Mock(), context=mock_context)
 
         SQL._merge_extracted_parameters(pipeline_result, context)
 
-        assert pipeline_result.merged_parameters == [1, 2]
+        assert pipeline_result.context.merged_parameters == [1, 2]
 
     def test_run_validation_only(self, sql_instance: SQL) -> None:
         """Skip this test for now."""
@@ -225,14 +239,17 @@ class TestSQLHelperMethods:
         """Skip this test for now."""
         pytest.skip("Internal method test - needs refactoring")
         """Test _build_processed_state with safe SQL."""
-        pipeline_result = StatementPipelineResult(
-            final_expression=Mock(),
+        mock_context = SQLProcessingContext(
+            initial_sql_string="SELECT * FROM users WHERE id = ?",
+            dialect=None,
+            config=SQLConfig(strict_mode=True),
+            current_expression=Mock(),
             merged_parameters=[1],
             parameter_info=[],
-            validation_result=ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP),
-            analysis_result=None,
             input_sql_had_placeholders=False,
         )
+        mock_context.validation_errors = []  # No errors means safe
+        pipeline_result = PipelineResult(expression=Mock(), context=mock_context)
 
         state = sql_instance._build_processed_state(pipeline_result, SQLConfig(strict_mode=True))
 
@@ -243,18 +260,26 @@ class TestSQLHelperMethods:
         """Skip this test for now."""
         pytest.skip("Internal method test - needs refactoring")
         """Test _build_processed_state with unsafe SQL in strict mode."""
-        validation_result = ValidationResult(
-            is_safe=False, risk_level=RiskLevel.HIGH, issues=["SQL injection detected"], warnings=[]
-        )
-
-        pipeline_result = StatementPipelineResult(
-            final_expression=Mock(),
+        mock_context = SQLProcessingContext(
+            initial_sql_string="SELECT * FROM users WHERE id = ?",
+            dialect=None,
+            config=SQLConfig(strict_mode=True),
+            current_expression=Mock(),
             merged_parameters=[1],
             parameter_info=[],
-            validation_result=validation_result,
-            analysis_result=None,
             input_sql_had_placeholders=False,
         )
+        # Add validation errors to indicate unsafe
+        mock_context.validation_errors = [
+            ValidationError(
+                message="SQL injection detected",
+                code="sql-injection",
+                risk_level=RiskLevel.HIGH,
+                processor="test",
+                expression=None,
+            )
+        ]
+        pipeline_result = PipelineResult(expression=Mock(), context=mock_context)
 
         with pytest.raises(SQLValidationError) as exc_info:
             sql_instance._build_processed_state(pipeline_result, SQLConfig(strict_mode=True))
@@ -265,18 +290,26 @@ class TestSQLHelperMethods:
         """Skip this test for now."""
         pytest.skip("Internal method test - needs refactoring")
         """Test _build_processed_state with unsafe SQL in non-strict mode."""
-        validation_result = ValidationResult(
-            is_safe=False, risk_level=RiskLevel.HIGH, issues=["SQL injection detected"], warnings=[]
-        )
-
-        pipeline_result = StatementPipelineResult(
-            final_expression=Mock(),
+        mock_context = SQLProcessingContext(
+            initial_sql_string="SELECT * FROM users WHERE id = ?",
+            dialect=None,
+            config=SQLConfig(strict_mode=False),
+            current_expression=Mock(),
             merged_parameters=[1],
             parameter_info=[],
-            validation_result=validation_result,
-            analysis_result=None,
             input_sql_had_placeholders=False,
         )
+        # Add validation errors to indicate unsafe
+        mock_context.validation_errors = [
+            ValidationError(
+                message="SQL injection detected",
+                code="sql-injection",
+                risk_level=RiskLevel.HIGH,
+                processor="test",
+                expression=None,
+            )
+        ]
+        pipeline_result = PipelineResult(expression=Mock(), context=mock_context)
 
         state = sql_instance._build_processed_state(pipeline_result, SQLConfig(strict_mode=False))
 
@@ -291,14 +324,16 @@ class TestSQLHelperMethods:
         mock_pipeline = Mock()
         mock_expression = Mock()
         mock_expression.sql.return_value = "SELECT * FROM users WHERE name = 'test'"
-        mock_result = StatementPipelineResult(
-            final_expression=mock_expression,
+        mock_context = SQLProcessingContext(
+            initial_sql_string="SELECT * FROM users WHERE name = 'test'",
+            dialect=None,
+            config=config,
+            current_expression=mock_expression,
             merged_parameters=["test"],
             parameter_info=[],
-            validation_result=ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP),
-            analysis_result=None,
             input_sql_had_placeholders=False,
         )
+        mock_result = PipelineResult(expression=mock_expression, context=mock_context)
         mock_pipeline.execute_pipeline.return_value = mock_result
 
         with patch.object(config, "get_statement_pipeline", return_value=mock_pipeline):

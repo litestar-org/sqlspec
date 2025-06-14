@@ -145,12 +145,7 @@ class SelectBuilder(
         Returns:
             The current builder instance for method chaining.
         """
-        self._hints.append({
-            "hint": hint,
-            "location": location,
-            "table": table,
-            "dialect": dialect,
-        })
+        self._hints.append({"hint": hint, "location": location, "table": table, "dialect": dialect})
         return self
 
     def build(self) -> "SafeQuery":
@@ -175,14 +170,15 @@ class SelectBuilder(
                     for hint in statement_hints:
                         try:
                             # Try to parse hint as an expression (e.g., "INDEX(users idx_name)")
-                            hint_expr = exp.maybe_parse(hint, dialect=self.dialect_name)
+                            hint_str = str(hint)  # Ensure hint is a string
+                            hint_expr: Optional[exp.Expression] = exp.maybe_parse(hint_str, dialect=self.dialect_name)
                             if hint_expr:
                                 hint_expressions.append(hint_expr)
                             else:
                                 # Create a raw identifier for unparsable hints
-                                hint_expressions.append(exp.Anonymous(this=hint))
+                                hint_expressions.append(exp.Anonymous(this=hint_str))
                         except Exception:  # noqa: PERF203
-                            hint_expressions.append(exp.Anonymous(this=hint))
+                            hint_expressions.append(exp.Anonymous(this=str(hint)))
 
                     # Create a Hint node and attach to SELECT
                     if hint_expressions:

@@ -147,9 +147,4 @@ def parse_condition_expression(
     return exp.condition(condition_input)
 
 
-__all__ = (
-    "parse_column_expression",
-    "parse_condition_expression",
-    "parse_order_expression",
-    "parse_table_expression",
-)
+__all__ = ("parse_column_expression", "parse_condition_expression", "parse_order_expression", "parse_table_expression")

@@ -108,11 +108,7 @@ class TestCorrelationMiddleware:
 
             # Simulate sending response start
             await actual_send(
-                {
-                    "type": "http.response.start",
-                    "status": 200,
-                    "headers": [(b"content-type", b"application/json")],
-                }
+                {"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json")]}
             )
 
             # Check that correlation ID was added to headers

@@ -43,18 +43,8 @@ from sqlspec.adapters.duckdb import DuckDBConfig
 # SQLSpec imports
 from sqlspec.base import sql
 from sqlspec.extensions.aiosql import AiosqlLoader
-from sqlspec.statement.builder import (
-    DeleteBuilder,
-    InsertBuilder,
-    MergeBuilder,
-    SelectBuilder,
-    UpdateBuilder,
-)
-from sqlspec.statement.filters import (
-    LimitOffsetFilter,
-    OrderByFilter,
-    SearchFilter,
-)
+from sqlspec.statement.builder import DeleteBuilder, InsertBuilder, MergeBuilder, SelectBuilder, UpdateBuilder
+from sqlspec.statement.filters import LimitOffsetFilter, OrderByFilter, SearchFilter
 from sqlspec.statement.sql import SQL, SQLConfig
 
 # Display constants
@@ -523,11 +513,7 @@ def analysis() -> None:
     )
 
     # Create analyzer with custom config
-    config = SQLConfig(
-        enable_analysis=True,
-        enable_validation=True,
-        enable_transformations=True,
-    )
+    config = SQLConfig(enable_analysis=True, enable_validation=True, enable_transformations=True)
 
     # Demo queries with different complexity levels
     queries = [

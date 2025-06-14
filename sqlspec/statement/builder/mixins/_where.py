@@ -49,8 +49,7 @@ class WhereClauseMixin:
             # Handle tuple format with proper parameter binding
             param_name = builder.add_parameter(condition[1])[1]
             condition_expr = exp.EQ(
-                this=parse_column_expression(condition[0]),
-                expression=exp.Placeholder(this=param_name),
+                this=parse_column_expression(condition[0]), expression=exp.Placeholder(this=param_name)
             )
         else:
             condition_expr = parse_condition_expression(condition)

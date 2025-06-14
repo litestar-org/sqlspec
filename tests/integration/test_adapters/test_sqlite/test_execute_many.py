@@ -12,10 +12,7 @@ from sqlspec.statement.sql import SQLConfig
 @pytest.fixture
 def sqlite_batch_session() -> "Generator[SqliteDriver, None, None]":
     """Create a SQLite session for batch operation testing."""
-    config = SqliteConfig(
-        database=":memory:",
-        statement_config=SQLConfig(strict_mode=False),
-    )
+    config = SqliteConfig(database=":memory:", statement_config=SQLConfig(strict_mode=False))
 
     with config.provide_session() as session:
         # Create test table
@@ -41,8 +38,7 @@ def test_sqlite_execute_many_basic(sqlite_batch_session: SqliteDriver) -> None:
     ]
 
     result = sqlite_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)",
-        parameters,
+        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -59,24 +55,13 @@ def test_sqlite_execute_many_update(sqlite_batch_session: SqliteDriver) -> None:
     # First insert some data
     sqlite_batch_session.execute_many(
         "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)",
-        [
-            ("Update 1", 10, "X"),
-            ("Update 2", 20, "Y"),
-            ("Update 3", 30, "Z"),
-        ],
+        [("Update 1", 10, "X"), ("Update 2", 20, "Y"), ("Update 3", 30, "Z")],
     )
 
     # Now update with execute_many
-    update_params = [
-        (100, "Update 1"),
-        (200, "Update 2"),
-        (300, "Update 3"),
-    ]
+    update_params = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
 
-    result = sqlite_batch_session.execute_many(
-        "UPDATE test_batch SET value = ? WHERE name = ?",
-        update_params,
-    )
+    result = sqlite_batch_session.execute_many("UPDATE test_batch SET value = ? WHERE name = ?", update_params)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
@@ -89,10 +74,7 @@ def test_sqlite_execute_many_update(sqlite_batch_session: SqliteDriver) -> None:
 
 def test_sqlite_execute_many_empty(sqlite_batch_session: SqliteDriver) -> None:
     """Test execute_many with empty parameter list on SQLite."""
-    result = sqlite_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)",
-        [],
-    )
+    result = sqlite_batch_session.execute_many("INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)", [])
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 0
@@ -112,8 +94,7 @@ def test_sqlite_execute_many_mixed_types(sqlite_batch_session: SqliteDriver) -> 
     ]
 
     result = sqlite_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)",
-        parameters,
+        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -125,10 +106,7 @@ def test_sqlite_execute_many_mixed_types(sqlite_batch_session: SqliteDriver) -> 
     assert null_result.data[0]["name"] == "Another Item"
 
     # Verify float value was stored correctly
-    float_result = sqlite_batch_session.execute(
-        "SELECT * FROM test_batch WHERE name = ?",
-        ("Float Item",),
-    )
+    float_result = sqlite_batch_session.execute("SELECT * FROM test_batch WHERE name = ?", ("Float Item",))
     assert len(float_result.data) == 1
     assert float_result.data[0]["value"] == 78.5
 
@@ -148,16 +126,9 @@ def test_sqlite_execute_many_delete(sqlite_batch_session: SqliteDriver) -> None:
     )
 
     # Delete specific items by name
-    delete_params = [
-        ("Delete 1",),
-        ("Delete 2",),
-        ("Delete 4",),
-    ]
+    delete_params = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
 
-    result = sqlite_batch_session.execute_many(
-        "DELETE FROM test_batch WHERE name = ?",
-        delete_params,
-    )
+    result = sqlite_batch_session.execute_many("DELETE FROM test_batch WHERE name = ?", delete_params)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
@@ -178,8 +149,7 @@ def test_sqlite_execute_many_large_batch(sqlite_batch_session: SqliteDriver) -> 
     large_batch = [(f"Item {i}", i * 10, f"CAT{i % 3}") for i in range(1000)]
 
     result = sqlite_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)",
-        large_batch,
+        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)", large_batch
     )
 
     assert isinstance(result, SQLResult)
@@ -191,8 +161,7 @@ def test_sqlite_execute_many_large_batch(sqlite_batch_session: SqliteDriver) -> 
 
     # Verify some specific values
     sample_result = sqlite_batch_session.execute(
-        "SELECT * FROM test_batch WHERE name IN (?, ?, ?) ORDER BY value",
-        ("Item 100", "Item 500", "Item 999"),
+        "SELECT * FROM test_batch WHERE name IN (?, ?, ?) ORDER BY value", ("Item 100", "Item 500", "Item 999")
     )
     assert len(sample_result.data) == 3
     assert sample_result.data[0]["value"] == 1000  # Item 100
@@ -204,11 +173,7 @@ def test_sqlite_execute_many_with_sql_object(sqlite_batch_session: SqliteDriver)
     """Test execute_many with SQL object on SQLite."""
     from sqlspec.statement.sql import SQL
 
-    parameters = [
-        ("SQL Obj 1", 111, "SOB"),
-        ("SQL Obj 2", 222, "SOB"),
-        ("SQL Obj 3", 333, "SOB"),
-    ]
+    parameters = [("SQL Obj 1", 111, "SOB"), ("SQL Obj 2", 222, "SOB"), ("SQL Obj 3", 333, "SOB")]
 
     sql_obj = SQL("INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)").as_many(parameters)
 
@@ -218,10 +183,7 @@ def test_sqlite_execute_many_with_sql_object(sqlite_batch_session: SqliteDriver)
     assert result.rows_affected == 3
 
     # Verify data
-    check_result = sqlite_batch_session.execute(
-        "SELECT COUNT(*) as count FROM test_batch WHERE category = ?",
-        ("SOB",),
-    )
+    check_result = sqlite_batch_session.execute("SELECT COUNT(*) as count FROM test_batch WHERE category = ?", ("SOB",))
     assert check_result.data[0]["count"] == 3
 
 
@@ -229,21 +191,15 @@ def test_sqlite_execute_many_transaction_rollback(sqlite_batch_session: SqliteDr
     """Test execute_many with transaction rollback on SQLite."""
     # Insert initial data
     sqlite_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)",
-        [("Initial", 1, "I")],
+        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)", [("Initial", 1, "I")]
     )
 
     # Test transaction behavior (SQLite in memory is auto-commit by default)
     # This test verifies the execute_many itself works correctly
-    parameters = [
-        ("Trans 1", 1000, "T"),
-        ("Trans 2", 2000, "T"),
-        ("Trans 3", 3000, "T"),
-    ]
+    parameters = [("Trans 1", 1000, "T"), ("Trans 2", 2000, "T"), ("Trans 3", 3000, "T")]
 
     result = sqlite_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)",
-        parameters,
+        "INSERT INTO test_batch (name, value, category) VALUES (?, ?, ?)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -266,15 +222,10 @@ def test_sqlite_execute_many_with_constraints(sqlite_batch_session: SqliteDriver
     """)
 
     # First batch should succeed
-    success_params = [
-        (1, "unique1", 100),
-        (2, "unique2", 200),
-        (3, "unique3", 300),
-    ]
+    success_params = [(1, "unique1", 100), (2, "unique2", 200), (3, "unique3", 300)]
 
     result = sqlite_batch_session.execute_many(
-        "INSERT INTO test_unique (id, unique_name, value) VALUES (?, ?, ?)",
-        success_params,
+        "INSERT INTO test_unique (id, unique_name, value) VALUES (?, ?, ?)", success_params
     )
 
     assert isinstance(result, SQLResult)
@@ -289,8 +240,7 @@ def test_sqlite_execute_many_with_constraints(sqlite_batch_session: SqliteDriver
 
     with pytest.raises(Exception):  # SQLite will raise an integrity error
         sqlite_batch_session.execute_many(
-            "INSERT INTO test_unique (id, unique_name, value) VALUES (?, ?, ?)",
-            duplicate_params,
+            "INSERT INTO test_unique (id, unique_name, value) VALUES (?, ?, ?)", duplicate_params
         )
 
     # Verify original data plus first row from failed batch

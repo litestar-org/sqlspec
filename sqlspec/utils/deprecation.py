@@ -49,10 +49,7 @@ def warn_deprecation(
         parts.append(f"{access_type} deprecated {kind} '{deprecated_name}'")  # pyright: ignore[reportUnknownMemberType]
 
     parts.extend(  # pyright: ignore[reportUnknownMemberType]
-        (
-            f"Deprecated in SQLSpec {version}",
-            f"This {kind} will be removed in {removal_in or 'the next major version'}",
-        ),
+        (f"Deprecated in SQLSpec {version}", f"This {kind} will be removed in {removal_in or 'the next major version'}")
     )
     if alternative:
         parts.append(f"Use {alternative!r} instead")  # pyright: ignore[reportUnknownMemberType]

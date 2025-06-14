@@ -81,35 +81,19 @@ class MockSyncDriver(SyncDriverAdapterProtocol[MockConnection, DictRow], SyncIns
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.NAMED_COLON
 
-    def _execute_statement(
-        self,
-        statement: SQL,
-        connection: MockConnection | None = None,
-        **kwargs: Any,
-    ) -> Any:
+    def _execute_statement(self, statement: SQL, connection: MockConnection | None = None, **kwargs: Any) -> Any:
         conn = connection or self.connection
         if statement.is_script:
             return "Script executed successfully"
         return conn.execute(statement.sql, statement.parameters)
 
-    def _wrap_select_result(
-        self,
-        statement: SQL,
-        result: Any,
-        schema_type: type | None = None,
-        **kwargs: Any,
-    ) -> Mock:
+    def _wrap_select_result(self, statement: SQL, result: Any, schema_type: type | None = None, **kwargs: Any) -> Mock:
         mock_result = Mock()
         mock_result.rows = result
         mock_result.row_count = len(result) if hasattr(result, "__len__") and result else 0
         return mock_result  # type: ignore
 
-    def _wrap_execute_result(
-        self,
-        statement: SQL,
-        result: Any,
-        **kwargs: Any,
-    ) -> Mock:
+    def _wrap_execute_result(self, statement: SQL, result: Any, **kwargs: Any) -> Mock:
         result = Mock()
         result.affected_count = 1
         result.last_insert_id = None
@@ -144,10 +128,7 @@ class MockAsyncDriver(AsyncDriverAdapterProtocol[MockAsyncConnection, DictRow], 
         return ParameterStyle.NAMED_COLON
 
     async def _execute_statement(
-        self,
-        statement: SQL,
-        connection: MockAsyncConnection | None = None,
-        **kwargs: Any,
+        self, statement: SQL, connection: MockAsyncConnection | None = None, **kwargs: Any
     ) -> Any:
         conn = connection or self.connection
         if statement.is_script:
@@ -155,23 +136,14 @@ class MockAsyncDriver(AsyncDriverAdapterProtocol[MockAsyncConnection, DictRow], 
         return await conn.execute(statement.sql, statement.parameters)
 
     async def _wrap_select_result(
-        self,
-        statement: SQL,
-        result: Any,
-        schema_type: type | None = None,
-        **kwargs: Any,
+        self, statement: SQL, result: Any, schema_type: type | None = None, **kwargs: Any
     ) -> Mock:
         mock_result = Mock()
         mock_result.rows = result
         mock_result.row_count = len(result) if hasattr(result, "__len__") and result else 0
         return mock_result  # type: ignore
 
-    async def _wrap_execute_result(
-        self,
-        statement: SQL,
-        result: Any,
-        **kwargs: Any,
-    ) -> Mock:
+    async def _wrap_execute_result(self, statement: SQL, result: Any, **kwargs: Any) -> Mock:
         mock_result = Mock()
         mock_result.affected_count = 1
         mock_result.last_insert_id = None
@@ -218,10 +190,7 @@ def test_common_driver_attributes_default_values() -> None:
 def test_common_driver_attributes_setup_instrumentation() -> None:
     """Test instrumentation setup in CommonDriverAttributesMixin."""
     connection = MockConnection()
-    instrumentation_config = InstrumentationConfig(
-        enable_opentelemetry=True,
-        enable_prometheus=True,
-    )
+    instrumentation_config = InstrumentationConfig(enable_opentelemetry=True, enable_prometheus=True)
 
     with patch.object(MockSyncDriver, "_setup_opentelemetry") as mock_otel:
         with patch.object(MockSyncDriver, "_setup_prometheus") as mock_prom:
@@ -234,10 +203,7 @@ def test_common_driver_attributes_setup_instrumentation() -> None:
 def test_common_driver_attributes_setup_opentelemetry() -> None:
     """Test OpenTelemetry setup."""
     connection = MockConnection()
-    instrumentation_config = InstrumentationConfig(
-        enable_opentelemetry=True,
-        service_name="test_service",
-    )
+    instrumentation_config = InstrumentationConfig(enable_opentelemetry=True, service_name="test_service")
 
     # Mock the OpenTelemetry trace import in the common driver module
     with patch("sqlspec.driver._common.trace") as mock_trace:
@@ -254,9 +220,7 @@ def test_common_driver_attributes_setup_prometheus() -> None:
     """Test Prometheus setup."""
     connection = MockConnection()
     instrumentation_config = InstrumentationConfig(
-        enable_prometheus=True,
-        service_name="test_service",
-        custom_tags={"env": "test"},
+        enable_prometheus=True, service_name="test_service", custom_tags={"env": "test"}
     )
 
     # Mock the Prometheus imports in the common driver module
@@ -378,13 +342,7 @@ def test_sync_instrumentation_mixin_success() -> None:
     with patch("time.monotonic", side_effect=[0.0, 0.1]):  # 100ms duration
         with patch("sqlspec.utils.telemetry.logger") as mock_logger:
             result = driver.instrument_sync_operation(
-                "test_operation",
-                "database",
-                {"custom_tag": "value"},
-                mock_func,
-                driver,
-                "arg1",
-                kwarg1="value1",
+                "test_operation", "database", {"custom_tag": "value"}, mock_func, driver, "arg1", kwarg1="value1"
             )
 
             assert result == "success_result"
@@ -403,13 +361,7 @@ def test_sync_instrumentation_mixin_exception() -> None:
     with patch("time.monotonic", side_effect=[0.0, 0.1]):
         with patch("sqlspec.utils.telemetry.logger") as mock_logger:
             with pytest.raises(ValueError, match="Test error"):
-                driver.instrument_sync_operation(
-                    "test_operation",
-                    "database",
-                    {},
-                    mock_func,
-                    driver,
-                )
+                driver.instrument_sync_operation("test_operation", "database", {}, mock_func, driver)
 
             mock_logger.exception.assert_called()
 
@@ -430,11 +382,7 @@ def test_sync_instrumentation_mixin_with_opentelemetry() -> None:
 
     with patch("time.monotonic", side_effect=[0.0, 0.05]):
         result = driver.instrument_sync_operation(
-            "otel_operation",
-            "database",
-            {"custom_attr": "value"},
-            mock_func,
-            driver,
+            "otel_operation", "database", {"custom_attr": "value"}, mock_func, driver
         )
 
         assert result == "otel_result"
@@ -458,13 +406,7 @@ def test_sync_instrumentation_mixin_with_prometheus() -> None:
     mock_func = Mock(return_value="prometheus_result")
 
     with patch("time.monotonic", side_effect=[0.0, 0.02]):  # 20ms
-        result = driver.instrument_sync_operation(
-            "prometheus_operation",
-            "database",
-            {},
-            mock_func,
-            driver,
-        )
+        result = driver.instrument_sync_operation("prometheus_operation", "database", {}, mock_func, driver)
 
         assert result == "prometheus_result"
         mock_counter.labels.assert_called()
@@ -480,13 +422,7 @@ def test_sync_instrumentation_mixin_logging_disabled() -> None:
     mock_func = Mock(return_value="no_log_result")
 
     with patch("sqlspec.utils.telemetry.logger") as mock_logger:
-        result = driver.instrument_sync_operation(
-            "no_log_operation",
-            "database",
-            {},
-            mock_func,
-            driver,
-        )
+        result = driver.instrument_sync_operation("no_log_operation", "database", {}, mock_func, driver)
 
         assert result == "no_log_result"
         mock_logger.info.assert_not_called()
@@ -531,13 +467,7 @@ async def test_async_instrumentation_mixin_exception() -> None:
     with patch("time.monotonic", side_effect=[0.0, 0.1]):
         with patch("sqlspec.utils.telemetry.logger") as mock_logger:
             with pytest.raises(RuntimeError, match="Async test error"):
-                await driver.instrument_async_operation(
-                    "async_error_operation",
-                    "database",
-                    {},
-                    mock_func,
-                    driver,
-                )
+                await driver.instrument_async_operation("async_error_operation", "database", {}, mock_func, driver)
 
             mock_logger.exception.assert_called()
 
@@ -558,11 +488,7 @@ async def test_async_instrumentation_mixin_with_opentelemetry() -> None:
 
     with patch("time.monotonic", side_effect=[0.0, 0.08]):
         result = await driver.instrument_async_operation(
-            "async_otel_operation",
-            "database",
-            {"async_custom_attr": "async_value"},
-            mock_func,
-            driver,
+            "async_otel_operation", "database", {"async_custom_attr": "async_value"}, mock_func, driver
         )
 
         assert result == "async_otel_result"
@@ -587,11 +513,7 @@ async def test_async_instrumentation_mixin_with_prometheus() -> None:
 
     with patch("time.monotonic", side_effect=[0.0, 0.03]):  # 30ms
         result = await driver.instrument_async_operation(
-            "async_prometheus_operation",
-            "database",
-            {},
-            mock_func,
-            driver,
+            "async_prometheus_operation", "database", {}, mock_func, driver
         )
 
         assert result == "async_prometheus_result"
@@ -1063,10 +985,7 @@ def test_driver_instrumentation_custom_tags() -> None:
     """Test driver instrumentation with custom tags."""
     connection = MockConnection()
     custom_tags = {"env": "test", "service": "user_service", "version": "1.0.0"}
-    instrumentation_config = InstrumentationConfig(
-        enable_prometheus=True,
-        custom_tags=custom_tags,
-    )
+    instrumentation_config = InstrumentationConfig(enable_prometheus=True, custom_tags=custom_tags)
 
     driver = MockSyncDriver(connection, instrumentation_config=instrumentation_config)
 

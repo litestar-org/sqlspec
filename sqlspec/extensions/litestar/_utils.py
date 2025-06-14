@@ -3,11 +3,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from litestar.types import Scope
 
-__all__ = (
-    "delete_sqlspec_scope_state",
-    "get_sqlspec_scope_state",
-    "set_sqlspec_scope_state",
-)
+__all__ = ("delete_sqlspec_scope_state", "get_sqlspec_scope_state", "set_sqlspec_scope_state")
 
 _SCOPE_NAMESPACE = "_sqlspec"
 

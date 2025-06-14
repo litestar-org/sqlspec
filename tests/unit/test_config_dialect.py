@@ -265,13 +265,7 @@ class TestRealAdapterDialects:
         assert AsyncpgConfig.driver_class == AsyncpgDriver
 
         # Create instance and check dialect
-        config = AsyncpgConfig(
-            host="localhost",
-            port=5432,
-            database="test",
-            user="test",
-            password="test",
-        )
+        config = AsyncpgConfig(host="localhost", port=5432, database="test", user="test", password="test")
         assert config.dialect == "postgres"
 
     def test_psycopg_config_dialect(self) -> None:
@@ -297,13 +291,7 @@ class TestRealAdapterDialects:
 
         # Create instance and check dialect
         config = AsyncmyConfig(
-            pool_config={
-                "host": "localhost",
-                "port": 3306,
-                "database": "test",
-                "user": "test",
-                "password": "test",
-            }
+            pool_config={"host": "localhost", "port": 3306, "database": "test", "user": "test", "password": "test"}
         )
         assert config.dialect == "mysql"
 
@@ -315,10 +303,7 @@ class TestDialectPropagation:
         """Test that dialect is passed when building SQL statements."""
         from sqlspec.statement.sql import SQL
 
-        driver = MockDriver(
-            connection=MockConnection(),
-            config=SQLConfig(),
-        )
+        driver = MockDriver(connection=MockConnection(), config=SQLConfig())
 
         # When driver builds a statement, it should pass its dialect
         statement = driver._build_statement("SELECT * FROM users")
@@ -329,10 +314,7 @@ class TestDialectPropagation:
         """Test that dialect is passed in execute_script."""
         from sqlspec.statement.sql import SQL
 
-        driver = MockDriver(
-            connection=MockConnection(),
-            config=SQLConfig(),
-        )
+        driver = MockDriver(connection=MockConnection(), config=SQLConfig())
 
         with patch.object(driver, "_execute_statement") as mock_execute:
             mock_execute.return_value = "SCRIPT EXECUTED"
@@ -353,10 +335,7 @@ class TestDialectPropagation:
         class TestTranslatorDriver(MockDriver, SQLTranslatorMixin):
             dialect = "postgres"
 
-        driver = TestTranslatorDriver(
-            connection=MockConnection(),
-            config=SQLConfig(),
-        )
+        driver = TestTranslatorDriver(connection=MockConnection(), config=SQLConfig())
 
         # Test convert_to_dialect uses driver dialect by default
         test_sql = "SELECT * FROM users"

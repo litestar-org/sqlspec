@@ -33,10 +33,7 @@ class AiosqliteDriver(
     """Aiosqlite SQLite Driver Adapter. Modern protocol implementation."""
 
     dialect: "DialectType" = "sqlite"
-    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (
-        ParameterStyle.QMARK,
-        ParameterStyle.NAMED_COLON,
-    )
+    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK, ParameterStyle.NAMED_COLON)
     default_parameter_style: ParameterStyle = ParameterStyle.QMARK
     __supports_arrow__: ClassVar[bool] = True
     __supports_parquet__: ClassVar[bool] = False
@@ -68,10 +65,7 @@ class AiosqliteDriver(
             await cursor.close()
 
     async def _execute_statement(
-        self,
-        statement: SQL,
-        connection: Optional[AiosqliteConnection] = None,
-        **kwargs: Any,
+        self, statement: SQL, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
@@ -102,12 +96,7 @@ class AiosqliteDriver(
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
-        self,
-        sql: str,
-        parameters: Any,
-        statement: SQL,
-        connection: Optional[AiosqliteConnection] = None,
-        **kwargs: Any,
+        self, sql: str, parameters: Any, statement: SQL, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict]:
         async with instrument_operation_async(self, "aiosqlite_execute", "database"):
             conn = self._connection(connection)
@@ -151,11 +140,7 @@ class AiosqliteDriver(
                 return dml_result
 
     async def _execute_many(
-        self,
-        sql: str,
-        param_list: Any,
-        connection: Optional[AiosqliteConnection] = None,
-        **kwargs: Any,
+        self, sql: str, param_list: Any, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
         async with instrument_operation_async(self, "aiosqlite_execute_many", "database"):
             conn = self._connection(connection)
@@ -186,10 +171,7 @@ class AiosqliteDriver(
                 return result
 
     async def _execute_script(
-        self,
-        script: str,
-        connection: Optional[AiosqliteConnection] = None,
-        **kwargs: Any,
+        self, script: str, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
     ) -> ScriptResultDict:
         async with instrument_operation_async(self, "aiosqlite_execute_script", "database"):
             conn = self._connection(connection)
@@ -204,11 +186,7 @@ class AiosqliteDriver(
             return result
 
     async def _wrap_select_result(
-        self,
-        statement: SQL,
-        result: SelectResultDict,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
+        self, statement: SQL, result: SelectResultDict, schema_type: "Optional[type[ModelDTOT]]" = None, **kwargs: Any
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         async with instrument_operation_async(self, "aiosqlite_wrap_select", "database"):
             # result must be a dict with keys: data, column_names, rows_affected
@@ -239,10 +217,7 @@ class AiosqliteDriver(
             )
 
     async def _wrap_execute_result(
-        self,
-        statement: SQL,
-        result: Union[DMLResultDict, ScriptResultDict],
-        **kwargs: Any,
+        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
     ) -> SQLResult[RowT]:
         async with instrument_operation_async(self, "aiosqlite_wrap_execute", "database"):
             operation_type = "UNKNOWN"

@@ -29,9 +29,7 @@ def sync_adapter(mock_sync_driver: Mock) -> AiosqlSyncAdapter:
 def test_sync_adapter_initialization(mock_sync_driver: Mock) -> None:
     """Test sync adapter initialization."""
     adapter = AiosqlSyncAdapter(
-        mock_sync_driver,
-        default_filters=[LimitOffsetFilter(100, 0)],
-        allow_sqlspec_filters=True,
+        mock_sync_driver, default_filters=[LimitOffsetFilter(100, 0)], allow_sqlspec_filters=True
     )
 
     assert adapter.driver is mock_sync_driver
@@ -50,10 +48,7 @@ def test_sync_adapter_process_sql(sync_adapter: AiosqlSyncAdapter) -> None:
 def test_sync_adapter_extract_sqlspec_filters_dict_params(sync_adapter: AiosqlSyncAdapter) -> None:
     """Test extracting SQLSpec filters from dict parameters."""
     filters = [SearchFilter("name", "John")]
-    parameters = {
-        "user_id": 123,
-        "_sqlspec_filters": filters,
-    }
+    parameters = {"user_id": 123, "_sqlspec_filters": filters}
 
     cleaned_params, extracted_filters = sync_adapter._extract_sqlspec_filters(parameters)
 
@@ -117,10 +112,7 @@ def test_sync_adapter_select_with_schema_type_in_params(sync_adapter: AiosqlSync
     mock_result.data = [User(id=1, name="John")]
     sync_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
-    parameters = {
-        "active": True,
-        "_sqlspec_schema_type": User,
-    }
+    parameters = {"active": True, "_sqlspec_schema_type": User}
 
     result = list(
         sync_adapter.select(
@@ -144,12 +136,7 @@ def test_sync_adapter_select_one_with_limit_filter(sync_adapter: AiosqlSyncAdapt
     mock_result.data = [{"id": 1, "name": "John"}]
     sync_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
-    result = sync_adapter.select_one(
-        conn=Mock(),
-        query_name="test_query",
-        sql="SELECT * FROM users",
-        parameters={},
-    )
+    result = sync_adapter.select_one(conn=Mock(), query_name="test_query", sql="SELECT * FROM users", parameters={})
 
     assert result == {"id": 1, "name": "John"}
     sync_adapter.driver.execute.assert_called_once()  # type: ignore[attr-defined]
@@ -164,10 +151,7 @@ def test_sync_adapter_select_value_dict_result(sync_adapter: AiosqlSyncAdapter) 
     # Mock select_one to return the dict
     with patch.object(sync_adapter, "select_one", return_value={"count": 42}):
         result = sync_adapter.select_value(
-            conn=Mock(),
-            query_name="test_query",
-            sql="SELECT COUNT(*) as count FROM users",
-            parameters={},
+            conn=Mock(), query_name="test_query", sql="SELECT COUNT(*) as count FROM users", parameters={}
         )
 
     assert result == 42
@@ -177,10 +161,7 @@ def test_sync_adapter_select_value_tuple_result(sync_adapter: AiosqlSyncAdapter)
     """Test select_value with tuple result."""
     with patch.object(sync_adapter, "select_one", return_value=(42, "test")):
         result = sync_adapter.select_value(
-            conn=Mock(),
-            query_name="test_query",
-            sql="SELECT COUNT(*), 'test' FROM users",
-            parameters={},
+            conn=Mock(), query_name="test_query", sql="SELECT COUNT(*), 'test' FROM users", parameters={}
         )
 
     assert result == 42
@@ -190,10 +171,7 @@ def test_sync_adapter_select_value_none_result(sync_adapter: AiosqlSyncAdapter) 
     """Test select_value with None result."""
     with patch.object(sync_adapter, "select_one", return_value=None):
         result = sync_adapter.select_value(
-            conn=Mock(),
-            query_name="test_query",
-            sql="SELECT COUNT(*) FROM users WHERE false",
-            parameters={},
+            conn=Mock(), query_name="test_query", sql="SELECT COUNT(*) FROM users WHERE false", parameters={}
         )
 
     assert result is None
@@ -206,10 +184,7 @@ def test_sync_adapter_select_cursor(sync_adapter: AiosqlSyncAdapter) -> None:
     sync_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
     with sync_adapter.select_cursor(
-        conn=Mock(),
-        query_name="test_query",
-        sql="SELECT * FROM users",
-        parameters={},
+        conn=Mock(), query_name="test_query", sql="SELECT * FROM users", parameters={}
     ) as cursor:
         rows = cursor.fetchall()
         assert len(rows) == 2
@@ -225,10 +200,7 @@ def test_sync_adapter_insert_update_delete(sync_adapter: AiosqlSyncAdapter) -> N
     sync_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
     result = sync_adapter.insert_update_delete(
-        conn=Mock(),
-        query_name="test_query",
-        sql="UPDATE users SET active = :active",
-        parameters={"active": False},
+        conn=Mock(), query_name="test_query", sql="UPDATE users SET active = :active", parameters={"active": False}
     )
 
     assert result == 3
@@ -242,10 +214,7 @@ def test_sync_adapter_insert_update_delete_many(sync_adapter: AiosqlSyncAdapter)
 
     parameters = [{"name": "John"}, {"name": "Jane"}]
     result = sync_adapter.insert_update_delete_many(
-        conn=Mock(),
-        query_name="test_query",
-        sql="INSERT INTO users (name) VALUES (:name)",
-        parameters=parameters,
+        conn=Mock(), query_name="test_query", sql="INSERT INTO users (name) VALUES (:name)", parameters=parameters
     )
 
     assert result == 5
@@ -287,9 +256,7 @@ def async_adapter(mock_async_driver: Mock) -> AiosqlAsyncAdapter:
 def test_async_adapter_initialization(mock_async_driver: Mock) -> None:
     """Test async adapter initialization."""
     adapter = AiosqlAsyncAdapter(
-        mock_async_driver,
-        default_filters=[LimitOffsetFilter(100, 0)],
-        allow_sqlspec_filters=True,
+        mock_async_driver, default_filters=[LimitOffsetFilter(100, 0)], allow_sqlspec_filters=True
     )
 
     assert adapter.driver is mock_async_driver
@@ -332,16 +299,10 @@ async def test_async_adapter_select_with_schema_type_in_params(async_adapter: Ai
     mock_result.data = [User(id=1, name="John")]
     async_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
-    parameters = {
-        "active": True,
-        "_sqlspec_schema_type": User,
-    }
+    parameters = {"active": True, "_sqlspec_schema_type": User}
 
     result = await async_adapter.select(
-        conn=Mock(),
-        query_name="test_query",
-        sql="SELECT * FROM users WHERE active = :active",
-        parameters=parameters,
+        conn=Mock(), query_name="test_query", sql="SELECT * FROM users WHERE active = :active", parameters=parameters
     )
 
     # Verify schema_type was passed to driver
@@ -359,10 +320,7 @@ async def test_async_adapter_select_one_with_limit(async_adapter: AiosqlAsyncAda
     async_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
     result = await async_adapter.select_one(
-        conn=Mock(),
-        query_name="test_query",
-        sql="SELECT * FROM users",
-        parameters={},
+        conn=Mock(), query_name="test_query", sql="SELECT * FROM users", parameters={}
     )
 
     assert result == {"id": 1, "name": "John"}
@@ -379,10 +337,7 @@ async def test_async_adapter_select_value(async_adapter: AiosqlAsyncAdapter) -> 
 
     with patch.object(async_adapter, "select_one", return_value=expected_result) as mock_select_one:
         result = await async_adapter.select_value(
-            conn=Mock(),
-            query_name="test_query",
-            sql="SELECT COUNT(*) as count FROM users",
-            parameters={},
+            conn=Mock(), query_name="test_query", sql="SELECT COUNT(*) as count FROM users", parameters={}
         )
 
     mock_select_one.assert_called_once()
@@ -397,10 +352,7 @@ async def test_async_adapter_select_cursor(async_adapter: AiosqlAsyncAdapter) ->
     async_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
     async with async_adapter.select_cursor(
-        conn=Mock(),
-        query_name="test_query",
-        sql="SELECT * FROM users",
-        parameters={},
+        conn=Mock(), query_name="test_query", sql="SELECT * FROM users", parameters={}
     ) as cursor:
         rows = await cursor.fetchall()
         assert len(rows) == 2
@@ -417,10 +369,7 @@ async def test_async_adapter_insert_update_delete(async_adapter: AiosqlAsyncAdap
     async_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
     await async_adapter.insert_update_delete(
-        conn=Mock(),
-        query_name="test_query",
-        sql="UPDATE users SET active = :active",
-        parameters={"active": False},
+        conn=Mock(), query_name="test_query", sql="UPDATE users SET active = :active", parameters={"active": False}
     )
 
     async_adapter.driver.execute.assert_called_once()  # type: ignore[attr-defined]
@@ -435,10 +384,7 @@ async def test_async_adapter_insert_update_delete_many(async_adapter: AiosqlAsyn
 
     parameters = [{"name": "John"}, {"name": "Jane"}]
     await async_adapter.insert_update_delete_many(
-        conn=Mock(),
-        query_name="test_query",
-        sql="INSERT INTO users (name) VALUES (:name)",
-        parameters=parameters,
+        conn=Mock(), query_name="test_query", sql="INSERT INTO users (name) VALUES (:name)", parameters=parameters
     )
 
     async_adapter.driver.execute_many.assert_called_once()  # type: ignore[attr-defined]
@@ -466,10 +412,7 @@ def test_async_adapter_extract_sqlspec_filters_with_default_filters(mock_async_d
     default_filter = LimitOffsetFilter(50, 0)
     adapter = AiosqlAsyncAdapter(mock_async_driver, default_filters=[default_filter])
 
-    parameters = {
-        "user_id": 123,
-        "_sqlspec_filters": [SearchFilter("name", "John")],
-    }
+    parameters = {"user_id": 123, "_sqlspec_filters": [SearchFilter("name", "John")]}
 
     cleaned_params, extracted_filters = adapter._extract_sqlspec_filters(parameters)
 
@@ -510,14 +453,7 @@ def test_sync_adapter_driver_execution_error_propagation() -> None:
     adapter = AiosqlSyncAdapter(mock_driver)
 
     with pytest.raises(Exception, match="Database connection failed"):
-        list(
-            adapter.select(
-                conn=Mock(),
-                query_name="test_query",
-                sql="SELECT * FROM users",
-                parameters={},
-            )
-        )
+        list(adapter.select(conn=Mock(), query_name="test_query", sql="SELECT * FROM users", parameters={}))
 
 
 @pytest.mark.asyncio
@@ -530,9 +466,4 @@ async def test_async_adapter_driver_execution_error_propagation() -> None:
     adapter = AiosqlAsyncAdapter(mock_driver)
 
     with pytest.raises(Exception, match="Database connection failed"):
-        await adapter.select(
-            conn=Mock(),
-            query_name="test_query",
-            sql="SELECT * FROM users",
-            parameters={},
-        )
+        await adapter.select(conn=Mock(), query_name="test_query", sql="SELECT * FROM users", parameters={})

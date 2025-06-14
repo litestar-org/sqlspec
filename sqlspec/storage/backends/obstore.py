@@ -77,15 +77,6 @@ class ObStoreBackend(InstrumentedObjectStore):
 
                 self.store = from_url(store_uri, **store_options)  # type: ignore[assignment]  # pyright: ignore[reportAttributeAccessIssue]
 
-            if self.instrumentation_config.debug_mode:
-                self.logger.debug(
-                    "ObStore backend initialized",
-                    extra={
-                        "store_uri": store_uri,
-                        "base_path": base_path,
-                    },
-                )
-
         except Exception as exc:
             msg = f"Failed to initialize obstore backend for {store_uri}"
             raise StorageOperationFailedError(msg) from exc
@@ -202,10 +193,7 @@ class ObStoreBackend(InstrumentedObjectStore):
         """Get object metadata using obstore."""
         resolved_path = self._resolve_path(path)
         metadata = self.store.head(resolved_path)
-        result = {
-            "path": resolved_path,
-            "exists": True,
-        }
+        result = {"path": resolved_path, "exists": True}
         for attr in ("size", "last_modified", "e_tag", "version"):
             if hasattr(metadata, attr):
                 result[attr] = getattr(metadata, attr)
@@ -343,10 +331,7 @@ class ObStoreBackend(InstrumentedObjectStore):
         metadata = await self.store.head_async(resolved_path)
 
         # Convert obstore ObjectMeta to dict
-        result = {
-            "path": resolved_path,
-            "exists": True,
-        }
+        result = {"path": resolved_path, "exists": True}
 
         # Extract metadata attributes if available
         for attr in ["size", "last_modified", "e_tag", "version"]:
@@ -372,7 +357,6 @@ class ObStoreBackend(InstrumentedObjectStore):
         await self.store.write_arrow_async(resolved_path, table, **kwargs)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
 
     async def _stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
-        """Stream Arrow record batches using obstore's native async support."""
         resolved_pattern = self._resolve_path(pattern)
         async for batch in self.store.stream_arrow_async(resolved_pattern, **kwargs):  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
             yield batch

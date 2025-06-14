@@ -5,7 +5,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
-import sqlglot.expressions as exp
+from sqlglot import expressions as exp
 from sqlglot.optimizer import (
     eliminate_joins,
     eliminate_subqueries,
@@ -18,7 +18,6 @@ from sqlglot.optimizer import (
 )
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.results import ProcessorResult
 from sqlspec.statement.pipelines.validators.base import BaseValidator
 
 if TYPE_CHECKING:
@@ -147,80 +146,75 @@ class PerformanceValidator(BaseValidator):
         super().__init__()
         self.config = config or PerformanceConfig()
 
-    def _process_internal(self, context: "SQLProcessingContext") -> ProcessorResult:
-        """Process SQL statement for performance validation.
+    def validate(self, expression: "exp.Expression", context: "SQLProcessingContext") -> None:
+        """Validate SQL statement for performance issues.
 
         Args:
+            expression: The SQL expression to validate
             context: The SQL processing context
-
-        Returns:
-            ProcessorResult with performance analysis
         """
-        if context.current_expression is None:
-            return self._create_result(
-                expression=None,
-                is_safe=True,
-                risk_level=RiskLevel.SKIP,
-                issues=["No expression to analyze"],
-                metadata={"skipped": True},
-            )
 
         # Performance analysis state
         analysis = PerformanceAnalysis()
-        issues: list[PerformanceIssue] = []
 
         # Single traversal for all checks
-        self._analyze_expression(context.current_expression, analysis)
+        self._analyze_expression(expression, analysis)
 
         # Calculate baseline complexity
         analysis.original_complexity = self._calculate_complexity(analysis)
 
         # Perform SQLGlot optimization analysis if enabled
         if self.config.enable_optimization_analysis:
-            self._analyze_optimization_opportunities(context.current_expression, analysis, context)
+            self._analyze_optimization_opportunities(expression, analysis, context)
 
         # Check for cartesian products
         if self.config.warn_on_cartesian:
             cartesian_issues = self._check_cartesian_products(analysis)
-            issues.extend(cartesian_issues)
+            for issue in cartesian_issues:
+                self.add_error(
+                    context,
+                    message=issue.description,
+                    code=issue.issue_type,
+                    risk_level=self._severity_to_risk_level(issue.severity),
+                    expression=expression,
+                )
 
         # Check join complexity
         if analysis.join_count > self.config.max_joins:
-            issues.append(
-                PerformanceIssue(
-                    issue_type="excessive_joins",
-                    severity="warning",
-                    description=f"Query has {analysis.join_count} joins (max: {self.config.max_joins})",
-                    impact="Exponential performance degradation with data growth",
-                    recommendation="Consider breaking into smaller queries or denormalizing",
-                )
+            self.add_error(
+                context,
+                message=f"Query has {analysis.join_count} joins (max: {self.config.max_joins})",
+                code="excessive-joins",
+                risk_level=RiskLevel.MEDIUM,
+                expression=expression,
             )
 
         # Check subquery depth
         if analysis.max_subquery_depth > self.config.max_subqueries:
-            issues.append(
-                PerformanceIssue(
-                    issue_type="deep_nesting",
-                    severity="warning",
-                    description=f"Query has {analysis.max_subquery_depth} levels of subqueries",
-                    impact="Poor query optimizer performance, difficult to cache",
-                    recommendation="Flatten subqueries using CTEs or temporary tables",
-                )
+            self.add_error(
+                context,
+                message=f"Query has {analysis.max_subquery_depth} levels of subqueries",
+                code="deep-nesting",
+                risk_level=RiskLevel.MEDIUM,
+                expression=expression,
             )
 
         # Check for performance anti-patterns
         pattern_issues = self._check_antipatterns(analysis)
-        issues.extend(pattern_issues)
+        for issue in pattern_issues:
+            self.add_error(
+                context,
+                message=issue.description,
+                code=issue.issue_type,
+                risk_level=self._severity_to_risk_level(issue.severity),
+                expression=expression,
+            )
 
         # Calculate overall complexity score
         complexity_score = self._calculate_complexity(analysis)
 
-        # Determine risk level
-        risk_level = self._determine_risk_level(issues, complexity_score)
-
         # Build metadata
-        metadata = {
-            "performance_issues": [self._issue_to_dict(issue) for issue in issues],
+        context.metadata[self.__class__.__name__] = {
             "complexity_score": complexity_score,
             "join_analysis": {
                 "total_joins": analysis.join_count,
@@ -239,22 +233,18 @@ class PerformanceValidator(BaseValidator):
                 "potential_improvement": analysis.potential_improvement,
                 "optimization_enabled": self.config.enable_optimization_analysis,
             },
-            "recommendations": [issue.recommendation for issue in issues]
-            + [opt.recommendation for opt in analysis.optimization_opportunities],
         }
 
-        # Store metadata in context for access by caller
-        context.set_additional_data("performance_validator", metadata)
-
-        # Return result
-        return self._create_result(
-            expression=context.current_expression,
-            is_safe=len(issues) == 0 or risk_level == RiskLevel.LOW,
-            risk_level=risk_level,
-            issues=[issue.description for issue in issues],
-            warnings=[issue.description for issue in issues if issue.severity == "warning"],
-            metadata=metadata,
-        )
+    @staticmethod
+    def _severity_to_risk_level(severity: str) -> RiskLevel:
+        """Convert severity string to RiskLevel."""
+        mapping = {
+            "critical": RiskLevel.CRITICAL,
+            "error": RiskLevel.HIGH,
+            "warning": RiskLevel.MEDIUM,
+            "info": RiskLevel.LOW,
+        }
+        return mapping.get(severity.lower(), RiskLevel.MEDIUM)
 
     def _analyze_expression(self, expr: "exp.Expression", analysis: PerformanceAnalysis, depth: int = 0) -> None:
         """Single-pass traversal to collect all performance metrics.

@@ -64,10 +64,7 @@ class OracleSyncDriver(
             cursor.close()
 
     def _execute_statement(
-        self,
-        statement: SQL,
-        connection: Optional[OracleSyncConnection] = None,
-        **kwargs: Any,
+        self, statement: SQL, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
@@ -118,23 +115,12 @@ class OracleSyncDriver(
                 if self.returns_rows(statement.expression):
                     fetched_data = cursor.fetchall()
                     column_names = [col[0] for col in cursor.description or []]
-                    return {
-                        "data": fetched_data,
-                        "column_names": column_names,
-                        "rows_affected": cursor.rowcount,
-                    }
+                    return {"data": fetched_data, "column_names": column_names, "rows_affected": cursor.rowcount}
 
-                return {
-                    "rows_affected": cursor.rowcount,
-                    "status_message": "OK",
-                }
+                return {"rows_affected": cursor.rowcount, "status_message": "OK"}
 
     def _execute_many(
-        self,
-        sql: str,
-        param_list: Any,
-        connection: Optional[OracleSyncConnection] = None,
-        **kwargs: Any,
+        self, sql: str, param_list: Any, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
         with instrument_operation(self, "oracle_execute_many", "database"):
             conn = self._connection(connection)
@@ -145,16 +131,10 @@ class OracleSyncDriver(
 
             with self._get_cursor(conn) as cursor:
                 cursor.executemany(sql, param_list or [])
-                return {
-                    "rows_affected": cursor.rowcount,
-                    "status_message": "OK",
-                }
+                return {"rows_affected": cursor.rowcount, "status_message": "OK"}
 
     def _execute_script(
-        self,
-        script: str,
-        connection: Optional[OracleSyncConnection] = None,
-        **kwargs: Any,
+        self, script: str, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
     ) -> ScriptResultDict:
         with instrument_operation(self, "oracle_execute_script", "database"):
             conn = self._connection(connection)
@@ -167,17 +147,10 @@ class OracleSyncDriver(
                     if statement and statement.strip():
                         cursor.execute(statement)
 
-            return {
-                "statements_executed": len(statements),
-                "status_message": "SCRIPT EXECUTED",
-            }
+            return {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
 
     def _wrap_select_result(
-        self,
-        statement: SQL,
-        result: SelectResultDict,
-        schema_type: Optional[type[ModelDTOT]] = None,
-        **kwargs: Any,
+        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "oracle_wrap_select", "database"):
             fetched_tuples = result.get("data", [])
@@ -194,24 +167,15 @@ class OracleSyncDriver(
             if schema_type:
                 converted_data = self.to_schema(rows_as_dicts, schema_type=schema_type)
                 return SQLResult[ModelDTOT](
-                    statement=statement,
-                    data=list(converted_data),
-                    column_names=column_names,
-                    operation_type="SELECT",
+                    statement=statement, data=list(converted_data), column_names=column_names, operation_type="SELECT"
                 )
 
             return SQLResult[RowT](
-                statement=statement,
-                data=rows_as_dicts,
-                column_names=column_names,
-                operation_type="SELECT",
+                statement=statement, data=rows_as_dicts, column_names=column_names, operation_type="SELECT"
             )
 
     def _wrap_execute_result(
-        self,
-        statement: SQL,
-        result: Union[DMLResultDict, ScriptResultDict],
-        **kwargs: Any,
+        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
     ) -> SQLResult[RowT]:
         with instrument_operation(self, "oracle_wrap_execute", "database"):
             operation_type = "UNKNOWN"
@@ -287,10 +251,7 @@ class OracleAsyncDriver(
             await ensure_async_(cursor.close)()
 
     async def _execute_statement(
-        self,
-        statement: SQL,
-        connection: Optional[OracleAsyncConnection] = None,
-        **kwargs: Any,
+        self, statement: SQL, connection: Optional[OracleAsyncConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
@@ -360,11 +321,7 @@ class OracleAsyncDriver(
                 return dml_result
 
     async def _execute_many(
-        self,
-        sql: str,
-        param_list: Any,
-        connection: Optional[OracleAsyncConnection] = None,
-        **kwargs: Any,
+        self, sql: str, param_list: Any, connection: Optional[OracleAsyncConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
         async with instrument_operation_async(self, "oracle_async_execute_many", "database"):
             conn = self._connection(connection)
@@ -382,10 +339,7 @@ class OracleAsyncDriver(
                 return result
 
     async def _execute_script(
-        self,
-        script: str,
-        connection: Optional[OracleAsyncConnection] = None,
-        **kwargs: Any,
+        self, script: str, connection: Optional[OracleAsyncConnection] = None, **kwargs: Any
     ) -> ScriptResultDict:
         async with instrument_operation_async(self, "oracle_async_execute_script", "database"):
             conn = self._connection(connection)
@@ -406,10 +360,7 @@ class OracleAsyncDriver(
                                 logger.debug("Executing statement: %s", statement)
                             await cursor.execute(statement)
 
-            result: ScriptResultDict = {
-                "statements_executed": len(statements),
-                "status_message": "SCRIPT EXECUTED",
-            }
+            result: ScriptResultDict = {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
             return result
 
     async def _wrap_select_result(
@@ -434,16 +385,10 @@ class OracleAsyncDriver(
             if schema_type:
                 converted_data = self.to_schema(rows_as_dicts, schema_type=schema_type)
                 return SQLResult[ModelDTOT](
-                    statement=statement,
-                    data=list(converted_data),
-                    column_names=column_names,
-                    operation_type="SELECT",
+                    statement=statement, data=list(converted_data), column_names=column_names, operation_type="SELECT"
                 )
             return SQLResult[RowT](
-                statement=statement,
-                data=rows_as_dicts,
-                column_names=column_names,
-                operation_type="SELECT",
+                statement=statement, data=rows_as_dicts, column_names=column_names, operation_type="SELECT"
             )
 
     async def _wrap_execute_result(

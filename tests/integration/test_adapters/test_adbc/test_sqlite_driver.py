@@ -135,11 +135,7 @@ def test_parameter_styles(adbc_sqlite_session: AdbcDriver) -> None:
 def test_multiple_parameters(adbc_sqlite_session: AdbcDriver) -> None:
     """Test queries with multiple parameters in SQLite."""
     # Insert test data
-    test_data = [
-        ("Alice", 25),
-        ("Bob", 30),
-        ("Charlie", 35),
-    ]
+    test_data = [("Alice", 25), ("Bob", 30), ("Charlie", 35)]
     adbc_sqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", test_data)
 
     # Query with multiple parameters
@@ -192,11 +188,7 @@ def test_execute_many_mixed_types(adbc_sqlite_session: AdbcDriver) -> None:
     """)
 
     # Prepare mixed type data
-    test_data = [
-        ("text1", 100, 1.5, b"bytes1"),
-        ("text2", 200, 2.5, b"bytes2"),
-        ("text3", 300, 3.5, b"bytes3"),
-    ]
+    test_data = [("text1", 100, 1.5, b"bytes1"), ("text2", 200, 2.5, b"bytes2"), ("text3", 300, 3.5, b"bytes3")]
 
     result = adbc_sqlite_session.execute_many(
         "INSERT INTO mixed_types_test (text_col, int_col, real_col, blob_col) VALUES (?, ?, ?, ?)", test_data
@@ -397,11 +389,7 @@ def test_blob_type(adbc_sqlite_session: AdbcDriver) -> None:
 def test_fetch_arrow_table(adbc_sqlite_session: AdbcDriver) -> None:
     """Test SQLite fetch_arrow_table functionality."""
     # Insert test data
-    test_data = [
-        ("Alice", 25, 50000.0),
-        ("Bob", 30, 60000.0),
-        ("Charlie", 35, 70000.0),
-    ]
+    test_data = [("Alice", 25, 50000.0), ("Bob", 30, 60000.0), ("Charlie", 35, 70000.0)]
 
     adbc_sqlite_session.execute_script("""
         CREATE TABLE arrow_test (

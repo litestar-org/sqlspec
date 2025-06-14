@@ -30,15 +30,10 @@ from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from sqlspec.config import InstrumentationConfig
     from sqlspec.statement.result import SQLResult
 
-__all__ = (
-    "QueryBuilder",
-    "SafeQuery",
-)
+__all__ = ("QueryBuilder", "SafeQuery")
 
 logger = get_logger("statement.builder")
 
@@ -246,32 +241,6 @@ class QueryBuilder(ABC, Generic[RowT]):
         self._with_ctes[alias] = exp.CTE(this=cte_select_expression, alias=exp.to_table(alias))
         return self
 
-    @contextlib.contextmanager
-    def _debug_build_phase(self, phase: str) -> "Iterator[None]":
-        """Debug logging for build phases.
-
-        Args:
-            phase: The name of the build phase
-
-        Yields:
-            None: Context manager for the build phase, logging start and end times.
-        """
-        if self.instrumentation_config and self.instrumentation_config.debug_mode:
-            logger.debug("Starting build phase: %s", phase, extra={"phase": phase})
-            start = time.perf_counter()
-            try:
-                yield
-            finally:
-                duration = time.perf_counter() - start
-                logger.debug(
-                    "Completed build phase: %s in %.3fms",
-                    phase,
-                    duration * 1000,
-                    extra={"phase": phase, "duration_ms": duration * 1000},
-                )
-        else:
-            yield
-
     def build(self) -> "SafeQuery":
         """Builds the SQL query string and parameters.
 
@@ -297,45 +266,39 @@ class QueryBuilder(ABC, Generic[RowT]):
         if self._expression is None:
             self._raise_sql_builder_error("QueryBuilder expression not initialized.")
         # self._expression is known to be not None here.
-
-        with self._debug_build_phase("copy_expression"):
-            final_expression = self._expression.copy()
+        final_expression = self._expression.copy()
 
         if self._with_ctes:
-            with self._debug_build_phase("process_ctes"):
-                if hasattr(final_expression, "with_") and callable(getattr(final_expression, "with_", None)):
-                    for alias, cte_node in self._with_ctes.items():
-                        final_expression = final_expression.with_(  # pyright: ignore
-                            cte_node.args["this"], as_=alias, copy=False
-                        )
-                elif (
-                    isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union))
-                    and self._with_ctes
-                ):
-                    final_expression = exp.With(expressions=list(self._with_ctes.values()), this=final_expression)
-                else:
-                    logger.warning(
-                        "Expression type %s may not support CTEs. CTEs will not be added.",
-                        type(final_expression).__name__,
+            if hasattr(final_expression, "with_") and callable(getattr(final_expression, "with_", None)):
+                for alias, cte_node in self._with_ctes.items():
+                    final_expression = final_expression.with_(  # pyright: ignore
+                        cte_node.args["this"], as_=alias, copy=False
                     )
+            elif (
+                isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union))
+                and self._with_ctes
+            ):
+                final_expression = exp.With(expressions=list(self._with_ctes.values()), this=final_expression)
+            else:
+                logger.warning(
+                    "Expression type %s may not support CTEs. CTEs will not be added.", type(final_expression).__name__
+                )
 
         # Apply SQLGlot optimizations if enabled
         if self.enable_optimization:
-            with self._debug_build_phase("optimize_expression"):
-                final_expression = self._optimize_expression(final_expression)
+            final_expression = self._optimize_expression(final_expression)
 
-        with self._debug_build_phase("generate_sql"):
-            try:
-                sql_string = final_expression.sql(dialect=self.dialect_name, pretty=True)
-            except Exception as e:
-                problematic_sql_for_log = "Could not serialize problematic expression."
-                with contextlib.suppress(Exception):
-                    problematic_sql_for_log = final_expression.sql(dialect=self.dialect_name)
+        try:
+            sql_string = final_expression.sql(dialect=self.dialect_name, pretty=True)
+        except Exception as e:
+            problematic_sql_for_log = "Could not serialize problematic expression."
+            with contextlib.suppress(Exception):
+                problematic_sql_for_log = final_expression.sql(dialect=self.dialect_name)
 
-                logger.exception("Error generating SQL. Problematic SQL (approx): %s", problematic_sql_for_log)
-                err_msg = f"Error generating SQL from expression: {e!s}"
-                # self._raise_sql_builder_error will make sql_string known as potentially unbound if not for NoReturn
-                self._raise_sql_builder_error(err_msg, e)
+            logger.exception("Error generating SQL. Problematic SQL (approx): %s", problematic_sql_for_log)
+            err_msg = f"Error generating SQL from expression: {e!s}"
+            # self._raise_sql_builder_error will make sql_string known as potentially unbound if not for NoReturn
+            self._raise_sql_builder_error(err_msg, e)
 
         if self.instrumentation_config and self.instrumentation_config.log_queries:
             duration = time.perf_counter() - start_time
@@ -372,29 +335,23 @@ class QueryBuilder(ABC, Generic[RowT]):
         try:
             # Use SQLGlot's comprehensive optimizer if schema is available
             if hasattr(self, "schema") and self.schema:
-                with self._debug_build_phase("comprehensive_optimization"):
-                    optimized = optimize(optimized.copy(), schema=self.schema, dialect=self.dialect_name)
+                optimized = optimize(optimized.copy(), schema=self.schema, dialect=self.dialect_name)
             else:
                 # Apply individual optimizations in order
                 if self.simplify_expressions:
-                    with self._debug_build_phase("simplify_expressions"):
-                        optimized = simplify(optimized.copy())
+                    optimized = simplify(optimized.copy())
 
                 if self.optimize_predicates and isinstance(optimized, (exp.Select, exp.Update, exp.Delete)):
-                    with self._debug_build_phase("pushdown_predicates"):
-                        optimized = pushdown_predicates(optimized.copy(), dialect=self.dialect_name)
+                    optimized = pushdown_predicates(optimized.copy(), dialect=self.dialect_name)
 
                 if self.optimize_joins and isinstance(optimized, exp.Select):
-                    with self._debug_build_phase("optimize_joins"):
-                        optimized = optimize_joins(optimized.copy(), dialect=self.dialect_name)
+                    optimized = optimize_joins(optimized.copy())
 
                 # Apply additional SQLGlot optimizations
                 if isinstance(optimized, exp.Select):
-                    with self._debug_build_phase("eliminate_subqueries"):
-                        optimized = eliminate_subqueries(optimized.copy())
+                    optimized = eliminate_subqueries(optimized.copy())
 
-                    with self._debug_build_phase("unnest_subqueries"):
-                        optimized = unnest_subqueries(optimized.copy())
+                    optimized = unnest_subqueries(optimized.copy())
 
         except Exception as e:
             # Log optimization failure but continue with unoptimized query

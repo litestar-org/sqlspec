@@ -293,11 +293,10 @@ def test_analyzer_process_method(analyzer: StatementAnalyzer) -> None:
         initial_sql_string=sql, dialect="mysql", config=config, current_expression=expression
     )
 
-    result_expression, validation_result = analyzer.process(context)
+    result_expression = analyzer.process(expression, context)
 
-    # Should return unchanged expression and no validation result
+    # Should return unchanged expression
     assert result_expression is expression
-    assert validation_result is None
 
 
 @pytest.mark.parametrize(
@@ -326,10 +325,7 @@ def test_analyzer_configurable_thresholds() -> None:
     """Test analyzer with custom complexity thresholds."""
     # Create analyzer with strict thresholds
     strict_analyzer = StatementAnalyzer(
-        max_join_count=2,
-        max_subquery_depth=1,
-        max_function_calls=5,
-        max_where_conditions=3,
+        max_join_count=2, max_subquery_depth=1, max_function_calls=5, max_where_conditions=3
     )
 
     # Query that should trigger warnings with strict settings

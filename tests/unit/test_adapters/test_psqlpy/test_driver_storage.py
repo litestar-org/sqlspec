@@ -37,11 +37,7 @@ def psqlpy_driver(mock_psqlpy_connection: AsyncMock) -> PsqlpyDriver:
     """Create a PSQLPy driver with mocked connection."""
     config = SQLConfig(strict_mode=False)
     instrumentation_config = InstrumentationConfig()
-    return PsqlpyDriver(
-        connection=mock_psqlpy_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
-    )
+    return PsqlpyDriver(connection=mock_psqlpy_connection, config=config, instrumentation_config=instrumentation_config)
 
 
 class TestPSQLPyStorageOperations:

@@ -323,9 +323,7 @@ class PostgreSQLDialectConfig(DialectConfig):
 
     def _get_dialect_specific_patterns(self) -> list[tuple[TokenType, TokenPattern]]:
         """Add PostgreSQL-specific patterns like dollar-quoted strings."""
-        return [
-            (TokenType.STRING_LITERAL, self._handle_dollar_quoted_string),
-        ]
+        return [(TokenType.STRING_LITERAL, self._handle_dollar_quoted_string)]
 
     def _handle_dollar_quoted_string(self, text: str, position: int, line: int, column: int) -> Optional[Token]:
         """Handle PostgreSQL dollar-quoted strings like $tag$...$tag$."""

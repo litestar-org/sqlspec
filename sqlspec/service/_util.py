@@ -1,13 +1,6 @@
 from collections.abc import Sequence
 from functools import partial
-from typing import (
-    Any,
-    Optional,
-    TypeVar,
-    Union,
-    cast,
-    overload,
-)
+from typing import Any, Optional, TypeVar, Union, cast, overload
 
 from sqlspec.driver.mixins._result_utils import _DEFAULT_TYPE_DECODERS, _default_msgspec_deserializer
 from sqlspec.exceptions import SQLSpecError
@@ -33,8 +26,7 @@ T = TypeVar("T")
 
 
 def find_filter(
-    filter_type: "type[FilterTypeT]",
-    filters: "Optional[Sequence[StatementFilter]]" = None,
+    filter_type: "type[FilterTypeT]", filters: "Optional[Sequence[StatementFilter]]" = None
 ) -> "Optional[FilterTypeT]":
     """Get the filter specified by filter type from the filters.
 
@@ -48,8 +40,7 @@ def find_filter(
     if filters is None:
         return None
     return next(
-        (cast("Optional[FilterTypeT]", filter_) for filter_ in filters if isinstance(filter_, filter_type)),
-        None,
+        (cast("Optional[FilterTypeT]", filter_) for filter_ in filters if isinstance(filter_, filter_type)), None
     )
 
 
@@ -124,10 +115,7 @@ class ResultConverter:
                         obj=data,
                         type=schema_type,
                         from_attributes=True,
-                        dec_hook=partial(
-                            _default_msgspec_deserializer,
-                            type_decoders=_DEFAULT_TYPE_DECODERS,
-                        ),
+                        dec_hook=partial(_default_msgspec_deserializer, type_decoders=_DEFAULT_TYPE_DECODERS),
                     ),
                 )
             if is_pydantic_model(schema_type):  # pyright: ignore
@@ -152,10 +140,7 @@ class ResultConverter:
                 obj=data,
                 type=list[schema_type],  # type: ignore[valid-type]
                 from_attributes=True,
-                dec_hook=partial(
-                    _default_msgspec_deserializer,
-                    type_decoders=_DEFAULT_TYPE_DECODERS,
-                ),
+                dec_hook=partial(_default_msgspec_deserializer, type_decoders=_DEFAULT_TYPE_DECODERS),
             )
         elif is_pydantic_model(schema_type):  # pyright: ignore
             converted_items = get_type_adapter(list[schema_type]).validate_python(data, from_attributes=True)  # type: ignore[valid-type] # pyright: ignore[reportUnknownArgumentType]

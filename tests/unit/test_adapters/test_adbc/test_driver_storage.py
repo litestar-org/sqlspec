@@ -39,11 +39,7 @@ def adbc_driver(mock_adbc_connection: MagicMock) -> AdbcDriver:
     """Create an ADBC driver with mocked connection."""
     config = SQLConfig(strict_mode=False)
     instrumentation_config = InstrumentationConfig()
-    return AdbcDriver(
-        connection=mock_adbc_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
-    )
+    return AdbcDriver(connection=mock_adbc_connection, config=config, instrumentation_config=instrumentation_config)
 
 
 class TestADBCStorageOperations:

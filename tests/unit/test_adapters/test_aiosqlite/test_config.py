@@ -58,9 +58,7 @@ def test_aiosqlite_config_initialization() -> None:
     custom_instrumentation = InstrumentationConfig(log_queries=True)
 
     config = AiosqliteConfig(
-        database=":memory:",
-        statement_config=custom_statement_config,
-        instrumentation=custom_instrumentation,
+        database=":memory:", statement_config=custom_statement_config, instrumentation=custom_instrumentation
     )
     assert config.statement_config is custom_statement_config
     assert config.instrumentation.log_queries is True
@@ -87,17 +85,17 @@ def test_aiosqlite_config_driver_type() -> None:
 
 
 def test_aiosqlite_config_is_async() -> None:
-    """Test Aiosqlite config __is_async__ attribute."""
+    """Test Aiosqlite config is_async attribute."""
     config = AiosqliteConfig(database=":memory:")
-    assert config.__is_async__ is True
-    assert AiosqliteConfig.__is_async__ is True
+    assert config.is_async is True
+    assert AiosqliteConfig.is_async is True
 
 
 def test_aiosqlite_config_supports_connection_pooling() -> None:
-    """Test Aiosqlite config __supports_connection_pooling__ attribute."""
+    """Test Aiosqlite config supports_connection_pooling attribute."""
     config = AiosqliteConfig(database=":memory:")
-    assert config.__supports_connection_pooling__ is False
-    assert AiosqliteConfig.__supports_connection_pooling__ is False
+    assert config.supports_connection_pooling is False
+    assert AiosqliteConfig.supports_connection_pooling is False
 
 
 def test_aiosqlite_config_from_connection_config() -> None:

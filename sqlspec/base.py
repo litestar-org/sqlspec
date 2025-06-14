@@ -1,14 +1,7 @@
 import asyncio
 import atexit
 from collections.abc import Awaitable, Coroutine
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Optional,
-    Union,
-    cast,
-    overload,
-)
+from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.config import (
     AsyncConfigT,
@@ -25,10 +18,7 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
-    from sqlspec.typing import (
-        ConnectionT,
-        PoolT,
-    )
+    from sqlspec.typing import ConnectionT, PoolT
 
 
 __all__ = ("SQLSpec",)
@@ -57,7 +47,7 @@ class SQLSpec:
         cleaned_count = 0
 
         for config_type, config in self._configs.items():
-            if config.__supports_connection_pooling__:
+            if config.supports_connection_pooling:
                 try:
                     if config.is_async:
                         close_pool_awaitable = config.close_pool()
@@ -89,10 +79,7 @@ class SQLSpec:
     def add_config(self, config: "AsyncConfigT") -> "type[AsyncConfigT]":  # pyright: ignore[reportInvalidTypeVarUse]
         ...
 
-    def add_config(
-        self,
-        config: "Union[SyncConfigT, AsyncConfigT]",
-    ) -> "type[Union[SyncConfigT, AsyncConfigT]]":  # pyright: ignore[reportInvalidTypeVarUse]
+    def add_config(self, config: "Union[SyncConfigT, AsyncConfigT]") -> "type[Union[SyncConfigT, AsyncConfigT]]":  # pyright: ignore[reportInvalidTypeVarUse]
         """Add a configuration instance to the registry.
 
         Args:
@@ -110,11 +97,11 @@ class SQLSpec:
             "Added configuration: %s (async: %s, pooling: %s)",
             config_type.__name__,
             config.is_async,
-            config.support_connection_pooling,
+            config.supports_connection_pooling,
             extra={
                 "config_type": config_type.__name__,
                 "is_async": config.is_async,
-                "supports_pooling": config.support_connection_pooling,
+                "supports_pooling": config.supports_connection_pooling,
             },
         )
         return config_type
@@ -126,8 +113,7 @@ class SQLSpec:
     def get_config(self, name: "type[AsyncConfigT]") -> "AsyncConfigT": ...
 
     def get_config(
-        self,
-        name: "Union[type[DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]], Any]",
+        self, name: "Union[type[DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]], Any]"
     ) -> "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]":
         """Retrieve a configuration instance by its type or a key.
 
@@ -449,7 +435,7 @@ class SQLSpec:
         )
         config_name = config.__class__.__name__
 
-        if config.support_connection_pooling:
+        if config.supports_connection_pooling:
             logger.debug("Getting pool for config: %s", config_name, extra={"config_type": config_name})
             return cast("Union[type[PoolT], Awaitable[type[PoolT]]]", config.create_pool())
 
@@ -506,7 +492,7 @@ class SQLSpec:
             config = self.get_config(name)
             config_name = self._get_config_name(name)
 
-        if config.support_connection_pooling:
+        if config.supports_connection_pooling:
             logger.debug("Closing pool for config: %s", config_name, extra={"config_type": config_name})
             return config.close_pool()
 

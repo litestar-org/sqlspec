@@ -61,15 +61,10 @@ async def asyncpg_params_session(postgres_service: PostgresService) -> "AsyncGen
     ],
 )
 async def test_asyncpg_numeric_parameter_types(
-    asyncpg_params_session: AsyncpgDriver,
-    params: Any,
-    expected_count: int,
+    asyncpg_params_session: AsyncpgDriver, params: Any, expected_count: int
 ) -> None:
     """Test different parameter types with AsyncPG numeric style."""
-    result = await asyncpg_params_session.execute(
-        "SELECT * FROM test_params WHERE name = $1",
-        params,
-    )
+    result = await asyncpg_params_session.execute("SELECT * FROM test_params WHERE name = $1", params)
 
     assert isinstance(result, SQLResult)
     assert result is not None
@@ -82,10 +77,7 @@ async def test_asyncpg_numeric_parameter_types(
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_numeric_parameter_style(asyncpg_params_session: AsyncpgDriver) -> None:
     """Test PostgreSQL numeric parameter style with AsyncPG."""
-    result = await asyncpg_params_session.execute(
-        "SELECT * FROM test_params WHERE name = $1",
-        ("test1",),
-    )
+    result = await asyncpg_params_session.execute("SELECT * FROM test_params WHERE name = $1", ("test1",))
 
     assert isinstance(result, SQLResult)
     assert result is not None
@@ -98,8 +90,7 @@ async def test_asyncpg_numeric_parameter_style(asyncpg_params_session: AsyncpgDr
 async def test_asyncpg_multiple_parameters_numeric(asyncpg_params_session: AsyncpgDriver) -> None:
     """Test queries with multiple parameters using numeric style."""
     result = await asyncpg_params_session.execute(
-        "SELECT * FROM test_params WHERE value >= $1 AND value <= $2 ORDER BY value",
-        (50, 150),
+        "SELECT * FROM test_params WHERE value >= $1 AND value <= $2 ORDER BY value", (50, 150)
     )
 
     assert isinstance(result, SQLResult)
@@ -113,9 +104,7 @@ async def test_asyncpg_multiple_parameters_numeric(asyncpg_params_session: Async
 async def test_asyncpg_null_parameters(asyncpg_params_session: AsyncpgDriver) -> None:
     """Test handling of NULL parameters on AsyncPG."""
     # Query for NULL values
-    result = await asyncpg_params_session.execute(
-        "SELECT * FROM test_params WHERE description IS NULL",
-    )
+    result = await asyncpg_params_session.execute("SELECT * FROM test_params WHERE description IS NULL")
 
     assert isinstance(result, SQLResult)
     assert result is not None
@@ -125,13 +114,11 @@ async def test_asyncpg_null_parameters(asyncpg_params_session: AsyncpgDriver) ->
 
     # Test inserting NULL with parameters
     await asyncpg_params_session.execute(
-        "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)",
-        ("null_param_test", 400, None),
+        "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", ("null_param_test", 400, None)
     )
 
     null_result = await asyncpg_params_session.execute(
-        "SELECT * FROM test_params WHERE name = $1",
-        ("null_param_test",),
+        "SELECT * FROM test_params WHERE name = $1", ("null_param_test",)
     )
     assert len(null_result) == 1
     assert null_result[0]["description"] is None
@@ -144,10 +131,7 @@ async def test_asyncpg_parameter_escaping(asyncpg_params_session: AsyncpgDriver)
     # This should safely search for a literal string with quotes
     malicious_input = "'; DROP TABLE test_params; --"
 
-    result = await asyncpg_params_session.execute(
-        "SELECT * FROM test_params WHERE name = $1",
-        (malicious_input,),
-    )
+    result = await asyncpg_params_session.execute("SELECT * FROM test_params WHERE name = $1", (malicious_input,))
 
     assert isinstance(result, SQLResult)
     assert result is not None
@@ -162,20 +146,14 @@ async def test_asyncpg_parameter_escaping(asyncpg_params_session: AsyncpgDriver)
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_parameter_with_like(asyncpg_params_session: AsyncpgDriver) -> None:
     """Test parameters with LIKE operations."""
-    result = await asyncpg_params_session.execute(
-        "SELECT * FROM test_params WHERE name LIKE $1",
-        ("test%",),
-    )
+    result = await asyncpg_params_session.execute("SELECT * FROM test_params WHERE name LIKE $1", ("test%",))
 
     assert isinstance(result, SQLResult)
     assert result is not None
     assert len(result) >= 3  # test1, test2, test3
 
     # Test with more specific pattern
-    specific_result = await asyncpg_params_session.execute(
-        "SELECT * FROM test_params WHERE name LIKE $1",
-        ("test1%",),
-    )
+    specific_result = await asyncpg_params_session.execute("SELECT * FROM test_params WHERE name LIKE $1", ("test1%",))
     assert len(specific_result) == 1
     assert specific_result[0]["name"] == "test1"
 
@@ -187,17 +165,12 @@ async def test_asyncpg_parameter_with_any_array(asyncpg_params_session: AsyncpgD
     # Insert additional test data
     await asyncpg_params_session.execute_many(
         "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)",
-        [
-            ("alpha", 10, "Alpha test"),
-            ("beta", 20, "Beta test"),
-            ("gamma", 30, "Gamma test"),
-        ],
+        [("alpha", 10, "Alpha test"), ("beta", 20, "Beta test"), ("gamma", 30, "Gamma test")],
     )
 
     # Test ANY with array parameter
     result = await asyncpg_params_session.execute(
-        "SELECT * FROM test_params WHERE name = ANY($1) ORDER BY name",
-        (["alpha", "beta", "test1"],),
+        "SELECT * FROM test_params WHERE name = ANY($1) ORDER BY name", (["alpha", "beta", "test1"],)
     )
 
     assert isinstance(result, SQLResult)
@@ -241,11 +214,7 @@ async def test_asyncpg_parameter_data_types(asyncpg_params_session: AsyncpgDrive
     """)
 
     # Test different data types
-    test_data = [
-        (42, 3.14, "hello", True, [1, 2, 3]),
-        (-100, -2.5, "world", False, [4, 5, 6]),
-        (0, 0.0, "", None, []),
-    ]
+    test_data = [(42, 3.14, "hello", True, [1, 2, 3]), (-100, -2.5, "world", False, [4, 5, 6]), (0, 0.0, "", None, [])]
 
     for i, data in enumerate(test_data):
         await asyncpg_params_session.execute(
@@ -255,8 +224,7 @@ async def test_asyncpg_parameter_data_types(asyncpg_params_session: AsyncpgDrive
 
     # Verify data with parameters
     result = await asyncpg_params_session.execute(
-        "SELECT * FROM test_types WHERE int_val = $1 AND real_val = $2",
-        (42, 3.14),
+        "SELECT * FROM test_types WHERE int_val = $1 AND real_val = $2", (42, 3.14)
     )
 
     assert len(result) == 1
@@ -271,27 +239,21 @@ async def test_asyncpg_parameter_edge_cases(asyncpg_params_session: AsyncpgDrive
     """Test edge cases for AsyncPG parameters."""
     # Empty string parameter
     await asyncpg_params_session.execute(
-        "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)",
-        ("", 999, "Empty name test"),
+        "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", ("", 999, "Empty name test")
     )
 
-    empty_result = await asyncpg_params_session.execute(
-        "SELECT * FROM test_params WHERE name = $1",
-        ("",),
-    )
+    empty_result = await asyncpg_params_session.execute("SELECT * FROM test_params WHERE name = $1", ("",))
     assert len(empty_result) == 1
     assert empty_result[0]["value"] == 999
 
     # Very long string parameter
     long_string = "x" * 1000
     await asyncpg_params_session.execute(
-        "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)",
-        ("long_test", 1000, long_string),
+        "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", ("long_test", 1000, long_string)
     )
 
     long_result = await asyncpg_params_session.execute(
-        "SELECT * FROM test_params WHERE description = $1",
-        (long_string,),
+        "SELECT * FROM test_params WHERE description = $1", (long_string,)
     )
     assert len(long_result) == 1
     assert len(long_result[0]["description"]) == 1000
@@ -303,8 +265,7 @@ async def test_asyncpg_parameter_with_postgresql_functions(asyncpg_params_sessio
     """Test parameters with PostgreSQL functions."""
     # Test with string functions
     result = await asyncpg_params_session.execute(
-        "SELECT * FROM test_params WHERE LENGTH(name) > $1 AND UPPER(name) LIKE $2",
-        (4, "TEST%"),
+        "SELECT * FROM test_params WHERE LENGTH(name) > $1 AND UPPER(name) LIKE $2", (4, "TEST%")
     )
 
     assert isinstance(result, SQLResult)
@@ -351,8 +312,7 @@ async def test_asyncpg_parameter_with_json(asyncpg_params_session: AsyncpgDriver
 
     for name, metadata in json_data:
         await asyncpg_params_session.execute(
-            "INSERT INTO test_json (name, metadata) VALUES ($1, $2)",
-            (name, json.dumps(metadata)),
+            "INSERT INTO test_json (name, metadata) VALUES ($1, $2)", (name, json.dumps(metadata))
         )
 
     # Test querying JSON with parameters (PostgreSQL ::cast syntax should now work)
@@ -389,23 +349,18 @@ async def test_asyncpg_parameter_with_arrays(asyncpg_params_session: AsyncpgDriv
 
     for name, tags, scores in array_data:
         await asyncpg_params_session.execute(
-            "INSERT INTO test_arrays (name, tags, scores) VALUES ($1, $2, $3)",
-            (name, tags, scores),
+            "INSERT INTO test_arrays (name, tags, scores) VALUES ($1, $2, $3)", (name, tags, scores)
         )
 
     # Test querying arrays with parameters
-    result = await asyncpg_params_session.execute(
-        "SELECT name FROM test_arrays WHERE $1 = ANY(tags)",
-        ("tag2",),
-    )
+    result = await asyncpg_params_session.execute("SELECT name FROM test_arrays WHERE $1 = ANY(tags)", ("tag2",))
 
     assert len(result) == 1
     assert result[0]["name"] == "Array 1"
 
     # Test array length with parameters
     length_result = await asyncpg_params_session.execute(
-        "SELECT name FROM test_arrays WHERE array_length(scores, 1) > $1",
-        (1,),
+        "SELECT name FROM test_arrays WHERE array_length(scores, 1) > $1", (1,)
     )
     assert len(length_result) == 2  # Array 1 and Array 2
 

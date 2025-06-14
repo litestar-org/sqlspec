@@ -258,7 +258,7 @@ def test_add_config_various_types(config_class: type, expected_async: bool, expe
     result = sqlspec.add_config(config)
     assert result is config_class
     assert config.is_async == expected_async
-    assert config.support_connection_pooling == expected_pooling
+    assert config.supports_connection_pooling == expected_pooling
 
 
 # Configuration Retrieval Tests
@@ -424,9 +424,7 @@ def test_get_session_driver_instantiation() -> None:
         session = sqlspec.get_session(MockSyncConfig)
 
         mock_driver_class.assert_called_once_with(
-            connection=mock_connection,
-            instrumentation_config=config.instrumentation,
-            default_row_type=dict,
+            connection=mock_connection, instrumentation_config=config.instrumentation, default_row_type=dict
         )
         assert session == mock_driver_instance
 

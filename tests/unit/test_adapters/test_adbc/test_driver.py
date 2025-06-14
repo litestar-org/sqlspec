@@ -20,10 +20,7 @@ from sqlspec.typing import DictRow
 def mock_adbc_connection() -> Mock:
     """Create a mock ADBC connection."""
     mock_conn = Mock(spec=Connection)
-    mock_conn.adbc_get_info.return_value = {
-        "vendor_name": "PostgreSQL",
-        "driver_name": "adbc_driver_postgresql",
-    }
+    mock_conn.adbc_get_info.return_value = {"vendor_name": "PostgreSQL", "driver_name": "adbc_driver_postgresql"}
     return mock_conn
 
 
@@ -33,10 +30,7 @@ def mock_cursor() -> Mock:
     mock_cursor = Mock(spec=Cursor)
     mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
     mock_cursor.rowcount = 1
-    mock_cursor.fetchall.return_value = [
-        (1, "John Doe", "john@example.com"),
-        (2, "Jane Smith", "jane@example.com"),
-    ]
+    mock_cursor.fetchall.return_value = [(1, "John Doe", "john@example.com"), (2, "Jane Smith", "jane@example.com")]
     return mock_cursor
 
 
@@ -67,11 +61,7 @@ def test_adbc_driver_initialization_with_config(mock_adbc_connection: Mock) -> N
     config = SQLConfig(strict_mode=False)
     instrumentation = InstrumentationConfig()
 
-    driver = AdbcDriver(
-        connection=mock_adbc_connection,
-        config=config,
-        instrumentation_config=instrumentation,
-    )
+    driver = AdbcDriver(connection=mock_adbc_connection, config=config, instrumentation_config=instrumentation)
 
     assert driver.config == config
     assert driver.instrumentation_config == instrumentation
@@ -80,10 +70,7 @@ def test_adbc_driver_initialization_with_config(mock_adbc_connection: Mock) -> N
 def test_adbc_driver_get_dialect_postgresql() -> None:
     """Test AdbcDriver._get_dialect detects PostgreSQL."""
     mock_conn = Mock(spec=Connection)
-    mock_conn.adbc_get_info.return_value = {
-        "vendor_name": "PostgreSQL",
-        "driver_name": "adbc_driver_postgresql",
-    }
+    mock_conn.adbc_get_info.return_value = {"vendor_name": "PostgreSQL", "driver_name": "adbc_driver_postgresql"}
 
     dialect = AdbcDriver._get_dialect(mock_conn)
     assert dialect == "postgres"
@@ -92,10 +79,7 @@ def test_adbc_driver_get_dialect_postgresql() -> None:
 def test_adbc_driver_get_dialect_bigquery() -> None:
     """Test AdbcDriver._get_dialect detects BigQuery."""
     mock_conn = Mock(spec=Connection)
-    mock_conn.adbc_get_info.return_value = {
-        "vendor_name": "BigQuery",
-        "driver_name": "adbc_driver_bigquery",
-    }
+    mock_conn.adbc_get_info.return_value = {"vendor_name": "BigQuery", "driver_name": "adbc_driver_bigquery"}
 
     dialect = AdbcDriver._get_dialect(mock_conn)
     assert dialect == "bigquery"
@@ -104,10 +88,7 @@ def test_adbc_driver_get_dialect_bigquery() -> None:
 def test_adbc_driver_get_dialect_sqlite() -> None:
     """Test AdbcDriver._get_dialect detects SQLite."""
     mock_conn = Mock(spec=Connection)
-    mock_conn.adbc_get_info.return_value = {
-        "vendor_name": "SQLite",
-        "driver_name": "adbc_driver_sqlite",
-    }
+    mock_conn.adbc_get_info.return_value = {"vendor_name": "SQLite", "driver_name": "adbc_driver_sqlite"}
 
     dialect = AdbcDriver._get_dialect(mock_conn)
     assert dialect == "sqlite"
@@ -116,10 +97,7 @@ def test_adbc_driver_get_dialect_sqlite() -> None:
 def test_adbc_driver_get_dialect_duckdb() -> None:
     """Test AdbcDriver._get_dialect detects DuckDB."""
     mock_conn = Mock(spec=Connection)
-    mock_conn.adbc_get_info.return_value = {
-        "vendor_name": "DuckDB",
-        "driver_name": "adbc_driver_duckdb",
-    }
+    mock_conn.adbc_get_info.return_value = {"vendor_name": "DuckDB", "driver_name": "adbc_driver_duckdb"}
 
     dialect = AdbcDriver._get_dialect(mock_conn)
     assert dialect == "duckdb"
@@ -128,10 +106,7 @@ def test_adbc_driver_get_dialect_duckdb() -> None:
 def test_adbc_driver_get_dialect_mysql() -> None:
     """Test AdbcDriver._get_dialect detects MySQL."""
     mock_conn = Mock(spec=Connection)
-    mock_conn.adbc_get_info.return_value = {
-        "vendor_name": "MySQL",
-        "driver_name": "mysql_driver",
-    }
+    mock_conn.adbc_get_info.return_value = {"vendor_name": "MySQL", "driver_name": "mysql_driver"}
 
     dialect = AdbcDriver._get_dialect(mock_conn)
     assert dialect == "mysql"
@@ -140,10 +115,7 @@ def test_adbc_driver_get_dialect_mysql() -> None:
 def test_adbc_driver_get_dialect_snowflake() -> None:
     """Test AdbcDriver._get_dialect detects Snowflake."""
     mock_conn = Mock(spec=Connection)
-    mock_conn.adbc_get_info.return_value = {
-        "vendor_name": "Snowflake",
-        "driver_name": "adbc_driver_snowflake",
-    }
+    mock_conn.adbc_get_info.return_value = {"vendor_name": "Snowflake", "driver_name": "adbc_driver_snowflake"}
 
     dialect = AdbcDriver._get_dialect(mock_conn)
     assert dialect == "snowflake"
@@ -152,10 +124,7 @@ def test_adbc_driver_get_dialect_snowflake() -> None:
 def test_adbc_driver_get_dialect_flightsql() -> None:
     """Test AdbcDriver._get_dialect detects Flight SQL."""
     mock_conn = Mock(spec=Connection)
-    mock_conn.adbc_get_info.return_value = {
-        "vendor_name": "Apache Arrow",
-        "driver_name": "adbc_driver_flightsql",
-    }
+    mock_conn.adbc_get_info.return_value = {"vendor_name": "Apache Arrow", "driver_name": "adbc_driver_flightsql"}
 
     dialect = AdbcDriver._get_dialect(mock_conn)
     assert dialect == "sqlite"  # FlightSQL defaults to sqlite
@@ -164,10 +133,7 @@ def test_adbc_driver_get_dialect_flightsql() -> None:
 def test_adbc_driver_get_dialect_unknown() -> None:
     """Test AdbcDriver._get_dialect defaults to postgres for unknown drivers."""
     mock_conn = Mock(spec=Connection)
-    mock_conn.adbc_get_info.return_value = {
-        "vendor_name": "Unknown DB",
-        "driver_name": "unknown_driver",
-    }
+    mock_conn.adbc_get_info.return_value = {"vendor_name": "Unknown DB", "driver_name": "unknown_driver"}
 
     dialect = AdbcDriver._get_dialect(mock_conn)
     assert dialect == "postgres"
@@ -196,10 +162,7 @@ def test_adbc_driver_get_placeholder_style_postgresql(mock_adbc_connection: Mock
 
 def test_adbc_driver_get_placeholder_style_sqlite(mock_adbc_connection: Mock) -> None:
     """Test AdbcDriver.default_parameter_style for SQLite."""
-    mock_adbc_connection.adbc_get_info.return_value = {
-        "vendor_name": "SQLite",
-        "driver_name": "adbc_driver_sqlite",
-    }
+    mock_adbc_connection.adbc_get_info.return_value = {"vendor_name": "SQLite", "driver_name": "adbc_driver_sqlite"}
 
     driver = AdbcDriver(connection=mock_adbc_connection)
     style = driver.default_parameter_style
@@ -208,10 +171,7 @@ def test_adbc_driver_get_placeholder_style_sqlite(mock_adbc_connection: Mock) ->
 
 def test_adbc_driver_get_placeholder_style_bigquery(mock_adbc_connection: Mock) -> None:
     """Test AdbcDriver.default_parameter_style for BigQuery."""
-    mock_adbc_connection.adbc_get_info.return_value = {
-        "vendor_name": "BigQuery",
-        "driver_name": "adbc_driver_bigquery",
-    }
+    mock_adbc_connection.adbc_get_info.return_value = {"vendor_name": "BigQuery", "driver_name": "adbc_driver_bigquery"}
 
     driver = AdbcDriver(connection=mock_adbc_connection)
     style = driver.default_parameter_style
@@ -220,10 +180,7 @@ def test_adbc_driver_get_placeholder_style_bigquery(mock_adbc_connection: Mock) 
 
 def test_adbc_driver_get_placeholder_style_duckdb(mock_adbc_connection: Mock) -> None:
     """Test AdbcDriver.default_parameter_style for DuckDB."""
-    mock_adbc_connection.adbc_get_info.return_value = {
-        "vendor_name": "DuckDB",
-        "driver_name": "adbc_driver_duckdb",
-    }
+    mock_adbc_connection.adbc_get_info.return_value = {"vendor_name": "DuckDB", "driver_name": "adbc_driver_duckdb"}
 
     driver = AdbcDriver(connection=mock_adbc_connection)
     style = driver.default_parameter_style
@@ -232,10 +189,7 @@ def test_adbc_driver_get_placeholder_style_duckdb(mock_adbc_connection: Mock) ->
 
 def test_adbc_driver_get_placeholder_style_mysql(mock_adbc_connection: Mock) -> None:
     """Test AdbcDriver.default_parameter_style for MySQL."""
-    mock_adbc_connection.adbc_get_info.return_value = {
-        "vendor_name": "MySQL",
-        "driver_name": "mysql_driver",
-    }
+    mock_adbc_connection.adbc_get_info.return_value = {"vendor_name": "MySQL", "driver_name": "mysql_driver"}
 
     driver = AdbcDriver(connection=mock_adbc_connection)
     style = driver.default_parameter_style
@@ -287,11 +241,7 @@ def test_adbc_driver_execute_statement_select(adbc_driver: AdbcDriver, mock_curs
 
     # Setup mock cursor for ADBC native Arrow support
     mock_arrow_table = pa.table(
-        {
-            "id": [1, 2],
-            "name": ["John Doe", "Jane Smith"],
-            "email": ["john@example.com", "jane@example.com"],
-        }
+        {"id": [1, 2], "name": ["John Doe", "Jane Smith"], "email": ["john@example.com", "jane@example.com"]}
     )
     mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
@@ -378,11 +328,7 @@ def test_adbc_driver_fetch_arrow_table_list_parameters(adbc_driver: AdbcDriver, 
 
     # Setup mock cursor for ADBC native Arrow support
     mock_arrow_table = pa.table(
-        {
-            "id": [1, 2],
-            "name": ["User 1", "User 2"],
-            "email": ["user1@example.com", "user2@example.com"],
-        }
+        {"id": [1, 2], "name": ["User 1", "User 2"], "email": ["user1@example.com", "user2@example.com"]}
     )
     mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
@@ -438,16 +384,9 @@ def test_adbc_driver_fetch_arrow_table_with_connection_override(adbc_driver: Adb
 
 def test_adbc_driver_instrumentation_logging(mock_adbc_connection: Mock, mock_cursor: Mock) -> None:
     """Test AdbcDriver with instrumentation logging enabled."""
-    instrumentation = InstrumentationConfig(
-        log_queries=True,
-        log_parameters=True,
-        log_results_count=True,
-    )
+    instrumentation = InstrumentationConfig(log_queries=True, log_parameters=True, log_results_count=True)
 
-    driver = AdbcDriver(
-        connection=mock_adbc_connection,
-        instrumentation_config=instrumentation,
-    )
+    driver = AdbcDriver(connection=mock_adbc_connection, instrumentation_config=instrumentation)
 
     mock_adbc_connection.cursor.return_value = mock_cursor
     mock_cursor.fetchall.return_value = [(1, "John")]

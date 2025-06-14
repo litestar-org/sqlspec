@@ -76,11 +76,7 @@ def test_sqlite_file_database_connection() -> None:
 def test_sqlite_connection_configuration() -> None:
     """Test SQLite connection with various configuration options."""
     # Test with timeout
-    config = SqliteConfig(
-        database=":memory:",
-        timeout=30.0,
-        check_same_thread=False,
-    )
+    config = SqliteConfig(database=":memory:", timeout=30.0, check_same_thread=False)
 
     with config.provide_session() as session:
         result = session.execute("SELECT 1 AS configured")
@@ -93,10 +89,7 @@ def test_sqlite_connection_configuration() -> None:
 def test_sqlite_isolation_levels() -> None:
     """Test SQLite with different isolation levels."""
     for isolation_level in [None, "DEFERRED", "IMMEDIATE", "EXCLUSIVE"]:
-        config = SqliteConfig(
-            database=":memory:",
-            isolation_level=isolation_level,
-        )
+        config = SqliteConfig(database=":memory:", isolation_level=isolation_level)
 
         with config.provide_session() as session:
             result = session.execute("SELECT 1 AS isolation_test")

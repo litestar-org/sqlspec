@@ -53,11 +53,7 @@ def test_warn_deprecation_basic_message() -> None:
     """Test basic deprecation warning message structure."""
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
-        warn_deprecation(
-            version="1.0.0",
-            deprecated_name="test_function",
-            kind="function",
-        )
+        warn_deprecation(version="1.0.0", deprecated_name="test_function", kind="function")
 
         assert len(warning_list) == 1
         warning = warning_list[0]
@@ -73,12 +69,7 @@ def test_warn_deprecation_with_removal_version() -> None:
     """Test deprecation warning with specific removal version."""
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
-        warn_deprecation(
-            version="1.0.0",
-            deprecated_name="test_method",
-            kind="method",
-            removal_in="2.0.0",
-        )
+        warn_deprecation(version="1.0.0", deprecated_name="test_method", kind="method", removal_in="2.0.0")
 
         assert len(warning_list) == 1
         message = str(warning_list[0].message)
@@ -89,12 +80,7 @@ def test_warn_deprecation_with_alternative() -> None:
     """Test deprecation warning with alternative suggestion."""
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
-        warn_deprecation(
-            version="1.0.0",
-            deprecated_name="old_function",
-            kind="function",
-            alternative="new_function",
-        )
+        warn_deprecation(version="1.0.0", deprecated_name="old_function", kind="function", alternative="new_function")
 
         assert len(warning_list) == 1
         message = str(warning_list[0].message)
@@ -106,10 +92,7 @@ def test_warn_deprecation_with_info() -> None:
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
         warn_deprecation(
-            version="1.0.0",
-            deprecated_name="test_class",
-            kind="class",
-            info="Additional context about the deprecation",
+            version="1.0.0", deprecated_name="test_class", kind="class", info="Additional context about the deprecation"
         )
 
         assert len(warning_list) == 1
@@ -121,12 +104,7 @@ def test_warn_deprecation_pending_warning() -> None:
     """Test pending deprecation warning instead of regular deprecation."""
     with warnings.catch_warnings(record=True) as warning_list:
         warnings.simplefilter("always")
-        warn_deprecation(
-            version="1.0.0",
-            deprecated_name="future_deprecated",
-            kind="function",
-            pending=True,
-        )
+        warn_deprecation(version="1.0.0", deprecated_name="future_deprecated", kind="function", pending=True)
 
         assert len(warning_list) == 1
         warning = warning_list[0]
@@ -166,16 +144,7 @@ def test_warn_deprecation_complete_message() -> None:
 @pytest.mark.parametrize(
     "kind",
     ["function", "method", "class", "property", "attribute", "parameter", "import", "classmethod"],
-    ids=[
-        "function",
-        "method",
-        "class",
-        "property",
-        "attribute",
-        "parameter",
-        "import",
-        "classmethod",
-    ],
+    ids=["function", "method", "class", "property", "attribute", "parameter", "import", "classmethod"],
 )
 def test_warn_deprecation_all_kinds(kind: str) -> None:
     """Test that all supported kinds work correctly."""

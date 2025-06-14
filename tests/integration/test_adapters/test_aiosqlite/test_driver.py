@@ -265,12 +265,7 @@ async def test_aiosqlite_transactions(aiosqlite_session: AiosqliteDriver) -> Non
 async def test_aiosqlite_complex_queries(aiosqlite_session: AiosqliteDriver) -> None:
     """Test complex SQL queries."""
     # Insert test data
-    test_data = [
-        ("Alice", 25),
-        ("Bob", 30),
-        ("Charlie", 35),
-        ("Diana", 28),
-    ]
+    test_data = [("Alice", 25), ("Bob", 30), ("Charlie", 35), ("Diana", 28)]
 
     await aiosqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", test_data)
 

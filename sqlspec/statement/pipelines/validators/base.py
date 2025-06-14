@@ -3,13 +3,13 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
-from sqlglot import exp
-
 from sqlspec.exceptions import RiskLevel
 from sqlspec.statement.pipelines.base import ProcessorProtocol
 from sqlspec.statement.pipelines.result_types import ValidationError
 
 if TYPE_CHECKING:
+    from sqlglot import exp
+
     from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 __all__ = ("BaseValidator",)
@@ -60,10 +60,6 @@ class BaseValidator(ProcessorProtocol, ABC):
             expression: The specific expression with the error (optional).
         """
         error = ValidationError(
-            message=message,
-            code=code,
-            risk_level=risk_level,
-            processor=self.__class__.__name__,
-            expression=expression,
+            message=message, code=code, risk_level=risk_level, processor=self.__class__.__name__, expression=expression
         )
         context.validation_errors.append(error)

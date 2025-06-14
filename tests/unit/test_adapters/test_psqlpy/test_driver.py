@@ -28,11 +28,7 @@ def psqlpy_driver(mock_psqlpy_connection: AsyncMock) -> PsqlpyDriver:
     """Create a PSQLPy driver with mocked connection."""
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
     instrumentation_config = InstrumentationConfig()
-    return PsqlpyDriver(
-        connection=mock_psqlpy_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
-    )
+    return PsqlpyDriver(connection=mock_psqlpy_connection, config=config, instrumentation_config=instrumentation_config)
 
 
 def test_psqlpy_driver_initialization(mock_psqlpy_connection: AsyncMock) -> None:
@@ -41,9 +37,7 @@ def test_psqlpy_driver_initialization(mock_psqlpy_connection: AsyncMock) -> None
     instrumentation_config = InstrumentationConfig(log_queries=True)
 
     driver = PsqlpyDriver(
-        connection=mock_psqlpy_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_psqlpy_connection, config=config, instrumentation_config=instrumentation_config
     )
 
     # Test driver attributes are set correctly

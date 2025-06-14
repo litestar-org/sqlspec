@@ -4,19 +4,10 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from sqlglot import exp
-from sqlglot.expressions import (
-    Array,
-    Binary,
-    Boolean,
-    DataType,
-    Func,
-    Literal,
-    Null,
-)
+from sqlglot.expressions import Array, Binary, Boolean, DataType, Func, Literal, Null
 
 from sqlspec.statement.pipelines.base import ProcessorProtocol
 from sqlspec.statement.pipelines.context import SQLProcessingContext
-from sqlspec.statement.pipelines.results import ProcessorResult
 
 __all__ = ("ParameterizationContext", "ParameterizeLiterals")
 
@@ -45,7 +36,7 @@ class ParameterizationContext:
     function_depth: int = 0
 
 
-class ParameterizeLiterals(ProcessorProtocol[exp.Expression]):
+class ParameterizeLiterals(ProcessorProtocol):
     """Advanced literal parameterization using SQLGlot AST analysis.
 
     This enhanced version provides:
@@ -98,10 +89,10 @@ class ParameterizeLiterals(ProcessorProtocol[exp.Expression]):
         self._parameter_counter = 0
         self._parameter_metadata: list[dict[str, Any]] = []  # Track parameter types and context
 
-    def process(self, context: SQLProcessingContext) -> "ProcessorResult":
+    def process(self, expression: exp.Expression, context: SQLProcessingContext) -> exp.Expression:
         """Advanced literal parameterization with context-aware AST analysis."""
         if context.current_expression is None or context.config.input_sql_had_placeholders:
-            return ProcessorResult(expression=context.current_expression)
+            return expression
 
         self.extracted_parameters = []
         self._parameter_counter = 0
@@ -115,13 +106,9 @@ class ParameterizeLiterals(ProcessorProtocol[exp.Expression]):
             context.extracted_parameters_from_pipeline = []
         context.extracted_parameters_from_pipeline.extend(self.extracted_parameters)
 
-        context.set_additional_data("parameter_metadata", self._parameter_metadata)
+        context.metadata["parameter_metadata"] = self._parameter_metadata
 
-        metadata = {
-            "type": "transformer",
-            "parameters_extracted": len(self.extracted_parameters),
-        }
-        return ProcessorResult(expression=context.current_expression, metadata=metadata)
+        return transformed_expression
 
     def _transform_with_context(self, node: exp.Expression, context: ParameterizationContext) -> exp.Expression:
         """Transform expression tree with context tracking."""

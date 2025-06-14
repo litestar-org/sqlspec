@@ -15,10 +15,7 @@ from sqlspec.statement.sql import SQLConfig
 @pytest.fixture
 def sqlite_arrow_session() -> "Generator[SqliteDriver, None, None]":
     """Create a SQLite session for Arrow testing."""
-    config = SqliteConfig(
-        database=":memory:",
-        statement_config=SQLConfig(strict_mode=False),
-    )
+    config = SqliteConfig(database=":memory:", statement_config=SQLConfig(strict_mode=False))
 
     with config.provide_session() as session:
         # Create test table with various data types
@@ -74,10 +71,7 @@ def test_sqlite_to_parquet(sqlite_arrow_session: SqliteDriver) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir) / "test_output.parquet"
 
-        sqlite_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE is_active = 1",
-            str(output_path),
-        )
+        sqlite_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE is_active = 1", str(output_path))
 
         assert output_path.exists()
 
@@ -152,8 +146,7 @@ def test_sqlite_arrow_large_dataset(sqlite_arrow_session: SqliteDriver) -> None:
     large_data = [(f"Item {i}", i * 10, float(i * 2.5), i % 2) for i in range(100, 1000)]
 
     sqlite_arrow_session.execute_many(
-        "INSERT INTO test_arrow (name, value, price, is_active) VALUES (?, ?, ?, ?)",
-        large_data,
+        "INSERT INTO test_arrow (name, value, price, is_active) VALUES (?, ?, ?, ?)", large_data
     )
 
     result = sqlite_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
@@ -171,9 +164,7 @@ def test_sqlite_parquet_export_options(sqlite_arrow_session: SqliteDriver) -> No
 
         # Export with compression
         sqlite_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE value <= 300",
-            str(output_path),
-            compression="snappy",
+            "SELECT * FROM test_arrow WHERE value <= 300", str(output_path), compression="snappy"
         )
 
         assert output_path.exists()

@@ -24,10 +24,7 @@ from sqlspec.statement import SQLResult
 from sqlspec.statement.filters import FilterTypes
 
 
-@get(
-    "/",
-    dependencies=providers.create_filter_dependencies({"search": "greeting", "search_ignore_case": True}),
-)
+@get("/", dependencies=providers.create_filter_dependencies({"search": "greeting", "search_ignore_case": True}))
 async def simple_asyncpg(
     db_session: AsyncpgDriver, filters: Annotated[list[FilterTypes], Dependency(skip_validation=True)]
 ) -> SQLResult[dict[str, Any]]:
@@ -37,11 +34,7 @@ async def simple_asyncpg(
 sqlspec = SQLSpec(
     config=[
         DatabaseConfig(
-            config=AsyncpgConfig(
-                dsn="postgres://app:app@localhost:15432/app",
-                min_size=1,
-                max_size=3,
-            ),
+            config=AsyncpgConfig(dsn="postgres://app:app@localhost:15432/app", min_size=1, max_size=3),
             commit_mode="autocommit",
         )
     ]

@@ -106,10 +106,7 @@ def test_oracledb_to_parquet(oracledb_arrow_session: OracleSyncDriver) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir) / "test_output.parquet"
 
-        oracledb_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow_data WHERE is_active = 1",
-            str(output_path),
-        )
+        oracledb_arrow_session.export_to_storage("SELECT * FROM test_arrow_data WHERE is_active = 1", str(output_path))
 
         assert output_path.exists()
 
@@ -141,8 +138,7 @@ def test_oracledb_arrow_with_parameters(oracledb_arrow_session: OracleSyncDriver
 def test_oracledb_arrow_empty_result(oracledb_arrow_session: OracleSyncDriver) -> None:
     """Test fetch_arrow_table with empty result on OracleDB."""
     result = oracledb_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow_data WHERE value > :threshold",
-        {"threshold": 1000},
+        "SELECT * FROM test_arrow_data WHERE value > :threshold", {"threshold": 1000}
     )
 
     assert isinstance(result, ArrowResult)

@@ -60,21 +60,9 @@ CONNECTION_FIELDS = frozenset(
     }
 )
 
-POOL_FIELDS = CONNECTION_FIELDS.union(
-    {
-        "hosts",
-        "ports",
-        "conn_recycling_method",
-        "max_db_pool_size",
-        "configure",
-    }
-)
+POOL_FIELDS = CONNECTION_FIELDS.union({"hosts", "ports", "conn_recycling_method", "max_db_pool_size", "configure"})
 
-__all__ = (
-    "CONNECTION_FIELDS",
-    "POOL_FIELDS",
-    "PsqlpyConfig",
-)
+__all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "PsqlpyConfig")
 
 
 class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
@@ -128,8 +116,8 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         "username",
     )
 
-    __is_async__: ClassVar[bool] = True
-    __supports_connection_pooling__: ClassVar[bool] = True
+    is_async: ClassVar[bool] = True
+    supports_connection_pooling: ClassVar[bool] = True
 
     # Driver class reference for dialect resolution
     driver_class: ClassVar[type[PsqlpyDriver]] = PsqlpyDriver
@@ -300,7 +288,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         self.default_row_type = default_row_type
 
         super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig(),  # pyright: ignore
+            instrumentation=instrumentation or InstrumentationConfig()  # pyright: ignore
         )
 
     @property
@@ -469,9 +457,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
                 )
 
             driver = self.driver_type(
-                connection=conn,
-                config=statement_config,
-                instrumentation_config=self.instrumentation,
+                connection=conn, config=statement_config, instrumentation_config=self.instrumentation
             )
             yield driver
 

@@ -32,7 +32,7 @@ class TestExpressionSimplifier:
         transformer = ExpressionSimplifier()
         context = _create_test_context(sql)
 
-        transformed_expression, result = transformer.process(context)
+        transformed_expression = transformer.process(context.current_expression, context)
 
         # Convert back to SQL to check simplification
         result_sql = transformed_expression.sql()
@@ -40,8 +40,9 @@ class TestExpressionSimplifier:
         # SQLGlot should simplify 1 + 1 to 2 and 10 * 2 to 20
         assert "2 AS sum" in result_sql or "2" in result_sql
         assert "20 AS product" in result_sql or "20" in result_sql
-        assert result is not None
-        assert result.risk_level == RiskLevel.LOW
+        # Check context for transformation logs
+        assert len(context.transformations) > 0
+        assert context.transformations[0].processor == "ExpressionSimplifier"
 
     def test_simplifies_boolean_expressions(self) -> None:
         """Test simplification of boolean expressions."""
@@ -50,7 +51,7 @@ class TestExpressionSimplifier:
         transformer = ExpressionSimplifier()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
 
@@ -65,7 +66,7 @@ class TestExpressionSimplifier:
         transformer = ExpressionSimplifier()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
 
@@ -80,7 +81,7 @@ class TestExpressionSimplifier:
         transformer = ExpressionSimplifier()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
 
@@ -94,7 +95,7 @@ class TestExpressionSimplifier:
         transformer = ExpressionSimplifier(enabled=False)
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
 
@@ -118,7 +119,7 @@ class TestExpressionSimplifier:
         transformer = ExpressionSimplifier(config=config)
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
 
@@ -139,7 +140,7 @@ class TestExpressionSimplifier:
         transformer = ExpressionSimplifier()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
 
@@ -155,7 +156,7 @@ class TestExpressionSimplifier:
         transformer = ExpressionSimplifier()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
 
@@ -180,7 +181,7 @@ class TestExpressionSimplifier:
         transformer = ExpressionSimplifier()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
 
@@ -201,7 +202,7 @@ class TestExpressionSimplifier:
         transformer = ExpressionSimplifier()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
 
@@ -225,7 +226,7 @@ class TestExpressionSimplifier:
         transformer = ExpressionSimplifier()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
 
@@ -239,15 +240,17 @@ class TestExpressionSimplifier:
         transformer = ExpressionSimplifier()
         context = _create_test_context(sql)
 
-        transformed_expression, result = transformer.process(context)
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
 
         # Should be essentially unchanged
         assert "SELECT name, email" in result_sql
         assert "WHERE active = ?" in result_sql
-        assert result is not None
-        assert "no simplifications applied" in result.warnings[0]
+        # Check context metadata for no simplification
+        assert "ExpressionSimplifier" in context.metadata
+        assert context.metadata["ExpressionSimplifier"]["simplified"] is False
+        assert context.metadata["ExpressionSimplifier"]["chars_saved"] == 0
 
     def test_optimization_failure_handling(self) -> None:
         """Test graceful handling of optimization failures."""
@@ -267,9 +270,9 @@ class TestExpressionSimplifier:
         transformer = ExpressionSimplifier(config=config)
 
         # This should not raise an exception even if optimization fails
-        transformed_expression, _ = transformer.process(context)
+        transformed_expression = transformer.process(context.current_expression, context)
 
-        # Should return the original expression and a warning result
+        # Should return the original expression
         assert transformed_expression is not None
 
     def test_reports_optimization_metrics(self) -> None:
@@ -279,13 +282,13 @@ class TestExpressionSimplifier:
         transformer = ExpressionSimplifier()
         context = _create_test_context(sql)
 
-        _, result = transformer.process(context)
+        _ = transformer.process(context.current_expression, context)
 
-        # Check that result contains optimization information in warnings
-        assert result is not None
-        assert result.warnings is not None
-        assert len(result.warnings) > 0
-        assert "simplified" in result.warnings[0]
+        # Check that context contains transformation logs
+        assert len(context.transformations) > 0
+        result = context.transformations[0]
+        assert result.processor == "ExpressionSimplifier"
+        assert "simplified" in result.description or "Simplified" in result.description
 
     def test_connector_optimization(self) -> None:
         """Test connector optimization (AND/OR logic)."""
@@ -294,7 +297,7 @@ class TestExpressionSimplifier:
         transformer = ExpressionSimplifier()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
 
@@ -309,7 +312,7 @@ class TestExpressionSimplifier:
         transformer = ExpressionSimplifier()
         context = _create_test_context(sql)
 
-        transformed_expression, _ = transformer.process(context)
+        transformed_expression = transformer.process(context.current_expression, context)
 
         result_sql = transformed_expression.sql()
 

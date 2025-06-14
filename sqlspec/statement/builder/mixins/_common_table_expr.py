@@ -14,11 +14,7 @@ class CommonTableExpressionMixin:
     _expression: Optional[exp.Expression] = None
 
     def with_(
-        self,
-        name: str,
-        query: Union[Any, str],
-        recursive: bool = False,
-        columns: Optional[list[str]] = None,
+        self, name: str, query: Union[Any, str], recursive: bool = False, columns: Optional[list[str]] = None
     ) -> Self:
         """Add WITH clause (Common Table Expression).
 

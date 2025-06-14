@@ -93,10 +93,7 @@ def on_warn_missing_reference(app: "Sphinx", domain: str, node: Node) -> "Option
 
 
 def on_missing_reference(
-    app: "Sphinx",
-    env: "BuildEnvironment",
-    node: "pending_xref",
-    contnode: "Element",
+    app: "Sphinx", env: "BuildEnvironment", node: "pending_xref", contnode: "Element"
 ) -> "Optional[Element]":
     if not hasattr(node, "attributes"):
         return None

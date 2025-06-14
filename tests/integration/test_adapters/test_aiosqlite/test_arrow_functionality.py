@@ -15,10 +15,7 @@ from sqlspec.statement.sql import SQLConfig
 @pytest.fixture
 async def aiosqlite_arrow_session() -> "AsyncGenerator[AiosqliteDriver, None]":
     """Create an AIOSQLite session for Arrow testing."""
-    config = AiosqliteConfig(
-        database=":memory:",
-        statement_config=SQLConfig(strict_mode=False),
-    )
+    config = AiosqliteConfig(database=":memory:", statement_config=SQLConfig(strict_mode=False))
 
     async with config.provide_session() as session:
         # Create test table with various data types
@@ -78,8 +75,7 @@ async def test_aiosqlite_to_parquet(aiosqlite_arrow_session: AiosqliteDriver) ->
         output_path = Path(tmpdir) / "test_output.parquet"
 
         await aiosqlite_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE is_active = 1",
-            str(output_path),
+            "SELECT * FROM test_arrow WHERE is_active = 1", str(output_path)
         )
 
         assert output_path.exists()
@@ -98,8 +94,7 @@ async def test_aiosqlite_to_parquet(aiosqlite_arrow_session: AiosqliteDriver) ->
 async def test_aiosqlite_arrow_with_parameters(aiosqlite_arrow_session: AiosqliteDriver) -> None:
     """Test fetch_arrow_table with parameters on AIOSQLite."""
     result = await aiosqlite_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE value >= ? AND value <= ? ORDER BY value",
-        (200, 400),
+        "SELECT * FROM test_arrow WHERE value >= ? AND value <= ? ORDER BY value", (200, 400)
     )
 
     assert isinstance(result, ArrowResult)
@@ -111,10 +106,7 @@ async def test_aiosqlite_arrow_with_parameters(aiosqlite_arrow_session: Aiosqlit
 @pytest.mark.asyncio
 async def test_aiosqlite_arrow_empty_result(aiosqlite_arrow_session: AiosqliteDriver) -> None:
     """Test fetch_arrow_table with empty result on AIOSQLite."""
-    result = await aiosqlite_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE value > ?",
-        (1000,),
-    )
+    result = await aiosqlite_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow WHERE value > ?", (1000,))
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows == 0
@@ -162,8 +154,7 @@ async def test_aiosqlite_arrow_large_dataset(aiosqlite_arrow_session: AiosqliteD
     large_data = [(f"Item {i}", i * 10, float(i * 2.5), i % 2) for i in range(100, 1000)]
 
     await aiosqlite_arrow_session.execute_many(
-        "INSERT INTO test_arrow (name, value, price, is_active) VALUES (?, ?, ?, ?)",
-        large_data,
+        "INSERT INTO test_arrow (name, value, price, is_active) VALUES (?, ?, ?, ?)", large_data
     )
 
     result = await aiosqlite_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
@@ -182,9 +173,7 @@ async def test_aiosqlite_parquet_export_options(aiosqlite_arrow_session: Aiosqli
 
         # Export with compression
         await aiosqlite_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE value <= 300",
-            str(output_path),
-            compression="snappy",
+            "SELECT * FROM test_arrow WHERE value <= 300", str(output_path), compression="snappy"
         )
 
         assert output_path.exists()
@@ -211,11 +200,7 @@ async def test_aiosqlite_arrow_with_joins(aiosqlite_arrow_session: AiosqliteDriv
 
     await aiosqlite_arrow_session.execute_many(
         "INSERT INTO categories (id, category_name, min_value) VALUES (?, ?, ?)",
-        [
-            (1, "Basic", 0),
-            (2, "Standard", 200),
-            (3, "Premium", 400),
-        ],
+        [(1, "Basic", 0), (2, "Standard", 200), (3, "Premium", 400)],
     )
 
     result = await aiosqlite_arrow_session.fetch_arrow_table("""

@@ -155,13 +155,13 @@ class TestInstrumentedObjectStore:
         assert backend.instrumentation_config is not None
 
         # With config
-        config = InstrumentationConfig(log_service_operations=True, debug_mode=True)
+        config = InstrumentationConfig(log_service_operations=True)
         backend = MockBackend(config)
         assert backend.instrumentation_config == config
 
     def test_sync_read_bytes_instrumentation(self, caplog: pytest.LogCaptureFixture) -> None:
         """Test that read_bytes properly instruments the operation."""
-        config = InstrumentationConfig(log_service_operations=True, debug_mode=True)
+        config = InstrumentationConfig(log_service_operations=True)
         backend = MockBackend(config)
 
         with caplog.at_level(logging.DEBUG):
@@ -177,7 +177,7 @@ class TestInstrumentedObjectStore:
 
     def test_sync_write_bytes_instrumentation(self, caplog: pytest.LogCaptureFixture) -> None:
         """Test that write_bytes properly instruments the operation."""
-        config = InstrumentationConfig(log_service_operations=True, debug_mode=True)
+        config = InstrumentationConfig(log_service_operations=True)
         backend = MockBackend(config)
 
         with caplog.at_level(logging.DEBUG):
@@ -218,7 +218,7 @@ class TestInstrumentedObjectStore:
 
     def test_sync_operations_without_logging(self) -> None:
         """Test that operations work without logging enabled."""
-        config = InstrumentationConfig(log_service_operations=False, debug_mode=False)
+        config = InstrumentationConfig(log_service_operations=False)
         backend = MockBackend(config)
 
         # Should work without any logging
@@ -229,7 +229,7 @@ class TestInstrumentedObjectStore:
     @pytest.mark.asyncio
     async def test_async_read_bytes_instrumentation(self, caplog: pytest.LogCaptureFixture) -> None:
         """Test that async read_bytes properly instruments the operation."""
-        config = InstrumentationConfig(log_service_operations=True, debug_mode=True)
+        config = InstrumentationConfig(log_service_operations=True)
         backend = MockBackend(config)
 
         with caplog.at_level(logging.DEBUG):
@@ -246,7 +246,7 @@ class TestInstrumentedObjectStore:
     @pytest.mark.asyncio
     async def test_async_write_bytes_instrumentation(self, caplog: pytest.LogCaptureFixture) -> None:
         """Test that async write_bytes properly instruments the operation."""
-        config = InstrumentationConfig(log_service_operations=True, debug_mode=True)
+        config = InstrumentationConfig(log_service_operations=True)
         backend = MockBackend(config)
 
         with caplog.at_level(logging.DEBUG):

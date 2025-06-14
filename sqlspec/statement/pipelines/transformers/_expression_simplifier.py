@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
-from sqlglot import exp
 from sqlglot.optimizer import simplify
 
 from sqlspec.exceptions import RiskLevel
@@ -9,6 +8,8 @@ from sqlspec.statement.pipelines.base import ProcessorProtocol
 from sqlspec.statement.pipelines.result_types import TransformationLog, ValidationError
 
 if TYPE_CHECKING:
+    from sqlglot import exp
+
     from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 __all__ = ("ExpressionSimplifier", "SimplificationConfig")
@@ -41,11 +42,7 @@ class ExpressionSimplifier(ProcessorProtocol):
         config: Configuration object controlling which optimizations to apply.
     """
 
-    def __init__(
-        self,
-        enabled: bool = True,
-        config: Optional[SimplificationConfig] = None,
-    ) -> None:
+    def __init__(self, enabled: bool = True, config: Optional[SimplificationConfig] = None) -> None:
         self.enabled = enabled
         self.config = config or SimplificationConfig()
 

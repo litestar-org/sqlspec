@@ -113,8 +113,8 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         "use_query_cache",
     )
 
-    __is_async__: ClassVar[bool] = False
-    __supports_connection_pooling__: ClassVar[bool] = False
+    is_async: ClassVar[bool] = False
+    supports_connection_pooling: ClassVar[bool] = False
 
     # Driver class reference for dialect resolution
     driver_class: ClassVar[type[BigQueryDriver]] = BigQueryDriver
@@ -220,10 +220,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         Example:
             >>> # Basic BigQuery connection
-            >>> config = BigQueryConfig(
-            ...     project="my-project",
-            ...     location="US",
-            ... )
+            >>> config = BigQueryConfig(project="my-project", location="US")
 
             >>> # Advanced configuration with ML and AI features
             >>> config = BigQueryConfig(
@@ -293,9 +290,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         # Store connection instance for reuse (BigQuery doesn't support traditional pooling)
         self._connection_instance: Optional[BigQueryConnection] = None
 
-        super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig(),
-        )
+        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
 
     @property
     def connection_type(self) -> type[BigQueryConnection]:  # type: ignore[override]

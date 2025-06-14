@@ -2,11 +2,7 @@
 
 from sqlspec.statement import builder, filters, parameters, result, sql
 from sqlspec.statement.result import ArrowResult, SQLResult, StatementResult
-from sqlspec.statement.sql import (
-    SQL,
-    SQLConfig,
-    Statement,
-)
+from sqlspec.statement.sql import SQL, SQLConfig, Statement
 
 __all__ = (
     "SQL",

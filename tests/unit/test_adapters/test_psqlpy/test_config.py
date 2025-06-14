@@ -57,13 +57,7 @@ def test_psqlpy_field_constants() -> None:
 
     # Check pool-specific fields
     pool_specific = POOL_FIELDS - CONNECTION_FIELDS
-    expected_pool_specific = {
-        "hosts",
-        "ports",
-        "conn_recycling_method",
-        "max_db_pool_size",
-        "configure",
-    }
+    expected_pool_specific = {"hosts", "ports", "conn_recycling_method", "max_db_pool_size", "configure"}
     assert pool_specific == expected_pool_specific
 
 
@@ -156,17 +150,17 @@ def test_psqlpy_config_driver_type() -> None:
 
 
 def test_psqlpy_config_is_async() -> None:
-    """Test Psqlpy config __is_async__ attribute."""
+    """Test Psqlpy config is_async attribute."""
     config = PsqlpyConfig(dsn="postgresql://test_user:test_password@localhost:5432/test_db")
-    assert config.__is_async__ is True
-    assert PsqlpyConfig.__is_async__ is True
+    assert config.is_async is True
+    assert PsqlpyConfig.is_async is True
 
 
 def test_psqlpy_config_supports_connection_pooling() -> None:
-    """Test Psqlpy config __supports_connection_pooling__ attribute."""
+    """Test Psqlpy config supports_connection_pooling attribute."""
     config = PsqlpyConfig(dsn="postgresql://test_user:test_password@localhost:5432/test_db")
-    assert config.__supports_connection_pooling__ is True
-    assert PsqlpyConfig.__supports_connection_pooling__ is True
+    assert config.supports_connection_pooling is True
+    assert PsqlpyConfig.supports_connection_pooling is True
 
 
 def test_psqlpy_config_from_pool_config() -> None:

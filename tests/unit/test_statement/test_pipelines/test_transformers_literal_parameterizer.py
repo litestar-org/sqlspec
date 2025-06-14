@@ -31,7 +31,7 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals()
         context = _create_test_context(sql)
 
-        param_expr, _ = parameterizer.process(context)
+        param_expr = parameterizer.process(context.current_expression, context)
 
         # Should replace string literal with placeholder
         param_sql = param_expr.sql()
@@ -39,7 +39,7 @@ class TestParameterizeLiterals:
         assert "?" in param_sql or "placeholder" in param_sql.lower()
 
         # Should extract the parameter
-        parameters = parameterizer.get_parameters()
+        parameters = context.extracted_parameters_from_pipeline
         assert len(parameters) == 1
         assert parameters[0] == "John"
 
@@ -50,10 +50,10 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals(preserve_boolean=False)
         context = _create_test_context(sql)
 
-        _, _ = parameterizer.process(context)
+        parameterizer.process(context.current_expression, context)
 
         # Should extract multiple parameters
-        parameters = parameterizer.get_parameters()
+        parameters = context.extracted_parameters_from_pipeline
         assert len(parameters) >= 2  # At least string and number
         assert "John" in parameters
         assert 25 in parameters
@@ -65,10 +65,10 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals()
         context = _create_test_context(sql)
 
-        _, _ = parameterizer.process(context)
+        parameterizer.process(context.current_expression, context)
 
         # Should extract numeric parameters
-        parameters = parameterizer.get_parameters()
+        parameters = context.extracted_parameters_from_pipeline
         assert len(parameters) == 2
         assert 19.99 in parameters
         assert 100 in parameters
@@ -80,14 +80,14 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals(preserve_null=True)
         context = _create_test_context(sql)
 
-        param_expr, _ = parameterizer.process(context)
+        param_expr = parameterizer.process(context.current_expression, context)
 
         # Should preserve NULL literals
         param_sql = param_expr.sql()
         assert "NULL" in param_sql.upper()
 
         # Should not extract NULL as parameter
-        parameters = parameterizer.get_parameters()
+        parameters = context.extracted_parameters_from_pipeline or []
         assert None not in parameters
 
     def test_boolean_preservation(self) -> None:
@@ -97,12 +97,12 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals(preserve_boolean=True)
         context = _create_test_context(sql)
 
-        _, _ = parameterizer.process(context)
+        parameterizer.process(context.current_expression, context)
 
         # Note: SQLGlot might normalize boolean representation
 
         # Should not extract booleans as parameters (or fewer parameters)
-        parameters = parameterizer.get_parameters()
+        parameters = context.extracted_parameters_from_pipeline or []
         assert True not in parameters or False not in parameters
 
     def test_limit_clause_preservation(self) -> None:
@@ -112,7 +112,7 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals(preserve_numbers_in_limit=True)
         context = _create_test_context(sql)
 
-        param_expr, _ = parameterizer.process(context)
+        param_expr = parameterizer.process(context.current_expression, context)
 
         # Should preserve LIMIT/OFFSET numbers
         param_sql = param_expr.sql()
@@ -120,7 +120,7 @@ class TestParameterizeLiterals:
         assert "20" in param_sql
 
         # Should not extract LIMIT/OFFSET numbers as parameters
-        parameters = parameterizer.get_parameters()
+        parameters = context.extracted_parameters_from_pipeline or []
         assert 10 not in parameters
         assert 20 not in parameters
 
@@ -132,14 +132,14 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals(max_string_length=1000)
         context = _create_test_context(sql)
 
-        param_expr, _ = parameterizer.process(context)
+        param_expr = parameterizer.process(context.current_expression, context)
 
         # Should preserve long strings
         param_sql = param_expr.sql()
         assert long_string in param_sql
 
         # Should not extract long string as parameter
-        parameters = parameterizer.get_parameters()
+        parameters = context.extracted_parameters_from_pipeline or []
         assert long_string not in parameters
 
     def test_placeholder_styles(self) -> None:
@@ -150,7 +150,7 @@ class TestParameterizeLiterals:
         parameterizer1 = ParameterizeLiterals(placeholder_style="?")
         context = _create_test_context(sql)
 
-        param_expr1, _ = parameterizer1.process(context)
+        param_expr1 = parameterizer1.process(context.current_expression, context)
         param_sql1 = param_expr1.sql()
         assert "?" in param_sql1
 
@@ -158,7 +158,7 @@ class TestParameterizeLiterals:
         parameterizer2 = ParameterizeLiterals(placeholder_style=":name")
         context = _create_test_context(sql)
 
-        param_expr2, _ = parameterizer2.process(context)
+        param_expr2 = parameterizer2.process(context.current_expression, context)
         param_sql2 = param_expr2.sql()
         # Should have named parameter (exact format may vary)
         assert "param_" in param_sql2 or ":" in param_sql2
@@ -170,7 +170,7 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals(placeholder_style="$1")
         context = _create_test_context(sql)
 
-        param_expr, _ = parameterizer.process(context)
+        param_expr = parameterizer.process(context.current_expression, context)
         param_sql = param_expr.sql()
 
         # Should have numbered placeholders
@@ -184,9 +184,9 @@ class TestParameterizeLiterals:
         context = _create_test_context(sql)
 
         # Process the query first
-        param_expr, _ = parameterizer.process(context)
+        param_expr = parameterizer.process(context.current_expression, context)
         param_sql = param_expr.sql()
-        parameters = parameterizer.get_parameters()
+        parameters = context.extracted_parameters_from_pipeline
 
         # Should return both SQL and parameters
         assert isinstance(param_sql, str)
@@ -202,10 +202,10 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals()
         context = _create_test_context(sql)
 
-        _, _ = parameterizer.process(context)
+        parameterizer.process(context.current_expression, context)
 
         # Should have parameters
-        assert len(parameterizer.get_parameters()) > 0
+        assert len(context.extracted_parameters_from_pipeline) > 0
 
         # Clear and check
         parameterizer.clear_parameters()
@@ -229,10 +229,10 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals()
         context = _create_test_context(sql)
 
-        _, _ = parameterizer.process(context)
+        parameterizer.process(context.current_expression, context)
 
         # Should extract multiple parameters from different parts of the query
-        parameters = parameterizer.get_parameters()
+        parameters = context.extracted_parameters_from_pipeline
         assert len(parameters) >= 3
         assert "active" in parameters
         assert "2023-01-01" in parameters
@@ -245,14 +245,14 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals()
         context = _create_test_context(sql)
 
-        param_expr, _ = parameterizer.process(context)
+        param_expr = parameterizer.process(context.current_expression, context)
 
         # Should preserve the 50 in VARCHAR(50)
         param_sql = param_expr.sql()
         assert "50" in param_sql
 
         # Should not extract the 50 as a parameter
-        parameters = parameterizer.get_parameters()
+        parameters = context.extracted_parameters_from_pipeline or []
         assert 50 not in parameters
 
     def test_empty_query(self) -> None:
@@ -262,10 +262,10 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals()
         context = _create_test_context(sql)
 
-        param_expr, _ = parameterizer.process(context)
+        param_expr = parameterizer.process(context.current_expression, context)
 
         # Should not extract any parameters
-        parameters = parameterizer.get_parameters()
+        parameters = context.extracted_parameters_from_pipeline or []
         assert len(parameters) == 0
 
         # SQL should remain largely unchanged
@@ -284,10 +284,10 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals(preserve_null=True, preserve_boolean=False)
         context = _create_test_context(sql)
 
-        param_expr, _ = parameterizer.process(context)
+        param_expr = parameterizer.process(context.current_expression, context)
 
         # Should extract various types of parameters
-        parameters = parameterizer.get_parameters()
+        parameters = context.extracted_parameters_from_pipeline
         assert "test_event" in parameters
         assert 100 in parameters
         assert 19.99 in parameters or 19 in parameters  # Depending on parsing
@@ -316,14 +316,14 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals(placeholder_style=":name")
         context = _create_test_context(sql)
 
-        _, _ = parameterizer.process(context)
+        parameterizer.process(context.current_expression, context)
 
         # Check that parameters were extracted
-        parameters = parameterizer.get_parameters()
+        parameters = context.extracted_parameters_from_pipeline
         assert len(parameters) > 0
 
         # Check parameter metadata
-        metadata = context.get_additional_data("parameter_metadata")
+        metadata = context.metadata.get("parameter_metadata")
         assert metadata is not None
         assert len(metadata) == len(parameters)
 
@@ -339,10 +339,10 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals(parameterize_arrays=True, parameterize_in_lists=True)
         context = _create_test_context(sql)
 
-        _, _ = parameterizer.process(context)
+        parameterizer.process(context.current_expression, context)
 
         # Should parameterize the IN list values
-        parameters = parameterizer.get_parameters()
+        parameters = context.extracted_parameters_from_pipeline
         assert len(parameters) == 5
         assert parameters == [1, 2, 3, 4, 5]
 
@@ -354,8 +354,8 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals(max_in_list_size=5)
         context = _create_test_context(small_sql)
 
-        _, _ = parameterizer.process(context)
-        parameters = parameterizer.get_parameters()
+        parameterizer.process(context.current_expression, context)
+        parameters = context.extracted_parameters_from_pipeline
         assert len(parameters) == 3
 
         # Large IN list (should not be parameterized)
@@ -365,8 +365,8 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals(max_in_list_size=50)
         context = _create_test_context(large_sql)
 
-        _, _ = parameterizer.process(context)
-        parameters = parameterizer.get_parameters()
+        parameterizer.process(context.current_expression, context)
+        parameters = context.extracted_parameters_from_pipeline or []
         # Should not parameterize due to size limit
         assert len(parameters) == 0
 
@@ -382,14 +382,14 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals(preserve_in_functions=["COALESCE", "IFNULL"])
         context = _create_test_context(sql)
 
-        param_expr, _ = parameterizer.process(context)
+        param_expr = parameterizer.process(context.current_expression, context)
         param_sql = param_expr.sql()
 
         # 'Unknown' should be preserved in COALESCE
         assert "'Unknown'" in param_sql
 
         # 2 in ROUND should be parameterized
-        parameters = parameterizer.get_parameters()
+        parameters = context.extracted_parameters_from_pipeline
         assert 2 in parameters
 
     def test_type_preservation(self) -> None:
@@ -404,10 +404,10 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals(type_preservation=True)
         context = _create_test_context(sql)
 
-        _, _ = parameterizer.process(context)
+        parameterizer.process(context.current_expression, context)
 
         # Check parameter metadata for type information
-        metadata = context.get_additional_data("parameter_metadata")
+        metadata = context.metadata.get("parameter_metadata")
         assert metadata is not None
 
         # Find metadata for each parameter
@@ -429,14 +429,14 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals(placeholder_style=":name")
         context = _create_test_context(sql)
 
-        param_expr, _ = parameterizer.process(context)
+        param_expr = parameterizer.process(context.current_expression, context)
         param_sql = param_expr.sql()
 
         # Should have context-aware parameter names
         assert ":param_" in param_sql or ":where_param_" in param_sql
 
         # Check metadata
-        metadata = context.get_additional_data("parameter_metadata")
+        metadata = context.metadata.get("parameter_metadata")
         assert metadata is not None
 
         # Should have captured context
@@ -450,10 +450,11 @@ class TestParameterizeLiterals:
         parameterizer = ParameterizeLiterals()
         context = _create_test_context(sql)
 
-        _, _ = parameterizer.process(context)
+        parameterizer.process(context.current_expression, context)
 
-        # Get metadata
-        metadata = parameterizer.get_parameter_metadata()
+        # Get metadata from context (not from parameterizer)
+        metadata = context.metadata.get("parameter_metadata")
+        assert metadata is not None
         assert len(metadata) == 2
 
         # Check metadata structure

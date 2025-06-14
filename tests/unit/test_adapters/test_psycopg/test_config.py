@@ -63,11 +63,7 @@ def test_psycopg_sync_config_basic_creation() -> None:
     """Test Psycopg sync config creation with basic parameters."""
     # Test minimal config creation
     config = PsycopgSyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
     assert config.host == "localhost"
     assert config.port == 5432
@@ -115,11 +111,7 @@ def test_psycopg_async_config_basic_creation() -> None:
     """Test Psycopg async config creation with basic parameters."""
     # Test minimal config creation
     config = PsycopgAsyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
     assert config.host == "localhost"
     assert config.port == 5432
@@ -161,11 +153,7 @@ def test_psycopg_sync_config_initialization() -> None:
     """Test Psycopg sync config initialization."""
     # Test with default parameters
     config = PsycopgSyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
     assert config.host == "localhost"
     assert isinstance(config.statement_config, SQLConfig)
@@ -198,11 +186,7 @@ def test_psycopg_async_config_initialization() -> None:
     """Test Psycopg async config initialization."""
     # Test with default parameters
     config = PsycopgAsyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
     assert config.host == "localhost"
     assert isinstance(config.statement_config, SQLConfig)
@@ -364,11 +348,7 @@ def test_psycopg_sync_config_provide_connection(mock_connect: Mock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
     config = PsycopgSyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
 
     # Test context manager behavior (without pool)
@@ -389,11 +369,7 @@ async def test_psycopg_async_config_provide_connection(mock_connect: Mock) -> No
     mock_connect.return_value = mock_connection
 
     config = PsycopgAsyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
 
     # Test context manager behavior (without pool)
@@ -412,11 +388,7 @@ def test_psycopg_sync_config_provide_connection_error_handling(mock_connect: Moc
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
     config = PsycopgSyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
 
     # Test error handling and cleanup
@@ -437,11 +409,7 @@ async def test_psycopg_async_config_provide_connection_error_handling(mock_conne
     mock_connect.return_value = mock_connection
 
     config = PsycopgAsyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
 
     # Test error handling and cleanup
@@ -460,11 +428,7 @@ def test_psycopg_sync_config_provide_session(mock_connect: Mock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
     config = PsycopgSyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
 
     # Test session context manager behavior
@@ -490,11 +454,7 @@ async def test_psycopg_async_config_provide_session(mock_connect: Mock) -> None:
     mock_connect.return_value = mock_connection
 
     config = PsycopgAsyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
 
     # Test session context manager behavior
@@ -515,11 +475,7 @@ async def test_psycopg_async_config_provide_session(mock_connect: Mock) -> None:
 def test_psycopg_sync_config_driver_type() -> None:
     """Test Psycopg sync config driver_type property."""
     config = PsycopgSyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
     assert config.driver_type is PsycopgSyncDriver
 
@@ -527,11 +483,7 @@ def test_psycopg_sync_config_driver_type() -> None:
 def test_psycopg_async_config_driver_type() -> None:
     """Test Psycopg async config driver_type property."""
     config = PsycopgAsyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
     assert config.driver_type is PsycopgAsyncDriver
 
@@ -541,11 +493,7 @@ def test_psycopg_sync_config_connection_type() -> None:
     from psycopg import Connection
 
     config = PsycopgSyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
     assert config.connection_type is Connection
 
@@ -555,65 +503,45 @@ def test_psycopg_async_config_connection_type() -> None:
     from psycopg import AsyncConnection
 
     config = PsycopgAsyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
     assert config.connection_type is AsyncConnection
 
 
 def test_psycopg_sync_config_is_async() -> None:
-    """Test Psycopg sync config __is_async__ attribute."""
+    """Test Psycopg sync config is_async attribute."""
     config = PsycopgSyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
-    assert config.__is_async__ is False
-    assert PsycopgSyncConfig.__is_async__ is False
+    assert config.is_async is False
+    assert PsycopgSyncConfig.is_async is False
 
 
 def test_psycopg_async_config_is_async() -> None:
-    """Test Psycopg async config __is_async__ attribute."""
+    """Test Psycopg async config is_async attribute."""
     config = PsycopgAsyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
-    assert config.__is_async__ is True
-    assert PsycopgAsyncConfig.__is_async__ is True
+    assert config.is_async is True
+    assert PsycopgAsyncConfig.is_async is True
 
 
 def test_psycopg_sync_config_supports_connection_pooling() -> None:
-    """Test Psycopg sync config __supports_connection_pooling__ attribute."""
+    """Test Psycopg sync config supports_connection_pooling attribute."""
     config = PsycopgSyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
-    assert config.__supports_connection_pooling__ is True
-    assert PsycopgSyncConfig.__supports_connection_pooling__ is True
+    assert config.supports_connection_pooling is True
+    assert PsycopgSyncConfig.supports_connection_pooling is True
 
 
 def test_psycopg_async_config_supports_connection_pooling() -> None:
-    """Test Psycopg async config __supports_connection_pooling__ attribute."""
+    """Test Psycopg async config supports_connection_pooling attribute."""
     config = PsycopgAsyncConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        dbname="test_db",
+        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db"
     )
-    assert config.__supports_connection_pooling__ is True
-    assert PsycopgAsyncConfig.__supports_connection_pooling__ is True
+    assert config.supports_connection_pooling is True
+    assert PsycopgAsyncConfig.supports_connection_pooling is True
 
 
 def test_psycopg_config_ssl_configuration() -> None:
@@ -656,10 +584,7 @@ def test_psycopg_config_from_pool_config() -> None:
     assert config.extras == {}
 
     # Test with connection config
-    connection_config = {
-        "sslmode": "require",
-        "connect_timeout": 30.0,
-    }
+    connection_config = {"sslmode": "require", "connect_timeout": 30.0}
     pool_config_override = {
         "host": "pool_host",
         "port": 5432,

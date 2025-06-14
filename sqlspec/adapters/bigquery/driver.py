@@ -6,22 +6,9 @@ import json
 import logging
 from collections.abc import Iterator
 from decimal import Decimal
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    ClassVar,
-    Optional,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Union
 
-from google.cloud.bigquery import (
-    ArrayQueryParameter,
-    Client,
-    QueryJob,
-    QueryJobConfig,
-    ScalarQueryParameter,
-)
+from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, QueryJobConfig, ScalarQueryParameter
 from google.cloud.bigquery.table import Row as BigQueryRow
 
 from sqlspec.config import InstrumentationConfig
@@ -315,10 +302,7 @@ class BigQueryDriver(
         return [dict(row) for row in rows_iterator]  # type: ignore[misc]
 
     def _execute_statement(
-        self,
-        statement: SQL,
-        connection: Optional[BigQueryConnection] = None,
-        **kwargs: Any,
+        self, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
@@ -349,12 +333,7 @@ class BigQueryDriver(
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
-        self,
-        sql: str,
-        parameters: Any,
-        statement: SQL,
-        connection: Optional[BigQueryConnection] = None,
-        **kwargs: Any,
+        self, sql: str, parameters: Any, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict]:
         # SQL should already be in correct format from compile()
         converted_sql = sql
@@ -475,17 +454,10 @@ class BigQueryDriver(
             logger.exception("BigQuery job failed")
             raise
 
-        return {
-            "rows_affected": num_affected or 0,
-            "status_message": f"OK - job_id: {query_job.job_id}",
-        }
+        return {"rows_affected": num_affected or 0, "status_message": f"OK - job_id: {query_job.job_id}"}
 
     def _execute_many(
-        self,
-        sql: str,
-        param_list: Any,
-        connection: Optional[BigQueryConnection] = None,
-        **kwargs: Any,
+        self, sql: str, param_list: Any, connection: Optional[BigQueryConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
         # Use a multi-statement script for batch execution
         script_parts = []
@@ -521,16 +493,10 @@ class BigQueryDriver(
         query_job.result(timeout=kwargs.get("bq_job_timeout"))
         total_rowcount = query_job.num_dml_affected_rows or 0
 
-        return {
-            "rows_affected": total_rowcount,
-            "status_message": f"OK - executed batch job {query_job.job_id}",
-        }
+        return {"rows_affected": total_rowcount, "status_message": f"OK - executed batch job {query_job.job_id}"}
 
     def _execute_script(
-        self,
-        script: str,
-        connection: Optional[BigQueryConnection] = None,
-        **kwargs: Any,
+        self, script: str, connection: Optional[BigQueryConnection] = None, **kwargs: Any
     ) -> ScriptResultDict:
         # BigQuery does not support multi-statement scripts in a single job
         # Use the shared implementation to split and execute statements individually
@@ -544,10 +510,7 @@ class BigQueryDriver(
                 # Wait for DDL operations to complete before proceeding
                 query_job.result(timeout=kwargs.get("bq_job_timeout"))
 
-        result: ScriptResultDict = {
-            "statements_executed": len(statements),
-            "status_message": "SCRIPT EXECUTED",
-        }
+        result: ScriptResultDict = {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
         return result
 
     def _wrap_select_result(
@@ -629,12 +592,7 @@ class BigQueryDriver(
     # BigQuery Native Arrow Support
     # ============================================================================
 
-    def _fetch_arrow_table(
-        self,
-        sql_obj: SQL,
-        connection: "Optional[Any]" = None,
-        **kwargs: Any,
-    ) -> "Any":
+    def _fetch_arrow_table(self, sql_obj: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "Any":
         """BigQuery native Arrow table fetching.
 
         BigQuery has native Arrow support through QueryJob.to_arrow()
@@ -662,9 +620,7 @@ class BigQueryDriver(
 
         bq_params = self._prepare_bq_query_parameters(params_dict) if params_dict else []
         query_job = self._run_query_job(
-            sql_obj.to_sql(placeholder_style=self.default_parameter_style),
-            bq_params,
-            connection=connection,
+            sql_obj.to_sql(placeholder_style=self.default_parameter_style), bq_params, connection=connection
         )
 
         with wrap_exceptions():
@@ -676,7 +632,7 @@ class BigQueryDriver(
             # This supports the BigQuery Storage API for optimal performance
             arrow_table = query_job.to_arrow(
                 # Pass through any BigQuery-specific options
-                create_bqstorage_client=kwargs.get("use_bqstorage_api", True),
+                create_bqstorage_client=kwargs.get("use_bqstorage_api", True)
                 # Additional options can be passed through
             )
 
@@ -759,11 +715,7 @@ class BigQueryDriver(
             job_config.source_format = "PARQUET"
 
             # Load from the Parquet bytes
-            load_job = connection.load_table_from_file(
-                buffer,
-                table_ref,
-                job_config=job_config,
-            )
+            load_job = connection.load_table_from_file(buffer, table_ref, job_config=job_config)
 
             # Wait for completion
             load_job.result()

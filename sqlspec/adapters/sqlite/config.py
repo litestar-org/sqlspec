@@ -51,8 +51,8 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
         "uri",
     )
 
-    __is_async__: ClassVar[bool] = False
-    __supports_connection_pooling__: ClassVar[bool] = False
+    is_async: ClassVar[bool] = False
+    supports_connection_pooling: ClassVar[bool] = False
 
     # Driver class reference for dialect resolution
     driver_class: ClassVar[type[SqliteDriver]] = SqliteDriver
@@ -66,7 +66,7 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
 
     def __init__(
         self,
-        database: str,
+        database: str = ":memory:",
         statement_config: Optional[SQLConfig] = None,
         instrumentation: Optional[InstrumentationConfig] = None,
         default_row_type: type[DictRow] = DictRow,
@@ -116,9 +116,7 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
-        super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig(),
-        )
+        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
 
     @classmethod
     def from_connection_config(
@@ -254,7 +252,5 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
                 )
 
             yield self.driver_type(
-                connection=connection,
-                config=statement_config,
-                instrumentation_config=self.instrumentation,
+                connection=connection, config=statement_config, instrumentation_config=self.instrumentation
             )

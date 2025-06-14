@@ -64,11 +64,7 @@ class PivotClauseMixin:
         # Create the pivot expression with proper fields structure
         in_expr = exp.In(this=pivot_col_expr, expressions=pivot_value_exprs)
 
-        pivot_node = exp.Pivot(
-            expressions=[pivot_agg_expr],
-            fields=[in_expr],
-            unpivot=False,
-        )
+        pivot_node = exp.Pivot(expressions=[pivot_agg_expr], fields=[in_expr], unpivot=False)
 
         if alias:
             pivot_node.set("alias", exp.TableAlias(this=exp.to_identifier(alias)))

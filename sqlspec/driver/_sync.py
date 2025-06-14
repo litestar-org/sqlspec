@@ -1,32 +1,13 @@
 """Synchronous driver protocol implementation."""
 
 from abc import ABC, abstractmethod
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Optional,
-    Union,
-    cast,
-    overload,
-)
+from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.driver.mixins import SyncInstrumentationMixin
-from sqlspec.statement.builder import (
-    DeleteBuilder,
-    InsertBuilder,
-    QueryBuilder,
-    SelectBuilder,
-    UpdateBuilder,
-)
+from sqlspec.statement.builder import DeleteBuilder, InsertBuilder, QueryBuilder, SelectBuilder, UpdateBuilder
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
-from sqlspec.typing import (
-    ConnectionT,
-    DictRow,
-    ModelDTOT,
-    RowT,
-    SQLParameterType,
-)
+from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, RowT, SQLParameterType
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.telemetry import instrument_operation
 
@@ -92,10 +73,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
 
     @abstractmethod
     def _execute_statement(
-        self,
-        statement: "SQL",
-        connection: "Optional[ConnectionT]" = None,
-        **kwargs: Any,
+        self, statement: "SQL", connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> "Union[SelectResultDict, DMLResultDict, ScriptResultDict]":
         """Actual execution implementation by concrete drivers, using the raw connection.
 
@@ -115,10 +93,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
 
     @abstractmethod
     def _wrap_execute_result(
-        self,
-        statement: "SQL",
-        result: "Union[DMLResultDict, ScriptResultDict]",
-        **kwargs: Any,
+        self, statement: "SQL", result: "Union[DMLResultDict, ScriptResultDict]", **kwargs: Any
     ) -> "SQLResult[RowT]":
         raise NotImplementedError
 
@@ -195,11 +170,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
             sql_statement = self._build_statement(
                 statement, parameters, filters=list(filters) or [], config=config or self.config
             )
-            result = self._execute_statement(
-                statement=sql_statement,
-                connection=self._connection(connection),
-                **kwargs,
-            )
+            result = self._execute_statement(statement=sql_statement, connection=self._connection(connection), **kwargs)
             is_select = self.returns_rows(sql_statement.expression)
             # If expression is None (parsing disabled or failed), check SQL string
             # TODO: improve this.  why can't use just use parameter parsing?
@@ -258,34 +229,22 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
                     enable_analysis=script_config.enable_analysis,
                     strict_mode=False,
                     cache_parsed_expression=script_config.cache_parsed_expression,
-                    processing_pipeline_components=[],
                     parameter_converter=script_config.parameter_converter,
                     parameter_validator=script_config.parameter_validator,
-                    sqlglot_schema=script_config.sqlglot_schema,
                     analysis_cache_size=script_config.analysis_cache_size,
+                    allowed_parameter_styles=script_config.allowed_parameter_styles,
+                    target_parameter_style=script_config.target_parameter_style,
+                    allow_mixed_parameter_styles=script_config.allow_mixed_parameter_styles,
                 )
-            sql_statement = SQL(
-                statement,
-                parameters,
-                *filters,
-                dialect=self.dialect,
-                config=script_config,
-            )
+            sql_statement = SQL(statement, parameters, *filters, dialect=self.dialect, config=script_config)
             sql_statement = sql_statement.as_script()
             script_output = self._execute_statement(
-                statement=sql_statement,
-                connection=self._connection(connection),
-                is_script=True,
-                **kwargs,
+                statement=sql_statement, connection=self._connection(connection), is_script=True, **kwargs
             )
             if isinstance(script_output, str):
                 from sqlspec.statement.result import SQLResult
 
-                result = SQLResult[RowT](
-                    statement=sql_statement,
-                    data=[],
-                    operation_type="SCRIPT",
-                )
+                result = SQLResult[RowT](statement=sql_statement, data=[], operation_type="SCRIPT")
                 result.total_statements = 1
                 result.successful_statements = 1
                 return result

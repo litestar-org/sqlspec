@@ -11,13 +11,7 @@ __all__ = ("ValidationResult",)
 class ValidationResult:
     """Result of SQL validation with detailed information."""
 
-    __slots__ = (
-        "is_safe",
-        "issues",
-        "risk_level",
-        "transformed_sql",
-        "warnings",
-    )
+    __slots__ = ("is_safe", "issues", "risk_level", "transformed_sql", "warnings")
 
     def __init__(
         self,
@@ -45,4 +39,3 @@ class ValidationResult:
 
     def __bool__(self) -> bool:
         return self.is_safe
-

@@ -441,9 +441,9 @@ def test_get_pool(sql_spec: SQLSpec, pool_config: MockDatabaseConfig) -> None:
 def test_config_properties(pool_config: MockDatabaseConfig, non_pool_config: MockNonPoolConfig) -> None:
     """Test configuration properties."""
     assert pool_config.is_async is False
-    assert pool_config.support_connection_pooling is True
+    assert pool_config.supports_connection_pooling is True
     assert non_pool_config.is_async is False
-    assert non_pool_config.support_connection_pooling is False
+    assert non_pool_config.supports_connection_pooling is False
 
 
 def test_connection_context(pool_config: MockDatabaseConfig, non_pool_config: MockNonPoolConfig) -> None:
@@ -505,6 +505,6 @@ def test_multiple_configs(
 
 def test_pool_methods(non_pool_config: MockNonPoolConfig) -> None:
     """Test that pool methods return None."""
-    assert non_pool_config.support_connection_pooling is False
+    assert non_pool_config.supports_connection_pooling is False
     assert non_pool_config.is_async is False
     assert non_pool_config.create_pool() is None  # type: ignore[func-returns-value]

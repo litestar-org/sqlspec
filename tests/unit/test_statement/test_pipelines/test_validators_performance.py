@@ -417,11 +417,7 @@ class TestPerformanceValidator:
         """Test behavior when optimization analysis is disabled."""
         from sqlspec.statement.pipelines.validators._performance import PerformanceConfig
 
-        validator = PerformanceValidator(
-            config=PerformanceConfig(
-                enable_optimization_analysis=False,
-            )
-        )
+        validator = PerformanceValidator(config=PerformanceConfig(enable_optimization_analysis=False))
 
         context.initial_sql_string = "SELECT 1 + 1 FROM users WHERE TRUE"
         context.current_expression = parse_one(context.initial_sql_string)
@@ -441,10 +437,7 @@ class TestPerformanceValidator:
         from sqlspec.statement.pipelines.validators._performance import PerformanceConfig
 
         validator = PerformanceValidator(
-            config=PerformanceConfig(
-                enable_optimization_analysis=True,
-                optimization_threshold=0.1,
-            )
+            config=PerformanceConfig(enable_optimization_analysis=True, optimization_threshold=0.1)
         )
 
         # Query with potentially optimizable joins
@@ -477,10 +470,7 @@ class TestPerformanceValidator:
         from sqlspec.statement.pipelines.validators._performance import PerformanceConfig
 
         validator = PerformanceValidator(
-            config=PerformanceConfig(
-                enable_optimization_analysis=True,
-                suggest_optimizations=True,
-            )
+            config=PerformanceConfig(enable_optimization_analysis=True, suggest_optimizations=True)
         )
 
         # Query with various optimization opportunities

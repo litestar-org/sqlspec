@@ -7,13 +7,7 @@ from typing import Union
 from unittest.mock import Mock, patch
 
 import pytest
-from google.cloud.bigquery import (
-    ArrayQueryParameter,
-    Client,
-    QueryJob,
-    QueryJobConfig,
-    ScalarQueryParameter,
-)
+from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, QueryJobConfig, ScalarQueryParameter
 
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
 from sqlspec.config import InstrumentationConfig
@@ -69,11 +63,7 @@ def test_bigquery_driver_initialization_with_config(mock_bigquery_connection: Mo
     config = SQLConfig(strict_mode=False)
     instrumentation = InstrumentationConfig(log_queries=True)
 
-    driver = BigQueryDriver(
-        connection=mock_bigquery_connection,
-        config=config,
-        instrumentation_config=instrumentation,
-    )
+    driver = BigQueryDriver(connection=mock_bigquery_connection, config=config, instrumentation_config=instrumentation)
 
     assert driver.config == config
     assert driver.instrumentation_config == instrumentation
@@ -85,9 +75,7 @@ def test_bigquery_driver_initialization_with_callbacks(mock_bigquery_connection:
     job_complete_callback = Mock()
 
     driver = BigQueryDriver(
-        connection=mock_bigquery_connection,
-        on_job_start=job_start_callback,
-        on_job_complete=job_complete_callback,
+        connection=mock_bigquery_connection, on_job_start=job_start_callback, on_job_complete=job_complete_callback
     )
 
     assert driver.on_job_start == job_start_callback
@@ -99,10 +87,7 @@ def test_bigquery_driver_initialization_with_job_config(mock_bigquery_connection
     job_config = QueryJobConfig()
     job_config.dry_run = True
 
-    driver = BigQueryDriver(
-        connection=mock_bigquery_connection,
-        default_query_job_config=job_config,
-    )
+    driver = BigQueryDriver(connection=mock_bigquery_connection, default_query_job_config=job_config)
 
     assert driver._default_query_job_config == job_config
 
@@ -214,12 +199,7 @@ def test_bigquery_driver_get_bq_param_type_unsupported(bigquery_driver: BigQuery
 
 def test_bigquery_driver_prepare_bq_query_parameters_scalar(bigquery_driver: BigQueryDriver) -> None:
     """Test BigQuery query parameter preparation for scalar values."""
-    params_dict = {
-        "@name": "John",
-        "@age": 30,
-        "@active": True,
-        "@score": 95.5,
-    }
+    params_dict = {"@name": "John", "@age": 30, "@active": True, "@score": 95.5}
 
     bq_params = bigquery_driver._prepare_bq_query_parameters(params_dict)
 
@@ -236,10 +216,7 @@ def test_bigquery_driver_prepare_bq_query_parameters_scalar(bigquery_driver: Big
 
 def test_bigquery_driver_prepare_bq_query_parameters_array(bigquery_driver: BigQueryDriver) -> None:
     """Test BigQuery query parameter preparation for array values."""
-    params_dict = {
-        "@tags": ["python", "sql", "bigquery"],
-        "@numbers": [1, 2, 3, 4, 5],
-    }
+    params_dict = {"@tags": ["python", "sql", "bigquery"], "@numbers": [1, 2, 3, 4, 5]}
 
     bq_params = bigquery_driver._prepare_bq_query_parameters(params_dict)
 
@@ -469,10 +446,7 @@ def test_bigquery_driver_job_config_precedence(mock_bigquery_connection: Mock) -
     driver_job_config = QueryJobConfig()
     driver_job_config.dry_run = True
 
-    driver = BigQueryDriver(
-        connection=mock_bigquery_connection,
-        default_query_job_config=driver_job_config,
-    )
+    driver = BigQueryDriver(connection=mock_bigquery_connection, default_query_job_config=driver_job_config)
 
     assert driver._default_query_job_config == driver_job_config
 

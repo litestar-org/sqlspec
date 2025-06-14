@@ -14,13 +14,7 @@ from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import (
-    DeleteBuilder,
-    InsertBuilder,
-    MergeBuilder,
-    SelectBuilder,
-    UpdateBuilder,
-)
+from sqlspec.statement.builder import DeleteBuilder, InsertBuilder, MergeBuilder, SelectBuilder, UpdateBuilder
 
 __all__ = ("SQLFactory",)
 

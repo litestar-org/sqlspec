@@ -10,11 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from sqlspec.statement.result import (
-    ArrowResult,
-    SQLResult,
-    StatementResult,
-)
+from sqlspec.statement.result import ArrowResult, SQLResult, StatementResult
 from sqlspec.statement.sql import SQL
 from sqlspec.typing import RowT
 
@@ -150,11 +146,7 @@ def test_sql_result_is_empty_select(basic_sql_result_select: SQLResult[RowT]) ->
 
 @pytest.mark.parametrize(
     ("rows", "expected_count", "expected_empty"),
-    [
-        ([], 0, True),
-        ([{"id": 1}], 1, False),
-        ([{"id": 1}, {"id": 2}], 2, False),
-    ],
+    [([], 0, True), ([{"id": 1}], 1, False), ([{"id": 1}, {"id": 2}], 2, False)],
     ids=["empty_rows", "single_row", "multiple_rows"],
 )
 def test_sql_result_row_operations_select(
@@ -269,15 +261,7 @@ def test_sql_result_get_inserted_id_from_metadata(basic_sql_result_execute: SQLR
         ("update", False, True, False),
         ("delete", False, False, True),
     ],
-    ids=[
-        "insert_upper",
-        "update_upper",
-        "delete_upper",
-        "merge_upper",
-        "insert_lower",
-        "update_lower",
-        "delete_lower",
-    ],
+    ids=["insert_upper", "update_upper", "delete_upper", "merge_upper", "insert_lower", "update_lower", "delete_lower"],
 )
 def test_execute_result_operation_type_checks(
     operation_type: str, expected_insert: bool, expected_update: bool, expected_delete: bool
@@ -303,11 +287,7 @@ def sample_statement_results_for_script() -> list[SQLResult[Any]]:  # Now uses S
 @pytest.fixture
 def basic_script_result(sample_statement_results_for_script: list[SQLResult[Any]]) -> SQLResult[Any]:
     """Basic SQLResult[Any] for testing."""
-    result = SQLResult[Any](
-        statement=SQL("SCRIPT"),
-        data=[],
-        operation_type="SCRIPT",
-    )
+    result = SQLResult[Any](statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
     # Add the sample statement results to simulate script execution
     for stmt_result in sample_statement_results_for_script:
         result.add_statement_result(stmt_result)

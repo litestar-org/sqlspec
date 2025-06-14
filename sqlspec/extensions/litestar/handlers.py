@@ -124,8 +124,7 @@ def autocommit_handler_maker(
 
 
 def lifespan_handler_maker(
-    config: "DatabaseConfigProtocol[Any, Any, Any]",
-    pool_key: str,
+    config: "DatabaseConfigProtocol[Any, Any, Any]", pool_key: str
 ) -> "Callable[[Litestar], AbstractAsyncContextManager[None]]":
     """Build the lifespan handler for managing the database connection pool.
 
@@ -207,9 +206,7 @@ def pool_provider_maker(
 
 
 def connection_provider_maker(
-    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]",
-    pool_key: str,
-    connection_key: str,
+    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", pool_key: str, connection_key: str
 ) -> "Callable[[State, Scope], AsyncGenerator[ConnectionT, None]]":
     async def provide_connection(state: "State", scope: "Scope") -> "AsyncGenerator[ConnectionT, None]":
         db_pool = state.get(pool_key)

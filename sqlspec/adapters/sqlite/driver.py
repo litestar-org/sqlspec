@@ -54,10 +54,7 @@ class SqliteDriver(
     __supports_arrow__: "ClassVar[bool]" = True
     __supports_parquet__: "ClassVar[bool]" = False
     dialect: "DialectType" = "sqlite"
-    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (
-        ParameterStyle.QMARK,
-        ParameterStyle.NAMED_COLON,
-    )
+    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK, ParameterStyle.NAMED_COLON)
     default_parameter_style: ParameterStyle = ParameterStyle.QMARK
 
     def __init__(
@@ -89,10 +86,7 @@ class SqliteDriver(
                 cursor.close()
 
     def _execute_statement(
-        self,
-        statement: SQL,
-        connection: Optional[SqliteConnection] = None,
-        **kwargs: Any,
+        self, statement: SQL, connection: Optional[SqliteConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
@@ -127,12 +121,7 @@ class SqliteDriver(
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
-        self,
-        sql: str,
-        parameters: Any,
-        statement: SQL,
-        connection: Optional[SqliteConnection] = None,
-        **kwargs: Any,
+        self, sql: str, parameters: Any, statement: SQL, connection: Optional[SqliteConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict]:
         """Execute a single statement with parameters."""
         with instrument_operation(self, "sqlite_execute", "database"):
@@ -164,11 +153,7 @@ class SqliteDriver(
                 return dml_result
 
     def _execute_many(
-        self,
-        sql: str,
-        param_list: Any,
-        connection: Optional[SqliteConnection] = None,
-        **kwargs: Any,
+        self, sql: str, param_list: Any, connection: Optional[SqliteConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
         """Execute a statement many times with a list of parameter tuples."""
         with instrument_operation(self, "sqlite_execute_many", "database"):
@@ -200,10 +185,7 @@ class SqliteDriver(
                 return result
 
     def _execute_script(
-        self,
-        script: str,
-        connection: Optional[SqliteConnection] = None,
-        **kwargs: Any,
+        self, script: str, connection: Optional[SqliteConnection] = None, **kwargs: Any
     ) -> ScriptResultDict:
         """Execute a script on the SQLite connection."""
         with instrument_operation(self, "sqlite_execute_script", "database"):
@@ -223,11 +205,7 @@ class SqliteDriver(
             return result
 
     def _wrap_select_result(
-        self,
-        statement: SQL,
-        result: SelectResultDict,
-        schema_type: Optional[type[ModelDTOT]] = None,
-        **kwargs: Any,
+        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
         with instrument_operation(self, "sqlite_wrap_select", "database"):
             # result must be a dict with keys: data, column_names, rows_affected
@@ -262,10 +240,7 @@ class SqliteDriver(
             )
 
     def _wrap_execute_result(
-        self,
-        statement: SQL,
-        result: Union[DMLResultDict, ScriptResultDict],
-        **kwargs: Any,
+        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
     ) -> SQLResult[RowT]:
         with instrument_operation(self, "sqlite_wrap_execute", "database"):
             operation_type = "UNKNOWN"

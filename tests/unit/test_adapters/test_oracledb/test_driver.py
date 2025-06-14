@@ -4,12 +4,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from sqlspec.adapters.oracledb import (
-    OracleAsyncConnection,
-    OracleAsyncDriver,
-    OracleSyncConnection,
-    OracleSyncDriver,
-)
+from sqlspec.adapters.oracledb import OracleAsyncConnection, OracleAsyncDriver, OracleSyncConnection, OracleSyncDriver
 from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQLConfig
@@ -33,9 +28,7 @@ def oracle_sync_driver(mock_oracle_sync_connection: Mock) -> OracleSyncDriver:
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
     instrumentation_config = InstrumentationConfig()
     return OracleSyncDriver(
-        connection=mock_oracle_sync_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_oracle_sync_connection, config=config, instrumentation_config=instrumentation_config
     )
 
 
@@ -45,9 +38,7 @@ def oracle_async_driver(mock_oracle_async_connection: Mock) -> OracleAsyncDriver
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
     instrumentation_config = InstrumentationConfig()
     return OracleAsyncDriver(
-        connection=mock_oracle_async_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_oracle_async_connection, config=config, instrumentation_config=instrumentation_config
     )
 
 
@@ -57,9 +48,7 @@ def test_oracle_sync_driver_initialization(mock_oracle_sync_connection: Mock) ->
     instrumentation_config = InstrumentationConfig(log_queries=True)
 
     driver = OracleSyncDriver(
-        connection=mock_oracle_sync_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_oracle_sync_connection, config=config, instrumentation_config=instrumentation_config
     )
 
     # Test driver attributes are set correctly
@@ -76,9 +65,7 @@ def test_oracle_async_driver_initialization(mock_oracle_async_connection: AsyncM
     instrumentation_config = InstrumentationConfig(log_queries=True)
 
     driver = OracleAsyncDriver(
-        connection=mock_oracle_async_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_oracle_async_connection, config=config, instrumentation_config=instrumentation_config
     )
 
     # Test driver attributes are set correctly
@@ -180,9 +167,7 @@ async def test_oracle_async_driver_non_query_statement(
 
 @pytest.mark.asyncio
 async def test_oracle_async_driver_to_parquet(
-    oracle_async_driver: OracleAsyncDriver,
-    mock_oracle_async_connection: AsyncMock,
-    monkeypatch: "pytest.MonkeyPatch",
+    oracle_async_driver: OracleAsyncDriver, mock_oracle_async_connection: AsyncMock, monkeypatch: "pytest.MonkeyPatch"
 ) -> None:
     """Test export_to_storage using unified storage mixin."""
     # Skip this complex test - the unified storage mixin integration tests better suited for integration testing

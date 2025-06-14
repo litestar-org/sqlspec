@@ -52,8 +52,7 @@ def test_psycopg_execute_many_basic(psycopg_batch_session: PsycopgSyncDriver) ->
     ]
 
     result = psycopg_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)",
-        parameters,
+        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -71,24 +70,13 @@ def test_psycopg_execute_many_update(psycopg_batch_session: PsycopgSyncDriver) -
     # First insert some data
     psycopg_batch_session.execute_many(
         "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)",
-        [
-            ("Update 1", 10, "X"),
-            ("Update 2", 20, "Y"),
-            ("Update 3", 30, "Z"),
-        ],
+        [("Update 1", 10, "X"), ("Update 2", 20, "Y"), ("Update 3", 30, "Z")],
     )
 
     # Now update with execute_many
-    update_params = [
-        (100, "Update 1"),
-        (200, "Update 2"),
-        (300, "Update 3"),
-    ]
+    update_params = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
 
-    result = psycopg_batch_session.execute_many(
-        "UPDATE test_batch SET value = %s WHERE name = %s",
-        update_params,
-    )
+    result = psycopg_batch_session.execute_many("UPDATE test_batch SET value = %s WHERE name = %s", update_params)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
@@ -103,8 +91,7 @@ def test_psycopg_execute_many_update(psycopg_batch_session: PsycopgSyncDriver) -
 def test_psycopg_execute_many_empty(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with empty parameter list on Psycopg."""
     result = psycopg_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)",
-        [],
+        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)", []
     )
 
     assert isinstance(result, SQLResult)
@@ -126,8 +113,7 @@ def test_psycopg_execute_many_mixed_types(psycopg_batch_session: PsycopgSyncDriv
     ]
 
     result = psycopg_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)",
-        parameters,
+        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -160,16 +146,9 @@ def test_psycopg_execute_many_delete(psycopg_batch_session: PsycopgSyncDriver) -
     )
 
     # Delete specific items by name
-    delete_params = [
-        ("Delete 1",),
-        ("Delete 2",),
-        ("Delete 4",),
-    ]
+    delete_params = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
 
-    result = psycopg_batch_session.execute_many(
-        "DELETE FROM test_batch WHERE name = %s",
-        delete_params,
-    )
+    result = psycopg_batch_session.execute_many("DELETE FROM test_batch WHERE name = %s", delete_params)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
@@ -191,8 +170,7 @@ def test_psycopg_execute_many_large_batch(psycopg_batch_session: PsycopgSyncDriv
     large_batch = [(f"Item {i}", i * 10, f"CAT{i % 3}") for i in range(1000)]
 
     result = psycopg_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)",
-        large_batch,
+        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)", large_batch
     )
 
     assert isinstance(result, SQLResult)
@@ -204,8 +182,7 @@ def test_psycopg_execute_many_large_batch(psycopg_batch_session: PsycopgSyncDriv
 
     # Verify some specific values using ANY for efficient querying
     sample_result = psycopg_batch_session.execute(
-        "SELECT * FROM test_batch WHERE name = ANY(%s) ORDER BY value",
-        (["Item 100", "Item 500", "Item 999"],),
+        "SELECT * FROM test_batch WHERE name = ANY(%s) ORDER BY value", (["Item 100", "Item 500", "Item 999"],)
     )
     assert len(sample_result.data) == 3
     assert sample_result.data[0]["value"] == 1000  # Item 100
@@ -218,11 +195,7 @@ def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgSync
     """Test execute_many with SQL object on Psycopg."""
     from sqlspec.statement.sql import SQL
 
-    parameters = [
-        ("SQL Obj 1", 111, "SOB"),
-        ("SQL Obj 2", 222, "SOB"),
-        ("SQL Obj 3", 333, "SOB"),
-    ]
+    parameters = [("SQL Obj 1", 111, "SOB"), ("SQL Obj 2", 222, "SOB"), ("SQL Obj 3", 333, "SOB")]
 
     sql_obj = SQL("INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)").as_many(parameters)
 
@@ -233,8 +206,7 @@ def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgSync
 
     # Verify data
     check_result = psycopg_batch_session.execute(
-        "SELECT COUNT(*) as count FROM test_batch WHERE category = %s",
-        ("SOB",),
+        "SELECT COUNT(*) as count FROM test_batch WHERE category = %s", ("SOB",)
     )
     assert check_result.data[0]["count"] == 3
 
@@ -242,18 +214,13 @@ def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgSync
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_with_returning(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with RETURNING clause on Psycopg."""
-    parameters = [
-        ("Return 1", 111, "RET"),
-        ("Return 2", 222, "RET"),
-        ("Return 3", 333, "RET"),
-    ]
+    parameters = [("Return 1", 111, "RET"), ("Return 2", 222, "RET"), ("Return 3", 333, "RET")]
 
     # Note: execute_many with RETURNING may not work the same as single execute
     # This test verifies the behavior
     try:
         result = psycopg_batch_session.execute_many(
-            "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s) RETURNING id, name",
-            parameters,
+            "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s) RETURNING id, name", parameters
         )
 
         assert isinstance(result, SQLResult)
@@ -266,13 +233,11 @@ def test_psycopg_execute_many_with_returning(psycopg_batch_session: PsycopgSyncD
         # execute_many with RETURNING might not be supported
         # Fall back to regular insert and verify
         psycopg_batch_session.execute_many(
-            "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)",
-            parameters,
+            "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)", parameters
         )
 
         check_result = psycopg_batch_session.execute(
-            "SELECT COUNT(*) as count FROM test_batch WHERE category = %s",
-            ("RET",),
+            "SELECT COUNT(*) as count FROM test_batch WHERE category = %s", ("RET",)
         )
         assert check_result.data[0]["count"] == 3
 
@@ -297,8 +262,7 @@ def test_psycopg_execute_many_with_arrays(psycopg_batch_session: PsycopgSyncDriv
     ]
 
     result = psycopg_batch_session.execute_many(
-        "INSERT INTO test_arrays (name, tags, scores) VALUES (%s, %s, %s)",
-        parameters,
+        "INSERT INTO test_arrays (name, tags, scores) VALUES (%s, %s, %s)", parameters
     )
 
     assert isinstance(result, SQLResult)
@@ -334,10 +298,7 @@ def test_psycopg_execute_many_with_json(psycopg_batch_session: PsycopgSyncDriver
         ("JSON 3", json.dumps({"type": "test", "value": 300, "tags": ["a", "b"]})),
     ]
 
-    result = psycopg_batch_session.execute_many(
-        "INSERT INTO test_json (name, metadata) VALUES (%s, %s)",
-        parameters,
-    )
+    result = psycopg_batch_session.execute_many("INSERT INTO test_json (name, metadata) VALUES (%s, %s)", parameters)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
@@ -366,16 +327,9 @@ def test_psycopg_execute_many_with_upsert(psycopg_batch_session: PsycopgSyncDriv
     """)
 
     # First batch - initial inserts
-    initial_params = [
-        (1, "Item 1"),
-        (2, "Item 2"),
-        (3, "Item 3"),
-    ]
+    initial_params = [(1, "Item 1"), (2, "Item 2"), (3, "Item 3")]
 
-    psycopg_batch_session.execute_many(
-        "INSERT INTO test_upsert (id, name) VALUES (%s, %s)",
-        initial_params,
-    )
+    psycopg_batch_session.execute_many("INSERT INTO test_upsert (id, name) VALUES (%s, %s)", initial_params)
 
     # Second batch - with conflicts using ON CONFLICT
     conflict_params = [
@@ -408,8 +362,7 @@ def test_psycopg_execute_many_with_copy(psycopg_batch_session: PsycopgSyncDriver
     large_batch = [(f"Copy Item {i}", i * 10, f"COPY{i % 2}") for i in range(100)]
 
     result = psycopg_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)",
-        large_batch,
+        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)", large_batch
     )
 
     assert isinstance(result, SQLResult)

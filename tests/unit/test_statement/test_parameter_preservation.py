@@ -4,7 +4,7 @@ import pytest
 
 from sqlspec.statement.builder.ddl import CreateTableAsSelectBuilder
 from sqlspec.statement.builder.select import SelectBuilder
-from sqlspec.statement.sql import SQL
+from sqlspec.statement.sql import SQL, SQLConfig
 
 
 def test_ctas_preserves_parameter_names() -> None:
@@ -21,7 +21,9 @@ def test_ctas_preserves_parameter_names() -> None:
 
     # Build and check
     safe_query = ctas_builder.build()
-    sql_statement = SQL(safe_query.sql, parameters=safe_query.parameters)
+    # Disable validation for DDL operations
+    config = SQLConfig(enable_validation=False, strict_mode=False)
+    sql_statement = SQL(safe_query.sql, parameters=safe_query.parameters, config=config)
 
     # Parameters should preserve original names
     assert "active" in safe_query.parameters

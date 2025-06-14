@@ -1,7 +1,4 @@
-from typing import (
-    Generic,
-    TypeVar,
-)
+from typing import Generic, TypeVar
 
 from sqlspec.config import DriverT
 from sqlspec.service._util import ResultConverter, find_filter

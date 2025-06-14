@@ -62,11 +62,7 @@ class UnpivotClauseMixin:
         # Create the unpivot expression (stored as Pivot with unpivot=True)
         in_expr = exp.In(this=name_col_ident, expressions=unpivot_cols_exprs)
 
-        unpivot_node = exp.Pivot(
-            expressions=[value_col_ident],
-            fields=[in_expr],
-            unpivot=True,
-        )
+        unpivot_node = exp.Pivot(expressions=[value_col_ident], fields=[in_expr], unpivot=True)
 
         if alias:
             unpivot_node.set("alias", exp.TableAlias(this=exp.to_identifier(alias)))

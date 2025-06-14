@@ -184,7 +184,8 @@ def test_set_operations_with_parameters() -> None:
 def test_where_exists_with_builder() -> None:
     """Test WHERE EXISTS with SelectBuilder subquery."""
     subquery = SelectBuilder().select("1").from_("orders").where(("user_id", "users.id"))
-    builder = SelectBuilder().select("*").from_("users").where_exists(subquery)
+    # Disable optimization to preserve the EXISTS clause
+    builder = SelectBuilder(enable_optimization=False).select("*").from_("users").where_exists(subquery)
 
     query = builder.build()
 
@@ -195,7 +196,8 @@ def test_where_exists_with_builder() -> None:
 
 def test_where_exists_with_string() -> None:
     """Test WHERE EXISTS with string subquery."""
-    builder = SelectBuilder().select("*").from_("users").where_exists("SELECT 1 FROM orders WHERE user_id = users.id")
+    # Disable optimization to preserve the EXISTS clause
+    builder = SelectBuilder(enable_optimization=False).select("*").from_("users").where_exists("SELECT 1 FROM orders WHERE user_id = users.id")
 
     query = builder.build()
 
@@ -206,7 +208,8 @@ def test_where_exists_with_string() -> None:
 def test_where_not_exists() -> None:
     """Test WHERE NOT EXISTS clause."""
     subquery = SelectBuilder().select("1").from_("orders").where(("user_id", "users.id"))
-    builder = SelectBuilder().select("*").from_("users").where_not_exists(subquery)
+    # Disable optimization to preserve the NOT EXISTS clause
+    builder = SelectBuilder(enable_optimization=False).select("*").from_("users").where_not_exists(subquery)
 
     query = builder.build()
 
@@ -284,7 +287,8 @@ def test_where_like_with_escape() -> None:
 
 def test_where_between() -> None:
     """Test WHERE BETWEEN clause."""
-    builder = SelectBuilder().select("*").from_("users").where_between("age", 18, 65)
+    # Disable optimization to preserve the BETWEEN clause
+    builder = SelectBuilder(enable_optimization=False).select("*").from_("users").where_between("age", 18, 65)
 
     query = builder.build()
 
@@ -621,10 +625,11 @@ def test_none_values_in_parameters() -> None:
 
 def test_complex_nested_conditions() -> None:
     """Test complex nested conditions with multiple helpers."""
-    subquery = SelectBuilder().select("user_id").from_("orders").where_between("total", 100, 1000)
+    # Disable optimization to preserve the BETWEEN clause
+    subquery = SelectBuilder(enable_optimization=False).select("user_id").from_("orders").where_between("total", 100, 1000)
 
     builder = (
-        SelectBuilder()
+        SelectBuilder(enable_optimization=False)
         .select("id", "name", "email")
         .from_("users")
         .where_in("id", subquery)

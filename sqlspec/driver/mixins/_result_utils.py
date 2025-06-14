@@ -36,9 +36,7 @@ _DEFAULT_TYPE_DECODERS: list[tuple[Callable[[Any], bool], Callable[[Any, Any], A
 
 
 def _default_msgspec_deserializer(
-    target_type: Any,
-    value: Any,
-    type_decoders: "Optional[Sequence[tuple[Any, Any]]]" = None,
+    target_type: Any, value: Any, type_decoders: "Optional[Sequence[tuple[Any, Any]]]" = None
 ) -> Any:
     """Default msgspec deserializer with type conversion support."""
     if type_decoders:
@@ -96,10 +94,7 @@ class ToSchemaMixin:
                         obj=data,
                         type=schema_type,
                         from_attributes=True,
-                        dec_hook=partial(
-                            _default_msgspec_deserializer,
-                            type_decoders=_DEFAULT_TYPE_DECODERS,
-                        ),
+                        dec_hook=partial(_default_msgspec_deserializer, type_decoders=_DEFAULT_TYPE_DECODERS),
                     ),
                 )
             return cast(
@@ -108,10 +103,7 @@ class ToSchemaMixin:
                     obj=data,
                     type=list[schema_type],  # type: ignore[valid-type]  # pyright: ignore
                     from_attributes=True,
-                    dec_hook=partial(
-                        _default_msgspec_deserializer,
-                        type_decoders=_DEFAULT_TYPE_DECODERS,
-                    ),
+                    dec_hook=partial(_default_msgspec_deserializer, type_decoders=_DEFAULT_TYPE_DECODERS),
                 ),
             )
         if schema_type is not None and is_pydantic_model(schema_type):

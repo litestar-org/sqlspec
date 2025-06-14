@@ -7,7 +7,7 @@ from sqlglot import exp
 
 from sqlspec.exceptions import RiskLevel, SQLValidationError
 from sqlspec.statement.pipelines.base import ProcessorProtocol
-from sqlspec.statement.pipelines.results import ProcessorResult, ValidationResult
+from sqlspec.statement.pipelines.result_types import ValidationError
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -25,7 +25,7 @@ class MixedParameterStyleError(SQLValidationError):
     """Raised when mixed parameter styles are detected but not allowed."""
 
 
-class ParameterStyleValidator(ProcessorProtocol[exp.Expression]):
+class ParameterStyleValidator(ProcessorProtocol):
     """Validates that parameter styles are supported by the database configuration.
 
     This validator checks:
@@ -34,11 +34,7 @@ class ParameterStyleValidator(ProcessorProtocol[exp.Expression]):
     3. Provides helpful error messages about supported styles
     """
 
-    def __init__(
-        self,
-        risk_level: "RiskLevel" = RiskLevel.HIGH,
-        fail_on_violation: bool = True,
-    ) -> None:
+    def __init__(self, risk_level: "RiskLevel" = RiskLevel.HIGH, fail_on_violation: bool = True) -> None:
         """Initialize the parameter style validator.
 
         Args:
@@ -48,7 +44,7 @@ class ParameterStyleValidator(ProcessorProtocol[exp.Expression]):
         self.risk_level = risk_level
         self.fail_on_violation = fail_on_violation
 
-    def process(self, context: "SQLProcessingContext") -> "ProcessorResult":
+    def process(self, expression: exp.Expression, context: "SQLProcessingContext") -> None:
         """Validate parameter styles in SQL.
 
         Args:
@@ -58,31 +54,25 @@ class ParameterStyleValidator(ProcessorProtocol[exp.Expression]):
             A ProcessorResult with the outcome of the validation.
         """
         if context.current_expression is None:
-            return ProcessorResult(
-                expression=exp.Placeholder(),
-                validation_result=ValidationResult(
-                    is_safe=False,
-                    risk_level=RiskLevel.CRITICAL,
-                    issues=["ParameterStyleValidator received no expression."],
-                ),
+            error = ValidationError(
+                message="ParameterStyleValidator received no expression.",
+                code="no-expression",
+                risk_level=RiskLevel.CRITICAL,
+                processor="ParameterStyleValidator",
+                expression=None,
             )
+            context.validation_errors.append(error)
+            return
 
         try:
             config = context.config
-            issues = []
 
             if config.allowed_parameter_styles is None:
-                return ProcessorResult(
-                    expression=context.current_expression,
-                    validation_result=ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP),
-                )
+                return
 
             param_info = context.parameter_info
             if not param_info:
-                return ProcessorResult(
-                    expression=context.current_expression,
-                    validation_result=ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP),
-                )
+                return
 
             unique_styles = {p.style for p in param_info}
             if len(unique_styles) > 1 and not config.allow_mixed_parameter_styles:
@@ -90,7 +80,14 @@ class ParameterStyleValidator(ProcessorProtocol[exp.Expression]):
                 msg = f"Mixed parameter styles detected ({detected_styles}) but not allowed."
                 if self.fail_on_violation:
                     self._raise_mixed_style_error(msg)
-                issues.append(msg)
+                error = ValidationError(
+                    message=msg,
+                    code="mixed-parameter-styles",
+                    risk_level=self.risk_level,
+                    processor="ParameterStyleValidator",
+                    expression=expression,
+                )
+                context.validation_errors.append(error)
 
             disallowed_styles = {str(s) for s in unique_styles if not config.validate_parameter_style(s)}
             if disallowed_styles:
@@ -99,23 +96,27 @@ class ParameterStyleValidator(ProcessorProtocol[exp.Expression]):
                 msg = f"Parameter style(s) {disallowed_str} not supported. Allowed: {allowed_str}"
                 if self.fail_on_violation:
                     self._raise_unsupported_style_error(msg)
-                issues.append(msg)
-
-            validation_result = (
-                ValidationResult(is_safe=False, risk_level=self.risk_level, issues=issues)
-                if issues
-                else ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
-            )
+                error = ValidationError(
+                    message=msg,
+                    code="unsupported-parameter-style",
+                    risk_level=self.risk_level,
+                    processor="ParameterStyleValidator",
+                    expression=expression,
+                )
+                context.validation_errors.append(error)
 
         except (UnsupportedParameterStyleError, MixedParameterStyleError):
             raise
         except Exception as e:
             logger.warning("Parameter style validation failed: %s", e)
-            validation_result = ValidationResult(
-                is_safe=True, risk_level=RiskLevel.SKIP, warnings=[f"Parameter style validation failed: {e}"]
+            error = ValidationError(
+                message=f"Parameter style validation failed: {e}",
+                code="validation-error",
+                risk_level=RiskLevel.LOW,
+                processor="ParameterStyleValidator",
+                expression=expression,
             )
-
-        return ProcessorResult(expression=context.current_expression, validation_result=validation_result)
+            context.validation_errors.append(error)
 
     @staticmethod
     def _raise_mixed_style_error(msg: "str") -> "None":

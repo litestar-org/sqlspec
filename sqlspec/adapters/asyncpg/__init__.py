@@ -3,10 +3,4 @@ from sqlspec.adapters.asyncpg.driver import AsyncpgConnection, AsyncpgDriver
 
 # AsyncpgDriver already imported above
 
-__all__ = (
-    "CONNECTION_FIELDS",
-    "POOL_FIELDS",
-    "AsyncpgConfig",
-    "AsyncpgConnection",
-    "AsyncpgDriver",
-)
+__all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "AsyncpgConfig", "AsyncpgConnection", "AsyncpgDriver")

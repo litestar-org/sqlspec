@@ -20,10 +20,7 @@ def psqlpy_config(postgres_service: PostgresService) -> PsqlpyConfig:
     """Fixture for PsqlpyConfig using the postgres service."""
     # Construct DSN manually like in asyncpg tests
     dsn = f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-    return PsqlpyConfig(
-        dsn=dsn,
-        max_db_pool_size=2,
-    )
+    return PsqlpyConfig(dsn=dsn, max_db_pool_size=2)
 
 
 @pytest.mark.asyncio

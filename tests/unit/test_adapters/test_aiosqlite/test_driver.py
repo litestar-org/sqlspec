@@ -44,9 +44,7 @@ def aiosqlite_driver(mock_aiosqlite_connection: AsyncMock) -> AiosqliteDriver:
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
     instrumentation_config = InstrumentationConfig()
     return AiosqliteDriver(
-        connection=mock_aiosqlite_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_aiosqlite_connection, config=config, instrumentation_config=instrumentation_config
     )
 
 
@@ -56,9 +54,7 @@ def test_aiosqlite_driver_initialization(mock_aiosqlite_connection: AsyncMock) -
     instrumentation_config = InstrumentationConfig(log_queries=True)
 
     driver = AiosqliteDriver(
-        connection=mock_aiosqlite_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_aiosqlite_connection, config=config, instrumentation_config=instrumentation_config
     )
 
     # Test driver attributes are set correctly

@@ -39,9 +39,7 @@ def psycopg_sync_driver(mock_psycopg_sync_connection: MagicMock) -> PsycopgSyncD
     config = SQLConfig(strict_mode=False)
     instrumentation_config = InstrumentationConfig()
     return PsycopgSyncDriver(
-        connection=mock_psycopg_sync_connection,
-        config=config,
-        instrumentation_config=instrumentation_config,
+        connection=mock_psycopg_sync_connection, config=config, instrumentation_config=instrumentation_config
     )
 
 

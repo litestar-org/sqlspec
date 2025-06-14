@@ -31,11 +31,7 @@ def adbc_postgresql_script_session(postgres_service: PostgresService) -> Generat
 @pytest.fixture
 def adbc_sqlite_script_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session for script testing."""
-    config = AdbcConfig(
-        uri=":memory:",
-        driver_name="adbc_driver_sqlite",
-        statement_config=SQLConfig(strict_mode=False),
-    )
+    config = AdbcConfig(uri=":memory:", driver_name="adbc_driver_sqlite", statement_config=SQLConfig(strict_mode=False))
 
     with config.provide_session() as session:
         yield session

@@ -94,8 +94,7 @@ async def test_psqlpy_to_parquet(psqlpy_arrow_session: PsqlpyDriver) -> None:
         output_path = Path(tmpdir) / "test_output.parquet"
 
         await psqlpy_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE is_active = true",
-            str(output_path),
+            "SELECT * FROM test_arrow WHERE is_active = true", str(output_path)
         )
 
         assert output_path.exists()
@@ -115,8 +114,7 @@ async def test_psqlpy_to_parquet(psqlpy_arrow_session: PsqlpyDriver) -> None:
 async def test_psqlpy_arrow_with_parameters(psqlpy_arrow_session: PsqlpyDriver) -> None:
     """Test fetch_arrow_table with parameters on PSQLPy."""
     result = await psqlpy_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE value >= $1 AND value <= $2 ORDER BY value",
-        (200, 400),
+        "SELECT * FROM test_arrow WHERE value >= $1 AND value <= $2 ORDER BY value", (200, 400)
     )
 
     assert isinstance(result, ArrowResult)
@@ -129,10 +127,7 @@ async def test_psqlpy_arrow_with_parameters(psqlpy_arrow_session: PsqlpyDriver) 
 @pytest.mark.xdist_group("postgres")
 async def test_psqlpy_arrow_empty_result(psqlpy_arrow_session: PsqlpyDriver) -> None:
     """Test fetch_arrow_table with empty result on PSQLPy."""
-    result = await psqlpy_arrow_session.fetch_arrow_table(
-        "SELECT * FROM test_arrow WHERE value > $1",
-        (1000,),
-    )
+    result = await psqlpy_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow WHERE value > $1", (1000,))
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows == 0
@@ -189,8 +184,7 @@ async def test_psqlpy_arrow_large_dataset(psqlpy_arrow_session: PsqlpyDriver) ->
     large_data = [(f"Item {i}", i * 10, Decimal(str(i * 2.5)), i % 2 == 0) for i in range(100, 1000)]
 
     await psqlpy_arrow_session.execute_many(
-        "INSERT INTO test_arrow (name, value, price, is_active) VALUES ($1, $2, $3, $4)",
-        large_data,
+        "INSERT INTO test_arrow (name, value, price, is_active) VALUES ($1, $2, $3, $4)", large_data
     )
 
     result = await psqlpy_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
@@ -210,9 +204,7 @@ async def test_psqlpy_parquet_export_options(psqlpy_arrow_session: PsqlpyDriver)
 
         # Export with compression
         await psqlpy_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE value <= 300",
-            str(output_path),
-            compression="snappy",
+            "SELECT * FROM test_arrow WHERE value <= 300", str(output_path), compression="snappy"
         )
 
         assert output_path.exists()

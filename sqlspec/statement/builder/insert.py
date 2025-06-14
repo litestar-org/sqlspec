@@ -41,11 +41,7 @@ ERR_MSG_EXPRESSION_NOT_INITIALIZED = "Internal error: base expression not initia
 
 @dataclass(unsafe_hash=True)
 class InsertBuilder(
-    QueryBuilder[RowT],
-    ReturningClauseMixin,
-    InsertValuesMixin,
-    InsertFromSelectMixin,
-    InsertIntoClauseMixin,
+    QueryBuilder[RowT], ReturningClauseMixin, InsertValuesMixin, InsertFromSelectMixin, InsertIntoClauseMixin
 ):
     """Builder for INSERT statements.
 
@@ -76,10 +72,7 @@ class InsertBuilder(
             InsertBuilder()
             .into("users")
             .values_from_dict(
-                {
-                    "name": "John",
-                    "email": "john@example.com",
-                }
+                {"name": "John", "email": "john@example.com"}
             )
         )
 
