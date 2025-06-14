@@ -6,9 +6,7 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
-from psycopg import AsyncConnection, Connection, connect
 from psycopg.rows import DictRow as PsycopgDictRow
-from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
 from sqlspec.adapters.psycopg.driver import (
@@ -23,6 +21,8 @@ from sqlspec.typing import DictRow, Empty
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
+
+    from psycopg import Connection
 
 logger = logging.getLogger("sqlspec.adapters.psycopg")
 
@@ -102,8 +102,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     supports_connection_pooling: ClassVar[bool] = True
 
     # Driver class reference for dialect resolution
-    driver_class: ClassVar[type[PsycopgSyncDriver]] = PsycopgSyncDriver
-
+    driver_type: type[PsycopgSyncDriver] = PsycopgSyncDriver
+    connection_type: type[PsycopgSyncConnection] = PsycopgSyncConnection
     # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional", "pyformat_named")
     """Psycopg supports %s (positional) and %(name)s (named) parameter styles."""
@@ -221,51 +221,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         super().__init__(instrumentation=instrumentation or InstrumentationConfig())
 
     @property
-    def connection_type(self) -> "type[PsycopgSyncConnection]":  # type: ignore[override]
-        """Return the connection type."""
-        return Connection  # pyright: ignore
-
-    @property
-    def driver_type(self) -> "type[PsycopgSyncDriver]":  # type: ignore[override]
-        """Return the driver type."""
-        return PsycopgSyncDriver
-
-    @classmethod
-    def from_pool_config(
-        cls,
-        pool_config: dict[str, Any],
-        connection_config: Optional[dict[str, Any]] = None,
-        statement_config: "Optional[SQLConfig]" = None,
-        instrumentation: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
-    ) -> "PsycopgSyncConfig":
-        """Create config from old-style pool_config and connection_config dicts for backward compatibility.
-
-        Args:
-            pool_config: Dictionary with pool and connection parameters
-            connection_config: Dictionary with additional connection parameters
-            statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
-            default_row_type: Default row type for results
-
-        Returns:
-            PsycopgSyncConfig instance
-        """
-        # Merge connection_config into pool_config (pool_config takes precedence)
-        merged_config = {}
-        if connection_config:
-            merged_config.update(connection_config)
-        merged_config.update(pool_config)
-
-        # Create config with all parameters
-        return cls(
-            statement_config=statement_config,
-            instrumentation=instrumentation,
-            default_row_type=default_row_type,
-            **merged_config,  # All connection and pool parameters go to direct fields or extras
-        )
-
-    @property
     def connection_config_dict(self) -> dict[str, Any]:
         """Return the connection configuration as a dict for psycopg operations.
 
@@ -347,10 +302,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         Returns:
             A psycopg Connection instance configured with DictRow.
         """
-        # TODO: this should still create a pool and return a connection from it
-        conn_dict = self.connection_config_dict
-        conn_dict["row_factory"] = dict_row
-        return connect(**conn_dict)
+        if self.pool_instance is None:
+            self.pool_instance = self.create_pool()
+        return self.pool_instance.getconn()  # pyright: ignore
 
     @contextlib.contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[PsycopgSyncConnection, None, None]":
@@ -448,7 +402,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     supports_connection_pooling: ClassVar[bool] = True
 
     # Driver class reference for dialect resolution
-    driver_class: ClassVar[type[PsycopgAsyncDriver]] = PsycopgAsyncDriver
+    driver_type: type[PsycopgAsyncDriver] = PsycopgAsyncDriver
+    connection_type: type[PsycopgAsyncConnection] = PsycopgAsyncConnection
 
     # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional", "pyformat_named")
@@ -567,53 +522,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         super().__init__(instrumentation=instrumentation or InstrumentationConfig())
 
     @property
-    def connection_type(self) -> "type[PsycopgAsyncConnection]":  # type: ignore[override]
-        """Return the connection type."""
-        from psycopg import AsyncConnection
-
-        return AsyncConnection  # pyright: ignore
-
-    @property
-    def driver_type(self) -> "type[PsycopgAsyncDriver]":  # type: ignore[override]
-        """Return the driver type."""
-        return PsycopgAsyncDriver
-
-    @classmethod
-    def from_pool_config(
-        cls,
-        pool_config: dict[str, Any],
-        connection_config: Optional[dict[str, Any]] = None,
-        statement_config: "Optional[SQLConfig]" = None,
-        instrumentation: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
-    ) -> "PsycopgAsyncConfig":
-        """Create config from old-style pool_config and connection_config dicts for backward compatibility.
-
-        Args:
-            pool_config: Dictionary with pool and connection parameters
-            connection_config: Dictionary with additional connection parameters
-            statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
-            default_row_type: Default row type for results
-
-        Returns:
-            PsycopgAsyncConfig instance
-        """
-        # Merge connection_config into pool_config (pool_config takes precedence)
-        merged_config = {}
-        if connection_config:
-            merged_config.update(connection_config)
-        merged_config.update(pool_config)
-
-        # Create config with all parameters
-        return cls(
-            statement_config=statement_config,
-            instrumentation=instrumentation,
-            default_row_type=default_row_type,
-            **merged_config,  # All connection and pool parameters go to direct fields or extras
-        )
-
-    @property
     def connection_config_dict(self) -> dict[str, Any]:
         """Return the connection configuration as a dict for psycopg operations.
 
@@ -701,9 +609,9 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             A psycopg AsyncConnection instance configured with DictRow.
         """
         # TODO: this should still create a pool and return a connection from it
-        conn_dict = self.connection_config_dict
-        conn_dict["row_factory"] = dict_row
-        return await AsyncConnection.connect(**conn_dict)  # pyright: ignore
+        if self.pool_instance is None:
+            self.pool_instance = await self.create_pool()
+        return await self.pool_instance.getconn()  # pyright: ignore
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[PsycopgAsyncConnection, None]":  # pyright: ignore

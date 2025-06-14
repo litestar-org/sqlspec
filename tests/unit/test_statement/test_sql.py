@@ -15,7 +15,6 @@ from sqlglot import exp
 from sqlspec.exceptions import RiskLevel, SQLValidationError
 from sqlspec.statement.filters import LimitOffsetFilter, SearchFilter
 from sqlspec.statement.parameters import ParameterInfo, ParameterStyle
-from sqlspec.statement.pipelines import ValidationResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -66,9 +65,9 @@ def test_sqlconfig_get_pipeline_default() -> None:
     # This SQL is designed to trigger a DMLWithoutWhereValidator if it were present and active
     stmt = SQL("UPDATE users SET name = 'test'", config=config)
 
-    # Use the new validate_detailed() method instead of deprecated validation_result
-    errors = stmt.validate_detailed()
-    assert isinstance(errors, list), "validate_detailed() should return a list"
+    # Use the validate() method to get validation errors
+    errors = stmt.validate()
+    assert isinstance(errors, list), "validate() should return a list"
     # This SQL should have validation errors (UPDATE without WHERE)
     assert len(errors) > 0, "UPDATE without WHERE should have validation errors"
     assert any("without WHERE" in error.message for error in errors), "Should detect UPDATE without WHERE"
@@ -311,18 +310,28 @@ def test_statement_separator_handling(include_separator: bool, expected_suffix: 
 
 
 @pytest.fixture
-def mock_validation_result() -> ValidationResult:
-    """Create a mock validation result."""
-    return ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE, issues=[])
+def mock_validation_errors() -> list:
+    """Create a mock validation errors list (empty for safe SQL)."""
+    return []
 
 
 @pytest.fixture
-def unsafe_validation_result() -> ValidationResult:
-    """Create an unsafe validation result."""
-    return ValidationResult(is_safe=False, risk_level=RiskLevel.HIGH, issues=["SQL injection detected"])
+def unsafe_validation_errors() -> list:
+    """Create an unsafe validation errors list."""
+    from sqlspec.statement.pipelines.result_types import ValidationError
+
+    return [
+        ValidationError(
+            message="SQL injection detected",
+            code="sql-injection",
+            risk_level=RiskLevel.HIGH,
+            processor="TestValidator",
+            expression=None,
+        )
+    ]
 
 
-def test_validation_enabled_safe_sql(mock_validation_result: ValidationResult) -> None:
+def test_validation_enabled_safe_sql(mock_validation_errors: list) -> None:
     """Test validation with safe SQL."""
     config = SQLConfig(enable_validation=True, strict_mode=True)
 
@@ -350,11 +359,11 @@ def test_validation_enabled_safe_sql(mock_validation_result: ValidationResult) -
         stmt = SQL("SELECT * FROM users", config=config)
 
         assert stmt.is_safe is True
-        assert stmt.validation_result is not None
-        assert stmt.validation_result.is_safe is True
+        assert stmt.validation_errors == []
+        assert stmt.has_errors is False
 
 
-def test_validation_enabled_unsafe_sql_strict_mode(unsafe_validation_result: ValidationResult) -> None:
+def test_validation_enabled_unsafe_sql_strict_mode(unsafe_validation_errors: list) -> None:
     """Test validation with unsafe SQL in strict mode raises exception."""
     config = SQLConfig(enable_validation=True, strict_mode=True)
 
@@ -376,16 +385,7 @@ def test_validation_enabled_unsafe_sql_strict_mode(unsafe_validation_result: Val
             input_sql_had_placeholders=False,
         )
         # Add validation errors to context to simulate unsafe SQL
-        from sqlspec.statement.pipelines.result_types import ValidationError as ValError
-
-        error = ValError(
-            message=unsafe_validation_result.issues[0] if unsafe_validation_result.issues else "Unsafe SQL",
-            code="unsafe-sql",
-            risk_level=unsafe_validation_result.risk_level,
-            processor="TestValidator",
-            expression=actual_expr,
-        )
-        mock_context.validation_errors.append(error)
+        mock_context.validation_errors.extend(unsafe_validation_errors)
         mock_result = PipelineResult(expression=actual_expr, context=mock_context)
         mock_pipeline.execute_pipeline.return_value = mock_result
         mock_get_pipeline.return_value = mock_pipeline
@@ -398,7 +398,7 @@ def test_validation_enabled_unsafe_sql_strict_mode(unsafe_validation_result: Val
             _ = stmt.sql  # This should trigger validation and raise
 
 
-def test_validation_enabled_unsafe_sql_non_strict_mode(unsafe_validation_result: ValidationResult) -> None:
+def test_validation_enabled_unsafe_sql_non_strict_mode(unsafe_validation_errors: list) -> None:
     """Test validation with unsafe SQL in non-strict mode allows creation."""
     config = SQLConfig(enable_validation=True, strict_mode=False)
 
@@ -420,16 +420,7 @@ def test_validation_enabled_unsafe_sql_non_strict_mode(unsafe_validation_result:
             input_sql_had_placeholders=False,
         )
         # Add validation errors to context to simulate unsafe SQL
-        from sqlspec.statement.pipelines.result_types import ValidationError as ValError
-
-        error = ValError(
-            message=unsafe_validation_result.issues[0] if unsafe_validation_result.issues else "Unsafe SQL",
-            code="unsafe-sql",
-            risk_level=unsafe_validation_result.risk_level,
-            processor="TestValidator",
-            expression=actual_expr,
-        )
-        mock_context.validation_errors.append(error)
+        mock_context.validation_errors.extend(unsafe_validation_errors)
         mock_result = PipelineResult(expression=actual_expr, context=mock_context)
         mock_pipeline.execute_pipeline.return_value = mock_result
         mock_get_pipeline.return_value = mock_pipeline
@@ -437,8 +428,8 @@ def test_validation_enabled_unsafe_sql_non_strict_mode(unsafe_validation_result:
         stmt = SQL("DROP TABLE users", config=config)
 
         assert stmt.is_safe is False
-        assert stmt.validation_result is not None
-        assert stmt.validation_result.is_safe is False
+        assert len(stmt.validation_errors) > 0
+        assert stmt.has_errors is True
 
 
 def test_validation_disabled() -> None:
@@ -446,12 +437,11 @@ def test_validation_disabled() -> None:
     config = SQLConfig(enable_validation=False)
     stmt = SQL("DROP TABLE users", config=config)
 
-    # Should have a skipped validation result
-    assert stmt.validation_result is not None
-    assert stmt.validation_result.is_safe is True
-    assert stmt.validation_result.risk_level == RiskLevel.SKIP
-    # The validation result will indicate it was skipped
-    assert len(stmt.validation_result.issues) >= 0  # May have pipeline messages
+    # Should have no errors when validation is disabled
+    assert stmt.is_safe is True
+    assert stmt.risk_level == RiskLevel.SKIP
+    # The validation will indicate it was skipped
+    assert len(stmt.validation_errors) == 0  # No validation errors when disabled
 
 
 def test_validate_method() -> None:
@@ -459,8 +449,9 @@ def test_validate_method() -> None:
     stmt = SQL("SELECT * FROM users", config=SQLConfig(enable_validation=False))
 
     # Validation should work even if disabled in config
-    result = stmt.validate()
-    assert isinstance(result, ValidationResult)
+    errors = stmt.validate()
+    assert isinstance(errors, list)
+    assert len(errors) == 0  # Safe SQL should have no errors
 
 
 def test_copy_with_new_sql() -> None:
@@ -805,23 +796,26 @@ def test_property_access() -> None:
     assert stmt.expression is not None
     assert stmt.parameters == {"id": 123}
     assert isinstance(stmt.parameter_info, list)
-    assert stmt.validation_result is not None
+    assert isinstance(stmt.validation_errors, list)
     assert isinstance(stmt.is_safe, bool)
     assert stmt.expected_result_type is None  # No builder used
 
 
 def test_validation_result_property() -> None:
-    """Test validation_result property."""
-    # With validation enabled
-    stmt_with_validation = SQL("SELECT * FROM users", config=SQLConfig(enable_validation=True))
-    assert stmt_with_validation.validation_result is not None
+    """Test validation properties."""
+    # With validation enabled - use a simple query that won't trigger performance warnings
+    stmt_with_validation = SQL("SELECT id FROM users", config=SQLConfig(enable_validation=True, strict_mode=False))
+    assert isinstance(stmt_with_validation.validation_errors, list)
+    # SELECT with specific columns should be safe
+    assert stmt_with_validation.is_safe is True
+    assert stmt_with_validation.has_errors is False
 
     # With validation disabled
-    stmt_without_validation = SQL("SELECT * FROM users", config=SQLConfig(enable_validation=False))
-    # Should have a skipped validation result
-    assert stmt_without_validation.validation_result is not None
-    assert stmt_without_validation.validation_result.is_safe is True
-    assert stmt_without_validation.validation_result.risk_level == RiskLevel.SKIP
+    stmt_without_validation = SQL("SELECT id FROM users", config=SQLConfig(enable_validation=False))
+    # Should have no errors and SKIP risk level
+    assert len(stmt_without_validation.validation_errors) == 0
+    assert stmt_without_validation.is_safe is True
+    assert stmt_without_validation.risk_level == RiskLevel.SKIP
 
 
 def test_mixed_parameter_styles_in_sql_string() -> None:

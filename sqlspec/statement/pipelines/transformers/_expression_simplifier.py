@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, cast
 
 from sqlglot.optimizer import simplify
 
@@ -87,7 +87,7 @@ class ExpressionSimplifier(ProcessorProtocol):
                 "optimizations_applied": self._get_applied_optimizations(),
             }
 
-            return simplified
+            return cast("exp.Expression", simplified)
 
     def _get_applied_optimizations(self) -> list[str]:
         """Get list of optimization types that are enabled."""

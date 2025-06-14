@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from asyncpg import Record
 from asyncpg import create_pool as asyncpg_create_pool
-from asyncpg.pool import PoolConnectionProxy
 
 from sqlspec._serialization import decode_json, encode_json
 from sqlspec.adapters.asyncpg.driver import AsyncpgConnection, AsyncpgDriver
@@ -18,7 +17,7 @@ from sqlspec.typing import DictRow, Empty
 from sqlspec.utils.telemetry import instrument_operation_async
 
 if TYPE_CHECKING:
-    from asyncio import AbstractEventLoop
+    from asyncio.events import AbstractEventLoop
     from collections.abc import Callable
 
     from asyncpg.pool import Pool
@@ -98,8 +97,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
     is_async: ClassVar[bool] = True
     supports_connection_pooling: ClassVar[bool] = True
 
-    # Driver class reference for dialect resolution
-    driver_class: ClassVar[type[AsyncpgDriver]] = AsyncpgDriver
+    driver_type: type[AsyncpgDriver] = AsyncpgDriver
+    connection_type: type[AsyncpgConnection] = AsyncpgConnection
 
     # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("numeric",)
@@ -221,57 +220,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         super().__init__(instrumentation=instrumentation or InstrumentationConfig())
 
     @property
-    def connection_type(self) -> type[AsyncpgConnection]:  # type: ignore[override]
-        """Return the connection type."""
-        return PoolConnectionProxy
-
-    @property
-    def driver_type(self) -> type[AsyncpgDriver]:  # type: ignore[override]
-        """Return the driver type."""
-        return AsyncpgDriver
-
-    @classmethod
-    def from_pool_config(
-        cls,
-        pool_config: dict[str, Any],
-        connection_config: Optional[dict[str, Any]] = None,
-        statement_config: Optional[SQLConfig] = None,
-        instrumentation: Optional[InstrumentationConfig] = None,
-        default_row_type: type[DictRow] = DictRow,
-        json_serializer: "Callable[[Any], str]" = encode_json,
-        json_deserializer: "Callable[[str], Any]" = decode_json,
-    ) -> "AsyncpgConfig":
-        """Create config from old-style pool_config and connection_config dicts for backward compatibility.
-
-        Args:
-            pool_config: Dictionary with pool and connection parameters
-            connection_config: Dictionary with additional connection parameters
-            statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
-            default_row_type: Default row type for results
-            json_serializer: JSON serialization function
-            json_deserializer: JSON deserialization function
-
-        Returns:
-            AsyncpgConfig instance
-        """
-        # Merge connection_config into pool_config (pool_config takes precedence)
-        merged_config = {}
-        if connection_config:
-            merged_config.update(connection_config)
-        merged_config.update(pool_config)
-
-        # Create config with all parameters
-        return cls(
-            statement_config=statement_config,
-            instrumentation=instrumentation,
-            default_row_type=default_row_type,
-            json_serializer=json_serializer,
-            json_deserializer=json_deserializer,
-            **merged_config,  # All connection and pool parameters go to direct fields or extras
-        )
-
-    @property
     def connection_config_dict(self) -> dict[str, Any]:
         """Return the connection configuration as a dict for asyncpg.connect().
 
@@ -325,10 +273,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             An AsyncPG connection instance.
         """
         async with instrument_operation_async(self, "asyncpg_create_connection", "database"):
-            import asyncpg
-
-            config = self.connection_config_dict
-            return await asyncpg.connect(**config)  # type: ignore[no-any-return]
+            if self.pool_instance is None:
+                self.pool_instance = await self._create_pool()
+            return await self.pool_instance.acquire()
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncpgConnection, None]:
@@ -341,20 +288,13 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Yields:
             An AsyncPG connection instance.
         """
-        if self.pool_instance:
-            connection: Optional[AsyncpgConnection] = None
-            try:
-                connection = await self.pool_instance.acquire()
-                yield connection
-            finally:
-                if connection is not None:
-                    await self.pool_instance.release(connection)  # type: ignore[arg-type]
-        else:
-            connection = await self.create_connection()
-            try:
-                yield connection
-            finally:
-                await connection.close()
+        if self.pool_instance is None:
+            self.pool_instance = await self._create_pool()
+        try:
+            connection = await self.pool_instance.acquire()
+            yield connection
+        finally:
+            await self.pool_instance.release(connection)  # type: ignore[arg-type]
 
     @asynccontextmanager
     async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncpgDriver, None]:

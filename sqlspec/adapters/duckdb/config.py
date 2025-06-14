@@ -153,8 +153,8 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
     is_async: ClassVar[bool] = False
     supports_connection_pooling: ClassVar[bool] = False
 
-    # Driver class reference for dialect resolution
-    driver_class: ClassVar[type[DuckDBDriver]] = DuckDBDriver
+    driver_type: type[DuckDBDriver] = DuckDBDriver
+    connection_type: type[DuckDBConnection] = DuckDBConnection
 
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "numeric")
     """DuckDB supports ? (qmark) and $1, $2 (numeric) parameter styles."""
@@ -331,52 +331,6 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         self.on_connection_create = on_connection_create
 
         super().__init__(instrumentation=instrumentation or InstrumentationConfig())
-
-    @property
-    def connection_type(self) -> type[DuckDBConnection]:  # type: ignore[override]
-        """Return the connection type."""
-        return DuckDBConnection
-
-    @property
-    def driver_type(self) -> type[DuckDBDriver]:  # type: ignore[override]
-        """Return the driver type."""
-        return DuckDBDriver
-
-    @classmethod
-    def from_connection_config(
-        cls,
-        connection_config: dict[str, Any],
-        statement_config: "Optional[SQLConfig]" = None,
-        instrumentation: "Optional[InstrumentationConfig]" = None,
-        default_row_type: type[DictRow] = DictRow,
-        extensions: "Optional[list[DuckDBExtensionConfig]]" = None,
-        secrets: "Optional[list[DuckDBSecretConfig]]" = None,
-        on_connection_create: "Optional[Callable[[DuckDBConnection], Optional[DuckDBConnection]]]" = None,
-    ) -> "DuckDBConfig":
-        """Create config from old-style connection_config dict for backward compatibility.
-
-        Args:
-            connection_config: Dictionary with connection parameters
-            statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
-            default_row_type: Default row type for results
-            extensions: List of extension configurations
-            secrets: List of secret configurations
-            on_connection_create: Callback executed when connection is created
-
-        Returns:
-            DuckDBConfig instance
-        """
-        # Create config with all parameters
-        return cls(
-            statement_config=statement_config,
-            instrumentation=instrumentation,
-            default_row_type=default_row_type,
-            extensions=extensions,
-            secrets=secrets,
-            on_connection_create=on_connection_create,
-            **connection_config,  # All connection parameters go to direct fields or extras
-        )
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:

@@ -21,8 +21,8 @@ def demo_basic_registration() -> None:
     """Basic registration patterns."""
 
     # 1. Register with direct instance
-    local_backend = FSSpecBackend("/tmp/sqlspec")
-    storage_registry.register("temp-files", local_backend)
+    FSSpecBackend("/tmp/sqlspec")
+    storage_registry.register_alias("temp-files", "/tmp/sqlspec")
 
     # 2. Register with configuration (lazy loading)
     storage_registry.register(

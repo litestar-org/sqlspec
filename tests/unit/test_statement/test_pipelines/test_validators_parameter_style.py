@@ -39,10 +39,9 @@ class TestParameterStyleValidator:
         context.current_expression = parse_one(context.initial_sql_string)
         context.parameter_info = param_validator.extract_parameters(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.SKIP  # No issues
+        assert len(context.validation_errors) == 0  # No issues
 
     def test_disallowed_parameter_style(
         self, validator: ParameterStyleValidator, context: SQLProcessingContext, param_validator: ParameterValidator
@@ -55,11 +54,11 @@ class TestParameterStyleValidator:
         context.current_expression = parse_one(context.initial_sql_string)
         context.parameter_info = param_validator.extract_parameters(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.HIGH
-        assert any("not supported by database" in issue for issue in result.issues)
+        assert len(context.validation_errors) > 0
+        assert context.validation_errors[0].risk_level == RiskLevel.HIGH
+        assert "not supported" in context.validation_errors[0].message
 
     def test_mixed_parameter_styles_disallowed(
         self, validator: ParameterStyleValidator, context: SQLProcessingContext, param_validator: ParameterValidator
@@ -73,11 +72,11 @@ class TestParameterStyleValidator:
         context.current_expression = parse_one(context.initial_sql_string)
         context.parameter_info = param_validator.extract_parameters(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.HIGH
-        assert any("Mixed parameter styles detected" in issue for issue in result.issues)
+        assert len(context.validation_errors) > 0
+        assert context.validation_errors[0].risk_level == RiskLevel.HIGH
+        assert "Mixed parameter styles detected" in context.validation_errors[0].message
 
     def test_mixed_parameter_styles_allowed(
         self, validator: ParameterStyleValidator, context: SQLProcessingContext, param_validator: ParameterValidator
@@ -91,10 +90,9 @@ class TestParameterStyleValidator:
         context.current_expression = parse_one(context.initial_sql_string)
         context.parameter_info = param_validator.extract_parameters(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.SKIP  # No issues
+        assert len(context.validation_errors) == 0  # No issues
 
     def test_numeric_parameter_style(
         self, validator: ParameterStyleValidator, context: SQLProcessingContext, param_validator: ParameterValidator
@@ -106,10 +104,9 @@ class TestParameterStyleValidator:
         context.current_expression = parse_one(context.initial_sql_string)
         context.parameter_info = param_validator.extract_parameters(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.SKIP  # No issues
+        assert len(context.validation_errors) == 0  # No issues
 
     def test_pyformat_positional_style(
         self, validator: ParameterStyleValidator, context: SQLProcessingContext, param_validator: ParameterValidator
@@ -122,10 +119,9 @@ class TestParameterStyleValidator:
         context.current_expression = parse_one("SELECT * FROM users WHERE id = ? AND name = ?")
         context.parameter_info = param_validator.extract_parameters(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.SKIP  # No issues
+        assert len(context.validation_errors) == 0  # No issues
 
     def test_pyformat_named_style(
         self, validator: ParameterStyleValidator, context: SQLProcessingContext, param_validator: ParameterValidator
@@ -138,10 +134,9 @@ class TestParameterStyleValidator:
         context.current_expression = parse_one("SELECT * FROM users WHERE id = ? AND name = ?")
         context.parameter_info = param_validator.extract_parameters(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.SKIP  # No issues
+        assert len(context.validation_errors) == 0  # No issues
 
     def test_named_at_style(
         self, validator: ParameterStyleValidator, context: SQLProcessingContext, param_validator: ParameterValidator
@@ -153,10 +148,9 @@ class TestParameterStyleValidator:
         context.current_expression = parse_one(context.initial_sql_string)
         context.parameter_info = param_validator.extract_parameters(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.SKIP  # No issues
+        assert len(context.validation_errors) == 0  # No issues
 
     def test_no_parameters_in_sql(
         self, validator: ParameterStyleValidator, context: SQLProcessingContext, param_validator: ParameterValidator
@@ -168,10 +162,9 @@ class TestParameterStyleValidator:
         context.current_expression = parse_one(context.initial_sql_string)
         context.parameter_info = param_validator.extract_parameters(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.SKIP  # No issues
+        assert len(context.validation_errors) == 0  # No issues
 
     def test_no_allowed_styles_configured(
         self, validator: ParameterStyleValidator, context: SQLProcessingContext, param_validator: ParameterValidator
@@ -183,10 +176,9 @@ class TestParameterStyleValidator:
         context.current_expression = parse_one(context.initial_sql_string)
         context.parameter_info = param_validator.extract_parameters(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.SKIP  # No validation when not configured
+        assert len(context.validation_errors) == 0  # No validation when not configured
 
     def test_empty_allowed_styles(
         self, validator: ParameterStyleValidator, context: SQLProcessingContext, param_validator: ParameterValidator
@@ -198,11 +190,11 @@ class TestParameterStyleValidator:
         context.current_expression = parse_one(context.initial_sql_string)
         context.parameter_info = param_validator.extract_parameters(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.HIGH
-        assert any("not supported by database" in issue for issue in result.issues)
+        assert len(context.validation_errors) > 0
+        assert context.validation_errors[0].risk_level == RiskLevel.HIGH
+        assert "not supported" in context.validation_errors[0].message
 
     def test_multiple_style_violations(
         self, validator: ParameterStyleValidator, context: SQLProcessingContext, param_validator: ParameterValidator
@@ -217,11 +209,10 @@ class TestParameterStyleValidator:
         context.current_expression = parse_one("SELECT * FROM users WHERE id = ? AND name = ? AND email = ?")
         context.parameter_info = param_validator.extract_parameters(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.HIGH
-        assert len(result.issues) >= 2  # At least mixed styles and disallowed styles
+        assert len(context.validation_errors) >= 2  # At least mixed styles and disallowed styles
+        assert all(error.risk_level == RiskLevel.HIGH for error in context.validation_errors)
 
     def test_complex_query_parameter_detection(
         self, validator: ParameterStyleValidator, context: SQLProcessingContext, param_validator: ParameterValidator
@@ -247,14 +238,14 @@ class TestParameterStyleValidator:
         context.current_expression = parse_one(context.initial_sql_string)
         context.parameter_info = param_validator.extract_parameters(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        validator.process(context.current_expression, context)
 
-        assert result is not None
         # Should detect mixed styles if allow_mixed_parameter_styles is False
         if not context.config.allow_mixed_parameter_styles:
-            assert result.risk_level == RiskLevel.HIGH
+            assert len(context.validation_errors) > 0
+            assert context.validation_errors[0].risk_level == RiskLevel.HIGH
         else:
-            assert result.risk_level == RiskLevel.SKIP
+            assert len(context.validation_errors) == 0
 
     def test_target_style_suggestion(
         self, validator: ParameterStyleValidator, context: SQLProcessingContext, param_validator: ParameterValidator
@@ -270,8 +261,7 @@ class TestParameterStyleValidator:
 
         # Note: This is a feature suggestion - the actual implementation
         # might not include style suggestions, but it could be useful
-        _, result = validator.process(context)
+        validator.process(context.current_expression, context)
 
-        assert result is not None
         # Currently should pass, but could warn about non-preferred style
-        assert result.risk_level == RiskLevel.SKIP
+        assert len(context.validation_errors) == 0

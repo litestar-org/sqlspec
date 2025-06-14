@@ -5,7 +5,6 @@ from typing import Optional
 from sqlglot import parse_one
 from sqlglot.dialects import Dialect
 
-from sqlspec.exceptions import RiskLevel
 from sqlspec.statement.pipelines.context import SQLProcessingContext
 from sqlspec.statement.pipelines.transformers import ExpressionSimplifier, SimplificationConfig
 from sqlspec.statement.sql import SQLConfig

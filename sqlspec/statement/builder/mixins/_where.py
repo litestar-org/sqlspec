@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
-from sqlglot import exp
+from sqlglot import exp, parse_one
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
@@ -52,7 +52,7 @@ class WhereClauseMixin:
                 this=parse_column_expression(condition[0]), expression=exp.Placeholder(this=param_name)
             )
         else:
-            condition_expr = parse_condition_expression(condition)
+            condition_expr = parse_condition_expression(condition)  # type: ignore[assignment]
 
         # Use dialect if available for Delete
         if isinstance(builder._expression, exp.Delete):
@@ -114,9 +114,6 @@ class WhereClauseMixin:
             sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=getattr(self, "dialect_name", None))
         else:
             sub_expr = exp.maybe_parse(str(subquery), dialect=getattr(self, "dialect_name", None))
-        if not sub_expr:
-            msg = f"Could not parse subquery for EXISTS: {subquery}"
-            raise SQLBuilderError(msg)
         exists_expr = exp.Exists(this=sub_expr)
         return cast("Self", self.where(exists_expr))
 
@@ -131,9 +128,6 @@ class WhereClauseMixin:
             sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=getattr(self, "dialect_name", None))
         else:
             sub_expr = exp.maybe_parse(str(subquery), dialect=getattr(self, "dialect_name", None))
-        if not sub_expr:
-            msg = f"Could not parse subquery for NOT EXISTS: {subquery}"
-            raise SQLBuilderError(msg)
         not_exists_expr = exp.Not(this=exp.Exists(this=sub_expr))
         return cast("Self", self.where(not_exists_expr))
 
@@ -212,10 +206,8 @@ class WhereClauseMixin:
         if isinstance(values, str):
             # Try to parse as subquery expression with enhanced parsing
             try:
-                import sqlglot
-
                 # Parse as a subquery expression
-                parsed_expr = sqlglot.parse_one(values)
+                parsed_expr = parse_one(values)
                 if isinstance(parsed_expr, (exp.Select, exp.Union, exp.Subquery)):
                     subquery_exp = exp.paren(parsed_expr)
                     condition = exp.EQ(this=col_expr, expression=exp.Any(this=subquery_exp))
@@ -259,10 +251,8 @@ class WhereClauseMixin:
         if isinstance(values, str):
             # Try to parse as subquery expression with enhanced parsing
             try:
-                import sqlglot
-
                 # Parse as a subquery expression
-                parsed_expr = sqlglot.parse_one(values)
+                parsed_expr = parse_one(values)
                 if isinstance(parsed_expr, (exp.Select, exp.Union, exp.Subquery)):
                     subquery_exp = exp.paren(parsed_expr)
                     condition = exp.NEQ(this=col_expr, expression=exp.Any(this=subquery_exp))

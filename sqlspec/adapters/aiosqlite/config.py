@@ -51,8 +51,8 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
     is_async: ClassVar[bool] = True
     supports_connection_pooling: ClassVar[bool] = False
 
-    # Driver class reference for dialect resolution
-    driver_class: ClassVar[type[AiosqliteDriver]] = AiosqliteDriver
+    driver_type: type[AiosqliteDriver] = AiosqliteDriver
+    connection_type: type[AiosqliteConnection] = AiosqliteConnection
 
     # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "named_colon")
@@ -112,52 +112,6 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
         self.default_row_type = default_row_type
 
         super().__init__(instrumentation=instrumentation or InstrumentationConfig())
-
-    @property
-    def connection_type(self) -> type[AiosqliteConnection]:  # type: ignore[override]
-        """Return the connection type."""
-        return AiosqliteConnection
-
-    @property
-    def driver_type(self) -> type[AiosqliteDriver]:  # type: ignore[override]
-        """Return the driver type."""
-        return AiosqliteDriver
-
-    @classmethod
-    def from_connection_config(
-        cls,
-        connection_config: dict[str, Any],
-        statement_config: Optional[SQLConfig] = None,
-        instrumentation: Optional[InstrumentationConfig] = None,
-        default_row_type: type[DictRow] = DictRow,
-    ) -> "AiosqliteConfig":
-        """Create config from old-style connection_config dict for backward compatibility.
-
-        Args:
-            connection_config: Dictionary with connection parameters
-            statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
-            default_row_type: Default row type for results
-
-        Returns:
-            AiosqliteConfig instance
-        """
-        # Extract required database parameter
-        database = connection_config.get("database")
-        if database is None:
-            msg = "'database' parameter is required"
-            raise ImproperConfigurationError(msg)
-
-        # Create config with all parameters
-        return cls(
-            database=database,
-            statement_config=statement_config,
-            instrumentation=instrumentation,
-            default_row_type=default_row_type,
-            **{
-                k: v for k, v in connection_config.items() if k != "database"
-            },  # Other connection parameters go to direct fields or extras
-        )
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:

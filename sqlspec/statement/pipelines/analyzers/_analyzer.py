@@ -283,7 +283,7 @@ class StatementAnalyzer(ProcessorProtocol):
         issues = []
         cartesian_products = 0
         for select in expression.find_all(exp.Select):
-            if select.from_ and hasattr(select.from_, "expressions"):
+            if select.from_ and hasattr(select.from_, "expressions"):  # type: ignore[truthy-function]
                 from_expressions = getattr(select.from_, "expressions", [])
                 if len(from_expressions) > 1 and not list(select.args.get("joins", [])):
                     # Check if validation already flagged this specific type of implicit cartesian product
@@ -298,7 +298,7 @@ class StatementAnalyzer(ProcessorProtocol):
             if join_node.kind and join_node.kind.upper() == "CROSS":
                 issues.append("Explicit CROSS JOIN found, potential Cartesian product.")
                 cartesian_products += 1  # or a different counter for explicit cross joins
-            elif not join_node.on and not join_node.using:
+            elif not join_node.on and not join_node.using:  # type: ignore[truthy-function]
                 issues.append(f"JOIN without ON/USING clause found ({join_node.sql()}), potential Cartesian product.")
                 cartesian_products += 1
 
@@ -588,8 +588,6 @@ class StatementAnalyzer(ProcessorProtocol):
             operations.append("DROP")
         elif isinstance(expr, exp.Alter):
             operations.append("ALTER")
-
-        # Additional operations
         if expr.find(exp.Join):
             operations.append("JOIN")
         if expr.find(exp.Group):

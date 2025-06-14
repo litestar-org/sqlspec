@@ -342,16 +342,16 @@ class QueryBuilder(ABC, Generic[RowT]):
                     optimized = simplify(optimized.copy())
 
                 if self.optimize_predicates and isinstance(optimized, (exp.Select, exp.Update, exp.Delete)):
-                    optimized = pushdown_predicates(optimized.copy(), dialect=self.dialect_name)
+                    optimized = pushdown_predicates(optimized.copy(), dialect=self.dialect_name)  # type: ignore[no-untyped-call]
 
                 if self.optimize_joins and isinstance(optimized, exp.Select):
-                    optimized = optimize_joins(optimized.copy())
+                    optimized = optimize_joins(optimized.copy())  # type: ignore[no-untyped-call]
 
                 # Apply additional SQLGlot optimizations
                 if isinstance(optimized, exp.Select):
                     optimized = eliminate_subqueries(optimized.copy())
 
-                    optimized = unnest_subqueries(optimized.copy())
+                    optimized = unnest_subqueries(optimized.copy())  # type: ignore[no-untyped-call]
 
         except Exception as e:
             # Log optimization failure but continue with unoptimized query

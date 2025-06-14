@@ -116,8 +116,8 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     is_async: ClassVar[bool] = False
     supports_connection_pooling: ClassVar[bool] = False
 
-    # Driver class reference for dialect resolution
-    driver_class: ClassVar[type[BigQueryDriver]] = BigQueryDriver
+    driver_type: type[BigQueryDriver] = BigQueryDriver
+    connection_type: type[BigQueryConnection] = BigQueryConnection
 
     # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_at",)
@@ -291,16 +291,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         self._connection_instance: Optional[BigQueryConnection] = None
 
         super().__init__(instrumentation=instrumentation or InstrumentationConfig())
-
-    @property
-    def connection_type(self) -> type[BigQueryConnection]:  # type: ignore[override]
-        """Return the connection type."""
-        return BigQueryConnection
-
-    @property
-    def driver_type(self) -> type[BigQueryDriver]:  # type: ignore[override]
-        """Return the driver type."""
-        return BigQueryDriver
 
     def _setup_default_job_config(self) -> None:
         """Set up default job configuration based on connection settings."""

@@ -96,7 +96,7 @@ class TestOracleNumericParameters:
         stmt = SQL(sql, parameters={"1": 10, "2": 20, "name": "test", "3": 30})
 
         # Check raw SQL to see original parameters
-        assert ":1" in stmt._sql
-        assert ":2" in stmt._sql
-        assert ":name" in stmt._sql
-        assert ":3" in stmt._sql
+        assert ":1" in stmt._sql  # type: ignore[operator]
+        assert ":2" in stmt._sql  # type: ignore[operator]
+        assert ":name" in stmt._sql  # type: ignore[operator]
+        assert ":3" in stmt._sql  # type: ignore[operator]

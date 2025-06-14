@@ -169,8 +169,13 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
                 sql_upper = sql_statement.sql.strip().upper()
                 is_select = any(sql_upper.startswith(prefix) for prefix in ["SELECT", "WITH", "VALUES", "TABLE"])
             if is_select:
-                return await self._wrap_select_result(sql_statement, result, schema_type=schema_type, **kwargs)
-            return await self._wrap_execute_result(sql_statement, result, **kwargs)
+                # Type assertion: for SELECT queries, result must be SelectResultDict
+                return await self._wrap_select_result(
+                    sql_statement, cast("SelectResultDict", result), schema_type=schema_type, **kwargs
+                )
+            return await self._wrap_execute_result(
+                sql_statement, cast("Union[DMLResultDict, ScriptResultDict]", result), **kwargs
+            )
 
     async def execute_many(
         self,
@@ -196,7 +201,9 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
                 is_many=True,
                 **kwargs,
             )
-            return await self._wrap_execute_result(sql_statement, result, **kwargs)
+            return await self._wrap_execute_result(
+                sql_statement, cast("Union[DMLResultDict, ScriptResultDict]", result), **kwargs
+            )
 
     async def execute_script(
         self,

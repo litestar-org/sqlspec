@@ -9,9 +9,7 @@ Key Components:
 - `StatementPipeline`: The main orchestrator for executing the processing stages.
 - `ProcessorProtocol`: The base protocol for all pipeline components (transformers,
   validators, analyzers).
-- `ValidationResult`: Standardized result from validation components.
-- `ValidationIssue`: Represents a single issue found during validation (to be defined,
-  likely in `validators.base` or `base`).
+- `ValidationError`: Represents a single issue found during validation.
 """
 
 from sqlspec.statement.pipelines import analyzers, transformers, validators
@@ -19,7 +17,6 @@ from sqlspec.statement.pipelines.analyzers import StatementAnalysis, StatementAn
 from sqlspec.statement.pipelines.base import ProcessorProtocol, SQLValidator, StatementPipeline
 from sqlspec.statement.pipelines.context import PipelineResult, SQLProcessingContext
 from sqlspec.statement.pipelines.result_types import AnalysisFinding, TransformationLog, ValidationError
-from sqlspec.statement.pipelines.results import ValidationResult
 from sqlspec.statement.pipelines.transformers import (
     CommentRemover,
     ExpressionSimplifier,
@@ -63,7 +60,6 @@ __all__ = (
     "StatementPipeline",
     "TransformationLog",
     "ValidationError",
-    "ValidationResult",
     # Module exports
     "analyzers",
     "transformers",

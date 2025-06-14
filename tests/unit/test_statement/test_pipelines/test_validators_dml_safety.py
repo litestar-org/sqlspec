@@ -65,7 +65,7 @@ class TestDMLSafetyValidator:
         context.current_expression = parse_one(context.initial_sql_string)
 
         # Process returns the expression, validation errors are in context
-        expression = validator.process(context.current_expression, context)
+        validator.process(context.current_expression, context)
 
         assert len(context.validation_errors) == 1
         error = context.validation_errors[0]
@@ -81,7 +81,7 @@ class TestDMLSafetyValidator:
         context.current_expression = parse_one(context.initial_sql_string)
 
         # Process returns the expression, validation errors are in context
-        expression = validator.process(context.current_expression, context)
+        validator.process(context.current_expression, context)
 
         # No validation errors should be added when DDL is allowed
         assert len(context.validation_errors) == 0
@@ -96,7 +96,7 @@ class TestDMLSafetyValidator:
         context.current_expression = parse_one(context.initial_sql_string)
 
         # Process returns the expression, validation errors are in context
-        expression = validator.process(context.current_expression, context)
+        validator.process(context.current_expression, context)
 
         assert len(context.validation_errors) == 1
         error = context.validation_errors[0]
@@ -136,7 +136,7 @@ class TestDMLSafetyValidator:
         context.current_expression = parse_one(context.initial_sql_string)
 
         # Process returns the expression, validation errors are in context
-        expression = validator.process(context.current_expression, context)
+        validator.process(context.current_expression, context)
 
         assert len(context.validation_errors) == 1
         error = context.validation_errors[0]
@@ -152,7 +152,7 @@ class TestDMLSafetyValidator:
         context.current_expression = parse_one(context.initial_sql_string)
 
         # Process returns the expression, validation errors are in context
-        expression = validator.process(context.current_expression, context)
+        validator.process(context.current_expression, context)
 
         assert len(context.validation_errors) == 1
         error = context.validation_errors[0]
@@ -168,11 +168,11 @@ class TestDMLSafetyValidator:
         context.initial_sql_string = "CREATE TABLE test (id INT)"
         context.current_expression = parse_one(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.CRITICAL
-        assert len(result.issues) >= 1
+        # Check errors were added to context
+        assert len(context.validation_errors) >= 1
+        assert context.risk_level == RiskLevel.CRITICAL
 
     def test_safe_dml_with_where(self, context: SQLProcessingContext) -> None:
         """Test that DML with WHERE clause is considered safe."""
@@ -182,10 +182,11 @@ class TestDMLSafetyValidator:
         context.initial_sql_string = "DELETE FROM users WHERE id = 1"
         context.current_expression = parse_one(context.initial_sql_string)
 
-        _, result = validator.process(context)
+        validator.process(context.current_expression, context)
 
-        assert result is not None
-        assert result.risk_level == RiskLevel.SKIP  # No issues found
+        # Check no errors were added to context (safe DML with WHERE)
+        assert len(context.validation_errors) == 0
+        assert context.risk_level == RiskLevel.SAFE
 
     def test_complex_query_categorization(self, validator: DMLSafetyValidator, context: SQLProcessingContext) -> None:
         """Test categorization of complex queries with multiple statement types."""

@@ -112,8 +112,8 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
     is_async: ClassVar[bool] = False
     supports_connection_pooling: ClassVar[bool] = True
 
-    # Driver class reference for dialect resolution
-    driver_class: ClassVar[type[OracleSyncDriver]] = OracleSyncDriver
+    driver_type: type[OracleSyncDriver] = OracleSyncDriver
+    connection_type: type[OracleSyncConnection] = OracleSyncConnection
 
     # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_colon", "numeric")
@@ -243,17 +243,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
 
         super().__init__(instrumentation=instrumentation or InstrumentationConfig())
 
-    @property
-    def connection_type(self) -> type[OracleSyncConnection]:  # type: ignore[override]
-        """Return the connection type."""
-
-        return oracledb.Connection
-
-    @property
-    def driver_type(self) -> type[OracleSyncDriver]:  # type: ignore[override]
-        """Return the driver type."""
-        return OracleSyncDriver
-
     def _create_pool(self) -> "ConnectionPool":
         """Create the actual connection pool."""
 
@@ -271,9 +260,9 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
             An Oracle Connection instance.
         """
         with instrument_operation(self, "oracle_create_connection", "database"):
-            import oracledb
-
-            return oracledb.connect(**self.connection_config_dict)
+            if self.pool_instance is None:
+                self.pool_instance = self.create_pool()
+            return self.pool_instance.acquire()
 
     @contextlib.contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[OracleSyncConnection, None, None]":
@@ -286,18 +275,13 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         Yields:
             An Oracle Connection instance.
         """
-        if self.pool_instance:
-            conn = self.pool_instance.acquire()
-            try:
-                yield conn
-            finally:
-                self.pool_instance.release(conn)
-        else:
-            conn = self.create_connection()
-            try:
-                yield conn
-            finally:
-                conn.close()
+        if self.pool_instance is None:
+            self.pool_instance = self.create_pool()
+        conn = self.pool_instance.acquire()
+        try:
+            yield conn
+        finally:
+            self.pool_instance.release(conn)
 
     @contextlib.contextmanager
     def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[OracleSyncDriver, None, None]":
@@ -334,41 +318,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         if not self.pool_instance:
             self.pool_instance = self.create_pool()
         return self.pool_instance
-
-    @classmethod
-    def from_pool_config(
-        cls,
-        pool_config: dict[str, Any],
-        connection_config: Optional[dict[str, Any]] = None,
-        statement_config: "Optional[SQLConfig]" = None,
-        instrumentation: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
-    ) -> "OracleSyncConfig":
-        """Create config from old-style pool_config and connection_config dicts for backward compatibility.
-
-        Args:
-            pool_config: Dictionary with pool and connection parameters
-            connection_config: Dictionary with additional connection parameters
-            statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
-            default_row_type: Default row type for results
-
-        Returns:
-            OracleSyncConfig instance
-        """
-        # Merge connection_config into pool_config (pool_config takes precedence)
-        merged_config = {}
-        if connection_config:
-            merged_config.update(connection_config)
-        merged_config.update(pool_config)
-
-        # Create config with all parameters
-        return cls(
-            statement_config=statement_config,
-            instrumentation=instrumentation,
-            default_row_type=default_row_type,
-            **merged_config,  # All connection and pool parameters go to direct fields or extras
-        )
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
@@ -448,8 +397,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
     is_async: ClassVar[bool] = True
     supports_connection_pooling: ClassVar[bool] = True
 
-    # Driver class reference for dialect resolution
-    driver_class: ClassVar[type[OracleAsyncDriver]] = OracleAsyncDriver
+    connection_type: type[OracleAsyncConnection] = OracleAsyncConnection
+    driver_type: type[OracleAsyncDriver] = OracleAsyncDriver
 
     # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_colon", "numeric")
@@ -580,52 +529,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         super().__init__(instrumentation=instrumentation or InstrumentationConfig())
 
     @property
-    def connection_type(self) -> type[OracleAsyncConnection]:  # type: ignore[override]
-        """Return the connection type."""
-
-        return oracledb.AsyncConnection
-
-    @property
-    def driver_type(self) -> type[OracleAsyncDriver]:  # type: ignore[override]
-        """Return the driver type."""
-        return OracleAsyncDriver
-
-    @classmethod
-    def from_pool_config(
-        cls,
-        pool_config: dict[str, Any],
-        connection_config: Optional[dict[str, Any]] = None,
-        statement_config: "Optional[SQLConfig]" = None,
-        instrumentation: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
-    ) -> "OracleAsyncConfig":
-        """Create config from old-style pool_config and connection_config dicts for backward compatibility.
-
-        Args:
-            pool_config: Dictionary with pool and connection parameters
-            connection_config: Dictionary with additional connection parameters
-            statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
-            default_row_type: Default row type for results
-
-        Returns:
-            OracleAsyncConfig instance
-        """
-        # Merge connection_config into pool_config (pool_config takes precedence)
-        merged_config = {}
-        if connection_config:
-            merged_config.update(connection_config)
-        merged_config.update(pool_config)
-
-        # Create config with all parameters
-        return cls(
-            statement_config=statement_config,
-            instrumentation=instrumentation,
-            default_row_type=default_row_type,
-            **merged_config,  # All connection and pool parameters go to direct fields or extras
-        )
-
-    @property
     def connection_config_dict(self) -> dict[str, Any]:
         """Return the connection configuration as a dict for Oracle async operations.
 
@@ -670,9 +573,9 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
             An Oracle AsyncConnection instance.
         """
         async with instrument_operation_async(self, "oracle_async_create_connection", "database"):
-            import oracledb
-
-            return await oracledb.connect_async(**self.connection_config_dict)  # type: ignore[no-any-return]
+            if self.pool_instance is None:
+                self.pool_instance = await self.create_pool()
+            return await self.pool_instance.acquire()
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[OracleAsyncConnection, None]:
@@ -685,18 +588,13 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         Yields:
             An Oracle AsyncConnection instance.
         """
-        if self.pool_instance:
-            conn = await self.pool_instance.acquire()
-            try:
-                yield conn
-            finally:
-                await self.pool_instance.release(conn)
-        else:
-            conn = await self.create_connection()
-            try:
-                yield conn
-            finally:
-                await conn.close()
+        if self.pool_instance is None:
+            self.pool_instance = await self.create_pool()
+        conn = await self.pool_instance.acquire()
+        try:
+            yield conn
+        finally:
+            await self.pool_instance.release(conn)
 
     @asynccontextmanager
     async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[OracleAsyncDriver, None]:

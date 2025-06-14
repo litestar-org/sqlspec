@@ -16,7 +16,6 @@ from typing_extensions import TypeVar
 from sqlspec.exceptions import RiskLevel, SQLValidationError
 from sqlspec.statement.pipelines.context import PipelineResult
 from sqlspec.statement.pipelines.result_types import ValidationError
-from sqlspec.statement.pipelines.results import ValidationResult
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 
@@ -29,7 +28,7 @@ if TYPE_CHECKING:
     from sqlspec.statement.sql import SQLConfig, Statement
 
 
-__all__ = ("ProcessorProtocol", "SQLValidator", "StatementPipeline", "UsesExpression", "ValidationResult")
+__all__ = ("ProcessorProtocol", "SQLValidator", "StatementPipeline", "UsesExpression")
 
 
 logger = get_logger("pipelines")
@@ -66,19 +65,17 @@ class UsesExpression:
             expr = statement.expression
             if expr is not None:
                 return expr
-            # If SQL object has no expression (e.g. parsing disabled), parse its .sql string
             return sqlglot.parse_one(statement.sql, read=dialect)
 
         # Assuming statement is str hereafter
         sql_str = str(statement)
         if not sql_str or not sql_str.strip():
-            return exp.Select()  # Return a neutral, empty expression for empty strings
+            return exp.Select()
 
         try:
             return sqlglot.parse_one(sql_str, read=dialect)
         except SQLGlotParseError as e:
             msg = f"SQL parsing failed: {e}"
-            # Provide context (sql_str, risk_level) for the error
             raise SQLValidationError(msg, sql_str, RiskLevel.HIGH) from e
 
 
@@ -118,11 +115,8 @@ class StatementPipeline:
         if context.current_expression is None:
             if context.config.enable_parsing:
                 try:
-                    # Parsing is the first implicit step if no expression is in context
                     context.current_expression = sqlglot.parse_one(context.initial_sql_string, dialect=context.dialect)
                 except Exception as e:
-                    # Add parsing error to context
-
                     error = ValidationError(
                         message=f"SQL Parsing Error: {e}",
                         code="parsing-error",
@@ -249,28 +243,38 @@ class SQLValidator(ProcessorProtocol, UsesExpression):
         self._run_validators(expression, context)
         return expression
 
+    @staticmethod
+    def _validate_safely(
+        validator_instance: "ProcessorProtocol", expression: "exp.Expression", context: "SQLProcessingContext"
+    ) -> None:
+        try:
+            validator_instance.process(expression, context)
+        except Exception as e:
+            # Add error to context
+
+            error = ValidationError(
+                message=f"Validator {validator_instance.__class__.__name__} error: {e}",
+                code="validator-error",
+                risk_level=RiskLevel.CRITICAL,
+                processor=validator_instance.__class__.__name__,
+                expression=expression,
+            )
+            context.validation_errors.append(error)
+            logger.warning("Individual validator %s failed: %s", validator_instance.__class__.__name__, e)
+
     def _run_validators(self, expression: "exp.Expression", context: "SQLProcessingContext") -> None:
         """Run all validators and handle exceptions."""
         for validator_instance in self.validators:
-            try:
-                validator_instance.process(expression, context)
-            except Exception as e:
-                # Add error to context
-
-                error = ValidationError(
-                    message=f"Validator {validator_instance.__class__.__name__} error: {e}",
-                    code="validator-error",
-                    risk_level=RiskLevel.CRITICAL,
-                    processor=validator_instance.__class__.__name__,
-                    expression=expression,
-                )
-                context.validation_errors.append(error)
-                logger.warning("Individual validator %s failed: %s", validator_instance.__class__.__name__, e)
+            self._validate_safely(validator_instance, expression, context)
 
     def validate(
         self, sql: "Statement", dialect: "DialectType", config: "Optional[SQLConfig]" = None
-    ) -> "ValidationResult":
-        """Convenience method to validate a raw SQL string or expression."""
+    ) -> "list[ValidationError]":
+        """Convenience method to validate a raw SQL string or expression.
+
+        Returns:
+            List of ValidationError objects found during validation.
+        """
         from sqlspec.statement.pipelines.context import SQLProcessingContext  # Local import for context
         from sqlspec.statement.sql import SQLConfig  # Local import for SQL.to_expression
 
@@ -297,11 +301,5 @@ class SQLValidator(ProcessorProtocol, UsesExpression):
 
         self.process(expression_to_validate, validation_context)
 
-        # Convert context errors to legacy ValidationResult
-        if validation_context.validation_errors:
-            return ValidationResult(
-                is_safe=False,
-                risk_level=validation_context.risk_level,
-                issues=[error.message for error in validation_context.validation_errors],
-            )
-        return ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
+        # Return the list of validation errors
+        return list(validation_context.validation_errors)

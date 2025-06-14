@@ -4,12 +4,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from sqlspec.exceptions import RiskLevel, SQLValidationError
 from sqlspec.statement.filters import LimitOffsetFilter
 from sqlspec.statement.parameters import ParameterInfo, ParameterStyle
-from sqlspec.statement.pipelines.base import ValidationResult
 from sqlspec.statement.pipelines.context import PipelineResult, SQLProcessingContext
-from sqlspec.statement.pipelines.result_types import ValidationError
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -203,118 +200,6 @@ class TestSQLHelperMethods:
         SQL._merge_extracted_parameters(pipeline_result, context)
 
         assert pipeline_result.context.merged_parameters == [1, 2]
-
-    def test_run_validation_only(self, sql_instance: SQL) -> None:
-        """Skip this test for now."""
-        pytest.skip("Internal method test - needs refactoring")
-        """Test _run_validation_only method."""
-        context = sql_instance._prepare_processing_context()
-        context.current_expression = Mock()
-
-        mock_validator = Mock()
-        mock_validation_result = ValidationResult(
-            is_safe=False, risk_level=RiskLevel.LOW, issues=["Test issue"], warnings=[]
-        )
-        mock_validator.process.return_value = mock_validation_result
-
-        with patch.object(sql_instance._config, "get_validators", return_value=[mock_validator]):
-            result = sql_instance._run_validation_only(context, "SELECT 1")
-
-            assert result.final_expression is not None
-            assert result.merged_parameters == []
-            assert result.validation_result == mock_validation_result
-
-    def test_create_disabled_result(self, sql_instance: SQL) -> None:
-        """Skip this test for now."""
-        pytest.skip("Internal method test - needs refactoring")
-        """Test _create_disabled_result method."""
-        result = sql_instance._create_disabled_result("SELECT 1", {"id": 1})
-
-        assert result.final_expression is None
-        assert result.merged_parameters == {"id": 1}
-        assert result.validation_result.risk_level == RiskLevel.SKIP
-        assert result.analysis_result is None
-
-    def test_build_processed_state_safe(self, sql_instance: SQL) -> None:
-        """Skip this test for now."""
-        pytest.skip("Internal method test - needs refactoring")
-        """Test _build_processed_state with safe SQL."""
-        mock_context = SQLProcessingContext(
-            initial_sql_string="SELECT * FROM users WHERE id = ?",
-            dialect=None,
-            config=SQLConfig(strict_mode=True),
-            current_expression=Mock(),
-            merged_parameters=[1],
-            parameter_info=[],
-            input_sql_had_placeholders=False,
-        )
-        mock_context.validation_errors = []  # No errors means safe
-        pipeline_result = PipelineResult(expression=Mock(), context=mock_context)
-
-        state = sql_instance._build_processed_state(pipeline_result, SQLConfig(strict_mode=True))
-
-        assert state["_is_safe"] is True
-        assert state["_final_parameters"] == [1]
-
-    def test_build_processed_state_unsafe_strict(self, sql_instance: SQL) -> None:
-        """Skip this test for now."""
-        pytest.skip("Internal method test - needs refactoring")
-        """Test _build_processed_state with unsafe SQL in strict mode."""
-        mock_context = SQLProcessingContext(
-            initial_sql_string="SELECT * FROM users WHERE id = ?",
-            dialect=None,
-            config=SQLConfig(strict_mode=True),
-            current_expression=Mock(),
-            merged_parameters=[1],
-            parameter_info=[],
-            input_sql_had_placeholders=False,
-        )
-        # Add validation errors to indicate unsafe
-        mock_context.validation_errors = [
-            ValidationError(
-                message="SQL injection detected",
-                code="sql-injection",
-                risk_level=RiskLevel.HIGH,
-                processor="test",
-                expression=None,
-            )
-        ]
-        pipeline_result = PipelineResult(expression=Mock(), context=mock_context)
-
-        with pytest.raises(SQLValidationError) as exc_info:
-            sql_instance._build_processed_state(pipeline_result, SQLConfig(strict_mode=True))
-
-        assert "SQL validation failed" in str(exc_info.value)
-
-    def test_build_processed_state_unsafe_non_strict(self, sql_instance: SQL) -> None:
-        """Skip this test for now."""
-        pytest.skip("Internal method test - needs refactoring")
-        """Test _build_processed_state with unsafe SQL in non-strict mode."""
-        mock_context = SQLProcessingContext(
-            initial_sql_string="SELECT * FROM users WHERE id = ?",
-            dialect=None,
-            config=SQLConfig(strict_mode=False),
-            current_expression=Mock(),
-            merged_parameters=[1],
-            parameter_info=[],
-            input_sql_had_placeholders=False,
-        )
-        # Add validation errors to indicate unsafe
-        mock_context.validation_errors = [
-            ValidationError(
-                message="SQL injection detected",
-                code="sql-injection",
-                risk_level=RiskLevel.HIGH,
-                processor="test",
-                expression=None,
-            )
-        ]
-        pipeline_result = PipelineResult(expression=Mock(), context=mock_context)
-
-        state = sql_instance._build_processed_state(pipeline_result, SQLConfig(strict_mode=False))
-
-        assert state["_is_safe"] is False
-        assert state["_final_parameters"] == [1]
 
     def test_ensure_processed_full_flow(self, config: SQLConfig) -> None:
         """Test the full _ensure_processed flow."""

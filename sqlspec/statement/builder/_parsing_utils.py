@@ -6,11 +6,11 @@ that users might pass as strings to various builder methods.
 
 from typing import Any, Optional, Union, cast
 
-from sqlglot import exp
+from sqlglot import exp, maybe_parse, parse_one
 
 from sqlspec.utils.logging import get_logger
 
-logger = get_logger(__name__)
+logger = get_logger("sqlspec")
 
 
 def parse_column_expression(column_input: Union[str, exp.Expression]) -> exp.Expression:
@@ -37,10 +37,8 @@ def parse_column_expression(column_input: Union[str, exp.Expression]) -> exp.Exp
 def parse_table_expression(table_input: str, explicit_alias: Optional[str] = None) -> exp.Expression:
     """Parses a table string that can be a name, a name with an alias, or a subquery string."""
     try:
-        import sqlglot
-
         # Wrapping in a SELECT statement is a robust way to parse various table-like syntaxes
-        parsed = sqlglot.parse_one(f"SELECT * FROM {table_input}")
+        parsed = parse_one(f"SELECT * FROM {table_input}")
         if isinstance(parsed, exp.Select) and parsed.args.get("from"):
             from_clause = cast("exp.From", parsed.args.get("from"))
             table_expr = from_clause.this
@@ -75,10 +73,7 @@ def parse_order_expression(order_input: Union[str, exp.Expression]) -> exp.Expre
         return order_input
 
     try:
-        # Use sqlglot's direct parser for Ordered expressions
-        import sqlglot
-
-        parsed = sqlglot.parse_one(str(order_input), into=exp.Ordered)
+        parsed = maybe_parse(str(order_input), into=exp.Ordered)
         if parsed:
             return parsed
     except Exception:

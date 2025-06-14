@@ -153,9 +153,12 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
     is_async: "ClassVar[bool]" = field(init=False, default=False)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
-    connection_type: "type[ConnectionT]" = field(init=False)
+    supports_native_arrow_import: "ClassVar[bool]" = field(init=False, default=False)
+    supports_native_arrow_export: "ClassVar[bool]" = field(init=False, default=False)
+    supports_native_parquet_import: "ClassVar[bool]" = field(init=False, default=False)
+    supports_native_parquet_export: "ClassVar[bool]" = field(init=False, default=False)
+    connection_type: "type[ConnectionT]" = field(init=False, repr=False, hash=False, compare=False)
     driver_type: "type[DriverT]" = field(init=False, repr=False, hash=False, compare=False)
-    driver_class: "ClassVar[type[DriverT]]" = field(init=False, repr=False, hash=False, compare=False)  # type: ignore[misc]
     pool_instance: "Optional[PoolT]" = field(default=None)
     instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
     default_row_type: "type[Any]" = field(init=False)
@@ -197,7 +200,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             The SQL dialect type.
         """
         # Get dialect from driver_class (all drivers must have a dialect attribute)
-        return cast("DialectType", self.driver_class.dialect)
+        return cast("DialectType", self.driver_type.dialect)
 
     @abstractmethod
     def create_connection(self) -> "Union[ConnectionT, Awaitable[ConnectionT]]":

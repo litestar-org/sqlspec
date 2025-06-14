@@ -498,10 +498,7 @@ class AdbcDriver(
 
             # Handle different modes
             if mode == "replace":
-                # Truncate table first
-                from sqlspec.statement.sql import SQL
-
-                self.execute(SQL(f"DELETE FROM {target_table}"))
+                self.execute(SQL(f"TRUNCATE TABLE {target_table}"))
             elif mode == "create":
                 # For create mode, we would need to infer schema and create table
                 # This is complex, so for now just treat as append

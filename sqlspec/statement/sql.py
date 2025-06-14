@@ -35,7 +35,6 @@ from sqlspec.exceptions import (
 # Updated imports for pipeline components
 from sqlspec.statement.filters import StatementFilter, apply_filter
 from sqlspec.statement.parameters import ParameterConverter, ParameterStyle, ParameterValidator
-from sqlspec.statement.pipelines import ValidationResult
 from sqlspec.statement.pipelines.base import StatementPipeline
 from sqlspec.statement.pipelines.context import PipelineResult, SQLProcessingContext
 from sqlspec.statement.pipelines.result_types import ValidationError
@@ -689,79 +688,12 @@ class SQL:
 
         return sql, params
 
-    def validate(self) -> "ValidationResult":
-        """Perform validation on the statement, update the internal validation result,
-        and raise SQLValidationError if the configuration and result warrant it.
-        The validation is run if not already cached or if cache is considered stale
-        (e.g., after filters have been applied).
+    def validate(self) -> "list[ValidationError]":
+        """Validate the SQL statement using configured validators.
 
         .. note::
             Consider using the `is_safe`, `has_errors`, or `validation_errors` properties
-            directly instead of calling validate() and checking the returned ValidationResult.
-
-        Returns:
-            The ValidationResult instance.
-        """
-        if not self._config.enable_validation:
-            if self.validation_result is None:
-                return ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
-            return self.validation_result or ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
-        if self.validation_result is not None:
-            self._check_and_raise_for_strict_mode()
-            return self.validation_result or ValidationResult(is_safe=True, risk_level=RiskLevel.SKIP)
-        if self._config.enable_parsing and self.expression is not None:
-            from sqlspec.statement.pipelines.context import SQLProcessingContext
-
-            validator_only_pipeline = self._get_validation_only_pipeline()
-            pipeline_result = validator_only_pipeline.execute_pipeline(
-                SQLProcessingContext(
-                    initial_sql_string=str(self.expression),
-                    dialect=self._dialect,
-                    config=self._config,
-                    current_expression=self.expression,
-                )
-            )
-            # Convert context errors to ValidationResult for backward compatibility
-            if pipeline_result.context.validation_errors:
-                return ValidationResult(
-                    is_safe=False,
-                    risk_level=pipeline_result.context.risk_level,
-                    issues=[error.message for error in pipeline_result.context.validation_errors],
-                )
-            return ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
-        if self._config.enable_parsing and self.expression is None:
-            try:
-                parsed_expr = self.to_expression(self.sql, self._dialect)
-                from sqlspec.statement.pipelines.context import SQLProcessingContext
-
-                validator_only_pipeline = self._get_validation_only_pipeline()
-                pipeline_result = validator_only_pipeline.execute_pipeline(
-                    SQLProcessingContext(
-                        initial_sql_string=self.sql,
-                        dialect=self._dialect,
-                        config=self._config,
-                        current_expression=parsed_expr,
-                    )
-                )
-                # Convert context errors to ValidationResult for backward compatibility
-                if pipeline_result.context.validation_errors:
-                    return ValidationResult(
-                        is_safe=False,
-                        risk_level=pipeline_result.context.risk_level,
-                        issues=[error.message for error in pipeline_result.context.validation_errors],
-                    )
-                return ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
-            except SQLValidationError as e:
-                return ValidationResult(is_safe=False, risk_level=RiskLevel.HIGH, issues=[str(e)])
-        else:
-            validator = _default_validator()
-            return validator.validate(self.sql, self._dialect, self.config)
-
-    def validate_detailed(self) -> "list[ValidationError]":
-        """Validate SQL and return detailed validation errors.
-
-        This method provides a modern alternative to the validate() method,
-        returning typed ValidationError objects directly instead of a ValidationResult.
+            directly instead of calling validate().
 
         Returns:
             List of ValidationError objects containing detailed information about
@@ -769,7 +701,7 @@ class SQL:
 
         Example:
             >>> sql = SQL("DROP TABLE users")
-            >>> errors = sql.validate_detailed()
+            >>> errors = sql.validate()
             >>> for error in errors:
             ...     print(
             ...         f"{error.code}: {error.message} (risk: {error.risk_level})"
@@ -1401,11 +1333,9 @@ class SQL:
             A new SQL instance with is_many=True and the provided parameters.
 
         Example:
-            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many([
-            ...     ["John"],
-            ...     ["Jane"],
-            ...     ["Bob"],
-            ... ])
+            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many(
+            ...     [["John"], ["Jane"], ["Bob"]]
+            ... )
             >>> # This creates a statement ready for executemany with 3 parameter sets
         """
         # Use provided parameters or keep existing ones (use _raw_parameters to avoid validation)
@@ -1430,7 +1360,6 @@ class SQL:
             transformed_expression=None,
             final_parameter_info=[],
             final_merged_parameters=many_parameters,
-            validation_result=None,
             validation_errors=[],
             has_validation_errors=False,
             validation_risk_level=RiskLevel.SAFE,
@@ -1485,7 +1414,6 @@ class SQL:
                 "_parsed_expression": processed.transformed_expression or processed.initial_expression,
                 "_parameter_info": processed.final_parameter_info,
                 "_merged_parameters": processed.final_merged_parameters,
-                "_validation_result": processed.validation_result,
                 "_builder_result_type": self._builder_result_type,
                 "_analysis_result": processed.analysis_result,
                 "_is_many": False,
@@ -1502,7 +1430,6 @@ class SQL:
             "_parsed_expression": self.expression,
             "_parameter_info": self.parameter_info,
             "_merged_parameters": self.parameters,
-            "_validation_result": self.validation_result,
             "_builder_result_type": self._builder_result_type,
             "_analysis_result": self.analysis_result,
             "_is_many": self._is_many,
@@ -1641,7 +1568,6 @@ class SQL:
                 return initial_expression
         except SQLValidationError as e:
             # Create failed state for validation errors during parsing
-            validation_result = ValidationResult(is_safe=False, risk_level=e.risk_level, issues=[str(e)])
             # Create a ValidationError for the parsing failure
             parsing_error = ValidationError(
                 message=str(e),
@@ -1657,7 +1583,6 @@ class SQL:
                 transformed_expression=None,
                 final_parameter_info=context.parameter_info,
                 final_merged_parameters=context.merged_parameters,
-                validation_result=validation_result,
                 validation_errors=[parsing_error],
                 has_validation_errors=True,
                 validation_risk_level=e.risk_level,
@@ -1706,21 +1631,11 @@ class SQL:
         """Run validation when parsing is disabled but validation is enabled."""
         with wrap_exceptions(suppress=(AttributeError, TypeError)):
             default_validator = _default_validator()
-            validation_result = default_validator.validate(context.initial_sql_string, self._dialect, self._config)
+            validation_errors = default_validator.validate(context.initial_sql_string, self._dialect, self._config)
 
-        # Legacy validation result handling - convert to context errors
-        if validation_result is not None and not validation_result.is_safe:
-            from sqlspec.statement.pipelines.result_types import ValidationError as ValError
-
-            for issue in validation_result.issues:
-                error = ValError(
-                    message=issue,
-                    code="legacy-validation",
-                    risk_level=validation_result.risk_level,
-                    processor="LegacyValidator",
-                    expression=None,
-                )
-                context.validation_errors.append(error)
+        # Add validation errors to context
+        if validation_errors:
+            context.validation_errors.extend(validation_errors)
 
         return PipelineResult(
             expression=exp.Select(),  # Default empty expression since no parsing
@@ -1749,21 +1664,6 @@ class SQL:
 
         # Determine risk level - SKIP if validation disabled, otherwise from context
         validation_risk_level = RiskLevel.SKIP if not self._config.enable_validation else final_context.risk_level
-        # Create ValidationResult from context errors for backward compatibility
-        validation_result = None
-        if validation_errors:
-            validation_result = ValidationResult(
-                is_safe=not has_validation_errors,
-                risk_level=validation_risk_level,
-                issues=[error.message for error in validation_errors],
-            )
-        else:
-            # When validation is disabled or no errors, use SKIP level
-            validation_result = ValidationResult(
-                is_safe=True,
-                risk_level=RiskLevel.SKIP if not self._config.enable_validation else RiskLevel.SAFE,
-                issues=[],
-            )
 
         # When parsing is disabled, don't store a transformed expression
         # For empty input strings, we want to keep the empty SELECT
@@ -1789,7 +1689,6 @@ class SQL:
             transformed_expression=transformed_expr,
             final_parameter_info=final_context.parameter_info,
             final_merged_parameters=final_context.merged_parameters,
-            validation_result=validation_result,
             validation_errors=validation_errors,
             has_validation_errors=has_validation_errors,
             validation_risk_level=validation_risk_level,

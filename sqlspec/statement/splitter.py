@@ -29,7 +29,7 @@ __all__ = (
 )
 
 
-logger = get_logger(__name__)
+logger = get_logger("sqlspec")
 
 
 class TokenType(Enum):

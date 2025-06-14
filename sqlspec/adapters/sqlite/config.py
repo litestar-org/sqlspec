@@ -11,7 +11,7 @@ from litestar.exceptions import ImproperlyConfiguredException
 from sqlspec.adapters.sqlite.driver import SqliteConnection, SqliteDriver
 from sqlspec.config import InstrumentationConfig, NoPoolSyncConfig
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow, Empty
+from sqlspec.typing import DictRow
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -54,9 +54,8 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
     is_async: ClassVar[bool] = False
     supports_connection_pooling: ClassVar[bool] = False
 
-    # Driver class reference for dialect resolution
-    driver_class: ClassVar[type[SqliteDriver]] = SqliteDriver
-
+    driver_type: type[SqliteDriver] = SqliteDriver
+    connection_type: type[SqliteConnection] = SqliteConnection
     # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "named_colon")
     """SQLite supports ? (qmark) and :name (named_colon) parameter styles."""
@@ -153,34 +152,6 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
             default_row_type=default_row_type,
             **connection_config,  # All other parameters go to extras
         )
-
-    @property
-    def connection_type(self) -> type[SqliteConnection]:  # type: ignore[override]
-        """Return the connection type."""
-        return SqliteConnection
-
-    @property
-    def driver_type(self) -> type[SqliteDriver]:  # type: ignore[override]
-        """Return the driver type."""
-        return SqliteDriver
-
-    @property
-    def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict for sqlite3.connect().
-
-        Gathers instance attributes and merges any extras parameters.
-        """
-        # Gather non-None connection parameters
-        config = {
-            field: getattr(self, field)
-            for field in CONNECTION_FIELDS
-            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
-        }
-
-        # Merge extras parameters
-        config.update(self.extras)
-
-        return config
 
     def create_connection(self) -> SqliteConnection:
         """Create and return a SQLite connection."""

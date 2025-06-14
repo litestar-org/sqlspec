@@ -119,9 +119,8 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     is_async: ClassVar[bool] = True
     supports_connection_pooling: ClassVar[bool] = True
 
-    # Driver class reference for dialect resolution
-    driver_class: ClassVar[type[PsqlpyDriver]] = PsqlpyDriver
-
+    driver_type: type[PsqlpyDriver] = PsqlpyDriver
+    connection_type: type[PsqlpyConnection] = PsqlpyConnection
     # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("numeric",)
     """Psqlpy only supports $1, $2, ... (numeric) parameter style."""
@@ -289,51 +288,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
         super().__init__(
             instrumentation=instrumentation or InstrumentationConfig()  # pyright: ignore
-        )
-
-    @property
-    def connection_type(self) -> type[ConnectionPool]:  # type: ignore[override]
-        """Return the connection type."""
-        return ConnectionPool
-
-    @property
-    def driver_type(self) -> type[PsqlpyDriver]:  # type: ignore[override]
-        """Return the driver type."""
-        return PsqlpyDriver
-
-    @classmethod
-    def from_pool_config(
-        cls,
-        pool_config: dict[str, Any],
-        connection_config: Optional[dict[str, Any]] = None,
-        statement_config: Optional[SQLConfig] = None,
-        instrumentation: Optional[InstrumentationConfig] = None,
-        default_row_type: type[DictRow] = DictRow,
-    ) -> "PsqlpyConfig":
-        """Create config from old-style pool_config and connection_config dicts for backward compatibility.
-
-        Args:
-            pool_config: Dictionary with pool and connection parameters
-            connection_config: Dictionary with additional connection parameters
-            statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
-            default_row_type: Default row type for results
-
-        Returns:
-            PsqlpyConfig instance
-        """
-        # Merge connection_config into pool_config (pool_config takes precedence)
-        merged_config = {}
-        if connection_config:
-            merged_config.update(connection_config)
-        merged_config.update(pool_config)
-
-        # Create config with all parameters
-        return cls(
-            statement_config=statement_config,
-            instrumentation=instrumentation,
-            default_row_type=default_row_type,
-            **merged_config,  # All connection and pool parameters go to direct fields or extras
         )
 
     @property

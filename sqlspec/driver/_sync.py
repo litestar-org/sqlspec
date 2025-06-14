@@ -11,7 +11,7 @@ from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, RowT, SQLParameterTy
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.telemetry import instrument_operation
 
-logger = get_logger(__name__)
+logger = get_logger("sqlspec")
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -179,8 +179,12 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
                 is_select = any(sql_upper.startswith(prefix) for prefix in ["SELECT", "WITH", "VALUES", "TABLE"])
             logger.debug("Is SELECT query: %s (expression: %s)", is_select, sql_statement.expression)
             if is_select:
-                return self._wrap_select_result(sql_statement, result, schema_type=schema_type, **kwargs)
-            return self._wrap_execute_result(sql_statement, result, **kwargs)
+                return self._wrap_select_result(
+                    sql_statement, cast("SelectResultDict", result), schema_type=schema_type, **kwargs
+                )
+            return self._wrap_execute_result(
+                sql_statement, cast("Union[DMLResultDict, ScriptResultDict]", result), **kwargs
+            )
 
     def execute_many(
         self,
@@ -206,7 +210,9 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
                 is_many=True,
                 **kwargs,
             )
-            return self._wrap_execute_result(sql_statement, result, **kwargs)
+            return self._wrap_execute_result(
+                sql_statement, cast("Union[DMLResultDict, ScriptResultDict]", result), **kwargs
+            )
 
     def execute_script(
         self,

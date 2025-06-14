@@ -48,6 +48,7 @@ class ParameterStyleValidator(ProcessorProtocol):
         """Validate parameter styles in SQL.
 
         Args:
+            expression: The SQL expression being validated
             context: SQL processing context with config
 
         Returns:

@@ -197,7 +197,12 @@ def test_where_exists_with_builder() -> None:
 def test_where_exists_with_string() -> None:
     """Test WHERE EXISTS with string subquery."""
     # Disable optimization to preserve the EXISTS clause
-    builder = SelectBuilder(enable_optimization=False).select("*").from_("users").where_exists("SELECT 1 FROM orders WHERE user_id = users.id")
+    builder = (
+        SelectBuilder(enable_optimization=False)
+        .select("*")
+        .from_("users")
+        .where_exists("SELECT 1 FROM orders WHERE user_id = users.id")
+    )
 
     query = builder.build()
 
@@ -626,7 +631,9 @@ def test_none_values_in_parameters() -> None:
 def test_complex_nested_conditions() -> None:
     """Test complex nested conditions with multiple helpers."""
     # Disable optimization to preserve the BETWEEN clause
-    subquery = SelectBuilder(enable_optimization=False).select("user_id").from_("orders").where_between("total", 100, 1000)
+    subquery = (
+        SelectBuilder(enable_optimization=False).select("user_id").from_("orders").where_between("total", 100, 1000)
+    )
 
     builder = (
         SelectBuilder(enable_optimization=False)

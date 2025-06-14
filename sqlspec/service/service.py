@@ -542,102 +542,6 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
             self._log_operation_error(operation, e, **op_context)
             raise
 
-    # Core execute methods that mirror async driver interface
-
-    @overload
-    async def execute(
-        self,
-        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
-        parameters: "Optional[SQLParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        config: "Optional[SQLConfig]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "SQLResult[RowT]": ...
-
-    @overload
-    async def execute(
-        self,
-        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
-        parameters: "Optional[SQLParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        config: "Optional[SQLConfig]" = None,
-        schema_type: "type[ModelDTOT]" = ...,
-        **kwargs: Any,
-    ) -> "SQLResult[ModelDTOT]": ...
-
-    async def execute(
-        self,
-        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
-        parameters: "Optional[SQLParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        config: "Optional[SQLConfig]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
-        """Execute a SQL statement asynchronously.
-
-        Args:
-            statement: SQL statement to execute
-            parameters: Query parameters
-            *filters: Statement filters to apply
-            connection: Optional connection to use
-            config: Optional SQL configuration
-            schema_type: Optional schema type for result deserialization
-            **kwargs: Additional driver-specific arguments
-
-        Returns:
-            Query results
-        """
-        with (
-            self._instrument("execute", statement_type=type(statement).__name__),
-            self._track_operation("execute", statement_type=type(statement).__name__) as ctx,
-            wrap_exceptions(),
-        ):
-            result = await self.driver.execute(  # type: ignore[misc]
-                statement, parameters, *filters, connection=connection, config=config, schema_type=schema_type, **kwargs
-            )
-            ctx["result_count"] = getattr(result, "rowcount", None)
-            return result
-
-    async def execute_many(
-        self,
-        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
-        parameters: "Optional[Sequence[SQLParameterType]]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[ConnectionT]" = None,
-        config: "Optional[SQLConfig]" = None,
-        **kwargs: Any,
-    ) -> "SQLResult[RowT]":
-        """Execute a statement multiple times with different parameters asynchronously.
-
-        Args:
-            statement: SQL statement to execute
-            parameters: Sequence of parameter sets
-            *filters: Statement filters to apply
-            connection: Optional connection to use
-            config: Optional SQL configuration
-            **kwargs: Additional driver-specific arguments
-
-        Returns:
-            Combined results
-        """
-        with (
-            self._instrument("execute_many", batch_size=len(parameters) if parameters else 0),
-            self._track_operation("execute_many", batch_size=len(parameters) if parameters else 0) as ctx,
-            wrap_exceptions(),
-        ):
-            result = await self.driver.execute_many(  # type: ignore[misc]
-                statement, parameters, *filters, connection=connection, config=config, **kwargs
-            )
-            ctx["result_count"] = getattr(result, "rowcount", None)
-            return result
-
-    # Async convenience methods for common query patterns
-
     @overload
     async def select(
         self,
@@ -658,7 +562,7 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
-        schema_type: "type[ModelDTOT]" = ...,
+        schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> "list[ModelDTOT]": ...
 
@@ -690,7 +594,7 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
             result = await self.execute(  # type: ignore[misc]
                 statement, parameters, *filters, connection=connection, config=config, schema_type=schema_type, **kwargs
             )
-            data = result.all()  # SQLResult.all() is synchronous
+            data = result.all()
             ctx["result_count"] = len(data)
             return data
 
@@ -714,7 +618,7 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
         *filters: "StatementFilter",
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
-        schema_type: "type[ModelDTOT]" = ...,
+        schema_type: "type[ModelDTOT]",
         **kwargs: Any,
     ) -> ModelDTOT: ...
 
@@ -741,16 +645,12 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
 
         Returns:
             Single result
-
-        Raises:
-            NoResultFoundError: If no results found
-            TooManyResultsError: If more than one result found
         """
         with self._instrument("select_one"), self._track_operation("select_one"):
             result = await self.execute(  # type: ignore[misc]
                 statement, parameters, *filters, connection=connection, config=config, schema_type=schema_type, **kwargs
             )
-            return result.one()  # SQLResult.one() is synchronous
+            return result.one()
 
     @overload
     async def select_one_or_none(
@@ -799,15 +699,12 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
 
         Returns:
             Single result or None
-
-        Raises:
-            TooManyResultsError: If more than one result found
         """
         with self._instrument("select_one_or_none"), self._track_operation("select_one_or_none"):
             result = await self.execute(  # type: ignore[misc]
                 statement, parameters, *filters, connection=connection, config=config, schema_type=schema_type, **kwargs
             )
-            return result.one_or_none()  # SQLResult.one_or_none() is synchronous
+            return result.one_or_none()
 
     async def select_value(
         self,
@@ -830,14 +727,10 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
 
         Returns:
             Scalar value from first column of first row
-
-        Raises:
-            NoResultFoundError: If no results found
-            TooManyResultsError: If more than one result found
         """
         with self._instrument("select_value"), self._track_operation("select_value"):
             result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
-            return result.scalar()  # SQLResult.scalar() is synchronous
+            return result.scalar()
 
     async def select_value_or_none(
         self,
@@ -862,7 +755,9 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
             Scalar value from first column of first row or None
         """
         with self._instrument("select_value_or_none"), self._track_operation("select_value_or_none"):
-            result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
+            result = await self.driver.execute(
+                statement, parameters, *filters, connection=connection, config=config, **kwargs
+            )
             return result.scalar_or_none()
 
     # Async DML convenience methods
@@ -875,7 +770,7 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SQLResult[RowT]":
+    ) -> "int":
         """Execute an INSERT statement asynchronously.
 
         Args:
@@ -892,7 +787,7 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
         with self._instrument("insert"), self._track_operation("insert") as ctx:
             result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
             ctx["rows_affected"] = result.rows_affected
-            return result
+            return result.rows_affected or -1
 
     async def update(
         self,
@@ -902,7 +797,7 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SQLResult[RowT]":
+    ) -> "int":
         """Execute an UPDATE statement asynchronously.
 
         Args:
@@ -919,7 +814,7 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
         with self._instrument("update"), self._track_operation("update") as ctx:
             result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
             ctx["rows_affected"] = result.rows_affected
-            return result
+            return result.rows_affected or -1
 
     async def delete(
         self,
@@ -929,7 +824,7 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
         connection: "Optional[ConnectionT]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SQLResult[RowT]":
+    ) -> "int":
         """Execute a DELETE statement asynchronously.
 
         Args:
@@ -946,4 +841,4 @@ class AsyncDatabaseService(InstrumentedService, Generic[DriverT, ConnectionT, Ro
         with self._instrument("delete"), self._track_operation("delete") as ctx:
             result = await self.execute(statement, parameters, *filters, connection=connection, config=config, **kwargs)
             ctx["rows_affected"] = result.rows_affected
-            return result
+            return result.rows_affected or -1

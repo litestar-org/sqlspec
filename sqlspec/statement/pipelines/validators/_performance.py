@@ -301,10 +301,6 @@ class PerformanceValidator(BaseValidator):
         elif isinstance(expr, exp.Star):
             analysis.select_star_count += 1
 
-        # Check for non-sargable predicates
-        if isinstance(expr, exp.Predicate) and self._is_non_sargable(expr):
-            analysis.non_sargable_predicates += 1
-
         # Recursive traversal
         for child in expr.args.values():
             if isinstance(child, exp.Expression):
@@ -499,25 +495,6 @@ class PerformanceValidator(BaseValidator):
         # Simplified check - look for column references without table qualifiers
         # In a real implementation, would need to track scope
         return any(not col.table for col in subquery.find_all(exp.Column))
-
-    @staticmethod
-    def _is_non_sargable(predicate: "exp.Predicate") -> bool:
-        """Check if predicate is non-sargable (can't use index).
-
-        Args:
-            predicate: Predicate expression
-
-        Returns:
-            True if non-sargable
-        """
-        # Check for functions on columns
-        if hasattr(predicate, "left") and isinstance(predicate.left, exp.Func):
-            # Function on left side of predicate
-            for _col in predicate.left.find_all(exp.Column):
-                return True  # Function wrapping column
-
-        # Check for type conversions
-        return bool(hasattr(predicate, "left") and isinstance(predicate.left, exp.Cast))
 
     @staticmethod
     def _get_table_name(expr: "Optional[exp.Expression]") -> str:

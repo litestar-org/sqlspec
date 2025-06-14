@@ -7,7 +7,6 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 import asyncmy
-from asyncmy.connection import Connection
 
 from sqlspec.adapters.asyncmy.driver import AsyncmyConnection, AsyncmyDriver
 from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig
@@ -79,9 +78,8 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
 
     is_async: ClassVar[bool] = True
     supports_connection_pooling: ClassVar[bool] = True
-
-    # Driver class reference for dialect resolution
-    driver_class: ClassVar[type[AsyncmyDriver]] = AsyncmyDriver
+    driver_type: type[AsyncmyDriver] = AsyncmyDriver
+    connection_type: type[AsyncmyConnection] = AsyncmyConnection
 
     # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional",)
@@ -187,51 +185,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         )
 
     @property
-    def connection_type(self) -> type[AsyncmyConnection]:  # type: ignore[override]
-        """Return the connection type."""
-        return Connection  # type: ignore[no-any-return]
-
-    @property
-    def driver_type(self) -> type[AsyncmyDriver]:  # type: ignore[override]
-        """Return the driver type."""
-        return AsyncmyDriver
-
-    @classmethod
-    def from_pool_config(
-        cls,
-        pool_config: dict[str, Any],
-        connection_config: Optional[dict[str, Any]] = None,
-        statement_config: Optional[SQLConfig] = None,
-        instrumentation: Optional[InstrumentationConfig] = None,
-        default_row_type: type[DictRow] = DictRow,
-    ) -> "AsyncmyConfig":
-        """Create config from old-style pool_config and connection_config dicts for backward compatibility.
-
-        Args:
-            pool_config: Dictionary with pool and connection parameters
-            connection_config: Dictionary with additional connection parameters
-            statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
-            default_row_type: Default row type for results
-
-        Returns:
-            AsyncmyConfig instance
-        """
-        # Merge connection_config into pool_config (pool_config takes precedence)
-        merged_config = {}
-        if connection_config:
-            merged_config.update(connection_config)
-        merged_config.update(pool_config)
-
-        # Create config with all parameters
-        return cls(
-            statement_config=statement_config,
-            instrumentation=instrumentation,
-            default_row_type=default_row_type,
-            **merged_config,  # All connection and pool parameters go to direct fields or extras
-        )
-
-    @property
     def connection_config_dict(self) -> dict[str, Any]:
         """Return the connection configuration as a dict for asyncmy.connect().
 
@@ -284,8 +237,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             An Asyncmy connection instance.
         """
         async with instrument_operation_async(self, "asyncmy_create_connection", "database"):
-            config = self.connection_config_dict
-            return await asyncmy.connect(**config)
+            if self.pool_instance is None:
+                self.pool_instance = await self.create_pool()
+            return await self.pool_instance.acquire()  # pyright: ignore
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncmyConnection, None]:  # pyright: ignore
@@ -298,15 +252,10 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         Yields:
             An Asyncmy connection instance.
         """
-        if self.pool_instance:
-            async with self.pool_instance.acquire() as connection:
-                yield connection
-        else:
-            connection = await self.create_connection()
-            try:
-                yield connection
-            finally:
-                connection.close()
+        if self.pool_instance is None:
+            self.pool_instance = await self.create_pool()
+        async with self.pool_instance.acquire() as connection:  # pyright: ignore
+            yield connection
 
     @asynccontextmanager
     async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncmyDriver, None]:

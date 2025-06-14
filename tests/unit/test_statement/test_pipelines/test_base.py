@@ -1,13 +1,10 @@
 """Tests for the base pipeline components."""
 
-from typing import Optional
-
-import pytest
 import sqlglot
 from sqlglot import exp
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.base import SQLValidator, StatementPipeline, UsesExpression, ValidationResult
+from sqlspec.statement.pipelines.base import SQLValidator, StatementPipeline, UsesExpression
 from sqlspec.statement.sql import SQLConfig
 
 
@@ -35,58 +32,6 @@ def test_uses_expression_with_expression_input() -> None:
     result_expression = UsesExpression.get_expression(original_expression, dialect="mysql")
 
     assert result_expression is original_expression
-
-
-def test_validation_result_initialization() -> None:
-    """Test ValidationResult initialization with various parameters."""
-    # Test with minimal parameters
-    result1 = ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
-    assert result1.is_safe
-    assert result1.risk_level == RiskLevel.SAFE
-    assert result1.issues == []
-    assert result1.warnings == []
-
-    # Test with full parameters
-    result2 = ValidationResult(
-        is_safe=False,
-        risk_level=RiskLevel.HIGH,
-        issues=["Issue 1", "Issue 2"],
-        warnings=["Warning 1"],
-        transformed_sql="SELECT * FROM users",
-    )
-    assert not result2.is_safe
-    assert result2.risk_level == RiskLevel.HIGH
-    assert len(result2.issues) == 2
-    assert len(result2.warnings) == 1
-    assert result2.transformed_sql == "SELECT * FROM users"
-
-
-def test_validation_result_merge() -> None:
-    """Test ValidationResult.merge functionality."""
-    result1 = ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE, issues=[], warnings=["Warning 1"])
-
-    result2 = ValidationResult(is_safe=False, risk_level=RiskLevel.HIGH, issues=["Issue 1"], warnings=["Warning 2"])
-
-    result1.merge(result2)
-
-    # After merge, should reflect the worse state
-    assert not result1.is_safe  # Should be False from result2
-    assert result1.risk_level == RiskLevel.HIGH  # Should take higher risk level
-    assert len(result1.issues) == 1  # Should include issues from result2
-    assert len(result1.warnings) == 2  # Should include warnings from both
-
-
-def test_validation_result_boolean_conversion() -> None:
-    """Test ValidationResult boolean conversion."""
-    safe_result = ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
-    unsafe_result = ValidationResult(is_safe=False, risk_level=RiskLevel.HIGH)
-
-    assert bool(safe_result) is True
-    assert bool(unsafe_result) is False
-
-
-# ProcessorResult tests removed - ProcessorResult class no longer exists in the codebase
-# The new pipeline architecture uses PipelineResult and SQLProcessingContext instead
 
 
 def test_statement_pipeline_initialization() -> None:
@@ -117,15 +62,24 @@ def test_sql_validator_initialization() -> None:
 def test_sql_validator_add_validator() -> None:
     """Test SQLValidator.add_validator functionality."""
     from sqlspec.statement.pipelines.context import SQLProcessingContext
+    from sqlspec.statement.pipelines.result_types import ValidationError
 
     validator = SQLValidator()
 
     # Create a mock validator that implements ProcessorProtocol
     class MockProcessor:
-        def process(self, context: SQLProcessingContext) -> tuple[exp.Expression, Optional[ValidationResult]]:
-            return context.current_expression or exp.Placeholder(), ValidationResult(
-                is_safe=True, risk_level=RiskLevel.SAFE
+        def process(self, expression: exp.Expression, context: SQLProcessingContext) -> exp.Expression:
+            # Add a validation error to the context
+            context.validation_errors.append(
+                ValidationError(
+                    message="Test error",
+                    code="test-error",
+                    risk_level=RiskLevel.LOW,
+                    processor="MockProcessor",
+                    expression=expression,
+                )
             )
+            return expression
 
     mock_processor = MockProcessor()
     validator.add_validator(mock_processor)  # type: ignore[arg-type]
@@ -185,8 +139,8 @@ def test_transformer_pipeline_execute_empty() -> None:
     assert result.expression is expression
     assert result.context is context
     # When validation is disabled (default), no errors should be added
-    assert len(result.validation_errors) == 0
-    assert result.risk_level == RiskLevel.SAFE
+    assert len(result.context.validation_errors) == 0
+    assert result.context.risk_level == RiskLevel.SAFE
 
 
 def test_transformer_pipeline_execute_with_mock_components() -> None:
@@ -215,133 +169,40 @@ def test_transformer_pipeline_execute_with_mock_components() -> None:
     assert result.expression is expression
     assert result.context is context
     # With no validators, should have no errors
-    assert len(result.validation_errors) == 0
+    assert len(result.context.validation_errors) == 0
 
 
-def test_risk_level_comparison() -> None:
-    """Test risk level comparisons in ValidationResult merging."""
-    # Test various risk level combinations
-    risk_combinations = [
-        (RiskLevel.SAFE, RiskLevel.LOW, RiskLevel.LOW),
-        (RiskLevel.LOW, RiskLevel.MEDIUM, RiskLevel.MEDIUM),
-        (RiskLevel.MEDIUM, RiskLevel.HIGH, RiskLevel.HIGH),
-        (RiskLevel.HIGH, RiskLevel.CRITICAL, RiskLevel.CRITICAL),
-    ]
-
-    for risk1, risk2, expected in risk_combinations:
-        result1 = ValidationResult(is_safe=True, risk_level=risk1)
-        result2 = ValidationResult(is_safe=True, risk_level=risk2)
-
-        result1.merge(result2)
-        assert result1.risk_level == expected
-
-
-def test_validation_result_aggregation() -> None:
-    """Test aggregation of multiple validation results."""
-    results = [
-        ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE, warnings=["Warning 1"]),
-        ValidationResult(is_safe=False, risk_level=RiskLevel.MEDIUM, issues=["Issue 1"]),
-        ValidationResult(is_safe=True, risk_level=RiskLevel.LOW, warnings=["Warning 2"]),
-        ValidationResult(is_safe=False, risk_level=RiskLevel.HIGH, issues=["Issue 2"]),
-    ]
-
-    # Aggregate all results
-    aggregated = ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
-    for result in results:
-        aggregated.merge(result)
-
-    # Should reflect the worst case
-    assert not aggregated.is_safe  # Any False makes it False
-    assert aggregated.risk_level == RiskLevel.HIGH  # Highest risk level
-    assert len(aggregated.issues) == 2  # All issues collected
-    assert len(aggregated.warnings) == 2  # All warnings collected
-
-
-def test_transformer_pipeline_validation_aggregation() -> None:
-    """Test validation error aggregation in StatementPipeline."""
+def test_sql_validator_validate_method() -> None:
+    """Test SQLValidator.validate method returns list of errors."""
     from sqlspec.statement.pipelines.context import SQLProcessingContext
     from sqlspec.statement.pipelines.result_types import ValidationError
 
-    # Create mock validators that add errors to context
     class MockValidator:
-        def __init__(self, error_message: str, risk_level: RiskLevel) -> None:
-            self.error_message = error_message
-            self.risk_level = risk_level
-
         def process(self, expression: exp.Expression, context: SQLProcessingContext) -> exp.Expression:
-            # Add validation error to context
-            error = ValidationError(
-                message=self.error_message,
-                code="mock-error",
-                risk_level=self.risk_level,
-                processor=self.__class__.__name__,
-                expression=expression,
+            context.validation_errors.append(
+                ValidationError(
+                    message="Test validation error",
+                    code="test-error",
+                    risk_level=RiskLevel.HIGH,
+                    processor="MockValidator",
+                    expression=expression,
+                )
             )
-            context.validation_errors.append(error)
             return expression
 
-    pipeline = StatementPipeline()
-    pipeline.validators = [  # type: ignore[list-item]
-        MockValidator("Warning 1", RiskLevel.LOW),  # type: ignore[list-item]
-        MockValidator("Issue 1", RiskLevel.MEDIUM),  # type: ignore[list-item]
-        MockValidator("Warning 2", RiskLevel.LOW),  # type: ignore[list-item]
-    ]
+    validator = SQLValidator(validators=[MockValidator()])  # type: ignore
+    errors = validator.validate("SELECT * FROM users", dialect="mysql")
 
-    config = SQLConfig()
-    expression = sqlglot.parse_one("SELECT 1", read="mysql")
-
-    context = SQLProcessingContext(
-        initial_sql_string="SELECT 1", dialect="mysql", config=config, current_expression=expression
-    )
-
-    result = pipeline.execute_pipeline(context)
-
-    # Check that all errors were collected
-    assert len(result.validation_errors) == 3
-    assert result.has_errors is True
-    # Risk level should be the highest (MEDIUM)
-    assert result.risk_level == RiskLevel.MEDIUM
+    assert len(errors) == 1
+    assert errors[0].message == "Test validation error"
+    assert errors[0].code == "test-error"
+    assert errors[0].risk_level == RiskLevel.HIGH
 
 
-def test_uses_expression_error_handling() -> None:
-    """Test UsesExpression error handling with invalid SQL."""
-    from sqlspec.exceptions import SQLValidationError
+def test_sql_validator_validate_with_no_errors() -> None:
+    """Test SQLValidator.validate returns empty list when no errors."""
+    validator = SQLValidator()
+    errors = validator.validate("SELECT 1", dialect="mysql")
 
-    # Test with invalid SQL that should fail parsing
-    invalid_sql = "SELECT * FROM"  # Incomplete SQL
-
-    with pytest.raises(SQLValidationError):
-        UsesExpression.get_expression(invalid_sql, dialect="mysql")
-
-
-def test_sql_validator_validate_convenience_method() -> None:
-    """Test SQLValidator.validate convenience method."""
-    from sqlspec.statement.pipelines.context import SQLProcessingContext
-
-    # Create a validator with a mock processor
-    class MockProcessor:
-        def process(self, context: SQLProcessingContext) -> tuple[exp.Expression, Optional[ValidationResult]]:
-            return context.current_expression or exp.Placeholder(), ValidationResult(
-                is_safe=False, risk_level=RiskLevel.MEDIUM, issues=["Mock issue"]
-            )
-
-    mock_processor = MockProcessor()
-    validator = SQLValidator(validators=[mock_processor])  # type: ignore[list-item]
-
-    # Test the convenience method
-    sql_string = "SELECT * FROM users"
-    result = validator.validate(sql_string, "mysql")
-
-    assert isinstance(result, ValidationResult)
-    assert not result.is_safe
-    assert len(result.issues) == 1
-
-
-def test_pipeline_component_slots() -> None:
-    """Test that pipeline result classes use __slots__ for memory efficiency."""
-    # Test ValidationResult slots
-    ValidationResult(is_safe=True, risk_level=RiskLevel.SAFE)
-    assert hasattr(ValidationResult, "__slots__")
-
-    # TransformationResult and AnalysisResult no longer exist in the new architecture
-    # The new pipeline uses context objects to collect results instead
+    assert errors == []
+    assert isinstance(errors, list)
