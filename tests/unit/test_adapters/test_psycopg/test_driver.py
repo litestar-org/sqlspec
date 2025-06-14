@@ -81,7 +81,8 @@ def test_psycopg_sync_driver_initialization(mock_psycopg_sync_connection: Psycop
     assert driver.config is config
     assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "postgres"
-    assert driver.__supports_arrow__ is True
+    assert driver.supports_native_arrow_export is False
+    assert driver.supports_native_arrow_import is False
 
 
 def test_psycopg_async_driver_initialization(mock_psycopg_async_connection: AsyncMock) -> None:
@@ -98,7 +99,8 @@ def test_psycopg_async_driver_initialization(mock_psycopg_async_connection: Asyn
     assert driver.config is config
     assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "postgres"
-    assert driver.__supports_arrow__ is True
+    assert driver.supports_native_arrow_export is False
+    assert driver.supports_native_arrow_import is False
 
 
 def test_psycopg_sync_driver_dialect_property(psycopg_sync_driver: PsycopgSyncDriver) -> None:
@@ -121,14 +123,18 @@ def test_psycopg_async_driver_dialect_property(psycopg_async_driver: PsycopgAsyn
 
 def test_psycopg_sync_driver_supports_arrow(psycopg_sync_driver: PsycopgSyncDriver) -> None:
     """Test Psycopg sync driver Arrow support."""
-    assert psycopg_sync_driver.__supports_arrow__ is True
-    assert PsycopgSyncDriver.__supports_arrow__ is True
+    assert psycopg_sync_driver.supports_native_arrow_export is False
+    assert psycopg_sync_driver.supports_native_arrow_import is False
+    assert PsycopgSyncDriver.supports_native_arrow_export is False
+    assert PsycopgSyncDriver.supports_native_arrow_import is False
 
 
 def test_psycopg_async_driver_supports_arrow(psycopg_async_driver: PsycopgAsyncDriver) -> None:
     """Test Psycopg async driver Arrow support."""
-    assert psycopg_async_driver.__supports_arrow__ is True
-    assert PsycopgAsyncDriver.__supports_arrow__ is True
+    assert psycopg_async_driver.supports_native_arrow_export is False
+    assert psycopg_async_driver.supports_native_arrow_import is False
+    assert PsycopgAsyncDriver.supports_native_arrow_export is False
+    assert PsycopgAsyncDriver.supports_native_arrow_import is False
 
 
 def test_psycopg_sync_driver_parameter_style(psycopg_sync_driver: PsycopgSyncDriver) -> None:

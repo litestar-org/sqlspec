@@ -56,7 +56,8 @@ def test_oracle_sync_driver_initialization(mock_oracle_sync_connection: Mock) ->
     assert driver.config is config
     assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "oracle"
-    assert driver.__supports_arrow__ is True
+    assert driver.supports_native_arrow_export is False
+    assert driver.supports_native_arrow_import is False
 
 
 def test_oracle_async_driver_initialization(mock_oracle_async_connection: AsyncMock) -> None:
@@ -73,7 +74,8 @@ def test_oracle_async_driver_initialization(mock_oracle_async_connection: AsyncM
     assert driver.config is config
     assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "oracle"
-    assert driver.__supports_arrow__ is True
+    assert driver.supports_native_arrow_export is False
+    assert driver.supports_native_arrow_import is False
 
 
 def test_oracle_sync_driver_dialect_property(oracle_sync_driver: OracleSyncDriver) -> None:
@@ -88,14 +90,18 @@ def test_oracle_async_driver_dialect_property(oracle_async_driver: OracleAsyncDr
 
 def test_oracle_sync_driver_supports_arrow(oracle_sync_driver: OracleSyncDriver) -> None:
     """Test Oracle sync driver Arrow support."""
-    assert oracle_sync_driver.__supports_arrow__ is True
-    assert OracleSyncDriver.__supports_arrow__ is True
+    assert oracle_sync_driver.supports_native_arrow_export is False
+    assert oracle_sync_driver.supports_native_arrow_import is False
+    assert OracleSyncDriver.supports_native_arrow_export is False
+    assert OracleSyncDriver.supports_native_arrow_import is False
 
 
 def test_oracle_async_driver_supports_arrow(oracle_async_driver: OracleAsyncDriver) -> None:
     """Test Oracle async driver Arrow support."""
-    assert oracle_async_driver.__supports_arrow__ is True
-    assert OracleAsyncDriver.__supports_arrow__ is True
+    assert oracle_async_driver.supports_native_arrow_export is False
+    assert oracle_async_driver.supports_native_arrow_import is False
+    assert OracleAsyncDriver.supports_native_arrow_export is False
+    assert OracleAsyncDriver.supports_native_arrow_import is False
 
 
 def test_oracle_sync_driver_placeholder_style(oracle_sync_driver: OracleSyncDriver) -> None:

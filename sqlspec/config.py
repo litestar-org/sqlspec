@@ -1,7 +1,7 @@
 # ruff: noqa: PLR6301
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional, TypeVar, Union
 
 from sqlspec.typing import ConnectionT, Counter, Gauge, PoolT  # pyright: ignore
 from sqlspec.utils.logging import get_logger
@@ -52,35 +52,6 @@ class InstrumentationConfig:
     This configuration controls logging, telemetry, and performance monitoring
     for all database operations in SQLSpec.
     """
-
-    __slots__ = (
-        "correlation_id_header",
-        "custom_tags",
-        "enable_opentelemetry",
-        "enable_prometheus",
-        "generate_correlation_id",
-        "log_connection_events",
-        "log_format",
-        "log_parameters",
-        "log_pool_operations",
-        "log_queries",
-        "log_results_count",
-        "log_runtime",
-        "log_sample_rate",
-        "log_service_operations",
-        "log_storage_operations",
-        "log_transaction_events",
-        "max_parameter_log_count",
-        "max_query_log_length",
-        "metrics_endpoint",
-        "prometheus_latency_buckets",
-        "service_name",
-        "slow_pool_operation_ms",
-        "slow_query_threshold_ms",
-        "structured_logging",
-        "telemetry_endpoint",
-        "trace_sample_rate",
-    )
 
     # Core logging settings
     log_queries: bool = True
@@ -180,8 +151,6 @@ class InstrumentationConfig:
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Protocol defining the interface for database configurations."""
 
-    __slots__ = ("_dialect", "_pool_metrics", "instrumentation", "pool_instance")
-
     is_async: "ClassVar[bool]" = field(init=False, default=False)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
     supports_native_arrow_import: "ClassVar[bool]" = field(init=False, default=False)
@@ -231,7 +200,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             The SQL dialect type.
         """
         # Get dialect from driver_class (all drivers must have a dialect attribute)
-        return cast("DialectType", self.driver_type.dialect)
+        return self.driver_type.dialect
 
     @abstractmethod
     def create_connection(self) -> "Union[ConnectionT, Awaitable[ConnectionT]]":

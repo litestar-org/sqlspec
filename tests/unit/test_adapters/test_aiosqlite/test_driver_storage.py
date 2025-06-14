@@ -132,19 +132,15 @@ class TestAIOSQLiteStorageOperations:
     @pytest.mark.asyncio
     async def test_export_to_storage_csv(self, aiosqlite_driver: AiosqliteDriver, tmp_path: Any) -> None:
         """Test export_to_storage with CSV format."""
-        # Mock execute
-        mock_result = create_mock_sql_result()
-        aiosqlite_driver.execute = AsyncMock(return_value=mock_result)
-
-        # Mock _export_via_backend since CSV goes through that path
-        aiosqlite_driver._export_via_backend = AsyncMock(return_value=2)
+        # Mock _export_to_storage to avoid actual backend operations
+        aiosqlite_driver._export_to_storage = AsyncMock(return_value=2)
 
         # Test export
         output_path = tmp_path / "output.csv"
         result = await aiosqlite_driver.export_to_storage("SELECT * FROM users", str(output_path), format="csv")
 
-        # Verify _export_via_backend was called
-        aiosqlite_driver._export_via_backend.assert_called_once()
+        # Verify _export_to_storage was called
+        aiosqlite_driver._export_to_storage.assert_called_once_with("SELECT * FROM users", str(output_path), "csv")
 
         # Should return row count
         assert result == 2
@@ -152,19 +148,17 @@ class TestAIOSQLiteStorageOperations:
     @pytest.mark.asyncio
     async def test_export_to_storage_json(self, aiosqlite_driver: AiosqliteDriver, tmp_path: Any) -> None:
         """Test export_to_storage with JSON format."""
-        # Mock execute
-        mock_result = create_mock_sql_result()
-        aiosqlite_driver.execute = AsyncMock(return_value=mock_result)
+        # Mock _export_to_storage to avoid actual backend operations
 
-        # Mock _export_via_backend since JSON goes through that path
-        aiosqlite_driver._export_via_backend = AsyncMock(return_value=2)
+        aiosqlite_driver._export_to_storage = AsyncMock(return_value=2)
 
         # Test export
         output_path = tmp_path / "output.json"
         result = await aiosqlite_driver.export_to_storage("SELECT * FROM users", str(output_path), format="json")
 
-        # Verify _export_via_backend was called
-        aiosqlite_driver._export_via_backend.assert_called_once()
+        # Verify _export_to_storage was called
+
+        aiosqlite_driver._export_to_storage.assert_called_once_with("SELECT * FROM users", str(output_path), "json")
 
         # Should return row count
         assert result == 2
@@ -203,15 +197,17 @@ class TestAIOSQLiteStorageOperations:
     @pytest.mark.asyncio
     async def test_import_from_storage_csv(self, aiosqlite_driver: AiosqliteDriver, tmp_path: Any) -> None:
         """Test import_from_storage with CSV format."""
-        # Mock _import_via_backend since CSV goes through that path
-        aiosqlite_driver._import_via_backend = AsyncMock(return_value=2)
+        # Mock _import_from_storage to avoid actual backend operations
+
+        aiosqlite_driver._import_from_storage = AsyncMock(return_value=2)
 
         # Test import
         input_path = tmp_path / "input.csv"
         result = await aiosqlite_driver.import_from_storage(str(input_path), "test_table", format="csv")
 
-        # Verify _import_via_backend was called
-        aiosqlite_driver._import_via_backend.assert_called_once()
+        # Verify _import_from_storage was called
+
+        aiosqlite_driver._import_from_storage.assert_called_once_with(str(input_path), "test_table", "csv", "create")
 
         # Should return row count
         assert result == 2
@@ -223,27 +219,28 @@ class TestAIOSQLiteStorageOperations:
         mock_result = create_mock_sql_result()
         aiosqlite_driver.execute = AsyncMock(return_value=mock_result)
 
-        # Track what gets passed to the filter
-        filter_called = False
-        filtered_sql = None
+        # Create a mock filter that implements StatementFilter protocol
 
-        # Create a custom filter function
-        def active_filter(statement: SQL) -> SQL:
-            """Filter to add WHERE active = TRUE clause."""
-            nonlocal filter_called, filtered_sql
-            filter_called = True
-            # The statement object might have the SQL as a property
+        mock_filter = MagicMock()
+
+        def append_to_statement(statement: SQL) -> SQL:
+            # Add WHERE clause to the SQL
+
             new_sql = statement.to_sql() + " WHERE active = TRUE"
-            filtered_sql = new_sql
+
             return SQL(new_sql, parameters=statement.parameters, config=statement._config)
+
+        mock_filter.append_to_statement = append_to_statement
 
         # Test with filter - note that filters come after parameters
         statement = SQL("SELECT * FROM users")
-        await aiosqlite_driver.fetch_arrow_table(statement, None, active_filter)  # type: ignore[arg-type]
+        result = await aiosqlite_driver.fetch_arrow_table(statement, None, mock_filter)
 
-        # Verify filter was called
-        assert filter_called, "Filter was not called"
-        assert filtered_sql == "SELECT * FROM users WHERE active = TRUE"
+        # Verify result
+
+        assert isinstance(result, ArrowResult)
+
+        assert result.num_rows == 2
 
         # Verify execute was called with filtered SQL
         aiosqlite_driver.execute.assert_called_once()

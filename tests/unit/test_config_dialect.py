@@ -176,13 +176,18 @@ class TestAsyncConfigDialect:
         """Test that NoPoolAsyncConfig returns dialect from driver class."""
 
         class TestNoPoolAsyncConfig(NoPoolAsyncConfig[MockConnection, MockAsyncDriver]):
-            driver_class: ClassVar[type[MockAsyncDriver]] = MockAsyncDriver
+            driver_type: type[MockAsyncDriver] = MockAsyncDriver
+            connection_type: type[MockConnection] = MockConnection
 
             def __init__(self, **kwargs: Any) -> None:
                 self.instrumentation = InstrumentationConfig()
                 self.statement_config = SQLConfig()
                 self.connection_config = {"host": "localhost"}
                 super().__init__(**kwargs)
+
+            @property
+            def dialect(self) -> str:
+                return "postgres"
 
             @property
             def connection_config_dict(self) -> dict[str, Any]:

@@ -44,7 +44,7 @@ pydantic = ["pydantic", "pydantic-extra-types"]
 pymssql = ["pymssql"]
 pymysql = ["pymysql"]
 spanner = ["google-cloud-spanner"]
-uuid = ["uuid-utils>=0.6.1"]
+uuid = ["uuid-utils"]
 
 
 [dependency-groups]
@@ -274,6 +274,8 @@ module = [
   "aiosql.*",
   "fsspec",
   "fsspec.*",
+  "sqlglot",
+  "sqlglot.*",
 ]
 
 [[tool.mypy.overrides]]

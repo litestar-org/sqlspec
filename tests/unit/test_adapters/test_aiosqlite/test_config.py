@@ -99,24 +99,17 @@ def test_aiosqlite_config_supports_connection_pooling() -> None:
 
 
 def test_aiosqlite_config_from_connection_config() -> None:
-    """Test Aiosqlite config from_connection_config backward compatibility."""
-    # Test basic backward compatibility
-    connection_config = {
-        "isolation_level": "test_isolation_level",
-        "database": "test_database",
-        "cached_statements": "test_cached_statements",
-    }
-    config = AiosqliteConfig.from_connection_config(connection_config)
-    # Add specific assertions based on fields
-    assert config.extras == {}
+    """Test Aiosqlite config initialization with various parameters."""
+    # Test basic initialization
+    config = AiosqliteConfig(database="test_database", isolation_level="test_isolation_level", cached_statements=100)
+    assert config.database == "test_database"
+    assert config.isolation_level == "test_isolation_level"
+    assert config.cached_statements == 100
 
-    # Test with extra parameters
-    connection_config_with_extras = {
-        "isolation_level": "test_isolation_level",
-        "database": "test_database",
-        "unknown_param": "test_value",
-        "another_param": 42,
-    }
-    config_extras = AiosqliteConfig.from_connection_config(connection_config_with_extras)
+    # Test with extras
+    extras_dict = {"unknown_param": "test_value", "another_param": 42}
+    config_extras = AiosqliteConfig(
+        database="test_database", isolation_level="test_isolation_level", extras=extras_dict
+    )
     assert config_extras.extras["unknown_param"] == "test_value"
     assert config_extras.extras["another_param"] == 42

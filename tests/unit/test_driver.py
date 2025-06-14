@@ -999,7 +999,7 @@ def test_driver_supports_arrow_attribute() -> None:
     driver = MockSyncDriver(connection)
 
     # Default should be False
-    assert driver.__supports_arrow__ is False
+    assert driver.supports_native_arrow_export is False
 
     # Should be accessible as class attribute
-    assert MockSyncDriver.__supports_arrow__ is False
+    assert MockSyncDriver.supports_native_arrow_export is False

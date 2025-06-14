@@ -89,7 +89,7 @@ class PsqlpyDriver(
                 # Convert query_result to list of dicts
                 dict_rows: list[dict[str, Any]] = []
                 if query_result:
-                    dict_rows = [dict(row) for row in query_result] if hasattr(query_result, "__iter__") else []
+                    dict_rows = [dict(row) for row in query_result] if hasattr(query_result, "__iter__") else []  # pyright: ignore
                 column_names = list(dict_rows[0].keys()) if dict_rows else []
                 return {"data": dict_rows, "column_names": column_names, "rows_affected": len(dict_rows)}
 

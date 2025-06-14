@@ -47,6 +47,9 @@ class MockAsyncDriver:
 class MockSyncConfig(NoPoolSyncConfig[Any, Any]):
     """Mock sync configuration for testing."""
 
+    is_async = False
+    supports_connection_pooling = False
+
     def __init__(self, name: str = "MockSync") -> None:
         self.name = name
         self.connection_instance = Mock()
@@ -71,6 +74,9 @@ class MockSyncConfig(NoPoolSyncConfig[Any, Any]):
 
 class MockAsyncConfig(NoPoolAsyncConfig[Any, Any]):
     """Mock async configuration for testing."""
+
+    is_async = True
+    supports_connection_pooling = False
 
     def __init__(self, name: str = "MockAsync") -> None:
         self.name = name
@@ -105,6 +111,9 @@ class MockAsyncConfig(NoPoolAsyncConfig[Any, Any]):
 class MockSyncPoolConfig(SyncDatabaseConfig[Any, Any, Any]):
     """Mock sync configuration with pooling for testing."""
 
+    is_async = False
+    supports_connection_pooling = True
+
     def __init__(self, name: str = "MockSyncPool") -> None:
         self.name = name
         self.connection_instance = Mock()
@@ -135,6 +144,9 @@ class MockSyncPoolConfig(SyncDatabaseConfig[Any, Any, Any]):
 
 class MockAsyncPoolConfig(AsyncDatabaseConfig[Any, Any, Any]):
     """Mock async configuration with pooling for testing."""
+
+    is_async = True
+    supports_connection_pooling = True
 
     def __init__(self, name: str = "MockAsyncPool") -> None:
         self.name = name

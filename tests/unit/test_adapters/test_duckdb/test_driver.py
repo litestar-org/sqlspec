@@ -48,7 +48,8 @@ def test_duckdb_driver_initialization(mock_duckdb_connection: Mock) -> None:
     assert driver.config is config
     assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "duckdb"
-    assert driver.__supports_arrow__ is True
+    assert driver.supports_native_arrow_export is False
+    assert driver.supports_native_arrow_import is False
 
 
 def test_duckdb_driver_dialect_property(duckdb_driver: DuckDBDriver) -> None:
@@ -58,8 +59,10 @@ def test_duckdb_driver_dialect_property(duckdb_driver: DuckDBDriver) -> None:
 
 def test_duckdb_driver_supports_arrow(duckdb_driver: DuckDBDriver) -> None:
     """Test DuckDB driver Arrow support."""
-    assert duckdb_driver.__supports_arrow__ is True
-    assert DuckDBDriver.__supports_arrow__ is True
+    assert duckdb_driver.supports_native_arrow_export is False
+    assert duckdb_driver.supports_native_arrow_import is False
+    assert DuckDBDriver.supports_native_arrow_export is False
+    assert DuckDBDriver.supports_native_arrow_import is False
 
 
 def test_duckdb_driver_placeholder_style(duckdb_driver: DuckDBDriver) -> None:

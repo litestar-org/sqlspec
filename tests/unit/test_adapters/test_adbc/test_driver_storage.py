@@ -1,7 +1,7 @@
 """Storage tests for ADBC driver."""
 
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 import pytest
@@ -10,11 +10,7 @@ from sqlspec.adapters.adbc import AdbcDriver
 from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.result import ArrowResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from tests.unit.test_adapters.storage_test_helpers import (
-    create_mock_arrow_result,
-    create_mock_arrow_table,
-    create_mock_sql_result,
-)
+from tests.unit.test_adapters.storage_test_helpers import create_mock_arrow_result, create_mock_arrow_table
 
 
 @pytest.fixture
@@ -126,9 +122,11 @@ class TestADBCStorageOperations:
         # Patch the _resolve_backend_and_path method to return our mock
         adbc_driver._resolve_backend_and_path = MagicMock(return_value=(mock_backend, str(tmp_path / "output.parquet")))
 
-        # Test export
-        output_path = tmp_path / "output.parquet"
-        result = adbc_driver.export_to_storage("SELECT * FROM users", str(output_path))
+        # Disable native export capability for this test
+        with patch.object(adbc_driver.__class__, "supports_native_parquet_export", False):
+            # Test export
+            output_path = tmp_path / "output.parquet"
+            result = adbc_driver.export_to_storage("SELECT * FROM users", str(output_path))
 
         # Verify backend was called
         mock_backend.write_arrow.assert_called_once()
@@ -141,38 +139,30 @@ class TestADBCStorageOperations:
 
     def test_export_to_storage_csv(self, adbc_driver: AdbcDriver, tmp_path: Any) -> None:
         """Test export_to_storage with CSV format."""
-        # Mock execute
-        mock_result = create_mock_sql_result()
-        adbc_driver.execute = MagicMock(return_value=mock_result)
-
-        # Mock _export_via_backend since CSV goes through that path
-        adbc_driver._export_via_backend = MagicMock(return_value=2)
+        # Mock _export_to_storage to avoid actual backend operations
+        adbc_driver._export_to_storage = MagicMock(return_value=2)
 
         # Test export
         output_path = tmp_path / "output.csv"
         result = adbc_driver.export_to_storage("SELECT * FROM users", str(output_path), format="csv")
 
-        # Verify _export_via_backend was called
-        adbc_driver._export_via_backend.assert_called_once()
+        # Verify _export_to_storage was called
+        adbc_driver._export_to_storage.assert_called_once_with("SELECT * FROM users", str(output_path), "csv")
 
         # Should return row count
         assert result == 2
 
     def test_export_to_storage_json(self, adbc_driver: AdbcDriver, tmp_path: Any) -> None:
         """Test export_to_storage with JSON format."""
-        # Mock execute
-        mock_result = create_mock_sql_result()
-        adbc_driver.execute = MagicMock(return_value=mock_result)
-
-        # Mock _export_via_backend since JSON goes through that path
-        adbc_driver._export_via_backend = MagicMock(return_value=2)
+        # Mock _export_to_storage to avoid actual backend operations
+        adbc_driver._export_to_storage = MagicMock(return_value=2)
 
         # Test export
         output_path = tmp_path / "output.json"
         result = adbc_driver.export_to_storage("SELECT * FROM users", str(output_path), format="json")
 
-        # Verify _export_via_backend was called
-        adbc_driver._export_via_backend.assert_called_once()
+        # Verify _export_to_storage was called
+        adbc_driver._export_to_storage.assert_called_once_with("SELECT * FROM users", str(output_path), "json")
 
         # Should return row count
         assert result == 2
@@ -192,9 +182,11 @@ class TestADBCStorageOperations:
         # Patch the _resolve_backend_and_path method to return our mock
         adbc_driver._resolve_backend_and_path = MagicMock(return_value=(mock_backend, str(tmp_path / "input.parquet")))
 
-        # Test import
-        input_path = tmp_path / "input.parquet"
-        result = adbc_driver.import_from_storage(str(input_path), "test_table")
+        # Disable native import capability for this test
+        with patch.object(adbc_driver.__class__, "supports_native_parquet_import", False):
+            # Test import
+            input_path = tmp_path / "input.parquet"
+            result = adbc_driver.import_from_storage(str(input_path), "test_table")
 
         # Verify backend was called
         mock_backend.read_arrow.assert_called_once_with(str(input_path))
@@ -207,15 +199,15 @@ class TestADBCStorageOperations:
 
     def test_import_from_storage_csv(self, adbc_driver: AdbcDriver, tmp_path: Any) -> None:
         """Test import_from_storage with CSV format."""
-        # Mock _import_via_backend since CSV goes through that path
-        adbc_driver._import_via_backend = MagicMock(return_value=2)
+        # Mock _import_from_storage to avoid actual backend operations
+        adbc_driver._import_from_storage = MagicMock(return_value=2)
 
         # Test import
         input_path = tmp_path / "input.csv"
         result = adbc_driver.import_from_storage(str(input_path), "test_table", format="csv")
 
-        # Verify _import_via_backend was called
-        adbc_driver._import_via_backend.assert_called_once()
+        # Verify _import_from_storage was called
+        adbc_driver._import_from_storage.assert_called_once_with(str(input_path), "test_table", "csv", "create")
 
         # Should return row count
         assert result == 2
@@ -227,27 +219,23 @@ class TestADBCStorageOperations:
         mock_cursor = mock_adbc_connection.cursor.return_value
         mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
-        # Track what gets passed to the filter
-        filter_called = False
-        filtered_sql = None
+        # Create a mock filter that implements StatementFilter protocol
+        mock_filter = MagicMock()
 
-        # Create a custom filter function
-        def active_filter(statement: SQL) -> SQL:
-            """Filter to add WHERE active = TRUE clause."""
-            nonlocal filter_called, filtered_sql
-            filter_called = True
-            # The statement object might have the SQL as a property
+        def append_to_statement(statement: SQL) -> SQL:
+            # Add WHERE clause to the SQL
             new_sql = statement.to_sql() + " WHERE active = TRUE"
-            filtered_sql = new_sql
             return SQL(new_sql, parameters=statement.parameters, config=statement._config)
 
-        # Test with filter - note that filters come after parameters
-        statement = SQL("SELECT * FROM users")
-        adbc_driver.fetch_arrow_table(statement, None, active_filter)  # type: ignore[arg-type]
+        mock_filter.append_to_statement = append_to_statement
 
-        # Verify filter was called
-        assert filter_called, "Filter was not called"
-        assert filtered_sql == "SELECT * FROM users WHERE active = TRUE"
+        # Test with filter
+        statement = SQL("SELECT * FROM users")
+        result = adbc_driver.fetch_arrow_table(statement, None, mock_filter)
+
+        # Verify result
+        assert isinstance(result, ArrowResult)
+        assert result.num_rows == 2
 
         # Verify execute was called with filtered SQL
         mock_cursor.execute.assert_called_once()
@@ -285,17 +273,19 @@ class TestADBCStorageOperations:
         # Mock ADBC connection with native adbc_ingest method
         mock_adbc_connection.adbc_ingest.return_value = 2
 
-        # Mock execute for DELETE
+        # Mock execute for TRUNCATE
         adbc_driver.execute = MagicMock(return_value=MagicMock())
 
         # Test ingest with replace mode
         result = adbc_driver.ingest_arrow_table(table, "test_table", mode="replace")
 
-        # Verify DELETE was called first (ADBC uses DELETE FROM for replace mode)
+        # Verify TRUNCATE was called first (unified storage mixin uses TRUNCATE for replace mode)
         adbc_driver.execute.assert_called_once()
-        delete_call = adbc_driver.execute.call_args
-        delete_sql = delete_call[0][0]
-        assert "DELETE FROM test_table" in delete_sql.to_sql()
+        truncate_call = adbc_driver.execute.call_args
+        truncate_sql = truncate_call[0][0]
+        assert isinstance(truncate_sql, SQL)
+        # Get the raw SQL string to avoid validation issues
+        assert truncate_sql._sql == "TRUNCATE TABLE test_table"
 
         # Verify native adbc_ingest was called
         mock_adbc_connection.adbc_ingest.assert_called_once_with("test_table", table, mode="replace")
@@ -326,5 +316,6 @@ class TestADBCStorageOperations:
 
     def test_fetch_arrow_table_native_capability_detection(self, adbc_driver: AdbcDriver) -> None:
         """Test that ADBC driver detects its native Arrow capability."""
-        # Test native capability detection
-        assert adbc_driver._has_native_capability("arrow") is True
+        # Test native capability detection by checking the supports_native_arrow_export attribute
+        assert adbc_driver.supports_native_arrow_export is True
+        assert adbc_driver.supports_native_arrow_import is True

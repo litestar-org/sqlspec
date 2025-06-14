@@ -45,7 +45,8 @@ def test_psqlpy_driver_initialization(mock_psqlpy_connection: AsyncMock) -> None
     assert driver.config is config
     assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "postgres"
-    assert driver.__supports_arrow__ is True
+    assert driver.supports_native_arrow_export is False
+    assert driver.supports_native_arrow_import is False
 
 
 def test_psqlpy_driver_dialect_property(psqlpy_driver: PsqlpyDriver) -> None:
@@ -55,8 +56,10 @@ def test_psqlpy_driver_dialect_property(psqlpy_driver: PsqlpyDriver) -> None:
 
 def test_psqlpy_driver_supports_arrow(psqlpy_driver: PsqlpyDriver) -> None:
     """Test PSQLPy driver Arrow support."""
-    assert psqlpy_driver.__supports_arrow__ is True
-    assert PsqlpyDriver.__supports_arrow__ is True
+    assert psqlpy_driver.supports_native_arrow_export is False
+    assert psqlpy_driver.supports_native_arrow_import is False
+    assert PsqlpyDriver.supports_native_arrow_export is False
+    assert PsqlpyDriver.supports_native_arrow_import is False
 
 
 def test_psqlpy_driver_placeholder_style(psqlpy_driver: PsqlpyDriver) -> None:

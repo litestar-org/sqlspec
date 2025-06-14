@@ -62,7 +62,9 @@ def test_aiosqlite_driver_initialization(mock_aiosqlite_connection: AsyncMock) -
     assert driver.config is config
     assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "sqlite"
-    assert driver.__supports_arrow__ is True
+    # AIOSQLite doesn't support native arrow operations
+    assert driver.supports_native_arrow_export is False
+    assert driver.supports_native_arrow_import is False
 
 
 def test_aiosqlite_driver_dialect_property(aiosqlite_driver: AiosqliteDriver) -> None:
@@ -72,8 +74,9 @@ def test_aiosqlite_driver_dialect_property(aiosqlite_driver: AiosqliteDriver) ->
 
 def test_aiosqlite_driver_supports_arrow(aiosqlite_driver: AiosqliteDriver) -> None:
     """Test AIOSQLite driver Arrow support."""
-    assert aiosqlite_driver.__supports_arrow__ is True
-    assert AiosqliteDriver.__supports_arrow__ is True
+    # AIOSQLite doesn't support native arrow operations
+    assert aiosqlite_driver.supports_native_arrow_export is False
+    assert aiosqlite_driver.supports_native_arrow_import is False
 
 
 def test_aiosqlite_driver_placeholder_style(aiosqlite_driver: AiosqliteDriver) -> None:

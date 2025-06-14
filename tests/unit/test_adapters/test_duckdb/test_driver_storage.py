@@ -234,27 +234,30 @@ class TestDuckDBStorageOperations:
         mock_cursor.arrow.return_value = mock_arrow_table
         mock_duckdb_connection.execute.return_value = mock_cursor
 
-        # Track what gets passed to the filter
-        filter_called = False
-        filtered_sql = None
+        # Create a mock filter that implements StatementFilter protocol
 
-        # Create a custom filter function
-        def active_filter(statement: SQL) -> SQL:
-            """Filter to add WHERE active = TRUE clause."""
-            nonlocal filter_called, filtered_sql
-            filter_called = True
-            # The statement object might have the SQL as a property
+        mock_filter = MagicMock()
+
+        def append_to_statement(statement: SQL) -> SQL:
+            # Add WHERE clause to the SQL
+
             new_sql = statement.to_sql() + " WHERE active = TRUE"
-            filtered_sql = new_sql
+
             return SQL(new_sql, parameters=statement.parameters, config=statement._config)
 
-        # Test with filter - note that filters come after parameters
-        statement = SQL("SELECT * FROM users")
-        duckdb_driver.fetch_arrow_table(statement, None, active_filter)  # type: ignore[arg-type]
+        mock_filter.append_to_statement = append_to_statement
 
-        # Verify filter was called
-        assert filter_called, "Filter was not called"
-        assert filtered_sql == "SELECT * FROM users WHERE active = TRUE"
+        # Test with filter
+
+        statement = SQL("SELECT * FROM users")
+
+        result = duckdb_driver.fetch_arrow_table(statement, None, mock_filter)
+
+        # Verify result
+
+        assert isinstance(result, ArrowResult)
+
+        assert result.num_rows == 2
 
         # Verify connection execute was called with filtered SQL
         mock_duckdb_connection.execute.assert_called()

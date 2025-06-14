@@ -1,7 +1,7 @@
 """Unit tests for ADBC driver."""
 
 import tempfile
-from typing import Any
+from typing import Any, cast
 from unittest.mock import Mock
 
 import pyarrow as pa
@@ -11,7 +11,7 @@ from adbc_driver_manager.dbapi import Connection, Cursor
 from sqlspec.adapters.adbc.driver import AdbcDriver
 from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.result import ArrowResult, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -50,7 +50,8 @@ def test_adbc_driver_initialization(mock_adbc_connection: Mock) -> None:
 
     assert driver.connection == mock_adbc_connection
     assert driver.dialect == "postgres"  # Based on mock connection info
-    assert driver.__supports_arrow__ is True
+    assert driver.supports_native_arrow_export is True
+    assert driver.supports_native_arrow_import is True
     assert driver.default_row_type == DictRow
     assert isinstance(driver.config, SQLConfig)
     assert isinstance(driver.instrumentation_config, InstrumentationConfig)
@@ -395,7 +396,8 @@ def test_adbc_driver_instrumentation_logging(mock_adbc_connection: Mock, mock_cu
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[123])
     # Parameters argument removed from _execute_statement call
     cursor_result = driver._execute_statement(statement)
-    select_result = driver._wrap_select_result(statement, cursor_result)
+    assert isinstance(cursor_result, dict) and "data" in cursor_result  # Type narrowing
+    select_result = driver._wrap_select_result(statement, cast("SelectResultDict", cursor_result))
 
     assert isinstance(select_result, SQLResult)
     # Logging calls are verified through the instrumentation config
@@ -436,8 +438,8 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
             return exp.Select()
 
         @property
-        def _expected_result_type(self) -> type[SQLResult[DictRow]]:
-            return SQLResult[DictRow]
+        def _expected_result_type(self) -> type[SQLResult[SQLResult[dict[str, Any]]]]:
+            return SQLResult[SQLResult[dict[str, Any]]]  # type: ignore[misc]
 
     sql_config = SQLConfig()
     # Test with SQL statement
@@ -515,6 +517,9 @@ def test_adbc_driver_to_parquet(adbc_driver: AdbcDriver, mock_cursor: Mock, monk
     mock_backend = Mock()
     mock_backend.write_arrow = fake_write_arrow
     monkeypatch.setattr(adbc_driver, "_get_storage_backend", lambda uri: mock_backend)
+
+    # Make the driver think it doesn't have native parquet export capability
+    monkeypatch.setattr(adbc_driver.__class__, "supports_native_parquet_export", False)
 
     statement = SQL("SELECT id, name FROM users")
     with tempfile.NamedTemporaryFile() as tmp:

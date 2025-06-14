@@ -55,7 +55,8 @@ def test_asyncmy_driver_initialization(mock_asyncmy_connection: AsyncMock) -> No
     assert driver.config is config
     assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "mysql"
-    assert driver.__supports_arrow__ is True
+    assert driver.supports_native_arrow_export is False
+    assert driver.supports_native_arrow_import is False
 
 
 def test_asyncmy_driver_dialect_property(asyncmy_driver: AsyncmyDriver) -> None:
@@ -65,8 +66,10 @@ def test_asyncmy_driver_dialect_property(asyncmy_driver: AsyncmyDriver) -> None:
 
 def test_asyncmy_driver_supports_arrow(asyncmy_driver: AsyncmyDriver) -> None:
     """Test Asyncmy driver Arrow support."""
-    assert asyncmy_driver.__supports_arrow__ is True
-    assert AsyncmyDriver.__supports_arrow__ is True
+    assert asyncmy_driver.supports_native_arrow_export is False
+    assert asyncmy_driver.supports_native_arrow_import is False
+    assert AsyncmyDriver.supports_native_arrow_export is False
+    assert AsyncmyDriver.supports_native_arrow_import is False
 
 
 def test_asyncmy_driver_placeholder_style(asyncmy_driver: AsyncmyDriver) -> None:

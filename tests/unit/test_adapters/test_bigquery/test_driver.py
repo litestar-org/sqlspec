@@ -51,7 +51,8 @@ def test_bigquery_driver_initialization(mock_bigquery_connection: Mock) -> None:
 
     assert driver.connection == mock_bigquery_connection
     assert driver.dialect == "bigquery"
-    assert driver.__supports_arrow__ is True
+    assert driver.supports_native_arrow_export is False
+    assert driver.supports_native_arrow_import is False
     assert driver.__supports_parquet__ is True
     assert driver.default_row_type == DictRow
     assert isinstance(driver.config, SQLConfig)

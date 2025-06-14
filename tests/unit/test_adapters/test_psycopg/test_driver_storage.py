@@ -133,8 +133,9 @@ class TestPsycopgSyncStorageOperations:
         output_path = tmp_path / "output.csv"
         result = psycopg_sync_driver.export_to_storage("SELECT * FROM users", str(output_path), format="csv")
 
-        # Verify _export_via_backend was called
-        psycopg_sync_driver._export_via_backend.assert_called_once()
+        # Verify _export_to_storage was called
+
+        psycopg_sync_driver._export_to_storage.assert_called_once_with("SELECT * FROM users", str(output_path), "csv")
 
         # Should return row count
         assert result == 2
@@ -156,8 +157,9 @@ class TestPsycopgSyncStorageOperations:
         output_path = tmp_path / "output.json"
         result = psycopg_sync_driver.export_to_storage("SELECT * FROM users", str(output_path), format="json")
 
-        # Verify _export_via_backend was called
-        psycopg_sync_driver._export_via_backend.assert_called_once()
+        # Verify _export_to_storage was called
+
+        psycopg_sync_driver._export_to_storage.assert_called_once_with("SELECT * FROM users", str(output_path), "json")
 
         # Should return row count
         assert result == 2
@@ -209,8 +211,9 @@ class TestPsycopgSyncStorageOperations:
         input_path = tmp_path / "input.csv"
         result = psycopg_sync_driver.import_from_storage(str(input_path), "test_table", format="csv")
 
-        # Verify _import_via_backend was called
-        psycopg_sync_driver._import_via_backend.assert_called_once()
+        # Verify _import_from_storage was called
+
+        psycopg_sync_driver._import_from_storage.assert_called_once_with(str(input_path), "test_table", "csv", "create")
 
         # Should return row count
         assert result == 2
@@ -221,27 +224,30 @@ class TestPsycopgSyncStorageOperations:
         mock_result = create_mock_sql_result()
         psycopg_sync_driver.execute = MagicMock(return_value=mock_result)
 
-        # Track what gets passed to the filter
-        filter_called = False
-        filtered_sql = None
+        # Create a mock filter that implements StatementFilter protocol
 
-        # Create a custom filter function
-        def active_filter(statement: SQL) -> SQL:
-            """Filter to add WHERE active = TRUE clause."""
-            nonlocal filter_called, filtered_sql
-            filter_called = True
-            # The statement object might have the SQL as a property
+        mock_filter = MagicMock()
+
+        def append_to_statement(statement: SQL) -> SQL:
+            # Add WHERE clause to the SQL
+
             new_sql = statement.to_sql() + " WHERE active = TRUE"
-            filtered_sql = new_sql
+
             return SQL(new_sql, parameters=statement.parameters, config=statement._config)
 
-        # Test with filter - note that filters come after parameters
-        statement = SQL("SELECT * FROM users")
-        psycopg_sync_driver.fetch_arrow_table(statement, None, active_filter)  # type: ignore[arg-type]
+        mock_filter.append_to_statement = append_to_statement
 
-        # Verify filter was called
-        assert filter_called, "Filter was not called"
-        assert filtered_sql == "SELECT * FROM users WHERE active = TRUE"
+        # Test with filter
+
+        statement = SQL("SELECT * FROM users")
+
+        result = psycopg_sync_driver.fetch_arrow_table(statement, None, mock_filter)
+
+        # Verify result
+
+        assert isinstance(result, ArrowResult)
+
+        assert result.num_rows == 2
 
         # Verify execute was called with filtered SQL
         psycopg_sync_driver.execute.assert_called_once()

@@ -47,7 +47,8 @@ def test_asyncpg_driver_initialization(mock_asyncpg_connection: AsyncMock) -> No
     assert driver.config is config
     assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "postgres"
-    assert driver.__supports_arrow__ is True
+    assert driver.supports_native_arrow_export is False
+    assert driver.supports_native_arrow_import is False
 
 
 def test_asyncpg_driver_dialect_property(asyncpg_driver: AsyncpgDriver) -> None:
@@ -57,8 +58,10 @@ def test_asyncpg_driver_dialect_property(asyncpg_driver: AsyncpgDriver) -> None:
 
 def test_asyncpg_driver_supports_arrow(asyncpg_driver: AsyncpgDriver) -> None:
     """Test AsyncPG driver Arrow support."""
-    assert asyncpg_driver.__supports_arrow__ is True
-    assert AsyncpgDriver.__supports_arrow__ is True
+    assert asyncpg_driver.supports_native_arrow_export is False
+    assert asyncpg_driver.supports_native_arrow_import is False
+    assert AsyncpgDriver.supports_native_arrow_export is False
+    assert AsyncpgDriver.supports_native_arrow_import is False
 
 
 def test_asyncpg_driver_placeholder_style(asyncpg_driver: AsyncpgDriver) -> None:
@@ -478,7 +481,8 @@ async def test_asyncpg_driver_storage_methods(asyncpg_driver: AsyncpgDriver) -> 
 async def test_asyncpg_driver_arrow_support_flag(asyncpg_driver: AsyncpgDriver) -> None:
     """Test AsyncPG driver declares Arrow support."""
     # AsyncPG should support Arrow operations
-    assert asyncpg_driver.__supports_arrow__ is True
+    assert asyncpg_driver.supports_native_arrow_export is False
+    assert asyncpg_driver.supports_native_arrow_import is False
     assert hasattr(asyncpg_driver, "_rows_to_arrow_table")
 
 

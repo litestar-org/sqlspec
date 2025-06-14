@@ -128,26 +128,15 @@ def test_adbc_config_supports_connection_pooling() -> None:
 
 
 def test_adbc_config_from_connection_config() -> None:
-    """Test ADBC config from_connection_config backward compatibility."""
-    # Test with driver_name (modern way)
-    connection_config = {"db_kwargs": "test_db_kwargs", "driver_name": "test_driver", "uri": "test_uri"}
-    config = AdbcConfig.from_connection_config(connection_config)
+    """Test ADBC config initialization with various parameters."""
+    # Test basic initialization
+    config = AdbcConfig(driver_name="test_driver", uri="test_uri", db_kwargs={"test_key": "test_value"})
     assert config.driver_name == "test_driver"
     assert config.uri == "test_uri"
+    assert config.db_kwargs == {"test_key": "test_value"}
 
-    # Test with driver (backward compatibility)
-    connection_config_legacy = {"db_kwargs": "test_db_kwargs", "driver": "test_driver", "uri": "test_uri"}
-    config_legacy = AdbcConfig.from_connection_config(connection_config_legacy)
-    assert config_legacy.driver_name == "test_driver"  # Should be mapped to driver_name
-    assert config_legacy.uri == "test_uri"
-
-    # Test with extra parameters
-    connection_config_with_extras = {
-        "db_kwargs": "test_db_kwargs",
-        "driver_name": "test_driver",
-        "unknown_param": "test_value",
-        "another_param": 42,
-    }
-    config_extras = AdbcConfig.from_connection_config(connection_config_with_extras)
+    # Test with extras
+    extras_dict = {"unknown_param": "test_value", "another_param": 42}
+    config_extras = AdbcConfig(driver_name="test_driver", uri="test_uri", extras=extras_dict)
     assert config_extras.extras["unknown_param"] == "test_value"
     assert config_extras.extras["another_param"] == 42
