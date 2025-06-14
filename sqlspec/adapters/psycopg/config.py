@@ -4,7 +4,7 @@ import contextlib
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 
 from psycopg.rows import DictRow as PsycopgDictRow
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
@@ -304,7 +304,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         """
         if self.pool_instance is None:
             self.pool_instance = self.create_pool()
-        return self.pool_instance.getconn()  # pyright: ignore
+        return cast("PsycopgSyncConnection", self.pool_instance.getconn())  # pyright: ignore
 
     @contextlib.contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[PsycopgSyncConnection, None, None]":
@@ -611,7 +611,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         # TODO: this should still create a pool and return a connection from it
         if self.pool_instance is None:
             self.pool_instance = await self.create_pool()
-        return await self.pool_instance.getconn()  # pyright: ignore
+        return cast("PsycopgAsyncConnection", await self.pool_instance.getconn())  # pyright: ignore
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[PsycopgAsyncConnection, None]":  # pyright: ignore

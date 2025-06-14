@@ -7,6 +7,7 @@ from sqlspec.base import SQLSpec as SQLSpecBase
 from sqlspec.config import AsyncConfigT, DatabaseConfigProtocol, DriverT, SyncConfigT
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.config import DatabaseConfig
+from sqlspec.extensions.litestar.middleware import CorrelationMiddleware
 from sqlspec.typing import ConnectionT, PoolT
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
@@ -81,15 +82,13 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
         )
 
         if correlation_enabled:
-            from sqlspec.extensions.litestar.middleware import CorrelationMiddleware
-
             # Check if middleware is already added
             has_correlation_middleware = any(
                 isinstance(mw, type) and issubclass(mw, CorrelationMiddleware) for mw in app_config.middleware
             )
 
             if not has_correlation_middleware:
-                app_config.middleware.append(CorrelationMiddleware)  # pyright: ignore
+                app_config.middleware.append(CorrelationMiddleware(app_config))
                 logger.info("Added correlation tracking middleware", extra={"correlation_id": CorrelationContext.get()})
 
         # Register types for injection

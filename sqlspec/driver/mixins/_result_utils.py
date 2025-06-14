@@ -58,6 +58,8 @@ def _default_msgspec_deserializer(
 
 
 class ToSchemaMixin:
+    __slots__ = ()
+
     @overload
     @staticmethod
     def to_schema(data: "ModelT", *, schema_type: None = None) -> "ModelT": ...

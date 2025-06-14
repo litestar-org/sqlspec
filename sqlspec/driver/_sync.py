@@ -26,6 +26,8 @@ EMPTY_FILTERS: "list[StatementFilter]" = []
 
 
 class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], SyncInstrumentationMixin, ABC):
+    __slots__ = ()
+
     def __init__(
         self,
         connection: "ConnectionT",

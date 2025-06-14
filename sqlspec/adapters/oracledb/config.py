@@ -5,7 +5,7 @@ import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 
 import oracledb
 
@@ -575,7 +575,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         async with instrument_operation_async(self, "oracle_async_create_connection", "database"):
             if self.pool_instance is None:
                 self.pool_instance = await self.create_pool()
-            return await self.pool_instance.acquire()
+            return cast("OracleAsyncConnection", await self.pool_instance.acquire())
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[OracleAsyncConnection, None]:

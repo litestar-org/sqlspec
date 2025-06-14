@@ -8,12 +8,14 @@ from sqlglot import exp
 
 from sqlspec.config import InstrumentationConfig
 from sqlspec.exceptions import NotFoundError
-from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import ConnectionT, Counter, DictRow, Gauge, Histogram, RowT, T, Tracer, trace
+from sqlspec.statement import SQLConfig
+from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.typing import ConnectionT, Counter, DictRow, Gauge, Histogram, RowT, T, trace
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from sqlspec.statement.parameters import ParameterStyle
+    from sqlglot.dialects.dialect import DialectType
+
 
 __all__ = ("CommonDriverAttributesMixin",)
 
@@ -24,30 +26,37 @@ logger = get_logger("driver")
 class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
     """Enhanced common attributes and methods for driver adapters with instrumentation."""
 
-    dialect: "Any"  # DialectType
+    __slots__ = (
+        "_error_counter",
+        "_latency_histogram",
+        "_pool_connections_gauge",
+        "_pool_latency_histogram",
+        "_query_counter",
+        "_tracer",
+        "config",
+        "connection",
+        "default_row_type",
+        "instrumentation_config",
+    )
+
+    dialect: "DialectType"  # DialectType
     """The SQL dialect supported by the underlying database driver."""
     supported_parameter_styles: "tuple[ParameterStyle, ...]"
     """The parameter styles supported by this driver."""
     default_parameter_style: "ParameterStyle"
     """The default parameter style to convert to when unsupported style is detected."""
-    connection: "ConnectionT"
-    """The underlying database connection."""
-    config: "SQLConfig"
-    """Configuration for SQL statements."""
-    instrumentation_config: "InstrumentationConfig"
-    """Configuration for instrumentation."""
-    default_row_type: "type[RowT]"
-    """The default row type to use for results (DictRow, TupleRow, etc.)."""
 
-    __supports_arrow__: "ClassVar[bool]" = False
-    """Indicates if the driver supports native Apache Arrow operations."""
+    supports_native_parquet_export: "ClassVar[bool]" = False
+    """Indicates if the driver supports native Parquet export operations."""
 
-    _tracer: "Optional[Tracer]" = None
-    _query_counter: "Optional[Counter]" = None
-    _error_counter: "Optional[Counter]" = None
-    _latency_histogram: "Optional[Histogram]" = None
-    _pool_latency_histogram: "Optional[Histogram]" = None
-    _pool_connections_gauge: "Optional[Gauge]" = None
+    supports_native_parquet_import: "ClassVar[bool]" = False
+    """Indicates if the driver supports native Parquet import operations."""
+
+    supports_native_arrow_export: "ClassVar[bool]" = False
+    """Indicates if the driver supports native Arrow export operations."""
+
+    supports_native_arrow_import: "ClassVar[bool]" = False
+    """Indicates if the driver supports native Arrow import operations."""
 
     def __init__(
         self,
@@ -192,8 +201,6 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         """
         if parameters is None:
             return None
-
-        from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 
         # Extract parameter info from the SQL
         validator = ParameterValidator()

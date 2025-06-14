@@ -28,6 +28,8 @@ logger = get_logger("instrumentation")
 class BaseInstrumentationMixin:
     """Base instrumentation mixin with common functionality."""
 
+    __slots__ = ()
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize instrumentation components."""
         super().__init__(*args, **kwargs)
@@ -249,6 +251,8 @@ class BaseInstrumentationMixin:
 class SyncInstrumentationMixin(BaseInstrumentationMixin):
     """Synchronous instrumentation mixin for database drivers."""
 
+    __slots__ = ()
+
     def log_query_execution(
         self,
         query: str,
@@ -363,6 +367,8 @@ class SyncInstrumentationMixin(BaseInstrumentationMixin):
 
 class AsyncInstrumentationMixin(BaseInstrumentationMixin):
     """Asynchronous instrumentation mixin for database drivers."""
+
+    __slots__ = ()
 
     async def log_query_execution(
         self,

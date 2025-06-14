@@ -9,15 +9,12 @@ from litestar.enums import ScopeType
 from litestar.middleware import ASGIMiddleware
 
 from sqlspec.utils.correlation import CorrelationContext
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from litestar.config.app import AppConfig
     from litestar.types import ASGIApp, Message, Receive, Scope, Send
 
 __all__ = ("CorrelationMiddleware",)
-
-logger = get_logger("extensions.litestar.middleware")
 
 
 class CorrelationMiddleware(ASGIMiddleware):
@@ -60,10 +57,6 @@ class CorrelationMiddleware(ASGIMiddleware):
 
         if not correlation_id:
             correlation_id = str(uuid4())
-            logger.debug("Generated new correlation ID", extra={"correlation_id": correlation_id})
-        else:
-            logger.debug("Using existing correlation ID from request", extra={"correlation_id": correlation_id})
-
         # Store correlation ID in scope for other middleware/handlers
         scope["state"]["correlation_id"] = correlation_id
 
@@ -84,12 +77,7 @@ class CorrelationMiddleware(ASGIMiddleware):
 
                 await send(message)
 
-            # Process the request with correlation context
-            try:
-                await next_app(scope, receive, send_wrapper)
-            except Exception:
-                logger.exception("Error processing request", extra={"correlation_id": correlation_id})
-                raise
+            await next_app(scope, receive, send_wrapper)
 
 
 def get_correlation_id_from_request(request: Request) -> Optional[str]:

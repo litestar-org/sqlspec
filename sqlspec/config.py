@@ -53,6 +53,35 @@ class InstrumentationConfig:
     for all database operations in SQLSpec.
     """
 
+    __slots__ = (
+        "correlation_id_header",
+        "custom_tags",
+        "enable_opentelemetry",
+        "enable_prometheus",
+        "generate_correlation_id",
+        "log_connection_events",
+        "log_format",
+        "log_parameters",
+        "log_pool_operations",
+        "log_queries",
+        "log_results_count",
+        "log_runtime",
+        "log_sample_rate",
+        "log_service_operations",
+        "log_storage_operations",
+        "log_transaction_events",
+        "max_parameter_log_count",
+        "max_query_log_length",
+        "metrics_endpoint",
+        "prometheus_latency_buckets",
+        "service_name",
+        "slow_pool_operation_ms",
+        "slow_query_threshold_ms",
+        "structured_logging",
+        "telemetry_endpoint",
+        "trace_sample_rate",
+    )
+
     # Core logging settings
     log_queries: bool = True
     """Whether to log database queries."""
@@ -150,6 +179,8 @@ class InstrumentationConfig:
 @dataclass
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Protocol defining the interface for database configurations."""
+
+    __slots__ = ("_dialect", "_pool_metrics", "instrumentation", "pool_instance")
 
     is_async: "ClassVar[bool]" = field(init=False, default=False)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
@@ -288,6 +319,8 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for a sync database configurations that do not implement a pool."""
 
+    __slots__ = ()  # All slots defined in parent
+
     is_async = False
     supports_connection_pooling = False
     pool_instance: None = None
@@ -317,6 +350,8 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 
 class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for an async database configurations that do not implement a pool."""
+
+    __slots__ = ()  # All slots defined in parent
 
     is_async: "ClassVar[bool]" = field(init=False, default=True)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
@@ -349,10 +384,14 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 class GenericPoolConfig:
     """Generic Database Pool Configuration."""
 
+    __slots__ = ()
+
 
 @dataclass
 class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Generic Sync Database Configuration."""
+
+    __slots__ = ()  # All slots defined in parent
 
     is_async: "ClassVar[bool]" = field(init=False, default=False)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=True)
@@ -432,6 +471,8 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
 @dataclass
 class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Generic Async Database Configuration."""
+
+    __slots__ = ()  # All slots defined in parent
 
     is_async: "ClassVar[bool]" = field(init=False, default=True)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=True)

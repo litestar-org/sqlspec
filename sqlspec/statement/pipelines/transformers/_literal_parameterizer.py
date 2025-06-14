@@ -375,7 +375,7 @@ class ParameterizeLiterals(ProcessorProtocol):
                 new_expressions.append(self._process_literal_with_context(expr, context))
             else:
                 new_expressions.append(self._transform_with_context(expr, context))
-        array_node.expressions = new_expressions
+        array_node.set("expressions", new_expressions)
         return array_node
 
     def _process_in_clause(self, in_node: exp.In, context: ParameterizationContext) -> exp.Expression:

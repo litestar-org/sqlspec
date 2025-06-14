@@ -10,6 +10,8 @@ __all__ = ("SQLTranslatorMixin",)
 class SQLTranslatorMixin:
     """Mixin for drivers supporting SQL translation."""
 
+    __slots__ = ()
+
     def convert_to_dialect(self, statement: "Statement", to_dialect: DialectType = None, pretty: bool = True) -> str:
         parsed_expression: exp.Expression
         if statement is not None and isinstance(statement, SQL):

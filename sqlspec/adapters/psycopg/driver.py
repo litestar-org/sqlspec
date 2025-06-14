@@ -1,6 +1,6 @@
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
 from psycopg import AsyncConnection, Connection
 from psycopg.rows import DictRow as PsycopgDictRow
@@ -39,8 +39,6 @@ class PsycopgSyncDriver(
         ParameterStyle.NAMED_PYFORMAT,
     )
     default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
-    __supports_arrow__: ClassVar[bool] = True
-    __supports_parquet__: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -223,9 +221,11 @@ class PsycopgSyncDriver(
                         metadata={"status_message": result["status_message"]},
                     )
 
-                # Check if this is a DMLResultDict
-                if "rows_affected" in result:
-                    rows_affected = result["rows_affected"]
+                # Check if this is a DMLResultDict (type narrowing)
+                if "rows_affected" in result and isinstance(result, dict) and "statements_executed" not in result:
+                    # We know this is a DMLResultDict
+                    dml_result = cast("DMLResultDict", result)
+                    rows_affected = dml_result["rows_affected"]
                     status_message = result["status_message"]
 
                     if self.instrumentation_config.log_results_count:
@@ -442,9 +442,11 @@ class PsycopgAsyncDriver(
                         metadata={"status_message": result["status_message"]},
                     )
 
-                # Check if this is a DMLResultDict
-                if "rows_affected" in result:
-                    rows_affected = result["rows_affected"]
+                # Check if this is a DMLResultDict (type narrowing)
+                if "rows_affected" in result and isinstance(result, dict) and "statements_executed" not in result:
+                    # We know this is a DMLResultDict
+                    dml_result = cast("DMLResultDict", result)
+                    rows_affected = dml_result["rows_affected"]
                     status_message = result["status_message"]
 
                     if self.instrumentation_config.log_results_count:

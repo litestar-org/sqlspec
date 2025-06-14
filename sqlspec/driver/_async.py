@@ -23,6 +23,8 @@ EMPTY_FILTERS: "list[StatementFilter]" = []
 
 
 class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], AsyncInstrumentationMixin, ABC):
+    __slots__ = ()
+
     def __init__(
         self,
         connection: "ConnectionT",

@@ -36,15 +36,29 @@ def _check_aiosql_available() -> None:
         raise MissingDependencyError(msg, "aiosql")
 
 
-def _normalize_dialect(dialect: str) -> str:
+def _normalize_dialect(dialect: "Union[str, Any, None]") -> str:
     """Normalize dialect name for SQLGlot compatibility.
 
     Args:
-        dialect: Original dialect name
+        dialect: Original dialect name (can be str, Dialect, type[Dialect], or None)
 
     Returns:
         Normalized dialect name
     """
+    # Handle different dialect types
+    if dialect is None:
+        return "sql"
+
+    # Extract string from dialect class or instance
+    if hasattr(dialect, "__name__"):  # It's a class
+        dialect_str = str(dialect.__name__).lower()  # pyright: ignore
+    elif hasattr(dialect, "name"):  # It's an instance with name attribute
+        dialect_str = str(dialect.name).lower()  # pyright: ignore
+    elif isinstance(dialect, str):
+        dialect_str = dialect.lower()
+    else:
+        dialect_str = str(dialect).lower()
+
     # Map common dialect aliases to SQLGlot names
     dialect_mapping = {
         "postgresql": "postgres",
@@ -55,7 +69,7 @@ def _normalize_dialect(dialect: str) -> str:
         "sqlite3": "sqlite",
         "aiosqlite": "sqlite",
     }
-    return dialect_mapping.get(dialect.lower(), dialect.lower())
+    return dialect_mapping.get(dialect_str, dialect_str)
 
 
 class AiosqlSyncAdapter:
@@ -714,10 +728,14 @@ class AiosqlService(
             for method in ["aexecute", "aselect", "aexecute_many"]
         ):
             return AiosqlAsyncAdapter(
-                self.driver, default_filters=self.default_filters, allow_sqlspec_filters=self.allow_sqlspec_filters
+                cast("AsyncDriverAdapterProtocol[Any, Any]", self.driver),
+                default_filters=self.default_filters,
+                allow_sqlspec_filters=self.allow_sqlspec_filters,
             )
         return AiosqlSyncAdapter(
-            self.driver, default_filters=self.default_filters, allow_sqlspec_filters=self.allow_sqlspec_filters
+            cast("SyncDriverAdapterProtocol[Any, Any]", self.driver),
+            default_filters=self.default_filters,
+            allow_sqlspec_filters=self.allow_sqlspec_filters,
         )
 
     def load_queries(self, sql_path: str, **aiosql_kwargs: Any) -> Any:
@@ -734,7 +752,8 @@ class AiosqlService(
             msg = "aiosql"
             raise MissingDependencyError(msg, "aiosql")
 
-        return aiosql.from_path(sql_path, self.aiosql_adapter, **aiosql_kwargs)
+        # aiosql expects either a string name for registered adapters or a class/instance
+        return aiosql.from_path(sql_path, self.aiosql_adapter, **aiosql_kwargs)  # type: ignore[arg-type]
 
     def load_queries_from_str(self, sql_str: str, **aiosql_kwargs: Any) -> Any:
         """Load queries from SQL string using aiosql with SQLSpec adapter.
@@ -750,7 +769,8 @@ class AiosqlService(
             msg = "aiosql"
             raise MissingDependencyError(msg, "aiosql")
 
-        return aiosql.from_str(sql_str, self.aiosql_adapter, **aiosql_kwargs)
+        # aiosql expects either a string name for registered adapters or a class/instance
+        return aiosql.from_str(sql_str, self.aiosql_adapter, **aiosql_kwargs)  # type: ignore[arg-type]
 
     def execute_query_with_filters(
         self,

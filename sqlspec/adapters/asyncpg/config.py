@@ -98,7 +98,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
     supports_connection_pooling: ClassVar[bool] = True
 
     driver_type: type[AsyncpgDriver] = AsyncpgDriver
-    connection_type: type[AsyncpgConnection] = AsyncpgConnection
+    connection_type: type[AsyncpgConnection] = type(AsyncpgConnection)  # type: ignore[assignment]
 
     # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("numeric",)
@@ -290,11 +290,13 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """
         if self.pool_instance is None:
             self.pool_instance = await self._create_pool()
+        connection = None
         try:
             connection = await self.pool_instance.acquire()
             yield connection
         finally:
-            await self.pool_instance.release(connection)  # type: ignore[arg-type]
+            if connection is not None:
+                await self.pool_instance.release(connection)
 
     @asynccontextmanager
     async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncpgDriver, None]:

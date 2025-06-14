@@ -17,17 +17,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from urllib.parse import urlparse
 
+from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.exceptions import MissingDependencyError, wrap_exceptions
-from sqlspec.statement.result import ArrowResult
-from sqlspec.statement.sql import SQL
+from sqlspec.statement import SQL, ArrowResult
 from sqlspec.storage import storage_registry
-from sqlspec.typing import ArrowTable, RowT, SQLParameterType
+from sqlspec.typing import ArrowTable, MixinOf, RowT, SQLParameterType
 from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
 
 if TYPE_CHECKING:
-    from sqlspec.statement.filters import StatementFilter
-    from sqlspec.statement.result import SQLResult
-    from sqlspec.statement.sql import SQLConfig, Statement
+    from sqlspec.statement import SQLConfig, SQLResult, Statement, StatementFilter
     from sqlspec.storage.protocol import ObjectStoreProtocol
     from sqlspec.typing import ConnectionT
 
@@ -39,8 +37,10 @@ logger = logging.getLogger(__name__)
 WINDOWS_PATH_MIN_LENGTH = 3
 
 
-class StorageMixinBase:
+class StorageMixinBase(MixinOf(CommonDriverAttributesMixin)):
     """Base class with common storage functionality."""
+
+    __slots__ = ()
 
     # These attributes are expected to be provided by the driver class
     config: Any  # Driver config - drivers use 'config' not '_config'
@@ -63,49 +63,13 @@ class StorageMixinBase:
     @staticmethod
     def _is_uri(path_or_uri: str) -> bool:
         """Check if input is a URI rather than a relative path."""
-        cloud_schemes = {"s3", "gs", "gcs", "az", "azure", "abfs", "abfss", "file", "http", "https"}
-
-        # Convert Path objects to string
-        path_or_uri = str(path_or_uri)
-
+        schemes = {"s3", "gs", "gcs", "az", "azure", "abfs", "abfss", "file", "http", "https"}
         if "://" in path_or_uri:
             scheme = path_or_uri.split("://", maxsplit=1)[0].lower()
-            return scheme in cloud_schemes
-
-        # Windows drive letters (C:\path)
+            return scheme in schemes
         if len(path_or_uri) >= WINDOWS_PATH_MIN_LENGTH and path_or_uri[1:3] == ":\\":
             return True
-
-        # Unix absolute paths starting with /
         return bool(path_or_uri.startswith("/"))
-
-    # TODO: we need to add more dunder methods to the mixin like __native_arrow__, __native_parquet__, etc.  The driver itself should have something that also says what kind of operations it supports for the type
-    def _has_native_capability(self, operation: str, uri: str = "", format: str = "") -> bool:
-        """Check if database has native capability for operation."""
-        # Use driver capability flags for accurate detection
-        supports_parquet = getattr(self, "__supports_parquet__", False)
-        supports_arrow = getattr(self, "__supports_arrow__", False)
-
-        # Check for Parquet-specific operations
-        if operation in {"parquet", "import", "export"} and format.lower() == "parquet" and supports_parquet:
-            # Additional URI-specific checks for databases with conditional support
-            driver_class_name = self.__class__.__name__
-
-            # BigQuery: only supports GCS URIs natively
-            if "BigQuery" in driver_class_name:
-                return uri.startswith("gs://")
-
-            # For now, require explicit native method implementation
-            # Future: drivers can implement _export_native, _import_native etc.
-            return False
-
-        # Check for Arrow operations
-        if operation == "arrow":
-            return supports_arrow
-
-        # For now, only return True if the driver actually implements the methods
-        # Future: drivers can override this method for native capabilities
-        return False
 
     @staticmethod
     def _detect_format(uri: str) -> str:
@@ -158,59 +122,20 @@ class SyncStorageMixin(StorageMixinBase):
             ArrowResult wrapping the Arrow table
         """
         self._ensure_pyarrow_installed()
+        return self._fetch_arrow_table(
+            SQL(statement, parameters, *filters, config=config or self.config, dialect=self.dialect),
+            connection=connection,
+            **kwargs,
+        )
 
-        # Convert to SQL object for processing
-        # Get the driver's dialect if available
-        driver_dialect = getattr(self, "dialect", None)
-
-        if isinstance(statement, str):
-            sql_obj = SQL(statement, parameters=parameters, config=config or self.config, dialect=driver_dialect)
-        elif hasattr(statement, "to_sql"):  # SQL object
-            sql_obj = statement
-            if parameters is not None:
-                # Create a new SQL object with the provided parameters
-                sql_obj = SQL(
-                    statement.sql, parameters=parameters, config=config or sql_obj._config, dialect=driver_dialect
-                )
-        else:  # sqlglot Expression
-            sql_obj = SQL(statement, parameters=parameters, config=config or self.config, dialect=driver_dialect)
-
-        # Apply filters
-        for filter_func in filters:
-            sql_obj = filter_func(sql_obj)  # type: ignore[operator]
-
-        # Delegate to protected method that drivers can override
-        return self._fetch_arrow_table(sql_obj, connection=connection, **kwargs)
-
-    def _fetch_arrow_table(
-        self, sql_obj: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any
-    ) -> "ArrowResult":
-        """Protected method for driver-specific Arrow table fetching.
-
-        Drivers should override this method to provide native Arrow support.
-        The default implementation uses the generic fallback.
-
-        Args:
-            sql_obj: Processed SQL object
-            connection: Optional connection override
-            **kwargs: Additional driver-specific options
-
-        Returns:
-            ArrowResult with the fetched data
-        """
-        # Default implementation: use the fallback
-        return self._fetch_arrow_table_fallback(sql_obj, connection=connection, **kwargs)
-
-    def _fetch_arrow_table_fallback(
-        self, sql_obj: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any
-    ) -> "ArrowResult":
+    def _fetch_arrow_table(self, sql: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any) -> "ArrowResult":
         """Generic fallback for Arrow table fetching.
 
         This method executes a regular query and converts the results to Arrow format.
         Drivers can call this method when they don't have native Arrow support.
 
         Args:
-            sql_obj: SQL object to execute
+            sql: SQL object to execute
             connection: Optional connection override
             **kwargs: Additional options (unused in fallback)
 
@@ -218,13 +143,10 @@ class SyncStorageMixin(StorageMixinBase):
             ArrowResult with converted data
         """
         with wrap_exceptions():
-            # Execute regular query
-            result = self.execute(sql_obj, connection=connection)  # type: ignore[attr-defined]
-
-            # Convert to Arrow table
-            arrow_table = self._rows_to_arrow_table(result.data or [], result.column_names or [])
-
-            return ArrowResult(statement=sql_obj, data=arrow_table)
+            result = self.execute(sql, connection=connection)
+            return ArrowResult(
+                statement=sql, data=self._rows_to_arrow_table(result.data or [], result.column_names or [])
+            )
 
     def ingest_arrow_table(self, table: ArrowTable, target_table: str, mode: str = "append", **options: Any) -> int:
         """Ingest Arrow table into database table.
@@ -275,10 +197,7 @@ class SyncStorageMixin(StorageMixinBase):
 
             # Handle mode
             if mode == "replace":
-                # Truncate table first
-                from sqlspec.statement.sql import SQL
-
-                self.execute(SQL(f"TRUNCATE TABLE {target_table}"))  # type: ignore[attr-defined]
+                self.execute(SQL(f"TRUNCATE TABLE {target_table}"))
             elif mode == "create":
                 # For create mode, we would need to infer schema and create table
                 # This is complex, so for now just treat as append
@@ -289,13 +208,15 @@ class SyncStorageMixin(StorageMixinBase):
             placeholders = [f":{col}" for col in columns]
             insert_sql = f"INSERT INTO {target_table} ({', '.join(columns)}) VALUES ({', '.join(placeholders)})"
 
-            from sqlspec.statement.sql import SQL
-
             sql_obj = SQL(insert_sql, parameters=rows).as_many()
 
             # Execute batch insert
             result = self.execute_many(sql_obj)  # type: ignore[attr-defined]
-            return result.rows_affected if hasattr(result, "rows_affected") else len(rows)
+            return (
+                result.rows_affected
+                if hasattr(result, "rows_affected") and result.rows_affected is not None
+                else len(rows)
+            )
 
     # ============================================================================
     # Native Database Operations
@@ -305,7 +226,7 @@ class SyncStorageMixin(StorageMixinBase):
         self, source_uri: str, columns: "Optional[list[str]]" = None, **options: Any
     ) -> "SQLResult":
         """Read Parquet file directly using database's native capabilities."""
-        if not self._has_native_capability("parquet", source_uri, "parquet"):
+        if not self.supports_native_parquet_import:
             msg = (
                 f"{self.__class__.__name__} does not support direct Parquet reading. Use import_from_storage() instead."
             )
@@ -316,7 +237,7 @@ class SyncStorageMixin(StorageMixinBase):
 
     def write_parquet_direct(self, data: Union[str, ArrowTable], destination_uri: str, **options: Any) -> None:
         """Write Parquet file directly using database's native capabilities."""
-        if not self._has_native_capability("parquet", destination_uri, "parquet"):
+        if not self.supports_native_parquet_export:
             msg = f"{self.__class__.__name__} does not support direct Parquet writing. Use export_to_storage() instead."
             raise NotImplementedError(msg)
 
@@ -375,7 +296,7 @@ class SyncStorageMixin(StorageMixinBase):
         file_format = format or self._detect_format(destination_uri)
 
         # Try native database export first
-        if self._has_native_capability("export", destination_uri, file_format):
+        if file_format == "parquet" and self.supports_native_parquet_export:
             return self._export_native(query_str, destination_uri, file_format, **options)
 
         # Use storage backend
@@ -386,11 +307,15 @@ class SyncStorageMixin(StorageMixinBase):
                 # Use Arrow for efficient transfer - pass original query object to preserve parameters
                 arrow_result = self.fetch_arrow_table(query_obj)
                 arrow_table = arrow_result.data
-                backend.write_arrow(path, arrow_table, **options)
-                return arrow_table.num_rows
+                if arrow_table is not None:
+                    backend.write_arrow(path, arrow_table, **options)
+                    return arrow_table.num_rows
+                return 0
 
         # Use traditional export through temporary file
-        return self._export_via_backend(query_obj, backend, path, file_format, **options)
+        # Convert query_obj to string for _export_via_backend
+        query_str = query_obj if isinstance(query_obj, str) else cast("SQL", query_obj).to_sql()
+        return self._export_via_backend(query_str, backend, path, file_format, **options)
 
     def import_from_storage(
         self, source_uri: str, table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
@@ -439,7 +364,7 @@ class SyncStorageMixin(StorageMixinBase):
         file_format = format or self._detect_format(source_uri)
 
         # Try native database import first
-        if self._has_native_capability("import", source_uri, file_format):
+        if file_format == "parquet" and self.supports_native_parquet_import:
             return self._import_native(source_uri, table_name, file_format, mode, **options)
 
         # Use storage backend
@@ -494,7 +419,7 @@ class SyncStorageMixin(StorageMixinBase):
         if not rows:
             # Empty table with column names
             # Create empty arrays for each column
-            empty_data = {col: [] for col in columns}
+            empty_data: dict[str, list[Any]] = {col: [] for col in columns}
             return pa.table(empty_data)
 
         # Convert rows to columnar format
@@ -643,11 +568,8 @@ class AsyncStorageMixin(StorageMixinBase):
         self._ensure_pyarrow_installed()
 
         # Convert to SQL object for processing
-        # Get the driver's dialect if available
-        driver_dialect = getattr(self, "dialect", None)
-
         if isinstance(statement, str):
-            sql_obj = SQL(statement, parameters=parameters, config=config or self.config, dialect=driver_dialect)
+            sql_obj = SQL(statement, parameters=parameters, config=config or self.config, dialect=self.dialect)
         elif hasattr(statement, "to_sql"):  # SQL object
             sql_obj = statement  # type: ignore[assignment]
             if parameters is not None:
@@ -656,10 +578,10 @@ class AsyncStorageMixin(StorageMixinBase):
                     statement.sql,  # type: ignore[arg-type]
                     parameters=parameters,
                     config=config or sql_obj._config,
-                    dialect=driver_dialect,
+                    dialect=self.dialect,
                 )
         else:  # sqlglot Expression
-            sql_obj = SQL(statement, parameters=parameters, config=config or self.config, dialect=driver_dialect)
+            sql_obj = SQL(statement, parameters=parameters, config=config or self.config, dialect=self.dialect)
 
         # Apply filters
         for filter_func in filters:
@@ -777,7 +699,11 @@ class AsyncStorageMixin(StorageMixinBase):
 
             # Execute batch insert
             result = await self.execute_many(SQL(insert_sql, parameters=rows).as_many())  # type: ignore[attr-defined]
-            return result.rows_affected if hasattr(result, "rows_affected") else len(rows)
+            return (
+                result.rows_affected
+                if hasattr(result, "rows_affected") and result.rows_affected is not None
+                else len(rows)
+            )
 
     # ============================================================================
     # Storage Integration Operations (Async)
@@ -829,7 +755,7 @@ class AsyncStorageMixin(StorageMixinBase):
         file_format = format or self._detect_format(destination_uri)
 
         # Try native database export first
-        if self._has_native_capability("export", destination_uri, file_format):
+        if file_format == "parquet" and self.supports_native_parquet_export:
             return await self._export_native(query_str, destination_uri, file_format, **options)
 
         # Use storage backend
@@ -839,8 +765,10 @@ class AsyncStorageMixin(StorageMixinBase):
             if file_format == "parquet":
                 arrow_result = await self.fetch_arrow_table(query_str)
                 arrow_table = arrow_result.data
-                await backend.write_arrow_async(path, arrow_table, **options)
-                return arrow_table.num_rows
+                if arrow_table is not None:
+                    await backend.write_arrow_async(path, arrow_table, **options)
+                    return arrow_table.num_rows
+                return 0
 
         return await self._export_via_backend(query_str, backend, path, file_format, **options)
 
@@ -890,7 +818,7 @@ class AsyncStorageMixin(StorageMixinBase):
         file_format = format or self._detect_format(source_uri)
 
         # Try native database import first
-        if self._has_native_capability("import", source_uri, file_format):
+        if file_format == "parquet" and self.supports_native_parquet_import:
             return await self._import_native(source_uri, table_name, file_format, mode, **options)
 
         # Use storage backend

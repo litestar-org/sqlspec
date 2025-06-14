@@ -51,8 +51,10 @@ class DuckDBDriver(
     dialect: "DialectType" = "duckdb"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK, ParameterStyle.NUMERIC)
     default_parameter_style: ParameterStyle = ParameterStyle.QMARK
-    __supports_arrow__: ClassVar[bool] = True
-    __supports_parquet__: ClassVar[bool] = True
+    supports_native_arrow_export: ClassVar[bool] = True
+    supports_native_arrow_import: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = True
+    supports_native_parquet_import: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -173,7 +175,7 @@ class DuckDBDriver(
 
             return SQLResult[RowT](
                 statement=statement,
-                data=rows_as_dicts,  # type: ignore[arg-type]
+                data=rows_as_dicts,
                 column_names=column_names,
                 rows_affected=rows_affected,
                 operation_type="SELECT",
@@ -218,14 +220,14 @@ class DuckDBDriver(
     # DuckDB Native Arrow Support
     # ============================================================================
 
-    def _fetch_arrow_table(self, sql_obj: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
+    def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         """Enhanced DuckDB native Arrow table fetching with streaming support.
 
         DuckDB has excellent native Arrow support through execute().arrow()
         This is much faster than fetching rows and converting to Arrow.
 
         Args:
-            sql_obj: Processed SQL object
+            sql: Processed SQL object
             connection: Optional connection override
             **kwargs: Additional options (batch_size for streaming, etc.)
 
@@ -236,7 +238,7 @@ class DuckDBDriver(
 
         with wrap_exceptions():
             # Use DuckDB's native execute() with parameters for optimal performance
-            sql_string, parameters = sql_obj.compile(placeholder_style=self.default_parameter_style)
+            sql_string, parameters = sql.compile(placeholder_style=self.default_parameter_style)
 
             if self.instrumentation_config.log_queries:
                 logger.debug("Executing DuckDB Arrow query: %s", sql_string)
@@ -275,7 +277,7 @@ class DuckDBDriver(
                 if self.instrumentation_config.log_results_count:
                     logger.debug("Fetched Arrow table (zero-copy) with %d rows", arrow_table.num_rows)
 
-            return ArrowResult(statement=sql_obj, data=arrow_table)
+            return ArrowResult(statement=sql, data=arrow_table)
 
     # ============================================================================
     # DuckDB Native Storage Operations (Override base implementations)
@@ -385,17 +387,17 @@ class DuckDBDriver(
             # Execute the import
             result = connection.execute(sql).fetchone()
             if result:
-                rows_imported = result[0] if isinstance(result, tuple) else 0
+                rows_imported = int(result[0]) if isinstance(result, tuple) else 0
                 logger.debug("Imported %d rows to table %s", rows_imported, table_name)
                 return rows_imported
 
             # If no result, get count from the table
             count_result = connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
-            return count_result[0] if count_result else 0
+            return int(count_result[0]) if count_result else 0
 
     def _read_parquet_native(
         self, source_uri: str, columns: Optional[list[str]] = None, **options: Any
-    ) -> "ArrowResult":
+    ) -> "SQLResult[dict[str, Any]]":
         """Enhanced DuckDB native Parquet reader with multiple file and filter support."""
 
         with instrument_operation(self, "duckdb_read_parquet_native", "database"):
@@ -443,7 +445,24 @@ class DuckDBDriver(
             if self.instrumentation_config.log_results_count:
                 logger.debug("Read %d rows from Parquet source: %s", arrow_table.num_rows, source_uri)
 
-            return ArrowResult(statement=SQL(query), data=arrow_table)
+            # Convert Arrow table to dict rows for SQLResult compatibility
+            arrow_dict = arrow_table.to_pydict()
+            column_names = arrow_table.column_names
+            num_rows = arrow_table.num_rows
+
+            # Convert columnar dict to row-wise dicts
+            rows = []
+            for i in range(num_rows):
+                row = {col: arrow_dict[col][i] for col in column_names}
+                rows.append(row)
+
+            return SQLResult[dict[str, Any]](
+                statement=SQL(query),
+                data=rows,
+                column_names=column_names,
+                rows_affected=num_rows,
+                operation_type="SELECT",
+            )
 
     def _write_parquet_native(self, data: Union[str, "ArrowTable"], destination_uri: str, **options: Any) -> None:
         """Enhanced DuckDB native Parquet writer with advanced options."""
@@ -567,7 +586,7 @@ class DuckDBDriver(
 
     def read_parquet_direct(
         self, source_uri: str, columns: "Optional[list[str]]" = None, **options: Any
-    ) -> "ArrowResult":
+    ) -> "SQLResult[dict[str, Any]]":
         """Read Parquet file directly using database's native capabilities."""
         if not self._has_native_capability("read", source_uri, "parquet"):
             msg = (

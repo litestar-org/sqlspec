@@ -3,7 +3,7 @@ import datetime
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
 from adbc_driver_manager.dbapi import Connection, Cursor
 
@@ -11,7 +11,7 @@ from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
 from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.telemetry import instrument_operation
@@ -19,7 +19,6 @@ from sqlspec.utils.telemetry import instrument_operation
 if TYPE_CHECKING:
     from sqlspec.config import InstrumentationConfig
     from sqlspec.statement.parameters import ParameterInfo
-    from sqlspec.statement.result import ArrowResult
 
 __all__ = ("AdbcConnection", "AdbcDriver")
 
@@ -49,8 +48,10 @@ class AdbcDriver(
     - Driver manager abstraction for easy multi-database support
     """
 
-    __supports_arrow__: ClassVar[bool] = True
-    __supports_parquet__: ClassVar[bool] = True
+    supports_native_arrow_import: ClassVar[bool] = True
+    supports_native_arrow_export: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = True
+    supports_native_parquet_import: ClassVar[bool] = True
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK,)
     default_parameter_style: ParameterStyle = ParameterStyle.QMARK
 
@@ -68,7 +69,6 @@ class AdbcDriver(
             default_row_type=default_row_type,
         )
         self.dialect = self._get_dialect(connection)
-        # Set parameter style based on detected dialect
         self.default_parameter_style = self._get_parameter_style_for_dialect(self.dialect)
 
     @staticmethod
@@ -419,9 +419,11 @@ class AdbcDriver(
                         metadata={"status_message": result["status_message"]},
                     )
 
-                # Check if this is a DMLResultDict
-                if "rows_affected" in result:
-                    rows_affected = result["rows_affected"]
+                # Check if this is a DMLResultDict (type narrowing)
+                if "rows_affected" in result and isinstance(result, dict) and "statements_executed" not in result:
+                    # We know this is a DMLResultDict
+                    dml_result = cast("DMLResultDict", result)
+                    rows_affected = dml_result["rows_affected"]
                     status_message = result["status_message"]
 
                     if self.instrumentation_config.log_results_count:
@@ -443,29 +445,28 @@ class AdbcDriver(
     # ADBC Native Arrow Support
     # ============================================================================
 
-    def _fetch_arrow_table(self, sql_obj: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
+    def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         """ADBC native Arrow table fetching.
 
         ADBC has excellent native Arrow support through cursor.fetch_arrow_table()
         This provides zero-copy data transfer for optimal performance.
 
         Args:
-            sql_obj: Processed SQL object
+            sql: Processed SQL object
             connection: Optional connection override
             **kwargs: Additional options (e.g., batch_size for streaming)
 
         Returns:
             ArrowResult with native Arrow table
         """
-        from sqlspec.statement.result import ArrowResult
 
         conn = self._connection(connection)
 
         with wrap_exceptions(), self._get_cursor(conn) as cursor:
             # Execute the query
             cursor.execute(
-                sql_obj.to_sql(placeholder_style=self.default_parameter_style),
-                sql_obj.get_parameters(style=self.default_parameter_style) or [],
+                sql.to_sql(placeholder_style=self.default_parameter_style),
+                sql.get_parameters(style=self.default_parameter_style) or [],
             )
 
             # Use ADBC's native Arrow fetch
@@ -474,7 +475,7 @@ class AdbcDriver(
             if self.instrumentation_config.log_results_count and arrow_table:
                 logger.debug("Fetched Arrow table with %d rows", arrow_table.num_rows)
 
-            return ArrowResult(statement=sql_obj, data=arrow_table)
+            return ArrowResult(statement=sql, data=arrow_table)
 
     def _ingest_arrow_table(self, table: "Any", target_table: str, mode: str, **options: Any) -> int:
         """ADBC-optimized Arrow table ingestion using native bulk insert.
@@ -516,7 +517,7 @@ class AdbcDriver(
                     if self.instrumentation_config.log_results_count:
                         logger.debug("ADBC ingested %d rows into %s", rows_inserted, target_table)
 
-                    return rows_inserted
+                    return int(rows_inserted)
 
             # Generic fallback using batch INSERT
             return super()._ingest_arrow_table(table, target_table, mode, **options)

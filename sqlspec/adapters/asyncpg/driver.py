@@ -1,6 +1,6 @@
 import re
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from asyncpg import Connection as AsyncpgNativeConnection
 from asyncpg import Record
@@ -50,8 +50,6 @@ class AsyncpgDriver(
     dialect: "DialectType" = "postgres"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NUMERIC,)
     default_parameter_style: ParameterStyle = ParameterStyle.NUMERIC
-    __supports_arrow__: ClassVar[bool] = True
-    __supports_parquet__: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -158,7 +156,7 @@ class AsyncpgDriver(
             if self.instrumentation_config.log_parameters and params_list:
                 logger.debug("Query parameters (batch): %s", params_list)
 
-            result = await conn.executemany(sql, params_list)
+            result = await conn.executemany(sql, params_list)  # type: ignore[func-returns-value]
 
             # Try to extract rowcount from result if available
             rows_affected = 0
@@ -241,7 +239,7 @@ class AsyncpgDriver(
                 )
 
             # Handle DML results
-            rows_affected = result.get("rows_affected", -1)
+            rows_affected = cast("int", result.get("rows_affected", -1))
             status_message = result.get("status_message", "")
 
             if self.instrumentation_config.log_results_count:

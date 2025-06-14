@@ -6,7 +6,7 @@ import json
 import logging
 from collections.abc import Iterator
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Union, cast
 
 from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, QueryJobConfig, ScalarQueryParameter
 from google.cloud.bigquery.table import Row as BigQueryRow
@@ -66,9 +66,11 @@ class BigQueryDriver(
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NAMED_AT,)
     default_parameter_style: ParameterStyle = ParameterStyle.NAMED_AT
     connection: BigQueryConnection
-    __supports_arrow__: ClassVar[bool] = True
-    __supports_parquet__: ClassVar[bool] = True
     _default_query_job_config: Optional[QueryJobConfig]
+    supports_native_parquet_import: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = True
+    supports_native_arrow_import: ClassVar[bool] = True
+    supports_native_arrow_export: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -411,12 +413,12 @@ class BigQueryDriver(
                         # Handle Mock objects in unit tests
                         column_names = [field.name for field in schema]
                 logger.debug("Returning data result with %d rows", len(rows_list))
-                result: SelectResultDict = {
+                data_result: SelectResultDict = {
                     "data": rows_list,
                     "column_names": column_names,
                     "rows_affected": len(rows_list),
                 }
-                return result
+                return data_result
             # For DML/DDL queries that don't return data
             # BigQuery emulator may not properly report num_dml_affected_rows
             num_affected = query_job.num_dml_affected_rows
@@ -564,9 +566,11 @@ class BigQueryDriver(
                     metadata={"status_message": result["status_message"]},
                 )
 
-            # Check if this is a DMLResultDict
-            if "rows_affected" in result:
-                rows_affected = result["rows_affected"]
+            # Check if this is a DMLResultDict (type narrowing)
+            if "rows_affected" in result and isinstance(result, dict) and "statements_executed" not in result:
+                # We know this is a DMLResultDict
+                dml_result = cast("DMLResultDict", result)
+                rows_affected = dml_result["rows_affected"]
                 status_message = result["status_message"]
 
                 if self.instrumentation_config.log_results_count:
@@ -592,14 +596,14 @@ class BigQueryDriver(
     # BigQuery Native Arrow Support
     # ============================================================================
 
-    def _fetch_arrow_table(self, sql_obj: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "Any":
+    def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "Any":
         """BigQuery native Arrow table fetching.
 
         BigQuery has native Arrow support through QueryJob.to_arrow()
         This provides efficient columnar data transfer for analytics workloads.
 
         Args:
-            sql_obj: Processed SQL object
+            sql: Processed SQL object
             connection: Optional connection override
             **kwargs: Additional options (e.g., bq_job_timeout, use_bqstorage_api)
 
@@ -608,19 +612,18 @@ class BigQueryDriver(
         """
 
         # Execute the query directly with BigQuery to get the QueryJob
-        params = sql_obj.get_parameters(style=self.default_parameter_style)
+        params = sql.get_parameters(style=self.default_parameter_style)
         params_dict: dict[str, Any] = {}
         if params:
             if isinstance(params, dict):
                 params_dict = params
             else:
-                # Convert positional to dict for BigQuery
                 for i, value in enumerate(params if isinstance(params, (list, tuple)) else [params]):
                     params_dict[f"param_{i}"] = value
 
         bq_params = self._prepare_bq_query_parameters(params_dict) if params_dict else []
         query_job = self._run_query_job(
-            sql_obj.to_sql(placeholder_style=self.default_parameter_style), bq_params, connection=connection
+            sql.to_sql(placeholder_style=self.default_parameter_style), bq_params, connection=connection
         )
 
         with wrap_exceptions():
@@ -630,16 +633,10 @@ class BigQueryDriver(
 
             # Use BigQuery's native to_arrow() method
             # This supports the BigQuery Storage API for optimal performance
-            arrow_table = query_job.to_arrow(
-                # Pass through any BigQuery-specific options
-                create_bqstorage_client=kwargs.get("use_bqstorage_api", True)
-                # Additional options can be passed through
-            )
+            arrow_table = query_job.to_arrow(create_bqstorage_client=kwargs.get("use_bqstorage_api", True))
+            logger.debug("Fetched Arrow table with %d rows", arrow_table.num_rows)
 
-            if self.instrumentation_config.log_results_count and arrow_table:
-                logger.debug("Fetched Arrow table with %d rows", arrow_table.num_rows)
-
-            return ArrowResult(statement=sql_obj, data=arrow_table)
+            return ArrowResult(statement=sql, data=arrow_table)
 
     def _ingest_arrow_table(self, table: "Any", target_table: str, mode: str, **options: Any) -> int:
         """BigQuery-optimized Arrow table ingestion.

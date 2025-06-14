@@ -1,8 +1,9 @@
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
+from typing import Any, ClassVar, Optional, Union, cast
 
 from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
+from sqlglot.dialects.dialect import DialectType
 
 from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
@@ -14,9 +15,6 @@ from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import ensure_async_
 from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
-
-if TYPE_CHECKING:
-    from sqlglot.dialects.dialect import DialectType
 
 __all__ = ("OracleAsyncConnection", "OracleAsyncDriver", "OracleSyncConnection", "OracleSyncDriver")
 
@@ -37,8 +35,7 @@ class OracleSyncDriver(
         ParameterStyle.POSITIONAL_COLON,
     )
     default_parameter_style: ParameterStyle = ParameterStyle.NAMED_COLON
-    __supports_arrow__: ClassVar[bool] = True
-    __supports_parquet__: ClassVar[bool] = False
+    support_native_arrow_export = True
 
     def __init__(
         self,
@@ -216,7 +213,7 @@ class OracleAsyncDriver(
 ):
     """Oracle Async Driver Adapter. Refactored for new protocol."""
 
-    dialect: str = "oracle"
+    dialect: DialectType = "oracle"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (
         ParameterStyle.NAMED_COLON,
         ParameterStyle.POSITIONAL_COLON,

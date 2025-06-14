@@ -1,8 +1,7 @@
-# ruff: noqa: PLR6301
 import logging
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 import aiosqlite
 
@@ -35,8 +34,6 @@ class AiosqliteDriver(
     dialect: "DialectType" = "sqlite"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK, ParameterStyle.NAMED_COLON)
     default_parameter_style: ParameterStyle = ParameterStyle.QMARK
-    __supports_arrow__: ClassVar[bool] = True
-    __supports_parquet__: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -125,8 +122,10 @@ class AiosqliteDriver(
                 if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
                     fetched_data = await cursor.fetchall()
                     column_names = [desc[0] for desc in cursor.description or []]
+                    # Convert to list of dicts or tuples as expected by TypedDict
+                    data_list: list[Any] = list(fetched_data) if fetched_data else []
                     result: SelectResultDict = {
-                        "data": fetched_data,
+                        "data": data_list,
                         "column_names": column_names,
                         "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
                     }
@@ -237,9 +236,11 @@ class AiosqliteDriver(
                         metadata={"status_message": result["status_message"]},
                     )
 
-                # Check if this is a DMLResultDict
-                if "rows_affected" in result:
-                    rows_affected = result["rows_affected"]
+                # Check if this is a DMLResultDict (type narrowing)
+                if "rows_affected" in result and isinstance(result, dict) and "statements_executed" not in result:
+                    # We know this is a DMLResultDict
+                    dml_result = cast("DMLResultDict", result)
+                    rows_affected = dml_result["rows_affected"]
                     status_message = result["status_message"]
 
                     if self.instrumentation_config.log_results_count:

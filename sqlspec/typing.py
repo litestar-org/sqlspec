@@ -547,6 +547,18 @@ def is_expression(obj: "Any") -> "TypeGuard[exp.Expression]":
     return isinstance(obj, exp.Expression)
 
 
+def MixinOf(base: type[T]) -> type[T]:  # noqa: N802
+    """Useful function to make mixins with baseclass type hint
+
+    ```
+    class StorageMixin(MixinOf(DriverProtocol)): ...
+    ```
+    """
+    if TYPE_CHECKING:
+        return base
+    return type("<MixinOf>", (base,), {})
+
+
 __all__ = (
     "AIOSQL_INSTALLED",
     "FSSPEC_INSTALLED",
@@ -579,6 +591,7 @@ __all__ = (
     "Gauge",
     "Histogram",
     "Mapping",
+    "MixinOf",
     "ModelDTOT",
     "ModelDict",
     "ModelDict",

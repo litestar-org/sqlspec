@@ -78,6 +78,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     """
 
     __slots__ = (
+        "_connection_instance",
         "client_info",
         "client_options",
         "credentials",

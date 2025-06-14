@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from psqlpy import Connection
 
@@ -40,8 +40,6 @@ class PsqlpyDriver(
     Modern, high-performance driver for PostgreSQL.
     """
 
-    __supports_arrow__: ClassVar[bool] = True
-    __supports_parquet__: ClassVar[bool] = False
     dialect: "DialectType" = "postgres"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NUMERIC,)
     default_parameter_style: ParameterStyle = ParameterStyle.NUMERIC
@@ -88,13 +86,18 @@ class PsqlpyDriver(
 
             if self.returns_rows(statement.expression):
                 query_result = await conn.fetch(sql, parameters=parameters)
-                dict_rows: list[dict[str, Any]] = query_result or []
+                # Convert query_result to list of dicts
+                dict_rows: list[dict[str, Any]] = []
+                if query_result:
+                    dict_rows = [dict(row) for row in query_result] if hasattr(query_result, "__iter__") else []
                 column_names = list(dict_rows[0].keys()) if dict_rows else []
                 return {"data": dict_rows, "column_names": column_names, "rows_affected": len(dict_rows)}
 
             # For non-SELECT statements
             rows_affected = await conn.execute(sql, parameters=parameters)
-            return {"rows_affected": -1 if rows_affected is None else rows_affected, "status_message": "OK"}
+            # Cast to int - psqlpy execute returns a QueryResult that may need conversion
+            affected_count = getattr(rows_affected, "rows_affected", -1) if rows_affected is not None else -1
+            return {"rows_affected": affected_count, "status_message": "OK"}
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
@@ -106,8 +109,10 @@ class PsqlpyDriver(
             if self.instrumentation_config.log_parameters and param_list:
                 logger.debug("Psqlpy query parameters (batch): %s", param_list)
 
-            rows_affected = await conn.execute_many(sql, param_list or [])
-            return {"rows_affected": -1 if rows_affected is None else rows_affected, "status_message": "OK"}
+            rows_affected = await conn.execute_many(sql, param_list or [])  # type: ignore[func-returns-value]
+            # Cast to int - psqlpy execute_many returns a QueryResult that may need conversion
+            affected_count = getattr(rows_affected, "rows_affected", -1) if rows_affected is not None else -1
+            return {"rows_affected": affected_count, "status_message": "OK"}
 
     async def _execute_script(
         self, script: str, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
