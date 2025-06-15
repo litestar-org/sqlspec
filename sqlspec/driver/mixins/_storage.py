@@ -13,16 +13,20 @@ import csv
 import json
 import logging
 import tempfile
+from abc import ABC
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 from urllib.parse import urlparse
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.statement import SQL, ArrowResult, StatementFilter
 from sqlspec.storage import storage_registry
 from sqlspec.typing import ArrowTable, RowT, StatementParameters
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.statement import SQLConfig, SQLResult, Statement
     from sqlspec.storage.protocol import ObjectStoreProtocol
     from sqlspec.typing import ConnectionT
@@ -35,7 +39,7 @@ logger = logging.getLogger(__name__)
 WINDOWS_PATH_MIN_LENGTH = 3
 
 
-class StorageMixinBase:
+class StorageMixinBase(ABC):
     """Base class with common storage functionality."""
 
     __slots__ = ()
@@ -43,6 +47,9 @@ class StorageMixinBase:
     # These attributes are expected to be provided by the driver class
     config: Any  # Driver config - drivers use 'config' not '_config'
     _connection: Any  # Database connection
+    dialect: "DialectType"
+    supports_native_parquet_export: "ClassVar[bool]"
+    supports_native_parquet_import: "ClassVar[bool]"
 
     @staticmethod
     def _ensure_pyarrow_installed() -> None:
@@ -89,9 +96,83 @@ class StorageMixinBase:
 
         return format_map.get(extension, "csv")
 
+    def _resolve_backend_and_path(self, uri: str) -> "tuple[ObjectStoreProtocol, str]":
+        """Resolve backend and path from URI with Phase 3 URI-first routing.
+
+        Args:
+            uri: URI to resolve (e.g., "s3://bucket/path", "file:///local/path")
+
+        Returns:
+            Tuple of (backend, path) where path is relative to the backend's base path
+        """
+        # Convert Path objects to string
+        uri = str(uri)
+        original_path = uri
+
+        # Convert absolute paths to file:// URIs if needed
+        if self._is_uri(uri) and "://" not in uri:
+            # It's an absolute path without scheme
+            uri = f"file://{uri}"
+
+        backend = self._get_storage_backend(uri)
+
+        # For file:// URIs, return just the path part for the backend
+        path = uri[7:] if uri.startswith("file://") else original_path
+
+        return backend, path
+
+    @staticmethod
+    def _rows_to_arrow_table(rows: "list[RowT]", columns: "list[str]") -> ArrowTable:
+        """Convert rows to Arrow table."""
+        import pyarrow as pa
+
+        if not rows:
+            # Empty table with column names
+            # Create empty arrays for each column
+            empty_data: dict[str, list[Any]] = {col: [] for col in columns}
+            return pa.table(empty_data)  # type: ignore[no-any-return]
+
+        # Convert rows to columnar format
+        if isinstance(rows[0], dict):
+            # Dict rows
+            data = {col: [cast("dict[str, Any]", row).get(col) for row in rows] for col in columns}
+        else:
+            # Tuple/list rows
+            data = {col: [cast("tuple[Any, ...]", row)[i] for row in rows] for i, col in enumerate(columns)}
+
+        return pa.table(data)  # type: ignore[no-any-return]
+
 
 class SyncStorageMixin(StorageMixinBase):
     """Unified storage operations for synchronous drivers."""
+
+    def ingest_arrow_table(self, table: "ArrowTable", table_name: str, mode: str = "create", **options: Any) -> int:
+        """Ingest an Arrow table into the database.
+
+        This public method provides a consistent entry point and can be used for
+        instrumentation, logging, etc., while delegating the actual work to the
+        driver-specific `_ingest_arrow_table` implementation.
+        """
+        return self._ingest_arrow_table(table, table_name, mode, **options)
+
+    def _ingest_arrow_table(self, table: "ArrowTable", table_name: str, mode: str = "create", **options: Any) -> int:
+        """Generic fallback for ingesting an Arrow table.
+
+        This implementation writes the Arrow table to a temporary Parquet file
+        and then uses the driver's generic `_bulk_load_file` capability.
+        Drivers with more efficient, native Arrow ingestion methods should override this.
+        """
+        import pyarrow.parquet as pq
+
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            pq.write_table(table, tmp_path)  # pyright: ignore
+
+        try:
+            # Use database's bulk load capabilities for Parquet
+            return self._bulk_load_file(tmp_path, table_name, "parquet", mode, **options)
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
     # ============================================================================
     # Core Arrow Operations
@@ -121,7 +202,7 @@ class SyncStorageMixin(StorageMixinBase):
         self._ensure_pyarrow_installed()
 
         return self._fetch_arrow_table(
-            SQL(statement, *parameters, config=_config or self.config, dialect=self.dialect, **kwargs),  # pyright: ignore
+            SQL(statement, *parameters, config=_config or self.config, dialect=self.dialect, **kwargs),  # type: ignore[arg-type]
             connection=_connection,
             **kwargs,
         )
@@ -174,9 +255,9 @@ class SyncStorageMixin(StorageMixinBase):
         Returns:
             Number of rows exported
         """
-        sql_obj = SQL(statement, *parameters, config=_config or self.config, dialect=self.dialect, **options)  # pyright: ignore
+        sql = SQL(statement, *parameters, config=_config or self.config, dialect=self.dialect, **options)  # pyright: ignore
 
-        return self._export_to_storage(sql_obj, destination_uri, format, connection=_connection, **options)
+        return self._export_to_storage(sql, destination_uri, format, connection=_connection, **options)
 
     def _export_to_storage(
         self,
@@ -191,7 +272,7 @@ class SyncStorageMixin(StorageMixinBase):
     ) -> int:
         # Convert query to string for format detection
         if hasattr(statement, "to_sql"):  # SQL object
-            query_str = statement.to_sql()
+            query_str = cast("SQL", statement).to_sql()
         elif isinstance(statement, str):
             query_str = statement
         else:  # sqlglot Expression
@@ -274,56 +355,6 @@ class SyncStorageMixin(StorageMixinBase):
         return self._import_via_backend(backend, path, table_name, file_format, mode, **options)
 
     # ============================================================================
-    # Helper Methods
-    # ============================================================================
-
-    def _resolve_backend_and_path(self, uri: str) -> "tuple[ObjectStoreProtocol, str]":
-        """Resolve backend and path from URI with Phase 3 URI-first routing.
-
-        Args:
-            uri: URI to resolve (e.g., "s3://bucket/path", "file:///local/path")
-
-        Returns:
-            Tuple of (backend, path) where path is relative to the backend's base path
-        """
-        # Convert Path objects to string
-        uri = str(uri)
-        original_path = uri
-
-        # Convert absolute paths to file:// URIs if needed
-        if self._is_uri(uri) and "://" not in uri:
-            # It's an absolute path without scheme
-            uri = f"file://{uri}"
-
-        backend = self._get_storage_backend(uri)
-
-        # For file:// URIs, return just the path part for the backend
-        path = uri[7:] if uri.startswith("file://") else original_path
-
-        return backend, path
-
-    @staticmethod
-    def _rows_to_arrow_table(rows: "list[RowT]", columns: "list[str]") -> ArrowTable:
-        """Convert rows to Arrow table."""
-        import pyarrow as pa
-
-        if not rows:
-            # Empty table with column names
-            # Create empty arrays for each column
-            empty_data: dict[str, list[Any]] = {col: [] for col in columns}
-            return pa.table(empty_data)
-
-        # Convert rows to columnar format
-        if isinstance(rows[0], dict):
-            # Dict rows
-            data = {col: [cast("dict", row).get(col) for row in rows] for col in columns}
-        else:
-            # Tuple/list rows
-            data = {col: [cast("tuple[Any, ...]", row)[i] for row in rows] for i, col in enumerate(columns)}
-
-        return pa.table(data)
-
-    # ============================================================================
     # Database-Specific Implementation Hooks
     # ============================================================================
 
@@ -353,7 +384,6 @@ class SyncStorageMixin(StorageMixinBase):
         self, query: str, backend: "ObjectStoreProtocol", path: str, format: str, **options: Any
     ) -> int:
         """Export via storage backend using temporary file."""
-        from sqlspec.statement.sql import SQL
 
         # Execute query and get results
         result = self.execute(SQL(query))  # type: ignore[attr-defined]
@@ -430,6 +460,41 @@ class SyncStorageMixin(StorageMixinBase):
 class AsyncStorageMixin(StorageMixinBase):
     """Unified storage operations for asynchronous drivers."""
 
+    async def ingest_arrow_table(
+        self, table: "ArrowTable", table_name: str, mode: str = "create", **options: Any
+    ) -> int:
+        """Ingest an Arrow table into the database asynchronously.
+
+        This public method provides a consistent entry point and can be used for
+        instrumentation, logging, etc., while delegating the actual work to the
+        driver-specific `_ingest_arrow_table` implementation.
+        """
+        self._ensure_pyarrow_installed()
+        return await self._ingest_arrow_table(table, table_name, mode, **options)
+
+    async def _ingest_arrow_table(
+        self, table: "ArrowTable", table_name: str, mode: str = "create", **options: Any
+    ) -> int:
+        """Generic async fallback for ingesting an Arrow table.
+
+        This implementation writes the Arrow table to a temporary Parquet file
+        and then uses the driver's generic `_bulk_load_file` capability.
+        Drivers with more efficient, native Arrow ingestion methods should override this.
+        """
+        import pyarrow.parquet as pq
+
+        # Use an async-friendly way to handle the temporary file if possible,
+        # but for simplicity, standard tempfile is acceptable here as it's a fallback.
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            await async_(pq.write_table)(table, tmp_path)  # pyright: ignore
+
+            try:
+                # Use database's async bulk load capabilities for Parquet
+                return await self._bulk_load_file(tmp_path, table_name, "parquet", mode, **options)
+            finally:
+                tmp_path.unlink(missing_ok=True)
+
     # ============================================================================
     # Core Arrow Operations (Async)
     # ============================================================================
@@ -458,8 +523,8 @@ class AsyncStorageMixin(StorageMixinBase):
         self._ensure_pyarrow_installed()
 
         # Separate parameters from filters
-        param_values = []
-        filters = []
+        param_values: list[StatementParameters] = []
+        filters: list[StatementFilter] = []
         for param in parameters:
             if isinstance(param, StatementFilter):
                 filters.append(param)
@@ -467,59 +532,39 @@ class AsyncStorageMixin(StorageMixinBase):
                 param_values.append(param)
 
         # Use first parameter as the primary parameter value, or None if no parameters
-        primary_params = param_values[0] if param_values else None
+        primary_params: Optional[StatementParameters] = param_values[0] if param_values else None
 
         # Convert to SQL object for processing
-        sql_obj = SQL(
-            statement, primary_params, *filters, config=_config or self.config, dialect=self.dialect, **kwargs
-        )
+        sql = SQL(statement, primary_params, *filters, config=_config or self.config, dialect=self.dialect, **kwargs)
 
         # Delegate to protected method that drivers can override
-        return await self._fetch_arrow_table(sql_obj, connection=_connection, **kwargs)
+        return await self._fetch_arrow_table(sql, connection=_connection, **kwargs)
 
     async def _fetch_arrow_table(
-        self, sql_obj: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any
-    ) -> "ArrowResult":
-        """Protected async method for driver-specific Arrow table fetching.
-
-        Async drivers should override this method to provide native Arrow support.
-        The default implementation uses the generic fallback.
-
-        Args:
-            sql_obj: Processed SQL object
-            connection: Optional connection override
-            **kwargs: Additional driver-specific options
-
-        Returns:
-            ArrowResult with the fetched data
-        """
-        # Default implementation: use the fallback
-        return await self._fetch_arrow_table_fallback(sql_obj, connection=connection, **kwargs)
-
-    async def _fetch_arrow_table_fallback(
-        self, sql_obj: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any
+        self, sql: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> "ArrowResult":
         """Generic async fallback for Arrow table fetching.
 
         This method executes a regular query and converts the results to Arrow format.
-        Async drivers can call this method when they don't have native Arrow support.
+        Drivers should override this method to provide native Arrow support if available.
+        If a driver has partial native support, it can call `super()._fetch_arrow_table(...)`
+        to use this fallback implementation.
 
         Args:
-            sql_obj: SQL object to execute
+            sql: SQL object to execute
             connection: Optional connection override
             **kwargs: Additional options (unused in fallback)
 
         Returns:
             ArrowResult with converted data
         """
-
         # Execute regular query
-        result = await self.execute(sql_obj, _connection=connection)  # type: ignore[attr-defined]
+        result = await self.execute(sql, _connection=connection)  # type: ignore[attr-defined]
 
         # Convert to Arrow table
         arrow_table = self._rows_to_arrow_table(result.data or [], result.column_names or [])
 
-        return ArrowResult(statement=sql_obj, data=arrow_table)
+        return ArrowResult(statement=sql, data=arrow_table)
 
     async def export_to_storage(
         self,
@@ -561,6 +606,11 @@ class AsyncStorageMixin(StorageMixinBase):
             Number of rows exported
         """
         file_format = format or self._detect_format(destination_uri)
+
+        # Try native database export first
+        if file_format == "parquet" and self.supports_native_parquet_export:
+            return await self._export_native(query.as_script().sql, destination_uri, file_format, **options)
+
         backend, path = self._resolve_backend_and_path(destination_uri)
 
         if file_format == "parquet":
@@ -612,59 +662,9 @@ class AsyncStorageMixin(StorageMixinBase):
 
         if file_format == "parquet":
             arrow_table = await backend.read_arrow_async(path, **options)
-
-            if arrow_table is not None:
-                return await self.ingest_arrow_table(arrow_table, table_name, mode=mode)
+            return await self.ingest_arrow_table(arrow_table, table_name, mode=mode)
 
         return await self._import_via_backend(backend, path, table_name, file_format, mode, **options)
-
-    # ============================================================================
-    # Async Helper Methods
-    # ============================================================================
-
-    def _resolve_backend_and_path(self, uri: str) -> "tuple[ObjectStoreProtocol, str]":
-        """Resolve backend and path from URI with Phase 3 URI-first routing.
-
-        Args:
-            uri: URI to resolve (e.g., "s3://bucket/path", "file:///local/path")
-
-        Returns:
-            Tuple of (backend, path) where path is relative to the backend's base path
-        """
-        # Convert Path objects to string
-        uri = str(uri)
-        original_path = uri
-
-        # Convert absolute paths to file:// URIs if needed
-        if self._is_uri(uri) and "://" not in uri:
-            # It's an absolute path without scheme
-            uri = f"file://{uri}"
-
-        backend = self._get_storage_backend(uri)
-
-        # For file:// URIs, return just the path part for the backend
-        path = uri[7:] if uri.startswith("file://") else original_path
-
-        return backend, path
-
-    @staticmethod
-    def _rows_to_arrow_table(rows: "list[RowT]", columns: "list[str]") -> ArrowTable:
-        """Convert rows to Arrow table - reuse base implementation."""
-        import pyarrow as pa
-
-        if not rows:
-            empty_data: dict[str, Any] = {col: [] for col in columns}
-            return pa.table(empty_data)
-
-        # Convert rows to columnar format
-        if isinstance(rows[0], dict):
-            # Dict rows
-            data = {col: [cast("dict", row).get(col) for row in rows] for col in columns}
-        else:
-            # Tuple/list rows
-            data = {col: [cast("tuple[Any, ...]", row)[i] for row in rows] for i, col in enumerate(columns)}
-
-        return pa.table(data)
 
     # ============================================================================
     # Async Database-Specific Implementation Hooks

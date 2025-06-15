@@ -1,6 +1,7 @@
+import io
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from psycopg import AsyncConnection, Connection
 from psycopg.rows import DictRow as PsycopgDictRow
@@ -15,7 +16,7 @@ from sqlspec.driver.mixins import (
     TypeCoercionMixin,
 )
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT, is_dict_with_field
 from sqlspec.utils.logging import get_logger
@@ -55,26 +56,6 @@ class PsycopgSyncDriver(
         default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
         super().__init__(connection=connection, config=config, default_row_type=default_row_type)
-
-    def _coerce_boolean(self, value: Any) -> Any:
-        """PostgreSQL has native boolean support, return as-is."""
-        return value
-
-    def _coerce_decimal(self, value: Any) -> Any:
-        """PostgreSQL has native decimal support."""
-        if isinstance(value, str):
-            from decimal import Decimal
-
-            return Decimal(value)
-        return value
-
-    def _coerce_json(self, value: Any) -> Any:
-        """PostgreSQL has native JSON/JSONB support, return as-is."""
-        return value
-
-    def _coerce_array(self, value: Any) -> Any:
-        """PostgreSQL has native array support, return as-is."""
-        return value
 
     @staticmethod
     @contextmanager
@@ -126,11 +107,11 @@ class PsycopgSyncDriver(
                 result: SelectResultDict = {
                     "data": fetched_data,
                     "column_names": column_names,
-                    "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                    "rows_affected": cursor.rowcount,
                 }
                 return result
             dml_result: DMLResultDict = {
-                "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                "rows_affected": cursor.rowcount,
                 "status_message": cursor.statusmessage or "OK",
             }
             return dml_result
@@ -141,10 +122,7 @@ class PsycopgSyncDriver(
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
             cursor.executemany(sql, param_list or [])
-            result: DMLResultDict = {
-                "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
-                "status_message": cursor.statusmessage or "OK",
-            }
+            result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": cursor.statusmessage or "OK"}
             return result
 
     def _execute_script(
@@ -158,6 +136,39 @@ class PsycopgSyncDriver(
                 "status_message": cursor.statusmessage or "SCRIPT EXECUTED",
             }
             return result
+
+    def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
+        self._ensure_pyarrow_installed()
+        conn = self._connection(connection)
+
+        with self._get_cursor(conn) as cursor:
+            cursor.execute(
+                sql.to_sql(placeholder_style=self.default_parameter_style),
+                sql.get_parameters(style=self.default_parameter_style) or [],
+            )
+            arrow_table = cursor.fetch_arrow_table()
+            return ArrowResult(statement=sql, data=arrow_table)
+
+    def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
+        self._ensure_pyarrow_installed()
+        import pyarrow.csv as pacsv
+
+        conn = self._connection(None)
+        with self._get_cursor(conn) as cursor:
+            if mode == "replace":
+                cursor.execute(f"TRUNCATE TABLE {table_name}")
+            elif mode == "create":
+                msg = "'create' mode is not supported for psycopg ingestion."
+                raise NotImplementedError(msg)
+
+            buffer = io.StringIO()
+            pacsv.write_csv(table, buffer)
+            buffer.seek(0)
+
+            with cursor.copy(f"COPY {table_name} FROM STDIN WITH (FORMAT CSV, HEADER)") as copy:
+                copy.write(buffer.read())
+
+            return cursor.rowcount if cursor.rowcount is not None else -1
 
     def _wrap_select_result(
         self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
@@ -234,26 +245,6 @@ class PsycopgAsyncDriver(
     def __init__(self, connection: PsycopgAsyncConnection, config: Optional[SQLConfig] = None) -> None:
         super().__init__(connection=connection, config=config, default_row_type=DictRow)
 
-    def _coerce_boolean(self, value: Any) -> Any:
-        """PostgreSQL has native boolean support, return as-is."""
-        return value
-
-    def _coerce_decimal(self, value: Any) -> Any:
-        """PostgreSQL has native decimal support."""
-        if isinstance(value, str):
-            from decimal import Decimal
-
-            return Decimal(value)
-        return value
-
-    def _coerce_json(self, value: Any) -> Any:
-        """PostgreSQL has native JSON/JSONB support, return as-is."""
-        return value
-
-    def _coerce_array(self, value: Any) -> Any:
-        """PostgreSQL has native array support, return as-is."""
-        return value
-
     @staticmethod
     @asynccontextmanager
     async def _get_cursor(connection: PsycopgAsyncConnection) -> AsyncGenerator[Any, None]:
@@ -316,13 +307,13 @@ class PsycopgAsyncDriver(
                 result: SelectResultDict = {
                     "data": fetched_data,
                     "column_names": column_names,
-                    "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                    "rows_affected": cursor.rowcount,
                 }
                 return result
 
             # For DML/DDL queries that don't return data
             dml_result: DMLResultDict = {
-                "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                "rows_affected": cursor.rowcount,
                 "status_message": cursor.statusmessage or "OK",
             }
             return dml_result
@@ -334,10 +325,7 @@ class PsycopgAsyncDriver(
         async with self._get_cursor(conn) as cursor:
             # Psycopg expects a list of parameter dicts for executemany
             await cursor.executemany(sql, param_list or [])
-            result: DMLResultDict = {
-                "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
-                "status_message": cursor.statusmessage or "OK",
-            }
+            result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": cursor.statusmessage or "OK"}
             return result
 
     async def _execute_script(
@@ -353,6 +341,39 @@ class PsycopgAsyncDriver(
             }
             return result
 
+    async def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
+        self._ensure_pyarrow_installed()
+        conn = self._connection(connection)
+
+        async with self._get_cursor(conn) as cursor:
+            await cursor.execute(
+                sql.to_sql(placeholder_style=self.default_parameter_style),
+                sql.get_parameters(style=self.default_parameter_style) or [],
+            )
+            arrow_table = await cursor.fetch_arrow_table()
+            return ArrowResult(statement=sql, data=arrow_table)
+
+    async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
+        self._ensure_pyarrow_installed()
+        import pyarrow.csv as pacsv
+
+        conn = self._connection(None)
+        async with self._get_cursor(conn) as cursor:
+            if mode == "replace":
+                await cursor.execute(f"TRUNCATE TABLE {table_name}")
+            elif mode == "create":
+                msg = "'create' mode is not supported for psycopg ingestion."
+                raise NotImplementedError(msg)
+
+            buffer = io.StringIO()
+            pacsv.write_csv(table, buffer)
+            buffer.seek(0)
+
+            async with cursor.copy(f"COPY {table_name} FROM STDIN WITH (FORMAT CSV, HEADER)") as copy:
+                await copy.write(buffer.read())
+
+            return cursor.rowcount if cursor.rowcount is not None else -1
+
     async def _wrap_select_result(
         self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
@@ -362,15 +383,10 @@ class PsycopgAsyncDriver(
         rows_affected = result["rows_affected"]
         rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
 
-        logger.debug("Query returned %d rows", len(rows_as_dicts))
-
         if schema_type:
-            converted_data_seq = self.to_schema(data=fetched_data, schema_type=schema_type)
-            # Ensure data is a list for SQLResult
-            converted_data_list = list(converted_data_seq) if converted_data_seq is not None else []
             return SQLResult[ModelDTOT](
                 statement=statement,
-                data=converted_data_list,
+                data=list(self.to_schema(data=fetched_data, schema_type=schema_type)),
                 column_names=column_names,
                 rows_affected=rows_affected,
                 operation_type="SELECT",
@@ -390,31 +406,23 @@ class PsycopgAsyncDriver(
         if statement.expression:
             operation_type = str(statement.expression.key).upper()
 
-        # Handle TypedDict results
-        if isinstance(result, dict):
-            # Check if this is a ScriptResultDict
-            if "statements_executed" in result:
-                return SQLResult[RowT](
-                    statement=statement,
-                    data=[],
-                    rows_affected=0,
-                    operation_type=operation_type or "SCRIPT",
-                    metadata={"status_message": result["status_message"]},
-                )
+        if is_dict_with_field(result, "statements_executed"):
+            return SQLResult[RowT](
+                statement=statement,
+                data=[],
+                rows_affected=0,
+                operation_type=operation_type or "SCRIPT",
+                metadata={"status_message": result["status_message"]},
+            )
 
-            # Check if this is a DMLResultDict (type narrowing)
-            if "rows_affected" in result and "statements_executed" not in result:
-                # We know this is a DMLResultDict
-                dml_result = cast("DMLResultDict", result)
-                rows_affected = dml_result["rows_affected"]
-                status_message = result["status_message"]
-                return SQLResult[RowT](
-                    statement=statement,
-                    data=[],
-                    rows_affected=rows_affected,
-                    operation_type=operation_type,
-                    metadata={"status_message": status_message},
-                )
+        if is_dict_with_field(result, "rows_affected"):
+            return SQLResult[RowT](
+                statement=statement,
+                data=[],
+                rows_affected=result["rows_affected"],
+                operation_type=operation_type,
+                metadata={"status_message": result["status_message"]},
+            )
 
         # This shouldn't happen with TypedDict approach
         msg = f"Unexpected result type: {type(result)}"

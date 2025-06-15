@@ -27,22 +27,18 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
 
     __slots__ = ("config", "connection", "default_row_type")
 
-    dialect: "DialectType"  # DialectType
+    dialect: "DialectType"
     """The SQL dialect supported by the underlying database driver."""
     supported_parameter_styles: "tuple[ParameterStyle, ...]"
     """The parameter styles supported by this driver."""
     default_parameter_style: "ParameterStyle"
     """The default parameter style to convert to when unsupported style is detected."""
-
     supports_native_parquet_export: "ClassVar[bool]" = False
     """Indicates if the driver supports native Parquet export operations."""
-
     supports_native_parquet_import: "ClassVar[bool]" = False
     """Indicates if the driver supports native Parquet import operations."""
-
     supports_native_arrow_export: "ClassVar[bool]" = False
     """Indicates if the driver supports native Arrow export operations."""
-
     supports_native_arrow_import: "ClassVar[bool]" = False
     """Indicates if the driver supports native Arrow import operations."""
 

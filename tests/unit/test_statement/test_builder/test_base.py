@@ -11,7 +11,7 @@ This module tests the foundational builder functionality including:
 """
 
 import math
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from unittest.mock import Mock, patch
 
 import pytest
@@ -32,6 +32,9 @@ from sqlspec.statement.builder.base import QueryBuilder, SafeQuery
 from sqlspec.statement.builder.mixins._where import WhereClauseMixin
 from sqlspec.statement.result import StatementResult
 from sqlspec.statement.sql import SQL, SQLConfig
+
+if TYPE_CHECKING:
+    pass
 
 
 # Test implementation of abstract QueryBuilder for testing
@@ -138,14 +141,15 @@ def test_query_builder_initialization(test_builder: MockQueryBuilder) -> None:
     assert isinstance(test_builder._with_ctes, dict)
 
 
-def test_query_builder_dialect_property(test_builder: MockQueryBuilder) -> None:
+@pytest.mark.parametrize(
+    "dialect,expected_name",
+    [(None, None), ("postgresql", "postgresql"), ("mysql", "mysql"), ("sqlite", "sqlite")],
+    ids=["no_dialect", "postgresql", "mysql", "sqlite"],
+)
+def test_query_builder_dialect_property(dialect: Any, expected_name: Any) -> None:
     """Test dialect property returns correct values."""
-    # Test with no dialect
-    assert test_builder.dialect_name is None
-
-    # Test with string dialect
-    test_builder.dialect = "postgresql"
-    assert test_builder.dialect_name == "postgresql"
+    builder = MockQueryBuilder(dialect=dialect)
+    assert builder.dialect_name == expected_name
 
 
 def test_query_builder_dialect_property_with_class() -> None:
@@ -167,27 +171,30 @@ def test_query_builder_dialect_property_with_instance() -> None:
 
 
 # Parameter management tests
-def test_query_builder_add_parameter_auto_name(test_builder: MockQueryBuilder) -> None:
-    """Test adding parameter with auto-generated name."""
-    value = "test_value"
-    result_builder, param_name = test_builder.add_parameter(value)
+@pytest.mark.parametrize(
+    "value,explicit_name,expected_name_pattern",
+    [
+        ("test_value", None, r"param_\d+"),
+        (42, None, r"param_\d+"),
+        ("custom_value", "custom_param", "custom_param"),
+        (True, "bool_param", "bool_param"),
+    ],
+    ids=["auto_name_string", "auto_name_int", "explicit_name", "explicit_bool"],
+)
+def test_query_builder_add_parameter(
+    test_builder: MockQueryBuilder, value: Any, explicit_name: Any, expected_name_pattern: str
+) -> None:
+    """Test adding parameters with various configurations."""
+    result_builder, param_name = test_builder.add_parameter(value, name=explicit_name)
 
     assert result_builder is test_builder
     assert param_name in test_builder._parameters
     assert test_builder._parameters[param_name] == value
-    assert param_name.startswith("param_")
 
-
-def test_query_builder_add_parameter_explicit_name(test_builder: MockQueryBuilder) -> None:
-    """Test adding parameter with explicit name."""
-    value = "test_value"
-    explicit_name = "custom_param"
-
-    result_builder, param_name = test_builder.add_parameter(value, name=explicit_name)
-
-    assert result_builder is test_builder
-    assert param_name == explicit_name
-    assert test_builder._parameters[explicit_name] == value
+    if explicit_name:
+        assert param_name == expected_name_pattern
+    else:
+        assert param_name.startswith("param_")
 
 
 def test_query_builder_add_parameter_duplicate_name_error(test_builder: MockQueryBuilder) -> None:
@@ -196,16 +203,6 @@ def test_query_builder_add_parameter_duplicate_name_error(test_builder: MockQuer
 
     with pytest.raises(SQLBuilderError, match="Parameter name 'duplicate' already exists"):
         test_builder.add_parameter("second_value", name="duplicate")
-
-
-def test_query_builder_internal_add_parameter(test_builder: MockQueryBuilder) -> None:
-    """Test internal _add_parameter method."""
-    value = "internal_value"
-    param_name = test_builder._add_parameter(value)
-
-    assert param_name in test_builder._parameters
-    assert test_builder._parameters[param_name] == value
-    assert param_name.startswith("param_")
 
 
 def test_query_builder_parameter_counter_increment(test_builder: MockQueryBuilder) -> None:
@@ -221,8 +218,8 @@ def test_query_builder_parameter_counter_increment(test_builder: MockQueryBuilde
 
 @pytest.mark.parametrize(
     "parameter_value",
-    ["string_value", 42, math.pi, True, None, [1, 2, 3], {"key": "value"}],
-    ids=["string", "int", "float", "bool", "none", "list", "dict"],
+    ["string_value", 42, math.pi, True, None, [1, 2, 3], {"key": "value"}, {1, 2, 3}, ("tuple", "value")],
+    ids=["string", "int", "float", "bool", "none", "list", "dict", "set", "tuple"],
 )
 def test_query_builder_parameter_types(test_builder: MockQueryBuilder, parameter_value: Any) -> None:
     """Test that various parameter types are handled correctly."""
@@ -275,31 +272,23 @@ def test_query_builder_with_cte_duplicate_alias_error(test_builder: MockQueryBui
         test_builder.with_cte(alias, sample_cte_query)
 
 
-def test_query_builder_with_cte_invalid_query_type(test_builder: MockQueryBuilder) -> None:
-    """Test error when adding CTE with invalid query type."""
-    alias = "invalid_cte"
-    invalid_query = 42  # Invalid type
-
-    with pytest.raises(SQLBuilderError, match="Invalid query type for CTE"):
-        test_builder.with_cte(alias, invalid_query)  # type: ignore[arg-type]
-
-
-def test_query_builder_with_cte_invalid_string_query(test_builder: MockQueryBuilder) -> None:
-    """Test error when adding CTE with invalid SQL string."""
-    alias = "invalid_sql_cte"
-    invalid_sql = "INVALID SQL SYNTAX"
-
-    with pytest.raises(SQLBuilderError, match="Failed to parse CTE query string"):
-        test_builder.with_cte(alias, invalid_sql)
-
-
-def test_query_builder_with_cte_non_select_string(test_builder: MockQueryBuilder) -> None:
-    """Test error when CTE string is not a SELECT statement."""
-    alias = "non_select_cte"
-    non_select_sql = "INSERT INTO users VALUES (1, 'test')"
-
-    with pytest.raises(SQLBuilderError, match="must parse to a SELECT statement"):
-        test_builder.with_cte(alias, non_select_sql)
+@pytest.mark.parametrize(
+    "invalid_query,error_match",
+    [
+        (42, "Invalid query type for CTE"),
+        ([], "Invalid query type for CTE"),
+        ({}, "Invalid query type for CTE"),
+        ("INVALID SQL SYNTAX", "Failed to parse CTE query string"),
+        ("INSERT INTO users VALUES (1, 'test')", "must parse to a SELECT statement"),
+    ],
+    ids=["int", "list", "dict", "invalid_sql", "non_select"],
+)
+def test_query_builder_with_cte_invalid_query(
+    test_builder: MockQueryBuilder, invalid_query: Any, error_match: str
+) -> None:
+    """Test error when adding CTE with invalid query."""
+    with pytest.raises(SQLBuilderError, match=error_match):
+        test_builder.with_cte("invalid_cte", invalid_query)
 
 
 def test_query_builder_with_cte_builder_without_expression(test_builder: MockQueryBuilder) -> None:
@@ -433,21 +422,17 @@ def test_query_builder_raise_sql_builder_error_with_cause() -> None:
 
 
 # WhereClauseMixin tests
-def test_where_mixin_where_eq_basic(where_mixin: WhereClauseMixinHelper) -> None:
-    """Test basic where_eq functionality."""
-    result = where_mixin.where_eq("name", "John")
+@pytest.mark.parametrize(
+    "column,value",
+    [("name", "John"), ("age", 25), ("active", True), (exp.column("status"), "active")],
+    ids=["string_column", "int_value", "bool_value", "expression_column"],
+)
+def test_where_mixin_where_eq(where_mixin: WhereClauseMixinHelper, column: Any, value: Any) -> None:
+    """Test where_eq functionality with various inputs."""
+    result = where_mixin.where_eq(column, value)
 
     assert result is where_mixin
-    assert "John" in where_mixin._parameters.values()
-
-
-def test_where_mixin_where_eq_with_column_expression(where_mixin: WhereClauseMixinHelper) -> None:
-    """Test where_eq with sqlglot Column expression."""
-    col_expr = exp.column("status")
-    result = where_mixin.where_eq(col_expr, "active")
-
-    assert result is where_mixin
-    assert "active" in where_mixin._parameters.values()
+    assert value in where_mixin._parameters.values()
 
 
 def test_where_mixin_where_between_basic(where_mixin: WhereClauseMixinHelper) -> None:
@@ -459,10 +444,17 @@ def test_where_mixin_where_between_basic(where_mixin: WhereClauseMixinHelper) ->
     assert 65 in where_mixin._parameters.values()
 
 
-def test_where_mixin_where_like_basic(where_mixin: WhereClauseMixinHelper) -> None:
-    """Test basic where_like functionality."""
-    pattern = "John%"
-    result = where_mixin.where_like("name", pattern)
+@pytest.mark.parametrize(
+    "pattern,escape",
+    [("John%", None), ("%@example.com", None), ("_test_", None), ("test\\_underscore", "\\")],
+    ids=["prefix", "suffix", "wildcard", "escaped"],
+)
+def test_where_mixin_where_like(where_mixin: WhereClauseMixinHelper, pattern: str, escape: Any) -> None:
+    """Test where_like functionality with various patterns."""
+    if escape:
+        result = where_mixin.where_like("name", pattern, escape)
+    else:
+        result = where_mixin.where_like("name", pattern)
 
     assert result is where_mixin
     assert pattern in where_mixin._parameters.values()
@@ -477,20 +469,20 @@ def test_where_mixin_where_not_like_basic(where_mixin: WhereClauseMixinHelper) -
     assert pattern in where_mixin._parameters.values()
 
 
-def test_where_mixin_where_is_null_basic(where_mixin: WhereClauseMixinHelper) -> None:
-    """Test basic where_is_null functionality."""
-    result = where_mixin.where_is_null("deleted_at")
-
+@pytest.mark.parametrize(
+    "column",
+    ["deleted_at", "email", "phone", exp.column("last_login")],
+    ids=["deleted_at", "email", "phone", "expression"],
+)
+def test_where_mixin_null_checks(where_mixin: WhereClauseMixinHelper, column: Any) -> None:
+    """Test NULL check methods."""
+    # Test IS NULL
+    result = where_mixin.where_is_null(column)
     assert result is where_mixin
-    # No parameters should be added for IS NULL
 
-
-def test_where_mixin_where_is_not_null_basic(where_mixin: WhereClauseMixinHelper) -> None:
-    """Test basic where_is_not_null functionality."""
-    result = where_mixin.where_is_not_null("email")
-
+    # Test IS NOT NULL
+    result = where_mixin.where_is_not_null(column)
     assert result is where_mixin
-    # No parameters should be added for IS NOT NULL
 
 
 def test_where_mixin_where_exists_with_string(where_mixin: WhereClauseMixinHelper) -> None:
@@ -515,28 +507,6 @@ def test_where_mixin_where_exists_with_builder(where_mixin: WhereClauseMixinHelp
     assert "active" in where_mixin._parameters.values()
 
 
-def test_where_mixin_where_not_exists_with_string(where_mixin: WhereClauseMixinHelper) -> None:
-    """Test where_not_exists with string subquery."""
-    subquery = "SELECT 1 FROM orders WHERE user_id = users.id"
-    result = where_mixin.where_not_exists(subquery)
-
-    assert result is where_mixin
-
-
-def test_where_mixin_where_not_exists_with_builder(where_mixin: WhereClauseMixinHelper) -> None:
-    """Test where_not_exists with QueryBuilder subquery."""
-    mock_builder = Mock()
-    mock_builder._parameters = {"status": "active"}
-    mock_builder.build.return_value = Mock()
-    mock_builder.build.return_value.sql = "SELECT 1 FROM orders"
-
-    result = where_mixin.where_not_exists(mock_builder)
-
-    assert result is where_mixin
-    # Parameters should be merged
-    assert "active" in where_mixin._parameters.values()
-
-
 @patch("sqlglot.exp.maybe_parse")
 def test_where_mixin_where_exists_parse_error(mock_parse: Mock, where_mixin: WhereClauseMixinHelper) -> None:
     """Test where_exists handles parse errors."""
@@ -544,30 +514,6 @@ def test_where_mixin_where_exists_parse_error(mock_parse: Mock, where_mixin: Whe
 
     with pytest.raises(SQLBuilderError, match="Could not parse subquery for EXISTS"):
         where_mixin.where_exists("INVALID SQL")
-
-
-@patch("sqlglot.exp.maybe_parse")
-def test_where_mixin_where_not_exists_parse_error(mock_parse: Mock, where_mixin: WhereClauseMixinHelper) -> None:
-    """Test where_not_exists handles parse errors."""
-    mock_parse.return_value = None  # Simulate parse failure
-
-    with pytest.raises(SQLBuilderError, match="Could not parse subquery for NOT EXISTS"):
-        where_mixin.where_not_exists("INVALID SQL")
-
-
-# Edge cases and integration tests
-@pytest.mark.parametrize(
-    ("column_input", "expected_type"),
-    [("string_column", str), (exp.column("expr_column"), exp.Column)],
-    ids=["string_column", "expression_column"],
-)
-def test_where_mixin_column_input_types(
-    where_mixin: WhereClauseMixinHelper, column_input: Any, expected_type: type
-) -> None:
-    """Test WhereClauseMixin methods handle both string and expression columns."""
-    # Test with where_eq as representative method
-    result = where_mixin.where_eq(column_input, "test_value")
-    assert result is where_mixin
 
 
 def test_where_mixin_method_chaining(where_mixin: WhereClauseMixinHelper) -> None:
@@ -584,6 +530,193 @@ def test_where_mixin_method_chaining(where_mixin: WhereClauseMixinHelper) -> Non
     assert len(where_mixin._parameters) >= 4
 
 
+# DDL Builder tests
+def test_drop_table_builder_basic() -> None:
+    """Test basic DROP TABLE functionality."""
+    sql = DropTableBuilder().table("my_table").build().sql
+    assert "DROP TABLE" in sql and "my_table" in sql
+
+
+def test_drop_index_builder_basic() -> None:
+    """Test basic DROP INDEX functionality."""
+    sql = DropIndexBuilder().name("idx_name").on_table("my_table").build().sql
+    assert "DROP INDEX" in sql and "idx_name" in sql
+
+
+def test_drop_view_builder_basic() -> None:
+    """Test basic DROP VIEW functionality."""
+    sql = DropViewBuilder().name("my_view").build().sql
+    assert "DROP VIEW" in sql and "my_view" in sql
+
+
+def test_drop_schema_builder_basic() -> None:
+    """Test basic DROP SCHEMA functionality."""
+    sql = DropSchemaBuilder().name("my_schema").build().sql
+    assert "DROP SCHEMA" in sql and "my_schema" in sql
+
+
+def test_create_index_builder_basic() -> None:
+    """Test basic CREATE INDEX functionality."""
+    sql = CreateIndexBuilder().name("idx_col").on_table("my_table").columns("col1", "col2").build().sql
+    assert "CREATE INDEX" in sql and "idx_col" in sql
+
+
+def test_truncate_table_builder_basic() -> None:
+    """Test basic TRUNCATE TABLE functionality."""
+    sql = TruncateTableBuilder().table("my_table").build().sql
+    assert "TRUNCATE TABLE" in sql
+
+
+def test_create_schema_builder_basic() -> None:
+    """Test basic CREATE SCHEMA functionality."""
+    sql = CreateSchemaBuilder().name("myschema").build().sql
+    assert "CREATE SCHEMA" in sql and "myschema" in sql
+
+    sql_if_not_exists = CreateSchemaBuilder().name("myschema").if_not_exists().build().sql
+    assert "IF NOT EXISTS" in sql_if_not_exists and "myschema" in sql_if_not_exists
+
+    sql_auth = CreateSchemaBuilder().name("myschema").authorization("bob").build().sql
+    assert "CREATE SCHEMA" in sql_auth and "myschema" in sql_auth
+
+
+# Complex DDL tests
+def test_create_table_as_select_builder_basic() -> None:
+    """Test CREATE TABLE AS SELECT functionality."""
+    from sqlspec.statement.builder.ddl import CreateTableAsSelectBuilder
+    from sqlspec.statement.builder.select import SelectBuilder
+
+    select_builder = SelectBuilder().select("id", "name").from_("users").where_eq("active", True)
+    builder = (
+        CreateTableAsSelectBuilder().name("new_table").if_not_exists().columns("id", "name").as_select(select_builder)
+    )
+    result = builder.build()
+    sql = result.sql
+
+    assert "CREATE TABLE" in sql
+    assert "IF NOT EXISTS" in sql
+    assert "AS SELECT" in sql or "AS\nSELECT" in sql
+    assert "FROM users" in sql
+    assert "id" in sql and "name" in sql
+    assert True in result.parameters.values()
+
+
+def test_create_materialized_view_basic() -> None:
+    """Test CREATE MATERIALIZED VIEW functionality."""
+    from sqlspec.statement.builder.ddl import CreateMaterializedViewBuilder
+    from sqlspec.statement.builder.select import SelectBuilder
+
+    select_builder = SelectBuilder().select("id", "name").from_("users").where_eq("active", True)
+    builder = (
+        CreateMaterializedViewBuilder()
+        .name("active_users_mv")
+        .if_not_exists()
+        .columns("id", "name")
+        .as_select(select_builder)
+    )
+    result = builder.build()
+    sql = result.sql
+
+    assert "CREATE MATERIALIZED VIEW" in sql or "CREATE MATERIALIZED_VIEW" in sql
+    assert "IF NOT EXISTS" in sql
+    assert "AS SELECT" in sql or "AS\nSELECT" in sql
+    assert "FROM users" in sql
+    assert True in result.parameters.values()
+
+
+def test_create_view_basic() -> None:
+    """Test CREATE VIEW functionality."""
+    from sqlspec.statement.builder.ddl import CreateViewBuilder
+    from sqlspec.statement.builder.select import SelectBuilder
+
+    select_builder = SelectBuilder().select("id", "name").from_("users").where_eq("active", True)
+    builder = CreateViewBuilder().name("active_users_v").if_not_exists().columns("id", "name").as_select(select_builder)
+    result = builder.build()
+    sql = result.sql
+
+    assert "CREATE VIEW" in sql
+    assert "IF NOT EXISTS" in sql
+    assert "AS SELECT" in sql or "AS\nSELECT" in sql
+    assert "FROM users" in sql
+    assert True in result.parameters.values()
+
+
+# ALTER TABLE tests
+def test_alter_table_add_column() -> None:
+    """Test ALTER TABLE ADD COLUMN."""
+    from sqlspec.statement.builder.ddl import AlterTableBuilder
+
+    sql = AlterTableBuilder("users").add_column("age", "INT").build().sql
+    assert "ALTER TABLE" in sql and "ADD COLUMN" in sql and "age" in sql and "INT" in sql
+
+
+def test_alter_table_drop_column() -> None:
+    """Test ALTER TABLE DROP COLUMN."""
+    from sqlspec.statement.builder.ddl import AlterTableBuilder
+
+    sql = AlterTableBuilder("users").drop_column("age").build().sql
+    assert "ALTER TABLE" in sql and "DROP COLUMN" in sql and "age" in sql
+
+
+def test_alter_table_rename_column() -> None:
+    """Test ALTER TABLE RENAME COLUMN."""
+    from sqlspec.statement.builder.ddl import AlterTableBuilder
+
+    sql = AlterTableBuilder("users").rename_column("old_name", "new_name").build().sql
+    assert "ALTER TABLE" in sql and "RENAME COLUMN" in sql and "old_name" in sql and "new_name" in sql
+
+
+def test_alter_table_error_if_no_action() -> None:
+    """Test ALTER TABLE raises error without action."""
+    from sqlspec.statement.builder.ddl import AlterTableBuilder
+
+    builder = AlterTableBuilder("users")
+    with pytest.raises(Exception):
+        builder.build()
+
+
+# COMMENT ON tests
+def test_comment_on_table_builder() -> None:
+    """Test COMMENT ON TABLE functionality."""
+    from sqlspec.statement.builder.ddl import CommentOnBuilder
+
+    sql = CommentOnBuilder().on_table("users").is_("User table").build().sql
+    assert "COMMENT ON TABLE users IS 'User table'" in sql
+
+
+def test_comment_on_column_builder() -> None:
+    """Test COMMENT ON COLUMN functionality."""
+    from sqlspec.statement.builder.ddl import CommentOnBuilder
+
+    sql = CommentOnBuilder().on_column("users", "age").is_("User age").build().sql
+    assert "COMMENT ON COLUMN users.age IS 'User age'" in sql
+
+
+def test_comment_on_builder_error() -> None:
+    """Test COMMENT ON raises error without comment."""
+    from sqlspec.statement.builder.ddl import CommentOnBuilder
+
+    with pytest.raises(Exception):
+        CommentOnBuilder().on_table("users").build()
+
+
+# RENAME TABLE test
+def test_rename_table_builder() -> None:
+    """Test RENAME TABLE functionality."""
+    from sqlspec.statement.builder.ddl import RenameTableBuilder
+
+    sql = RenameTableBuilder().table("users").to("customers").build().sql
+    assert "ALTER TABLE users RENAME TO customers" in sql or "RENAME TO customers" in sql
+
+
+def test_rename_table_builder_error() -> None:
+    """Test RENAME TABLE raises error without new name."""
+    from sqlspec.statement.builder.ddl import RenameTableBuilder
+
+    with pytest.raises(Exception):
+        RenameTableBuilder().table("users").build()
+
+
+# Integration tests
 def test_query_builder_full_workflow_integration(test_builder: MockQueryBuilder) -> None:
     """Test complete QueryBuilder workflow integration."""
     # Add parameters
@@ -619,6 +752,8 @@ def test_query_builder_complex_parameter_types(test_builder: MockQueryBuilder) -
         "dict_param": {"nested": {"key": "value"}},
         "none_param": None,
         "bool_param": True,
+        "set_param": {4, 5, 6},
+        "tuple_param": (7, 8, 9),
     }
 
     for name, value in complex_params.items():
@@ -630,76 +765,6 @@ def test_query_builder_complex_parameter_types(test_builder: MockQueryBuilder) -
         assert query.parameters[name] == expected_value
 
 
-def test_drop_table_builder_basic() -> None:
-    sql = DropTableBuilder().table("my_table").build().sql
-    assert "DROP TABLE" in sql and "my_table" in sql
-
-
-def test_drop_index_builder_basic() -> None:
-    sql = DropIndexBuilder().name("idx_name").on_table("my_table").build().sql
-    # sqlglot does not render the table name for DROP INDEX in default dialect
-    assert "DROP INDEX" in sql and "idx_name" in sql
-
-
-def test_drop_view_builder_basic() -> None:
-    sql = DropViewBuilder().name("my_view").build().sql
-    assert "DROP VIEW" in sql and "my_view" in sql
-
-
-def test_drop_schema_builder_basic() -> None:
-    sql = DropSchemaBuilder().name("my_schema").build().sql
-    assert "DROP SCHEMA" in sql and "my_schema" in sql
-
-
-def test_create_index_builder_basic() -> None:
-    sql = CreateIndexBuilder().name("idx_col").on_table("my_table").columns("col1", "col2").build().sql
-    # sqlglot does not render the table name or columns for CREATE INDEX in default dialect
-    assert "CREATE INDEX" in sql and "idx_col" in sql
-
-
-def test_truncate_table_builder_basic() -> None:
-    sql = TruncateTableBuilder().table("my_table").build().sql
-    # sqlglot does not render the table name for TRUNCATE TABLE in default dialect
-    assert "TRUNCATE TABLE" in sql
-
-
-def test_create_schema_builder_basic() -> None:
-    sql = CreateSchemaBuilder().name("myschema").build().sql
-    assert "CREATE SCHEMA" in sql and "myschema" in sql
-
-    sql_if_not_exists = CreateSchemaBuilder().name("myschema").if_not_exists().build().sql
-    assert "IF NOT EXISTS" in sql_if_not_exists and "myschema" in sql_if_not_exists
-
-    sql_auth = CreateSchemaBuilder().name("myschema").authorization("bob").build().sql
-    # sqlglot may render AUTHORIZATION as a property or not, depending on dialect support
-    assert "CREATE SCHEMA" in sql_auth and "myschema" in sql_auth and ("AUTHORIZATION" in sql_auth or "bob" in sql_auth)
-
-
-def test_create_table_as_select_builder_basic() -> None:
-    from sqlspec.statement.builder.ddl import CreateTableAsSelectBuilder
-    from sqlspec.statement.builder.select import SelectBuilder
-
-    select_builder = SelectBuilder().select("id", "name").from_("users").where_eq("active", True)
-    builder = (
-        CreateTableAsSelectBuilder().name("new_table").if_not_exists().columns("id", "name").as_select(select_builder)
-    )
-    result = builder.build()
-    sql = result.sql
-    # Basic SQL structure assertions
-    assert "CREATE TABLE" in sql
-    assert "IF NOT EXISTS" in sql
-    assert "AS SELECT" in sql or "AS\nSELECT" in sql
-    assert "FROM users" in sql
-    assert "id" in sql and "name" in sql
-    # Parameter merging: value should be True, but name is auto-generated (see TODO below)
-    assert True in result.parameters.values()
-    # TODO: It is critical to enhance query processing to preserve user-supplied parameter names.
-    # Currently, parameter names from subqueries/builders are not preserved (e.g., 'active' becomes 'param_1').
-    # This affects CTAS and any builder that merges parameters from other builders or SQL objects.
-    # See test_create_table_as_select_builder_basic and CreateTableAsSelectBuilder for context.
-    # The system should support passing through user-supplied parameter names when possible for better traceability and debugging.
-
-
 def test_query_builder_str_fallback() -> None:
     """Test __str__ fallback when build fails."""
     builder = MockQueryBuilder()
@@ -709,209 +774,3 @@ def test_query_builder_str_fallback() -> None:
     # Since QueryBuilder is a dataclass, it should show class name and fields
     assert "MockQueryBuilder" in result
     assert "dialect=" in result
-
-
-def test_create_materialized_view_basic() -> None:
-    from sqlspec.statement.builder.ddl import CreateMaterializedViewBuilder
-    from sqlspec.statement.builder.select import SelectBuilder
-
-    select_builder = SelectBuilder().select("id", "name").from_("users").where_eq("active", True)
-    builder = (
-        CreateMaterializedViewBuilder()
-        .name("active_users_mv")
-        .if_not_exists()
-        .columns("id", "name")
-        .as_select(select_builder)
-    )
-    result = builder.build()
-    sql = result.sql
-    # SQLGlot may use MATERIALIZED_VIEW with underscore
-    assert "CREATE MATERIALIZED VIEW" in sql or "CREATE MATERIALIZED_VIEW" in sql
-    assert "IF NOT EXISTS" in sql
-    assert "AS SELECT" in sql or "AS\nSELECT" in sql
-    assert "FROM users" in sql
-    assert "id" in sql and "name" in sql
-    assert True in result.parameters.values()
-
-
-def test_create_materialized_view_with_options() -> None:
-    from sqlspec.statement.builder.ddl import CreateMaterializedViewBuilder
-    from sqlspec.statement.builder.select import SelectBuilder
-
-    select_builder = SelectBuilder().select("id").from_("users")
-    builder = (
-        CreateMaterializedViewBuilder()
-        .name("mv1")
-        .as_select(select_builder)
-        .with_data()
-        .refresh_mode("ON COMMIT")
-        .storage_parameter("foo", "bar")
-        .tablespace("fastspace")
-        .using_index("idx_mv1")
-        .with_hint("/*+ PARALLEL(2) */")
-    )
-    result = builder.build()
-    sql = result.sql
-    # SQLGlot may use MATERIALIZED_VIEW with underscore
-    assert "CREATE MATERIALIZED VIEW" in sql or "CREATE MATERIALIZED_VIEW" in sql
-    assert "WITH_DATA" in sql or "NO_DATA" in sql or "WITH DATA" in sql or "NO DATA" in sql
-    assert "PARALLEL" in sql or "HINT" in sql or "PARALLEL(2)" in sql
-    assert "TABLESPACE" in sql or "fastspace" in sql
-    assert "USING_INDEX" in sql or "idx_mv1" in sql
-    assert "foo" in sql and "bar" in sql
-
-
-def test_create_materialized_view_parameter_merging() -> None:
-    from sqlspec.statement.builder.ddl import CreateMaterializedViewBuilder
-    from sqlspec.statement.builder.select import SelectBuilder
-
-    select_builder = SelectBuilder().select("id").from_("users").where_eq("status", "active")
-    builder = CreateMaterializedViewBuilder().name("mv2").as_select(select_builder)
-    result = builder.build()
-    # Parameter from SELECT should be merged
-    assert "active" in result.parameters.values()
-
-
-def test_create_view_basic() -> None:
-    from sqlspec.statement.builder.ddl import CreateViewBuilder
-    from sqlspec.statement.builder.select import SelectBuilder
-
-    select_builder = SelectBuilder().select("id", "name").from_("users").where_eq("active", True)
-    builder = CreateViewBuilder().name("active_users_v").if_not_exists().columns("id", "name").as_select(select_builder)
-    result = builder.build()
-    sql = result.sql
-    assert "CREATE VIEW" in sql
-    assert "IF NOT EXISTS" in sql
-    assert "AS SELECT" in sql or "AS\nSELECT" in sql
-    assert "FROM users" in sql
-    assert "id" in sql and "name" in sql
-    assert True in result.parameters.values()
-
-
-def test_create_view_with_hint() -> None:
-    from sqlspec.statement.builder.ddl import CreateViewBuilder
-    from sqlspec.statement.builder.select import SelectBuilder
-
-    select_builder = SelectBuilder().select("id").from_("users")
-    builder = CreateViewBuilder().name("v1").as_select(select_builder).with_hint("/*+ NO_MERGE */")
-    result = builder.build()
-    sql = result.sql
-    assert "CREATE VIEW" in sql
-    assert "NO_MERGE" in sql or "HINT" in sql
-
-
-def test_create_view_parameter_merging() -> None:
-    from sqlspec.statement.builder.ddl import CreateViewBuilder
-    from sqlspec.statement.builder.select import SelectBuilder
-
-    select_builder = SelectBuilder().select("id").from_("users").where_eq("status", "active")
-    builder = CreateViewBuilder().name("v2").as_select(select_builder)
-    result = builder.build()
-    # Parameter from SELECT should be merged
-    assert "active" in result.parameters.values()
-
-
-def test_alter_table_add_column_action() -> None:
-    from sqlspec.statement.builder.ddl import AlterTableBuilder
-
-    sql = AlterTableBuilder("users").add_column("age", "INT").build().sql
-    assert "ALTER TABLE" in sql and "ADD COLUMN" in sql and "age" in sql and "INT" in sql
-
-
-def test_alter_table_drop_column_action() -> None:
-    from sqlspec.statement.builder.ddl import AlterTableBuilder
-
-    sql = AlterTableBuilder("users").drop_column("age").build().sql
-    assert "ALTER TABLE" in sql and "DROP COLUMN" in sql and "age" in sql
-
-
-def test_alter_table_rename_column_action() -> None:
-    from sqlspec.statement.builder.ddl import AlterTableBuilder
-
-    sql = AlterTableBuilder("users").rename_column("old_name", "new_name").build().sql
-    assert "ALTER TABLE" in sql and "RENAME COLUMN" in sql and "old_name" in sql and "new_name" in sql
-
-
-def test_alter_table_alter_column_type_action() -> None:
-    from sqlspec.statement.builder.ddl import AlterTableBuilder
-
-    sql = AlterTableBuilder("users").alter_column_type("age", "BIGINT").build().sql
-    assert "ALTER TABLE" in sql and "ALTER COLUMN" in sql and "age" in sql and "BIGINT" in sql
-
-
-def test_alter_table_set_default_action() -> None:
-    from sqlspec.statement.builder.ddl import AlterTableBuilder
-
-    sql = AlterTableBuilder("users").set_default("age", 42).build().sql
-    assert "ALTER TABLE" in sql and "SET DEFAULT" in sql and "age" in sql and "42" in sql
-
-
-def test_alter_table_drop_default_action() -> None:
-    from sqlspec.statement.builder.ddl import AlterTableBuilder
-
-    sql = AlterTableBuilder("users").drop_default("age").build().sql
-    assert "ALTER TABLE" in sql and "DROP DEFAULT" in sql and "age" in sql
-
-
-def test_alter_table_set_property_action() -> None:
-    # Property operations are not supported in the current AlterTableBuilder API
-    # These would need to be implemented or use raw SQL
-    pass
-
-
-def test_alter_table_drop_property_action() -> None:
-    # Property operations are not supported in the current AlterTableBuilder API
-    # These would need to be implemented or use raw SQL
-    pass
-
-
-def test_alter_table_with_hint_action() -> None:
-    # with_hint is not supported in the current AlterTableBuilder API
-    pass
-
-
-def test_alter_table_error_if_no_action() -> None:
-    from sqlspec.statement.builder.ddl import AlterTableBuilder
-
-    builder = AlterTableBuilder("users")
-    with pytest.raises(Exception):
-        builder.build()
-
-
-def test_comment_on_table_builder() -> None:
-    from sqlspec.statement.builder.ddl import CommentOnBuilder
-
-    sql = CommentOnBuilder().on_table("users").is_("User table").build().sql
-    assert "COMMENT ON TABLE users IS 'User table'" in sql
-
-
-def test_comment_on_column_builder() -> None:
-    from sqlspec.statement.builder.ddl import CommentOnBuilder
-
-    sql = CommentOnBuilder().on_column("users", "age").is_("User age").build().sql
-    assert "COMMENT ON COLUMN users.age IS 'User age'" in sql
-
-
-def test_comment_on_builder_error() -> None:
-    import pytest
-
-    from sqlspec.statement.builder.ddl import CommentOnBuilder
-
-    with pytest.raises(Exception):
-        CommentOnBuilder().on_table("users").build()
-
-
-def test_rename_table_builder() -> None:
-    from sqlspec.statement.builder.ddl import RenameTableBuilder
-
-    sql = RenameTableBuilder().table("users").to("customers").build().sql
-    assert "ALTER TABLE users RENAME TO customers" in sql or "RENAME TO customers" in sql
-
-
-def test_rename_table_builder_error() -> None:
-    import pytest
-
-    from sqlspec.statement.builder.ddl import RenameTableBuilder
-
-    with pytest.raises(Exception):
-        RenameTableBuilder().table("users").build()

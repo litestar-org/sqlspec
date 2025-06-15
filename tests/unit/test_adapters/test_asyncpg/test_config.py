@@ -1,16 +1,34 @@
-"""Unit tests for asyncpg configuration."""
+"""Unit tests for AsyncPG configuration.
 
-from unittest.mock import AsyncMock, Mock, patch
+This module tests the AsyncpgConfig class including:
+- Basic configuration initialization
+- Connection and pool parameter handling
+- DSN vs individual parameter configuration
+- SSL configuration
+- Context manager behavior (async)
+- Connection pooling support
+- Error handling
+- Property accessors
+"""
+
+import ssl
+from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from sqlspec.adapters.asyncpg import CONNECTION_FIELDS, POOL_FIELDS, AsyncpgConfig, AsyncpgDriver
 from sqlspec.statement.sql import SQLConfig
+from sqlspec.typing import DictRow
+
+if TYPE_CHECKING:
+    pass
 
 
-def test_asyncpg_field_constants() -> None:
-    """Test AsyncPG CONNECTION_FIELDS and POOL_FIELDS constants."""
-    expected_connection_fields = {
+# Constants Tests
+def test_connection_fields_constant() -> None:
+    """Test CONNECTION_FIELDS constant contains all expected fields."""
+    expected_fields = {
         "dsn",
         "host",
         "port",
@@ -27,8 +45,11 @@ def test_asyncpg_field_constants() -> None:
         "max_cacheable_statement_size",
         "server_settings",
     }
-    assert CONNECTION_FIELDS == expected_connection_fields
+    assert CONNECTION_FIELDS == expected_fields
 
+
+def test_pool_fields_constant() -> None:
+    """Test POOL_FIELDS constant contains connection fields plus pool-specific fields."""
     # POOL_FIELDS should be a superset of CONNECTION_FIELDS
     assert CONNECTION_FIELDS.issubset(POOL_FIELDS)
 
@@ -48,96 +69,183 @@ def test_asyncpg_field_constants() -> None:
     assert pool_specific == expected_pool_specific
 
 
-def test_asyncpg_config_basic_creation() -> None:
-    """Test AsyncPG config creation with basic parameters."""
-    # Test minimal config creation
-    config = AsyncpgConfig(host="localhost", port=5432, user="test_user", password="test_password", database="test_db")
-    assert config.host == "localhost"
-    assert config.port == 5432
-    assert config.user == "test_user"
-    assert config.password == "test_password"
-    assert config.database == "test_db"
-    assert config.extras == {}
+# Initialization Tests
+@pytest.mark.parametrize(
+    "kwargs,expected_attrs",
+    [
+        (
+            {
+                "host": "localhost",
+                "port": 5432,
+                "user": "test_user",
+                "password": "test_password",
+                "database": "test_db",
+            },
+            {
+                "host": "localhost",
+                "port": 5432,
+                "user": "test_user",
+                "password": "test_password",
+                "database": "test_db",
+                "dsn": None,
+                "ssl": None,
+                "extras": {},
+            },
+        ),
+        (
+            {"dsn": "postgresql://test_user:test_password@localhost:5432/test_db"},
+            {
+                "dsn": "postgresql://test_user:test_password@localhost:5432/test_db",
+                "host": None,
+                "port": None,
+                "user": None,
+                "password": None,
+                "database": None,
+                "extras": {},
+            },
+        ),
+    ],
+    ids=["individual_params", "dsn"],
+)
+def test_config_initialization(kwargs: dict[str, Any], expected_attrs: dict[str, Any]) -> None:
+    """Test config initialization with various parameters."""
+    config = AsyncpgConfig(**kwargs)
 
-    # Test with all parameters
-    config_full = AsyncpgConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        database="test_db",
-        connect_timeout=30.0,
-        command_timeout=60.0,
-        server_settings={"application_name": "test_app"},
-        ssl=None,
-        min_size=1,
-        max_size=10,
-        max_queries=50000,
-    )
-    assert config_full.host == "localhost"
-    assert config_full.connect_timeout == 30.0
-    assert config_full.command_timeout == 60.0
-    assert config_full.server_settings == {"application_name": "test_app"}
-    assert config_full.ssl is None
-    assert config_full.min_size == 1
-    assert config_full.max_size == 10
-    assert config_full.max_queries == 50000
+    for attr, expected_value in expected_attrs.items():
+        assert getattr(config, attr) == expected_value
 
-
-def test_asyncpg_config_extras_handling() -> None:
-    """Test AsyncPG config extras parameter handling."""
-    # Test with explicit extras
-    config = AsyncpgConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        database="test_db",
-        extras={"custom_param": "value", "debug": True},
-    )
-    assert config.extras["custom_param"] == "value"
-    assert config.extras["debug"] is True
-
-    # Test with kwargs going to extras
-    config2 = AsyncpgConfig(host="localhost", port=5432, user="test_user", password="test_password", database="test_db")
-    assert config2.extras["unknown_param"] == "test"
-    assert config2.extras["another_param"] == 42
-
-
-def test_asyncpg_config_initialization() -> None:
-    """Test asyncpg config initialization."""
-    # Test with default parameters
-    config = AsyncpgConfig(host="localhost", port=5432, user="test_user", password="test_password", database="test_db")
-    assert config.host == "localhost"
+    # Check base class attributes
     assert isinstance(config.statement_config, SQLConfig)
-    # Test with custom parameters
-    custom_statement_config = SQLConfig()
+    assert config.default_row_type is DictRow
+
+
+@pytest.mark.parametrize(
+    "init_kwargs,expected_extras",
+    [
+        (
+            {"host": "localhost", "port": 5432, "custom_param": "value", "debug": True},
+            {"custom_param": "value", "debug": True},
+        ),
+        (
+            {"dsn": "postgresql://localhost/test", "unknown_param": "test", "another_param": 42},
+            {"unknown_param": "test", "another_param": 42},
+        ),
+        ({"host": "localhost", "port": 5432}, {}),
+    ],
+    ids=["with_custom_params", "with_dsn_extras", "no_extras"],
+)
+def test_extras_handling(init_kwargs: dict[str, Any], expected_extras: dict[str, Any]) -> None:
+    """Test handling of extra parameters."""
+    config = AsyncpgConfig(**init_kwargs)
+    assert config.extras == expected_extras
+
+
+@pytest.mark.parametrize(
+    "statement_config,expected_type",
+    [(None, SQLConfig), (SQLConfig(), SQLConfig), (SQLConfig(strict_mode=True), SQLConfig)],
+    ids=["default", "empty", "custom"],
+)
+def test_statement_config_initialization(statement_config: "SQLConfig | None", expected_type: type[SQLConfig]) -> None:
+    """Test statement config initialization."""
+    config = AsyncpgConfig(host="localhost", statement_config=statement_config)
+    assert isinstance(config.statement_config, expected_type)
+
+    if statement_config is not None:
+        assert config.statement_config is statement_config
+
+
+# Connection Configuration Tests
+@pytest.mark.parametrize(
+    "timeout_type,value",
+    [("connect_timeout", 30.0), ("command_timeout", 60.0)],
+    ids=["connect_timeout", "command_timeout"],
+)
+def test_timeout_configuration(timeout_type: str, value: float) -> None:
+    """Test timeout configuration."""
+    config = AsyncpgConfig(host="localhost", **{timeout_type: value})
+    assert getattr(config, timeout_type) == value
+
+
+def test_statement_cache_configuration() -> None:
+    """Test statement cache configuration."""
     config = AsyncpgConfig(
-        host="custom_host",
-        port=5433,
-        user="custom_user",
-        password="custom_password",
-        database="custom_db",
-        connect_timeout=60.0,
-        min_size=2,
-        max_size=20,
-        statement_config=custom_statement_config,
+        host="localhost",
+        statement_cache_size=200,
+        max_cached_statement_lifetime=600,
+        max_cacheable_statement_size=16384,
     )
-    assert config.host == "custom_host"
-    assert config.port == 5433
-    assert config.connect_timeout == 60.0
-    assert config.statement_config is custom_statement_config
+
+    assert config.statement_cache_size == 200
+    assert config.max_cached_statement_lifetime == 600
+    assert config.max_cacheable_statement_size == 16384
 
 
+def test_server_settings() -> None:
+    """Test server settings configuration."""
+    server_settings = {"application_name": "test_app", "timezone": "UTC", "search_path": "public,test_schema"}
+
+    config = AsyncpgConfig(host="localhost", server_settings=server_settings)
+    assert config.server_settings == server_settings
+
+
+# SSL Configuration Tests
+def test_ssl_boolean() -> None:
+    """Test SSL configuration with boolean value."""
+    config = AsyncpgConfig(host="localhost", ssl=True)
+    assert config.ssl is True
+
+    config = AsyncpgConfig(host="localhost", ssl=False)
+    assert config.ssl is False
+
+
+def test_ssl_context() -> None:
+    """Test SSL configuration with SSLContext."""
+    ssl_context = ssl.create_default_context()
+    config = AsyncpgConfig(host="localhost", ssl=ssl_context)
+    assert config.ssl is ssl_context
+
+
+def test_ssl_passfile() -> None:
+    """Test SSL configuration with passfile."""
+    config = AsyncpgConfig(host="localhost", passfile="/path/to/.pgpass", direct_tls=True)
+    assert config.passfile == "/path/to/.pgpass"
+    assert config.direct_tls is True
+
+
+# Pool Configuration Tests
+@pytest.mark.parametrize(
+    "pool_param,value",
+    [("min_size", 5), ("max_size", 20), ("max_queries", 50000), ("max_inactive_connection_lifetime", 300.0)],
+    ids=["min_size", "max_size", "max_queries", "max_inactive_lifetime"],
+)
+def test_pool_parameters(pool_param: str, value: Any) -> None:
+    """Test pool-specific parameters."""
+    config = AsyncpgConfig(host="localhost", **{pool_param: value})
+    assert getattr(config, pool_param) == value
+
+
+def test_pool_callbacks() -> None:
+    """Test pool setup and init callbacks."""
+
+    async def setup(conn: Any) -> None:
+        pass
+
+    async def init(conn: Any) -> None:
+        pass
+
+    config = AsyncpgConfig(host="localhost", setup=setup, init=init)
+
+    assert config.setup is setup
+    assert config.init is init
+
+
+# Connection Creation Tests
 @pytest.mark.asyncio
-async def test_asyncpg_config_connection_creation() -> None:
-    """Test asyncpg config connection creation (mocked)."""
+async def test_create_connection() -> None:
+    """Test connection creation."""
     mock_connection = AsyncMock()
 
-    # Patch the asyncpg module in the create_connection method's local scope
-    with patch("asyncpg.connect") as mock_connect:
-        mock_connect.return_value = mock_connection
-
+    with patch("asyncpg.connect", return_value=mock_connection) as mock_connect:
         config = AsyncpgConfig(
             host="localhost",
             port=5432,
@@ -149,7 +257,6 @@ async def test_asyncpg_config_connection_creation() -> None:
 
         connection = await config.create_connection()
 
-        # Verify connection creation was called with correct parameters
         mock_connect.assert_called_once_with(
             host="localhost",
             port=5432,
@@ -161,72 +268,120 @@ async def test_asyncpg_config_connection_creation() -> None:
         assert connection is mock_connection
 
 
-@patch("asyncpg.connect")
 @pytest.mark.asyncio
-async def test_asyncpg_config_provide_connection(mock_connect: Mock) -> None:
-    """Test asyncpg config provide_connection context manager."""
+async def test_create_connection_with_dsn() -> None:
+    """Test connection creation with DSN."""
     mock_connection = AsyncMock()
-    mock_connect.return_value = mock_connection
 
-    config = AsyncpgConfig(host="localhost", port=5432, user="test_user", password="test_password", database="test_db")
+    with patch("asyncpg.connect", return_value=mock_connection) as mock_connect:
+        dsn = "postgresql://test_user:test_password@localhost:5432/test_db"
+        config = AsyncpgConfig(dsn=dsn)
 
-    # Test context manager behavior (without pool)
-    async with config.provide_connection() as conn:
-        assert conn is mock_connection
-        # Verify connection is not closed yet
-        mock_connection.close.assert_not_called()
+        connection = await config.create_connection()
 
-    # Verify connection was closed after context exit
-    mock_connection.close.assert_called_once()
+        mock_connect.assert_called_once_with(dsn=dsn)
+        assert connection is mock_connection
 
 
-@patch("asyncpg.connect")
+# Pool Creation Tests
 @pytest.mark.asyncio
-async def test_asyncpg_config_provide_connection_error_handling(mock_connect: Mock) -> None:
-    """Test asyncpg config provide_connection error handling."""
+async def test_create_pool() -> None:
+    """Test pool creation."""
+    mock_pool = AsyncMock()
+
+    with patch("sqlspec.adapters.asyncpg.config.asyncpg_create_pool", return_value=mock_pool) as mock_create_pool:
+        config = AsyncpgConfig(
+            host="localhost",
+            port=5432,
+            user="test_user",
+            password="test_password",
+            database="test_db",
+            min_size=5,
+            max_size=20,
+        )
+
+        pool = await config.create_pool()
+
+        mock_create_pool.assert_called_once()
+        call_kwargs = mock_create_pool.call_args[1]
+        assert call_kwargs["host"] == "localhost"
+        assert call_kwargs["port"] == 5432
+        assert call_kwargs["min_size"] == 5
+        assert call_kwargs["max_size"] == 20
+        assert pool is mock_pool
+
+
+# Context Manager Tests
+@pytest.mark.asyncio
+async def test_provide_connection_no_pool() -> None:
+    """Test provide_connection without pool (creates individual connection)."""
     mock_connection = AsyncMock()
-    mock_connect.return_value = mock_connection
 
-    config = AsyncpgConfig(host="localhost", port=5432, user="test_user", password="test_password", database="test_db")
+    with patch("asyncpg.connect", return_value=mock_connection):
+        config = AsyncpgConfig(host="localhost")
 
-    # Test error handling and cleanup
-    with pytest.raises(ValueError):
         async with config.provide_connection() as conn:
             assert conn is mock_connection
-            raise ValueError("Test error")
+            mock_connection.close.assert_not_called()
 
-    # Verify connection was still closed despite error
-    mock_connection.close.assert_called_once()
+        mock_connection.close.assert_called_once()
 
 
-@patch("asyncpg.connect")
 @pytest.mark.asyncio
-async def test_asyncpg_config_provide_session(mock_connect: Mock) -> None:
-    """Test asyncpg config provide_session context manager."""
+async def test_provide_connection_with_pool() -> None:
+    """Test provide_connection with existing pool."""
+    mock_pool = AsyncMock()
     mock_connection = AsyncMock()
-    mock_connect.return_value = mock_connection
+    mock_pool.acquire.return_value.__aenter__.return_value = mock_connection
 
-    config = AsyncpgConfig(host="localhost", port=5432, user="test_user", password="test_password", database="test_db")
+    config = AsyncpgConfig(host="localhost", pool_instance=mock_pool)
 
-    # Test session context manager behavior
-    async with config.provide_session() as session:
-        assert isinstance(session, AsyncpgDriver)
-        assert session.connection is mock_connection
-        # The config might be modified to include parameter styles
-        assert session.config.strict_mode == config.statement_config.strict_mode
-        assert session.config.enable_parsing == config.statement_config.enable_parsing
-        assert session.config.enable_validation == config.statement_config.enable_validation
-        # Check that parameter styles were set
-        assert session.config.allowed_parameter_styles == ("numeric",)
-        assert session.config.target_parameter_style == "numeric"  # Verify connection is not closed yet
-        mock_connection.close.assert_not_called()
-
-    # Verify connection was closed after context exit
-    mock_connection.close.assert_called_once()
+    async with config.provide_connection() as conn:
+        assert conn is mock_connection
+        mock_pool.acquire.assert_called_once()
 
 
-def test_asyncpg_config_connection_config_dict() -> None:
-    """Test asyncpg config connection_config_dict and pool_config_dict properties."""
+@pytest.mark.asyncio
+async def test_provide_connection_error_handling() -> None:
+    """Test provide_connection error handling."""
+    mock_connection = AsyncMock()
+
+    with patch("asyncpg.connect", return_value=mock_connection):
+        config = AsyncpgConfig(host="localhost")
+
+        with pytest.raises(ValueError, match="Test error"):
+            async with config.provide_connection() as conn:
+                assert conn is mock_connection
+                raise ValueError("Test error")
+
+        # Connection should still be closed
+        mock_connection.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_provide_session() -> None:
+    """Test provide_session context manager."""
+    mock_connection = AsyncMock()
+
+    with patch("asyncpg.connect", return_value=mock_connection):
+        config = AsyncpgConfig(host="localhost", database="test_db")
+
+        async with config.provide_session() as session:
+            assert isinstance(session, AsyncpgDriver)
+            assert session.connection is mock_connection
+
+            # Check parameter style injection
+            assert session.config.allowed_parameter_styles == ("numeric",)
+            assert session.config.target_parameter_style == "numeric"
+
+            mock_connection.close.assert_not_called()
+
+        mock_connection.close.assert_called_once()
+
+
+# Property Tests
+def test_connection_config_dict() -> None:
+    """Test connection_config_dict property."""
     config = AsyncpgConfig(
         host="localhost",
         port=5432,
@@ -235,153 +390,164 @@ def test_asyncpg_config_connection_config_dict() -> None:
         database="test_db",
         connect_timeout=30.0,
         command_timeout=60.0,
-        min_size=1,
-        max_size=10,
+        min_size=5,  # Pool parameter, should not be in connection dict
+        max_size=10,  # Pool parameter, should not be in connection dict
     )
 
-    # Test connection_config_dict returns only connection parameters
     conn_dict = config.connection_config_dict
-    expected_conn = {
-        "host": "localhost",
-        "port": 5432,
-        "user": "test_user",
-        "password": "test_password",
-        "database": "test_db",
-        "connect_timeout": 30.0,
-        "command_timeout": 60.0,
-    }
-    for key, value in expected_conn.items():
-        assert conn_dict[key] == value
 
-    # Connection config should not include pool-specific parameters
+    # Should include connection parameters
+    assert conn_dict["host"] == "localhost"
+    assert conn_dict["port"] == 5432
+    assert conn_dict["user"] == "test_user"
+    assert conn_dict["password"] == "test_password"
+    assert conn_dict["database"] == "test_db"
+    assert conn_dict["connect_timeout"] == 30.0
+    assert conn_dict["command_timeout"] == 60.0
+
+    # Should not include pool parameters
     assert "min_size" not in conn_dict
     assert "max_size" not in conn_dict
 
-    # Test pool_config_dict returns all parameters
+
+def test_pool_config_dict() -> None:
+    """Test pool_config_dict property."""
+    config = AsyncpgConfig(host="localhost", port=5432, min_size=5, max_size=10, max_queries=50000)
+
     pool_dict = config.pool_config_dict
-    expected_pool = {
-        "host": "localhost",
-        "port": 5432,
-        "user": "test_user",
-        "password": "test_password",
-        "database": "test_db",
-        "connect_timeout": 30.0,
-        "command_timeout": 60.0,
-        "min_size": 1,
-        "max_size": 10,
-    }
-    for key, value in expected_pool.items():
-        assert pool_dict[key] == value
+
+    # Should include all parameters
+    assert pool_dict["host"] == "localhost"
+    assert pool_dict["port"] == 5432
+    assert pool_dict["min_size"] == 5
+    assert pool_dict["max_size"] == 10
+    assert pool_dict["max_queries"] == 50000
 
 
-def test_asyncpg_config_driver_type() -> None:
-    """Test asyncpg config driver_type property."""
-    config = AsyncpgConfig(host="localhost", port=5432, user="test_user", password="test_password", database="test_db")
+def test_driver_type() -> None:
+    """Test driver_type class attribute."""
+    config = AsyncpgConfig(host="localhost")
     assert config.driver_type is AsyncpgDriver
 
 
-def test_asyncpg_config_connection_type() -> None:
-    """Test asyncpg config connection_type property."""
-    config = AsyncpgConfig(host="localhost", port=5432, user="test_user", password="test_password", database="test_db")
-    # asyncpg uses PoolConnectionProxy when using pools
+def test_connection_type() -> None:
+    """Test connection_type class attribute."""
     from asyncpg.pool import PoolConnectionProxy
 
+    config = AsyncpgConfig(host="localhost")
     assert config.connection_type is PoolConnectionProxy
 
 
-def test_asyncpg_config_ssl_configuration() -> None:
-    """Test asyncpg config with SSL configuration."""
-    import ssl
-
-    ssl_context = ssl.create_default_context()
-
-    config = AsyncpgConfig(
-        host="localhost", port=5432, user="test_user", password="test_password", database="test_db", ssl=ssl_context
-    )
-    assert config.ssl is ssl_context
-
-
-def test_asyncpg_config_server_settings() -> None:
-    """Test asyncpg config with server settings."""
-    server_settings = {"application_name": "test_app", "timezone": "UTC", "search_path": "public,test_schema"}
-
-    config = AsyncpgConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        database="test_db",
-        server_settings=server_settings,
-    )
-    assert config.server_settings == server_settings
-
-
-def test_asyncpg_config_timeouts() -> None:
-    """Test asyncpg config with different timeout settings."""
-    config = AsyncpgConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        database="test_db",
-        connect_timeout=30.0,
-        command_timeout=120.0,
-    )
-    assert config.connect_timeout == 30.0
-    assert config.command_timeout == 120.0
-
-
-def test_asyncpg_config_is_async() -> None:
-    """Test asyncpg config is_async attribute."""
-    config = AsyncpgConfig(host="localhost", port=5432, user="test_user", password="test_password", database="test_db")
-    assert config.is_async is True
+def test_is_async() -> None:
+    """Test is_async class attribute."""
     assert AsyncpgConfig.is_async is True
 
+    config = AsyncpgConfig(host="localhost")
+    assert config.is_async is True
 
-def test_asyncpg_config_supports_connection_pooling() -> None:
-    """Test asyncpg config supports_connection_pooling attribute."""
-    config = AsyncpgConfig(host="localhost", port=5432, user="test_user", password="test_password", database="test_db")
-    assert config.supports_connection_pooling is True
+
+def test_supports_connection_pooling() -> None:
+    """Test supports_connection_pooling class attribute."""
     assert AsyncpgConfig.supports_connection_pooling is True
 
-
-def test_asyncpg_config_dsn_configuration() -> None:
-    """Test asyncpg config with DSN."""
-    dsn = "postgresql://test_user:test_password@localhost:5432/test_db"
-    config = AsyncpgConfig(dsn=dsn)
-
-    # The config should be able to construct connection parameters
-    config_dict = config.connection_config_dict
-    assert "dsn" in config_dict
-    assert config_dict["dsn"] == dsn
+    config = AsyncpgConfig(host="localhost")
+    assert config.supports_connection_pooling is True
 
 
-def test_asyncpg_config_minimal_connection() -> None:
-    """Test asyncpg config with minimal connection parameters."""
-    config = AsyncpgConfig(host="localhost", port=5432, user="test_user", password="test_password", database="test_db")
-
-    # Should work with just the required parameters
-    assert config.host == "localhost"
-    assert config.port == 5432
-    assert config.user == "test_user"
-    assert config.password == "test_password"
-    assert config.database == "test_db"
+# Parameter Style Tests
+def test_supported_parameter_styles() -> None:
+    """Test supported parameter styles class attribute."""
+    assert AsyncpgConfig.supported_parameter_styles == ("numeric",)
 
 
-def test_asyncpg_config_pool_settings() -> None:
-    """Test asyncpg config with pool-specific settings."""
+def test_preferred_parameter_style() -> None:
+    """Test preferred parameter style class attribute."""
+    assert AsyncpgConfig.preferred_parameter_style == "numeric"
+
+
+# JSON Serialization Tests
+def test_json_serializer_configuration() -> None:
+    """Test custom JSON serializer configuration."""
+
+    def custom_serializer(obj: Any) -> str:
+        return f"custom:{obj}"
+
+    def custom_deserializer(data: str) -> Any:
+        return data.replace("custom:", "")
+
+    config = AsyncpgConfig(host="localhost", json_serializer=custom_serializer, json_deserializer=custom_deserializer)
+
+    assert config.json_serializer is custom_serializer
+    assert config.json_deserializer is custom_deserializer
+
+
+# Slots Test
+def test_slots_defined() -> None:
+    """Test that __slots__ is properly defined."""
+    assert hasattr(AsyncpgConfig, "__slots__")
+    expected_slots = {
+        "command_timeout",
+        "connect_timeout",
+        "connection_class",
+        "database",
+        "default_row_type",
+        "direct_tls",
+        "dsn",
+        "extras",
+        "host",
+        "init",
+        "json_deserializer",
+        "json_serializer",
+        "loop",
+        "max_cacheable_statement_size",
+        "max_cached_statement_lifetime",
+        "max_inactive_connection_lifetime",
+        "max_queries",
+        "max_size",
+        "min_size",
+        "passfile",
+        "password",
+        "pool_instance",
+        "port",
+        "record_class",
+        "server_settings",
+        "setup",
+        "ssl",
+        "statement_cache_size",
+        "statement_config",
+        "user",
+    }
+    assert set(AsyncpgConfig.__slots__) == expected_slots
+
+
+# Edge Cases
+def test_config_with_both_dsn_and_individual_params() -> None:
+    """Test config with both DSN and individual parameters."""
     config = AsyncpgConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        database="test_db",
-        min_size=5,
-        max_size=20,
-        max_queries=50000,
-        max_inactive_connection_lifetime=300.0,
+        dsn="postgresql://user:pass@host:5432/db",
+        host="different_host",  # Individual params alongside DSN
+        port=5433,
     )
-    assert config.min_size == 5
-    assert config.max_size == 20
-    assert config.max_queries == 50000
-    assert config.max_inactive_connection_lifetime == 300.0
+
+    # Both should be stored
+    assert config.dsn == "postgresql://user:pass@host:5432/db"
+    assert config.host == "different_host"
+    assert config.port == 5433
+    # Note: The actual precedence is handled in create_connection
+
+
+def test_config_minimal_dsn() -> None:
+    """Test config with minimal DSN."""
+    config = AsyncpgConfig(dsn="postgresql://localhost/test")
+    assert config.dsn == "postgresql://localhost/test"
+    assert config.host is None
+    assert config.port is None
+    assert config.user is None
+    assert config.password is None
+
+
+def test_config_with_pool_instance() -> None:
+    """Test config with existing pool instance."""
+    mock_pool = MagicMock()
+    config = AsyncpgConfig(host="localhost", pool_instance=mock_pool)
+    assert config.pool_instance is mock_pool

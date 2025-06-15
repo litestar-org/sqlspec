@@ -14,11 +14,10 @@ from sqlspec.driver.mixins import (
     TypeCoercionMixin,
 )
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import to_json
 from sqlspec.utils.sync_tools import ensure_async_
 
 __all__ = ("OracleAsyncConnection", "OracleAsyncDriver", "OracleSyncConnection", "OracleSyncDriver")
@@ -54,32 +53,6 @@ class OracleSyncDriver(
         default_row_type: type[DictRow] = DictRow,
     ) -> None:
         super().__init__(connection=connection, config=config, default_row_type=default_row_type)
-
-    def _coerce_boolean(self, value: Any) -> Any:
-        """Oracle doesn't have native boolean, convert to number."""
-        if isinstance(value, bool):
-            return 1 if value else 0
-        return value
-
-    def _coerce_decimal(self, value: Any) -> Any:
-        """Oracle handles decimal as NUMBER type."""
-        if isinstance(value, str):
-            from decimal import Decimal
-
-            return Decimal(value)
-        return value
-
-    def _coerce_json(self, value: Any) -> Any:
-        """Oracle JSON stored as CLOB, serialize to string."""
-        if isinstance(value, (dict, list)):
-            return to_json(value)
-        return value
-
-    def _coerce_array(self, value: Any) -> Any:
-        """Oracle doesn't have native arrays, serialize to JSON string."""
-        if isinstance(value, (list, tuple)):
-            return to_json(list(value))
-        return value
 
     @contextmanager
     def _get_cursor(self, connection: Optional[OracleSyncConnection] = None) -> Generator[Cursor, None, None]:
@@ -133,22 +106,22 @@ class OracleSyncDriver(
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
-            cursor.execute(sql, parameters or [])
+            cursor.execute(sql, parameters or [])  # type: ignore[no-untyped-call]
 
             if self.returns_rows(statement.expression):
-                fetched_data = cursor.fetchall()
-                column_names = [col[0] for col in cursor.description or []]
-                return {"data": fetched_data, "column_names": column_names, "rows_affected": cursor.rowcount}
+                fetched_data = cursor.fetchall()  # type: ignore[no-untyped-call]
+                column_names = [col[0] for col in cursor.description or []]  # type: ignore[attr-defined]
+                return {"data": fetched_data, "column_names": column_names, "rows_affected": cursor.rowcount}  # type: ignore[attr-defined]
 
-            return {"rows_affected": cursor.rowcount, "status_message": "OK"}
+            return {"rows_affected": cursor.rowcount, "status_message": "OK"}  # type: ignore[attr-defined]
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
-            cursor.executemany(sql, param_list or [])
-            return {"rows_affected": cursor.rowcount, "status_message": "OK"}
+            cursor.executemany(sql, param_list or [])  # type: ignore[no-untyped-call]
+            return {"rows_affected": cursor.rowcount, "status_message": "OK"}  # type: ignore[attr-defined]
 
     def _execute_script(
         self, script: str, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
@@ -161,6 +134,37 @@ class OracleSyncDriver(
                     cursor.execute(statement)
 
         return {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
+
+    def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
+        self._ensure_pyarrow_installed()
+        conn = self._connection(connection)
+        arrow_table = conn.fetch_df_all(
+            sql.to_sql(placeholder_style=self.default_parameter_style),
+            sql.get_parameters(style=self.default_parameter_style) or [],
+        )
+        return ArrowResult(statement=sql, data=arrow_table)
+
+    def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
+        self._ensure_pyarrow_installed()
+        conn = self._connection(None)
+
+        with self._get_cursor(conn) as cursor:
+            if mode == "replace":
+                cursor.execute(f"TRUNCATE TABLE {table_name}")
+            elif mode == "create":
+                msg = "'create' mode is not supported for oracledb ingestion."
+                raise NotImplementedError(msg)
+
+            data_for_ingest = table.to_pylist()
+            if not data_for_ingest:
+                return 0
+
+            # Generate column placeholders: :1, :2, etc.
+            num_columns = len(data_for_ingest[0])
+            placeholders = ", ".join(f":{i + 1}" for i in range(num_columns))
+            sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
+            cursor.executemany(sql, data_for_ingest)
+            return cursor.rowcount
 
     def _wrap_select_result(
         self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
@@ -242,32 +246,6 @@ class OracleAsyncDriver(
     ) -> None:
         super().__init__(connection=connection, config=config, default_row_type=default_row_type)
 
-    def _coerce_boolean(self, value: Any) -> Any:
-        """Oracle doesn't have native boolean, convert to number."""
-        if isinstance(value, bool):
-            return 1 if value else 0
-        return value
-
-    def _coerce_decimal(self, value: Any) -> Any:
-        """Oracle handles decimal as NUMBER type."""
-        if isinstance(value, str):
-            from decimal import Decimal
-
-            return Decimal(value)
-        return value
-
-    def _coerce_json(self, value: Any) -> Any:
-        """Oracle JSON stored as CLOB, serialize to string."""
-        if isinstance(value, (dict, list)):
-            return to_json(value)
-        return value
-
-    def _coerce_array(self, value: Any) -> Any:
-        """Oracle doesn't have native arrays, serialize to JSON string."""
-        if isinstance(value, (list, tuple)):
-            return to_json(list(value))
-        return value
-
     @asynccontextmanager
     async def _get_cursor(
         self, connection: Optional[OracleAsyncConnection] = None
@@ -323,24 +301,21 @@ class OracleAsyncDriver(
         conn = self._connection(connection)
         async with self._get_cursor(conn) as cursor:
             if parameters is None:
-                await cursor.execute(sql)
+                await cursor.execute(sql)  # type: ignore[no-untyped-call]
             else:
-                await cursor.execute(sql, parameters)
+                await cursor.execute(sql, parameters)  # type: ignore[no-untyped-call]
 
             # For SELECT statements, extract data while cursor is open
             if self.returns_rows(statement.expression):
-                fetched_data = await cursor.fetchall()
-                column_names = [col[0] for col in cursor.description or []]
+                fetched_data = await cursor.fetchall()  # type: ignore[no-untyped-call]
+                column_names = [col[0] for col in cursor.description or []]  # type: ignore[attr-defined]
                 result: SelectResultDict = {
                     "data": fetched_data,
                     "column_names": column_names,
-                    "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                    "rows_affected": cursor.rowcount,
                 }
                 return result
-            dml_result: DMLResultDict = {
-                "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
-                "status_message": "OK",
-            }
+            dml_result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
             return dml_result
 
     async def _execute_many(
@@ -348,11 +323,8 @@ class OracleAsyncDriver(
     ) -> DMLResultDict:
         conn = self._connection(connection)
         async with self._get_cursor(conn) as cursor:
-            await cursor.executemany(sql, param_list or [])
-            result: DMLResultDict = {
-                "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
-                "status_message": "OK",
-            }
+            await cursor.executemany(sql, param_list or [])  # type: ignore[no-untyped-call]
+            result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
             return result
 
     async def _execute_script(
@@ -373,6 +345,37 @@ class OracleAsyncDriver(
 
         result: ScriptResultDict = {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
         return result
+
+    async def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
+        self._ensure_pyarrow_installed()
+        conn = self._connection(connection)
+        arrow_table = await conn.fetch_df_all(
+            sql.to_sql(placeholder_style=self.default_parameter_style),
+            sql.get_parameters(style=self.default_parameter_style) or [],
+        )
+        return ArrowResult(statement=sql, data=arrow_table)
+
+    async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
+        self._ensure_pyarrow_installed()
+        conn = self._connection(None)
+
+        async with self._get_cursor(conn) as cursor:
+            if mode == "replace":
+                await cursor.execute(f"TRUNCATE TABLE {table_name}")
+            elif mode == "create":
+                msg = "'create' mode is not supported for oracledb ingestion."
+                raise NotImplementedError(msg)
+
+            data_for_ingest = table.to_pylist()
+            if not data_for_ingest:
+                return 0
+
+            # Generate column placeholders: :1, :2, etc.
+            num_columns = len(data_for_ingest[0])
+            placeholders = ", ".join(f":{i + 1}" for i in range(num_columns))
+            sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
+            await cursor.executemany(sql, data_for_ingest)
+            return cursor.rowcount
 
     async def _wrap_select_result(
         self,

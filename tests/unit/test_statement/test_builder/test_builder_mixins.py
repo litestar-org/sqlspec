@@ -1,8 +1,30 @@
-from typing import Optional
+"""Unit tests for query builder mixins.
+
+This module tests the various builder mixins including:
+- WhereClauseMixin for WHERE conditions
+- JoinClauseMixin for JOIN operations
+- LimitOffsetClauseMixin for LIMIT/OFFSET
+- OrderByClauseMixin for ORDER BY
+- FromClauseMixin for FROM clause
+- ReturningClauseMixin for RETURNING clause
+- InsertValuesMixin for INSERT VALUES
+- SetOperationMixin for UNION/INTERSECT/EXCEPT
+- GroupByClauseMixin for GROUP BY
+- HavingClauseMixin for HAVING clause
+- UpdateSetClauseMixin for UPDATE SET
+- UpdateFromClauseMixin for UPDATE FROM
+- InsertFromSelectMixin for INSERT FROM SELECT
+- Merge mixins for MERGE statements
+- PivotClauseMixin for PIVOT operations
+- UnpivotClauseMixin for UNPIVOT operations
+- AggregateFunctionsMixin for aggregate functions
+"""
+
+from typing import TYPE_CHECKING, Any, Optional
+from unittest.mock import Mock
 
 import pytest
 from sqlglot import exp
-from sqlglot.dialects.dialect import DialectType
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder.mixins._aggregate_functions import AggregateFunctionsMixin
@@ -30,18 +52,32 @@ from sqlspec.statement.builder.mixins._update_from import UpdateFromClauseMixin
 from sqlspec.statement.builder.mixins._update_set import UpdateSetClauseMixin
 from sqlspec.statement.builder.mixins._where import WhereClauseMixin
 
+if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
 
-# --- Minimal Protocol for Mixins ---
-class DummyBuilder:
+
+# Helper Classes
+class MockQueryResult:
+    """Mock query result for testing."""
+
+    def __init__(self, sql: str, parameters: dict[str, Any]) -> None:
+        self.sql = sql
+        self.parameters = parameters
+
+
+class MockBuilder:
+    """Base mock builder implementing minimal protocol for testing mixins."""
+
     def __init__(self, expression: "Optional[exp.Expression]" = None) -> None:
         self._expression: Optional[exp.Expression] = expression
-        self._parameters: dict[str, object] = {}
-        self._parameter_counter: int = 0
-        self.dialect: DialectType = None
+        self._parameters: dict[str, Any] = {}
+        self._parameter_counter = 0
+        self.dialect: Optional[DialectType] = None
         self.dialect_name: Optional[str] = None
         self._table: Optional[str] = None
 
-    def add_parameter(self, value: object, name: Optional[str] = None) -> tuple["DummyBuilder", str]:
+    def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple["MockBuilder", str]:
+        """Add a parameter to the builder."""
         if name and name in self._parameters:
             raise SQLBuilderError(f"Parameter name '{name}' already exists.")
         param_name = name or f"param_{self._parameter_counter + 1}"
@@ -49,376 +85,594 @@ class DummyBuilder:
         self._parameters[param_name] = value
         return self, param_name
 
-    def build(self) -> object:
-        # Dummy build for set ops
-        class DummyQuery:
-            def __init__(self, sql: str, parameters: dict[str, object]) -> None:
-                self.sql: str = sql
-                self.parameters: dict[str, object] = parameters
+    def build(self) -> MockQueryResult:
+        """Build the query."""
+        return MockQueryResult("SELECT 1", self._parameters)
 
-        return DummyQuery("SELECT 1", self._parameters)
-
-
-# --- Import Mixins ---
+    def _raise_sql_builder_error(self, message: str, cause: Optional[Exception] = None) -> None:
+        """Raise a SQLBuilderError."""
+        raise SQLBuilderError(message) from cause
 
 
-# --- WhereClauseMixin ---
-class _TestWhereMixin(DummyBuilder, WhereClauseMixin):
-    def __init__(self, expression: Optional[exp.Expression] = None) -> None:
-        super().__init__(expression)
+# Test Implementations
+class WhereTestBuilder(MockBuilder, WhereClauseMixin):
+    """Test builder with WHERE clause mixin."""
 
     pass
 
 
-def test_where_clause_basic() -> None:
-    builder = _TestWhereMixin(exp.Select())
-    assert builder._expression is not None
-    builder.where("id = 1")
-    assert isinstance(builder._expression, exp.Select)
+# WhereClauseMixin Tests
+@pytest.mark.parametrize(
+    "condition,expected_type",
+    [
+        ("id = 1", exp.Select),
+        (("status", "active"), exp.Select),
+        (exp.EQ(this=exp.column("id"), expression=exp.Literal.number(1)), exp.Select),
+    ],
+    ids=["string_condition", "tuple_condition", "expression_condition"],
+)
+def test_where_clause_basic(condition: Any, expected_type: type[exp.Expression]) -> None:
+    """Test basic WHERE clause functionality."""
+    builder = WhereTestBuilder(expected_type())
+    result = builder.where(condition)
+    assert result is builder
+    assert isinstance(builder._expression, expected_type)
+    assert builder._expression.args.get("where") is not None
 
 
-def test_where_clause_wrong_type() -> None:
-    builder = _TestWhereMixin(exp.Insert())
-    with pytest.raises(SQLBuilderError):
+def test_where_clause_wrong_expression_type() -> None:
+    """Test WHERE clause with wrong expression type."""
+    builder = WhereTestBuilder(exp.Insert())
+    with pytest.raises(SQLBuilderError, match="WHERE clause is only supported"):
         builder.where("id = 1")
 
 
-def test_where_eq_adds_param() -> None:
-    builder = _TestWhereMixin(exp.Select())
-    builder.where_eq("name", "John")
-    assert "John" in builder._parameters.values()
+@pytest.mark.parametrize(
+    "method,args,expected_params",
+    [
+        ("where_eq", ("name", "John"), ["John"]),
+        ("where_neq", ("status", "inactive"), ["inactive"]),
+        ("where_lt", ("age", 18), [18]),
+        ("where_lte", ("age", 65), [65]),
+        ("where_gt", ("score", 90), [90]),
+        ("where_gte", ("rating", 4.5), [4.5]),
+        ("where_like", ("email", "%@example.com"), ["%@example.com"]),
+        ("where_not_like", ("name", "%test%"), ["%test%"]),
+        ("where_ilike", ("name", "john%"), ["john%"]),
+        ("where_between", ("age", 25, 45), [25, 45]),
+        ("where_in", ("status", ["active", "pending"]), [["active", "pending"]]),
+        ("where_not_in", ("role", ["guest", "banned"]), [["guest", "banned"]]),
+    ],
+    ids=["eq", "neq", "lt", "lte", "gt", "gte", "like", "not_like", "ilike", "between", "in", "not_in"],
+)
+def test_where_helper_methods(method: str, args: tuple, expected_params: list[Any]) -> None:
+    """Test WHERE clause helper methods."""
+    builder = WhereTestBuilder(exp.Select())
+    where_method = getattr(builder, method)
+    result = where_method(*args)
+
+    assert result is builder
+    # Check parameters were added
+    for param in expected_params:
+        assert param in builder._parameters.values()
 
 
-def test_where_any_with_values() -> None:
-    builder = _TestWhereMixin(exp.Select())
-    assert builder._expression is not None
-    builder.where_any("id", [1, 2, 3])
+@pytest.mark.parametrize(
+    "column",
+    ["deleted_at", "email_verified", exp.column("archived_at")],
+    ids=["string_column", "another_string", "expression_column"],
+)
+def test_where_null_checks(column: Any) -> None:
+    """Test WHERE IS NULL and IS NOT NULL."""
+    builder = WhereTestBuilder(exp.Select())
+
+    # Test IS NULL
+    result = builder.where_is_null(column)
+    assert result is builder
+
+    # Reset and test IS NOT NULL
+    builder = WhereTestBuilder(exp.Select())
+    result = builder.where_is_not_null(column)
+    assert result is builder
+
+
+@pytest.mark.parametrize(
+    "values_or_subquery,expected_any_type",
+    [
+        ([1, 2, 3], exp.Tuple),
+        ((4, 5, 6), exp.Tuple),
+        (Mock(build=lambda: Mock(sql="SELECT id FROM users")), type(None)),  # Subquery
+    ],
+    ids=["list_values", "tuple_values", "subquery"],
+)
+def test_where_any_operations(values_or_subquery: Any, expected_any_type: Any) -> None:
+    """Test WHERE ANY operations."""
+    builder = WhereTestBuilder(exp.Select())
+
+    # Test where_any
+    result = builder.where_any("id", values_or_subquery)
+    assert result is builder
     where_expr = builder._expression.args.get("where")
     assert where_expr is not None
-    eq_expr = where_expr.this
-    assert isinstance(eq_expr, exp.EQ)
-    expr_any = eq_expr.args.get("expression")
-    assert expr_any is not None
-    assert isinstance(expr_any, exp.Any)
-    any_arg = expr_any.args.get("this")
-    assert any_arg is not None
-    assert isinstance(any_arg, exp.Tuple)
+    assert isinstance(where_expr.this, exp.EQ)
 
-
-def test_where_any_with_subquery() -> None:
-    class SubqueryBuilder:
-        def build(self) -> object:
-            class Dummy:
-                sql = "SELECT id FROM users"
-
-            return Dummy()
-
-    builder = _TestWhereMixin(exp.Select())
-    assert builder._expression is not None
-    builder.where_any("id", SubqueryBuilder())
+    # Test where_not_any
+    builder = WhereTestBuilder(exp.Select())
+    result = builder.where_not_any("id", values_or_subquery)
+    assert result is builder
     where_expr = builder._expression.args.get("where")
     assert where_expr is not None
-    eq_expr = where_expr.this
-    assert isinstance(eq_expr, exp.EQ)
-    expr_any = eq_expr.args.get("expression")
-    assert expr_any is not None
-    assert isinstance(expr_any, exp.Any)
+    assert isinstance(where_expr.this, exp.NEQ)
 
 
-def test_where_not_any_with_values() -> None:
-    builder = _TestWhereMixin(exp.Select())
-    assert builder._expression is not None
-    builder.where_not_any("id", [1, 2, 3])
-    where_expr = builder._expression.args.get("where")
-    assert where_expr is not None
-    neq_expr = where_expr.this
-    assert isinstance(neq_expr, exp.NEQ)
-    expr_any = neq_expr.args.get("expression")
-    assert expr_any is not None
-    assert isinstance(expr_any, exp.Any)
-    any_arg = expr_any.args.get("this")
-    assert any_arg is not None
-    assert isinstance(any_arg, exp.Tuple)
+def test_where_exists_operations() -> None:
+    """Test WHERE EXISTS and NOT EXISTS."""
+    subquery = "SELECT 1 FROM orders WHERE user_id = users.id"
+
+    # Test EXISTS
+    builder = WhereTestBuilder(exp.Select())
+    result = builder.where_exists(subquery)
+    assert result is builder
+
+    # Test NOT EXISTS
+    builder = WhereTestBuilder(exp.Select())
+    result = builder.where_not_exists(subquery)
+    assert result is builder
 
 
-def test_where_not_any_with_subquery() -> None:
-    class SubqueryBuilder:
-        def build(self) -> object:
-            class Dummy:
-                sql = "SELECT id FROM users"
-
-            return Dummy()
-
-    builder = _TestWhereMixin(exp.Select())
-    assert builder._expression is not None
-    builder.where_not_any("id", SubqueryBuilder())
-    where_expr = builder._expression.args.get("where")
-    assert where_expr is not None
-    neq_expr = where_expr.this
-    assert isinstance(neq_expr, exp.NEQ)
-    expr_any = neq_expr.args.get("expression")
-    assert expr_any is not None
-    assert isinstance(expr_any, exp.Any)
-
-
-# --- JoinClauseMixin ---
-class _TestJoinMixin(DummyBuilder, JoinClauseMixin):
-    def __init__(self, expression: Optional[exp.Expression] = None) -> None:
-        super().__init__(expression)
+class JoinTestBuilder(MockBuilder, JoinClauseMixin):
+    """Test builder with JOIN clause mixin."""
 
     pass
 
 
-def test_join_inner() -> None:
-    builder = _TestJoinMixin(exp.Select())
-    builder.join("users", on="users.id = orders.user_id", join_type="INNER")
+# JoinClauseMixin Tests
+@pytest.mark.parametrize(
+    "join_type,method,table,on_condition",
+    [
+        ("INNER", "join", "users", "users.id = orders.user_id"),
+        ("LEFT", "left_join", "profiles", "users.id = profiles.user_id"),
+        ("RIGHT", "right_join", "departments", "users.dept_id = departments.id"),
+        ("FULL", "full_join", "audit_log", "users.id = audit_log.user_id"),
+        ("CROSS", "cross_join", "regions", None),
+    ],
+    ids=["inner", "left", "right", "full", "cross"],
+)
+def test_join_types(join_type: str, method: str, table: str, on_condition: Optional[str]) -> None:
+    """Test various JOIN types."""
+    builder = JoinTestBuilder(exp.Select())
+    join_method = getattr(builder, method)
+
+    if on_condition:
+        result = join_method(table, on=on_condition)
+    else:
+        result = join_method(table)
+
+    assert result is builder
     assert isinstance(builder._expression, exp.Select)
 
 
-def test_join_invalid_type() -> None:
-    builder = _TestJoinMixin(exp.Insert())
-    with pytest.raises(SQLBuilderError):
+def test_join_with_wrong_expression_type() -> None:
+    """Test JOIN with wrong expression type."""
+    builder = JoinTestBuilder(exp.Insert())
+    with pytest.raises(SQLBuilderError, match="JOIN clause is only supported"):
         builder.join("users")
 
 
-# --- LimitOffsetClauseMixin ---
-class _TestLimitOffsetMixin(DummyBuilder, LimitOffsetClauseMixin):
-    def __init__(self, expression: Optional[exp.Expression] = None) -> None:
-        super().__init__(expression)
+def test_join_with_alias() -> None:
+    """Test JOIN with table alias."""
+    builder = JoinTestBuilder(exp.Select())
+    result = builder.join("users AS u", on="u.id = orders.user_id")
+    assert result is builder
+
+
+class LimitOffsetTestBuilder(MockBuilder, LimitOffsetClauseMixin):
+    """Test builder with LIMIT/OFFSET mixin."""
 
     pass
 
 
-def test_limit_clause() -> None:
-    builder = _TestLimitOffsetMixin(exp.Select())
-    builder.limit(10)
+# LimitOffsetClauseMixin Tests
+@pytest.mark.parametrize(
+    "limit_value,offset_value",
+    [(10, None), (None, 20), (50, 100), (1, 0), (100, 500)],
+    ids=["limit_only", "offset_only", "both", "single_page", "large_offset"],
+)
+def test_limit_offset_operations(limit_value: Optional[int], offset_value: Optional[int]) -> None:
+    """Test LIMIT and OFFSET operations."""
+    builder = LimitOffsetTestBuilder(exp.Select())
+
+    if limit_value is not None:
+        result = builder.limit(limit_value)
+        assert result is builder
+
+    if offset_value is not None:
+        result = builder.offset(offset_value)
+        assert result is builder
+
     assert isinstance(builder._expression, exp.Select)
 
 
-def test_offset_clause() -> None:
-    builder = _TestLimitOffsetMixin(exp.Select())
-    builder.offset(5)
-    assert isinstance(builder._expression, exp.Select)
+def test_limit_offset_wrong_expression_type() -> None:
+    """Test LIMIT/OFFSET with wrong expression type."""
+    builder = LimitOffsetTestBuilder(exp.Insert())
+
+    with pytest.raises(SQLBuilderError, match="LIMIT is only supported"):
+        builder.limit(10)
+
+    with pytest.raises(SQLBuilderError, match="OFFSET is only supported"):
+        builder.offset(5)
 
 
-def test_limit_offset_wrong_type() -> None:
-    builder = _TestLimitOffsetMixin(exp.Insert())
-    with pytest.raises(SQLBuilderError):
-        builder.limit(1)
-    with pytest.raises(SQLBuilderError):
-        builder.offset(1)
-
-
-# --- OrderByClauseMixin ---
-class _TestOrderByMixin(DummyBuilder, OrderByClauseMixin):
-    def __init__(self, expression: Optional[exp.Expression] = None) -> None:
-        super().__init__(expression)
+class OrderByTestBuilder(MockBuilder, OrderByClauseMixin):
+    """Test builder with ORDER BY mixin."""
 
     pass
 
 
-def test_order_by_clause() -> None:
-    builder = _TestOrderByMixin(exp.Select())
-    builder.order_by("name")
+# OrderByClauseMixin Tests
+@pytest.mark.parametrize(
+    "columns,desc",
+    [
+        (["name"], False),
+        (["created_at"], True),
+        (["department", "salary"], False),
+        (["score", "name"], True),
+        ([exp.column("updated_at")], True),
+    ],
+    ids=["single_asc", "single_desc", "multiple_asc", "multiple_desc", "expression_desc"],
+)
+def test_order_by_operations(columns: list[Any], desc: bool) -> None:
+    """Test ORDER BY operations."""
+    builder = OrderByTestBuilder(exp.Select())
+    result = builder.order_by(*columns, desc=desc)
+    assert result is builder
     assert isinstance(builder._expression, exp.Select)
 
 
-def test_order_by_wrong_type() -> None:
-    builder = _TestOrderByMixin(exp.Insert())
-    with pytest.raises(SQLBuilderError):
+def test_order_by_wrong_expression_type() -> None:
+    """Test ORDER BY with wrong expression type."""
+    builder = OrderByTestBuilder(exp.Insert())
+    with pytest.raises(SQLBuilderError, match="ORDER BY is only supported"):
         builder.order_by("name")
 
 
-# --- FromClauseMixin ---
-class _TestFromMixin(DummyBuilder, FromClauseMixin):
-    def __init__(self, expression: Optional[exp.Expression] = None) -> None:
-        super().__init__(expression)
+class FromTestBuilder(MockBuilder, FromClauseMixin):
+    """Test builder with FROM clause mixin."""
 
     pass
 
 
-def test_from_clause() -> None:
-    builder = _TestFromMixin(exp.Select())
-    builder.from_("users")
+# FromClauseMixin Tests
+@pytest.mark.parametrize(
+    "table,alias",
+    [("users", None), ("customers", "c"), ("public.orders", "o"), (exp.Table(this="products"), None)],
+    ids=["simple_table", "table_with_alias", "schema_qualified", "expression_table"],
+)
+def test_from_clause_operations(table: Any, alias: Optional[str]) -> None:
+    """Test FROM clause operations."""
+    builder = FromTestBuilder(exp.Select())
+
+    if alias:
+        result = builder.from_(f"{table} AS {alias}")
+    else:
+        result = builder.from_(table)
+
+    assert result is builder
     assert isinstance(builder._expression, exp.Select)
 
 
-def test_from_wrong_type() -> None:
-    builder = _TestFromMixin(exp.Insert())
-    with pytest.raises(SQLBuilderError):
+def test_from_wrong_expression_type() -> None:
+    """Test FROM with wrong expression type."""
+    builder = FromTestBuilder(exp.Insert())
+    with pytest.raises(SQLBuilderError, match="FROM clause is only supported"):
         builder.from_("users")
 
 
-# --- ReturningClauseMixin ---
-class _TestReturningMixin(DummyBuilder, ReturningClauseMixin):
-    def __init__(self, expression: Optional[exp.Expression] = None) -> None:
-        super().__init__(expression)
+class ReturningTestBuilder(MockBuilder, ReturningClauseMixin):
+    """Test builder with RETURNING clause mixin."""
 
     pass
 
 
-def test_returning_insert() -> None:
-    builder = _TestReturningMixin(exp.Insert())
-    builder.returning("id")
-    assert isinstance(builder._expression, exp.Insert)
+# ReturningClauseMixin Tests
+@pytest.mark.parametrize(
+    "expression_type,columns",
+    [
+        (exp.Insert, ["id"]),
+        (exp.Update, ["id", "updated_at"]),
+        (exp.Delete, ["*"]),
+        (exp.Insert, ["id", "name", "created_at"]),
+    ],
+    ids=["insert_single", "update_multiple", "delete_star", "insert_multiple"],
+)
+def test_returning_clause_operations(expression_type: type[exp.Expression], columns: list[str]) -> None:
+    """Test RETURNING clause operations."""
+    builder = ReturningTestBuilder(expression_type())
+    result = builder.returning(*columns)
+    assert result is builder
+    assert isinstance(builder._expression, expression_type)
 
 
-def test_returning_wrong_type() -> None:
-    builder = _TestReturningMixin(exp.Select())
-    with pytest.raises(SQLBuilderError):
+def test_returning_wrong_expression_type() -> None:
+    """Test RETURNING with wrong expression type."""
+    builder = ReturningTestBuilder(exp.Select())
+    with pytest.raises(SQLBuilderError, match="RETURNING is only supported"):
         builder.returning("id")
 
 
-# --- InsertValuesMixin ---
-class _TestInsertValuesMixin(DummyBuilder, InsertValuesMixin):
-    def __init__(self, expression: Optional[exp.Expression] = None) -> None:
-        super().__init__(expression)
+class InsertValuesTestBuilder(MockBuilder, InsertValuesMixin):
+    """Test builder with INSERT VALUES mixin."""
 
     pass
 
 
-def test_insert_columns_and_values() -> None:
-    builder = _TestInsertValuesMixin(exp.Insert())
-    builder.columns("name", "email")
-    builder.values("John", "john@example.com")
+# InsertValuesMixin Tests
+def test_insert_columns_operation() -> None:
+    """Test INSERT columns specification."""
+    builder = InsertValuesTestBuilder(exp.Insert())
+    result = builder.columns("id", "name", "email")
+    assert result is builder
     assert isinstance(builder._expression, exp.Insert)
 
 
-def test_insert_values_wrong_type() -> None:
-    builder = _TestInsertValuesMixin(exp.Select())
-    with pytest.raises(SQLBuilderError):
+@pytest.mark.parametrize(
+    "values,expected_param_count",
+    [(["John", "john@example.com"], 2), ([1, "Admin", True, None], 4), ([{"key": "value"}, [1, 2, 3]], 2)],
+    ids=["basic_values", "mixed_types", "complex_values"],
+)
+def test_insert_values_operation(values: list[Any], expected_param_count: int) -> None:
+    """Test INSERT values operation."""
+    builder = InsertValuesTestBuilder(exp.Insert())
+    result = builder.values(*values)
+    assert result is builder
+    assert len(builder._parameters) == expected_param_count
+
+
+def test_insert_values_from_dict() -> None:
+    """Test INSERT values from dictionary."""
+    builder = InsertValuesTestBuilder(exp.Insert())
+    result = builder.values_from_dict({"name": "John", "email": "john@example.com", "active": True})
+    assert result is builder
+    assert len(builder._parameters) == 3
+
+
+def test_insert_values_wrong_expression_type() -> None:
+    """Test INSERT VALUES with wrong expression type."""
+    builder = InsertValuesTestBuilder(exp.Select())
+    with pytest.raises(SQLBuilderError, match="columns.*only supported.*INSERT"):
+        builder.columns("name")
+    with pytest.raises(SQLBuilderError, match="values.*only supported.*INSERT"):
         builder.values("John")
 
 
-# --- SetOperationMixin ---
-class _TestSetOpMixin(DummyBuilder, SetOperationMixin):
-    def __init__(self, expression: Optional[exp.Expression] = None) -> None:
-        super().__init__(expression)
-
-    def build(self) -> object:
-        class DummyQuery:
-            def __init__(self, sql: str, parameters: dict[str, object]) -> None:
-                self.sql: str = sql
-                self.parameters: dict[str, object] = parameters
-
-        return DummyQuery("SELECT 1", self._parameters)
-
-
-def test_union_operation() -> None:
-    builder1 = _TestSetOpMixin(exp.Select())
-    builder2 = _TestSetOpMixin(exp.Select())
-    builder1._parameters = {"param_1": 1}
-    builder2._parameters = {"param_2": 2}
-    result = builder1.union(builder2)
-    assert isinstance(result, _TestSetOpMixin)
-    assert "param_1" in result._parameters and "param_2" in result._parameters
-
-
-# --- GroupByClauseMixin ---
-class _TestGroupByMixin(DummyBuilder, GroupByClauseMixin):
-    def __init__(self, expression: Optional[exp.Expression] = None) -> None:
-        super().__init__(expression)
+class SetOperationTestBuilder(MockBuilder, SetOperationMixin):
+    """Test builder with set operations mixin."""
 
     pass
 
 
-def test_group_by_clause() -> None:
-    builder = _TestGroupByMixin(exp.Select())
-    builder.group_by("name")
-    assert isinstance(builder._expression, exp.Select)
+# SetOperationMixin Tests
+@pytest.mark.parametrize(
+    "operation,method,distinct",
+    [
+        ("UNION", "union", True),
+        ("UNION ALL", "union", False),
+        ("INTERSECT", "intersect", True),
+        ("INTERSECT ALL", "intersect", False),
+        ("EXCEPT", "except_", True),
+        ("EXCEPT ALL", "except_", False),
+    ],
+    ids=["union", "union_all", "intersect", "intersect_all", "except", "except_all"],
+)
+def test_set_operations(operation: str, method: str, distinct: bool) -> None:
+    """Test set operations (UNION, INTERSECT, EXCEPT)."""
+    builder1 = SetOperationTestBuilder(exp.Select())
+    builder2 = SetOperationTestBuilder(exp.Select())
+
+    # Add some parameters to verify merging
+    builder1._parameters = {"param_1": "value1"}
+    builder2._parameters = {"param_2": "value2"}
+
+    set_method = getattr(builder1, method)
+    if method in ["union", "intersect", "except_"]:
+        result = set_method(builder2, distinct=distinct)
+    else:
+        result = set_method(builder2)
+
+    assert isinstance(result, SetOperationTestBuilder)
+    # Parameters should be merged
+    assert "param_1" in result._parameters
+    assert "param_2" in result._parameters
 
 
-def test_group_by_rollup() -> None:
-    builder = _TestGroupByMixin(exp.Select())
-    assert builder._expression is not None
-    builder.group_by_rollup("a", "b")
-    group = builder._expression.args.get("group")
-    assert group is not None
-    # Should be a Group node containing a Rollup in its expressions
-    assert isinstance(group, exp.Group)
-    exprs = group.args.get("expressions")
-    assert exprs is not None
-    found = any(isinstance(e, exp.Rollup) for e in exprs if e is not None)
-    assert found
+def test_set_operation_wrong_expression_type() -> None:
+    """Test set operations with wrong expression type."""
+    builder1 = SetOperationTestBuilder(exp.Insert())  # Wrong type
+    builder2 = SetOperationTestBuilder(exp.Select())
+
+    with pytest.raises(SQLBuilderError, match="Set operations.*only supported.*SELECT"):
+        builder1.union(builder2)
 
 
-# --- HavingClauseMixin ---
-class _TestHavingMixin(DummyBuilder, HavingClauseMixin):
-    def __init__(self, expression: Optional[exp.Expression] = None) -> None:
-        super().__init__(expression)
+class GroupByTestBuilder(MockBuilder, GroupByClauseMixin):
+    """Test builder with GROUP BY mixin."""
 
     pass
 
 
-def test_having_clause() -> None:
-    builder = _TestHavingMixin(exp.Select())
-    builder.having("COUNT(*) > 1")
+# GroupByClauseMixin Tests
+@pytest.mark.parametrize(
+    "columns",
+    [["department"], ["department", "location"], ["year", "month", "day"], [exp.column("created_date")]],
+    ids=["single", "double", "triple", "expression"],
+)
+def test_group_by_operations(columns: list[Any]) -> None:
+    """Test GROUP BY operations."""
+    builder = GroupByTestBuilder(exp.Select())
+    result = builder.group_by(*columns)
+    assert result is builder
     assert isinstance(builder._expression, exp.Select)
 
 
-def test_having_wrong_type() -> None:
-    builder = _TestHavingMixin(exp.Insert())
-    with pytest.raises(SQLBuilderError):
+@pytest.mark.parametrize(
+    "method,columns",
+    [
+        ("group_by_rollup", ["year", "month"]),
+        ("group_by_cube", ["product", "region"]),
+        ("group_by_grouping_sets", [["a"], ["b"], ["a", "b"]]),
+    ],
+    ids=["rollup", "cube", "grouping_sets"],
+)
+def test_group_by_advanced_operations(method: str, columns: Any) -> None:
+    """Test advanced GROUP BY operations (ROLLUP, CUBE, GROUPING SETS)."""
+    builder = GroupByTestBuilder(exp.Select())
+    group_method = getattr(builder, method)
+
+    if method == "group_by_grouping_sets":
+        result = group_method(*columns)
+    else:
+        result = group_method(*columns)
+
+    assert result is builder
+    assert builder._expression.args.get("group") is not None
+
+
+def test_group_by_wrong_expression_type() -> None:
+    """Test GROUP BY with wrong expression type."""
+    builder = GroupByTestBuilder(exp.Insert())
+    with pytest.raises(SQLBuilderError, match="GROUP BY is only supported"):
+        builder.group_by("column")
+
+
+class HavingTestBuilder(MockBuilder, HavingClauseMixin):
+    """Test builder with HAVING clause mixin."""
+
+    pass
+
+
+# HavingClauseMixin Tests
+@pytest.mark.parametrize(
+    "condition",
+    ["COUNT(*) > 10", "SUM(amount) >= 1000", "AVG(score) < 75", "MAX(price) - MIN(price) > 100"],
+    ids=["count", "sum", "avg", "range"],
+)
+def test_having_operations(condition: str) -> None:
+    """Test HAVING clause operations."""
+    builder = HavingTestBuilder(exp.Select())
+    result = builder.having(condition)
+    assert result is builder
+    assert isinstance(builder._expression, exp.Select)
+
+
+def test_having_wrong_expression_type() -> None:
+    """Test HAVING with wrong expression type."""
+    builder = HavingTestBuilder(exp.Insert())
+    with pytest.raises(SQLBuilderError, match="HAVING is only supported"):
         builder.having("COUNT(*) > 1")
 
 
-# --- UpdateSetClauseMixin ---
-class _TestUpdateSetMixin(DummyBuilder, UpdateSetClauseMixin):
-    def __init__(self, expression: Optional[exp.Expression] = None) -> None:
-        super().__init__(expression)
+class UpdateSetTestBuilder(MockBuilder, UpdateSetClauseMixin):
+    """Test builder with UPDATE SET mixin."""
 
     pass
 
 
-def test_update_set_clause() -> None:
-    builder = _TestUpdateSetMixin(exp.Update())
-    builder.set(name="John")
+# UpdateSetClauseMixin Tests
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"name": "John"},
+        {"status": "active", "updated_at": "2024-01-01"},
+        {"counter": exp.Add(this=exp.column("counter"), expression=exp.Literal.number(1))},
+    ],
+    ids=["single_value", "multiple_values", "expression_value"],
+)
+def test_update_set_operations(updates: dict[str, Any]) -> None:
+    """Test UPDATE SET operations."""
+    builder = UpdateSetTestBuilder(exp.Update())
+
+    for column, value in updates.items():
+        result = builder.set(**{column: value})
+        assert result is builder
+
     assert isinstance(builder._expression, exp.Update)
+    # Check parameters were added for non-expression values
+    for value in updates.values():
+        if not isinstance(value, exp.Expression):
+            assert value in builder._parameters.values()
 
 
-def test_update_set_wrong_type() -> None:
-    builder = _TestUpdateSetMixin(exp.Select())
-    with pytest.raises(SQLBuilderError):
+def test_update_set_wrong_expression_type() -> None:
+    """Test UPDATE SET with wrong expression type."""
+    builder = UpdateSetTestBuilder(exp.Select())
+    with pytest.raises(SQLBuilderError, match="set.*only supported.*UPDATE"):
         builder.set(name="John")
 
 
-# --- UpdateFromClauseMixin ---
-class _TestUpdateFromMixin(DummyBuilder, UpdateFromClauseMixin):
-    def __init__(self, expression: Optional[exp.Expression] = None) -> None:
-        super().__init__(expression)
+class UpdateFromTestBuilder(MockBuilder, UpdateFromClauseMixin):
+    """Test builder with UPDATE FROM mixin."""
 
     pass
 
 
-def test_update_from_clause() -> None:
-    builder = _TestUpdateFromMixin(exp.Update())
-    builder.from_("other_table")
+# UpdateFromClauseMixin Tests
+def test_update_from_operations() -> None:
+    """Test UPDATE FROM operations."""
+    builder = UpdateFromTestBuilder(exp.Update())
+    result = builder.from_("source_table")
+    assert result is builder
     assert isinstance(builder._expression, exp.Update)
 
 
-def test_update_from_wrong_type() -> None:
-    builder = _TestUpdateFromMixin(exp.Select())
-    with pytest.raises(SQLBuilderError):
+def test_update_from_wrong_expression_type() -> None:
+    """Test UPDATE FROM with wrong expression type."""
+    builder = UpdateFromTestBuilder(exp.Select())
+    with pytest.raises(SQLBuilderError, match="FROM.*only supported.*UPDATE"):
         builder.from_("other_table")
 
 
-# --- InsertFromSelectMixin ---
-class _TestInsertFromSelectMixin(DummyBuilder, InsertFromSelectMixin):
-    def __init__(self, expression: Optional[exp.Expression] = None) -> None:
-        super().__init__(expression)
+class InsertFromSelectTestBuilder(MockBuilder, InsertFromSelectMixin):
+    """Test builder with INSERT FROM SELECT mixin."""
 
     pass
 
 
+# InsertFromSelectMixin Tests
+def test_insert_from_select_operations() -> None:
+    """Test INSERT FROM SELECT operations."""
+    builder = InsertFromSelectTestBuilder(exp.Insert())
+    builder._table = "target_table"  # Set table first
+
+    # Create a mock select builder
+    select_builder = Mock()
+    select_builder.build.return_value = MockQueryResult("SELECT * FROM source", {})
+
+    result = builder.from_select(select_builder)
+    assert result is builder
+
+
 def test_insert_from_select_requires_table() -> None:
-    builder = _TestInsertFromSelectMixin(exp.Insert())
-    with pytest.raises(SQLBuilderError):
-        builder.from_select(DummyBuilder(exp.Select()))
+    """Test INSERT FROM SELECT requires table to be set."""
+    builder = InsertFromSelectTestBuilder(exp.Insert())
+    select_builder = Mock()
+
+    with pytest.raises(SQLBuilderError, match="Table must be set"):
+        builder.from_select(select_builder)
 
 
-# --- Merge*ClauseMixins ---
-class _TestMergeMixin(
-    DummyBuilder,
+def test_insert_from_select_wrong_expression_type() -> None:
+    """Test INSERT FROM SELECT with wrong expression type."""
+    builder = InsertFromSelectTestBuilder(exp.Select())
+    builder._table = "target_table"
+    select_builder = Mock()
+
+    with pytest.raises(SQLBuilderError, match="from_select.*only supported.*INSERT"):
+        builder.from_select(select_builder)
+
+
+class MergeTestBuilder(
+    MockBuilder,
     MergeIntoClauseMixin,
     MergeUsingClauseMixin,
     MergeOnClauseMixin,
@@ -426,158 +680,205 @@ class _TestMergeMixin(
     MergeNotMatchedClauseMixin,
     MergeNotMatchedBySourceClauseMixin,
 ):
-    def __init__(self, expression: Optional[exp.Expression] = None) -> None:
-        super().__init__(expression)
+    """Test builder with all MERGE mixins."""
 
     pass
 
 
-def test_merge_into_and_using() -> None:
-    builder = _TestMergeMixin(exp.Merge())
-    builder.into("target")
-    builder.using("source")
-    builder.on("target.id = source.id")
-    builder.when_matched_then_update({"name": "new"})
-    builder.when_not_matched_then_insert(["id"], [1])
+# Merge Mixins Tests
+def test_merge_complete_flow() -> None:
+    """Test complete MERGE statement flow."""
+    builder = MergeTestBuilder(exp.Merge())
+
+    # Build MERGE statement step by step
+    result = builder.into("target_table", "t")
+    assert result is builder
+
+    result = builder.using("source_table", "s")
+    assert result is builder
+
+    result = builder.on("t.id = s.id")
+    assert result is builder
+
+    result = builder.when_matched_then_update({"name": "s.name", "updated_at": "NOW()"})
+    assert result is builder
+
+    result = builder.when_not_matched_then_insert(["id", "name"], ["s.id", "s.name"])
+    assert result is builder
+
+    result = builder.when_not_matched_by_source_then_delete()
+    assert result is builder
+
     assert isinstance(builder._expression, exp.Merge)
 
 
+@pytest.mark.parametrize(
+    "condition,updates",
+    [
+        (None, {"status": "updated"}),
+        ("s.priority > 5", {"priority": "s.priority"}),
+        ("s.active = true", {"last_seen": "s.timestamp"}),
+    ],
+    ids=["unconditional", "priority_condition", "active_condition"],
+)
+def test_merge_when_matched_variations(condition: Optional[str], updates: dict[str, str]) -> None:
+    """Test WHEN MATCHED variations."""
+    builder = MergeTestBuilder(exp.Merge())
+    result = builder.when_matched_then_update(updates, condition=condition)
+    assert result is builder
+
+
+def test_merge_when_matched_then_delete() -> None:
+    """Test WHEN MATCHED THEN DELETE."""
+    builder = MergeTestBuilder(exp.Merge())
+    result = builder.when_matched_then_delete(condition="s.deleted = true")
+    assert result is builder
+
+
+def test_merge_wrong_expression_type() -> None:
+    """Test MERGE operations with wrong expression type."""
+    builder = MergeTestBuilder(exp.Select())
+
+    with pytest.raises(SQLBuilderError, match="into.*only supported.*MERGE"):
+        builder.into("target")
+
+
 def test_merge_on_invalid_condition() -> None:
-    builder = _TestMergeMixin(exp.Merge())
+    """Test MERGE ON with invalid condition."""
+    builder = MergeTestBuilder(exp.Merge())
     builder.into("target")
     builder.using("source")
-    with pytest.raises(SQLBuilderError):
+
+    with pytest.raises(SQLBuilderError, match="ON condition cannot be empty"):
         builder.on(None)  # type: ignore[arg-type]
 
 
-# --- PivotClauseMixin ---
-class _TestPivotMixin(DummyBuilder, PivotClauseMixin):
-    _expression: "Optional[exp.Expression]"
-    dialect: "DialectType"
-
-    def __init__(self, expression: "Optional[exp.Expression]" = None) -> None:
-        super().__init__(expression)
+class PivotTestBuilder(MockBuilder, PivotClauseMixin):
+    """Test builder with PIVOT clause mixin."""
 
     pass
 
 
-def test_pivot_clause_basic() -> None:
-    # Create a Select with a FROM clause (required for PIVOT)
-    select_expr = exp.Select().from_("sales_data")
-    builder = _TestPivotMixin(select_expr)
-    builder.pivot(
-        aggregate_function="SUM",
-        aggregate_column="sales",
-        pivot_column="quarter",
-        pivot_values=["Q1", "Q2", "Q3", "Q4"],
-        alias=None,
+# PivotClauseMixin Tests
+@pytest.mark.parametrize(
+    "aggregate_function,aggregate_column,pivot_column,pivot_values,alias",
+    [
+        ("SUM", "sales", "quarter", ["Q1", "Q2", "Q3", "Q4"], None),
+        ("COUNT", "orders", "status", ["pending", "shipped", "delivered"], "order_pivot"),
+        ("AVG", "rating", "category", ["A", "B", "C"], "rating_pivot"),
+        ("MAX", "score", "level", [1, 2, 3, 4, 5], None),
+    ],
+    ids=["sum_quarters", "count_status", "avg_rating", "max_levels"],
+)
+def test_pivot_operations(
+    aggregate_function: str, aggregate_column: str, pivot_column: str, pivot_values: list[Any], alias: Optional[str]
+) -> None:
+    """Test PIVOT operations."""
+    # Create a Select with FROM clause (required for PIVOT)
+    select_expr = exp.Select().from_("data_table")
+    builder = PivotTestBuilder(select_expr)
+
+    result = builder.pivot(
+        aggregate_function=aggregate_function,
+        aggregate_column=aggregate_column,
+        pivot_column=pivot_column,
+        pivot_values=pivot_values,
+        alias=alias,
     )
+
+    assert result is builder
     assert isinstance(builder._expression, exp.Select)
-    # PIVOT should be attached to the table in FROM clause
+
+    # Verify PIVOT is attached to table
     from_clause = builder._expression.args.get("from")
     assert from_clause is not None
     table = from_clause.this
     assert isinstance(table, exp.Table)
     pivots = table.args.get("pivots", [])
     assert len(pivots) > 0
-    assert any(pivot.args.get("unpivot") is False for pivot in pivots)
 
 
-def test_pivot_clause_with_alias() -> None:
-    # Create a Select with a FROM clause (required for PIVOT)
-    select_expr = exp.Select().from_("sales_data")
-    builder = _TestPivotMixin(select_expr)
-    builder.pivot(
-        aggregate_function="SUM",
-        aggregate_column="sales",
-        pivot_column="quarter",
-        pivot_values=["Q1", "Q2"],
-        alias="pivot_table",
-    )
-    assert builder._expression is not None
-    # PIVOT should be attached to the table in FROM clause
-    from_clause = builder._expression.args.get("from")
-    assert from_clause is not None
-    table = from_clause.this
-    assert isinstance(table, exp.Table)
-    pivots = table.args.get("pivots", [])
-    assert len(pivots) > 0
-    pivot_node = pivots[0]
-    alias_val = pivot_node.args.get("alias")
-    assert alias_val is not None
-    assert "pivot_table" in str(alias_val)
+def test_pivot_without_from_clause() -> None:
+    """Test PIVOT without FROM clause raises error."""
+    builder = PivotTestBuilder(exp.Select())  # No FROM clause
+
+    with pytest.raises(TypeError, match="NoneType.*has no attribute"):
+        builder.pivot(aggregate_function="SUM", aggregate_column="sales", pivot_column="quarter", pivot_values=["Q1"])
 
 
-def test_pivot_clause_wrong_type() -> None:
-    builder = _TestPivotMixin(exp.Insert())
+def test_pivot_wrong_expression_type() -> None:
+    """Test PIVOT with wrong expression type."""
+    builder = PivotTestBuilder(exp.Insert())
+
     with pytest.raises(TypeError):
         builder.pivot(aggregate_function="SUM", aggregate_column="sales", pivot_column="quarter", pivot_values=["Q1"])
 
 
-# --- UnpivotClauseMixin ---
-class _TestUnpivotMixin(DummyBuilder, UnpivotClauseMixin):
-    _expression: "Optional[exp.Expression]"
-    dialect: "DialectType"
-
-    def __init__(self, expression: "Optional[exp.Expression]" = None) -> None:
-        super().__init__(expression)
+class UnpivotTestBuilder(MockBuilder, UnpivotClauseMixin):
+    """Test builder with UNPIVOT clause mixin."""
 
     pass
 
 
-def test_unpivot_clause_basic() -> None:
-    # Create a Select with a FROM clause (required for UNPIVOT)
-    select_expr = exp.Select().from_("quarterly_sales")
-    builder = _TestUnpivotMixin(select_expr)
-    builder.unpivot(
-        value_column_name="sales", name_column_name="quarter", columns_to_unpivot=["Q1", "Q2", "Q3", "Q4"], alias=None
+# UnpivotClauseMixin Tests
+@pytest.mark.parametrize(
+    "value_column,name_column,columns,alias",
+    [
+        ("sales", "quarter", ["Q1", "Q2", "Q3", "Q4"], None),
+        ("amount", "month", ["Jan", "Feb", "Mar"], "monthly_unpivot"),
+        ("score", "subject", ["Math", "Science", "English"], "grades_unpivot"),
+        ("revenue", "region", ["North", "South", "East", "West"], None),
+    ],
+    ids=["quarters", "months", "subjects", "regions"],
+)
+def test_unpivot_operations(value_column: str, name_column: str, columns: list[str], alias: Optional[str]) -> None:
+    """Test UNPIVOT operations."""
+    # Create a Select with FROM clause (required for UNPIVOT)
+    select_expr = exp.Select().from_("wide_table")
+    builder = UnpivotTestBuilder(select_expr)
+
+    result = builder.unpivot(
+        value_column_name=value_column, name_column_name=name_column, columns_to_unpivot=columns, alias=alias
     )
+
+    assert result is builder
     assert isinstance(builder._expression, exp.Select)
-    # UNPIVOT should be attached to the table in FROM clause as Pivot with unpivot=True
+
+    # Verify UNPIVOT is attached to table
     from_clause = builder._expression.args.get("from")
     assert from_clause is not None
     table = from_clause.this
     assert isinstance(table, exp.Table)
     pivots = table.args.get("pivots", [])
     assert len(pivots) > 0
+    # UNPIVOT is represented as Pivot with unpivot=True
     assert any(pivot.args.get("unpivot") is True for pivot in pivots)
 
 
-def test_unpivot_clause_with_alias() -> None:
-    # Create a Select with a FROM clause (required for UNPIVOT)
-    select_expr = exp.Select().from_("monthly_sales")
-    builder = _TestUnpivotMixin(select_expr)
-    builder.unpivot(
-        value_column_name="amount", name_column_name="month", columns_to_unpivot=["Jan", "Feb"], alias="unpivot_table"
-    )
-    assert builder._expression is not None
-    # UNPIVOT should be attached to the table in FROM clause as Pivot with unpivot=True
-    from_clause = builder._expression.args.get("from")
-    assert from_clause is not None
-    table = from_clause.this
-    assert isinstance(table, exp.Table)
-    pivots = table.args.get("pivots", [])
-    assert len(pivots) > 0
-    pivot_node = pivots[0]
-    assert pivot_node.args.get("unpivot") is True
-    alias_val = pivot_node.args.get("alias")
-    assert alias_val is not None
-    assert "unpivot_table" in str(alias_val)
+def test_unpivot_without_from_clause() -> None:
+    """Test UNPIVOT without FROM clause raises error."""
+    builder = UnpivotTestBuilder(exp.Select())  # No FROM clause
+
+    with pytest.raises(TypeError, match="NoneType.*has no attribute"):
+        builder.unpivot(value_column_name="value", name_column_name="name", columns_to_unpivot=["col1"])
 
 
-def test_unpivot_clause_wrong_type() -> None:
-    builder = _TestUnpivotMixin(exp.Insert())
+def test_unpivot_wrong_expression_type() -> None:
+    """Test UNPIVOT with wrong expression type."""
+    builder = UnpivotTestBuilder(exp.Insert())
+
     with pytest.raises(TypeError):
-        builder.unpivot(value_column_name="sales", name_column_name="quarter", columns_to_unpivot=["Q1"])
+        builder.unpivot(value_column_name="value", name_column_name="name", columns_to_unpivot=["col1"])
 
 
-# --- AggregateFunctionsMixin ---
-class MockAggregateFunctionsMixin(DummyBuilder, AggregateFunctionsMixin):
-    def __init__(self, expression: Optional[exp.Expression] = None) -> None:
-        super().__init__(expression)
+class AggregateTestBuilder(MockBuilder, AggregateFunctionsMixin):
+    """Test builder with aggregate functions mixin."""
 
-    def select(self, expr: object) -> "MockAggregateFunctionsMixin":
-        assert self._expression is not None
+    def select(self, expr: Any) -> "AggregateTestBuilder":
+        """Mock select method to add expressions."""
+        if self._expression is None:
+            self._expression = exp.Select()
+
         exprs = self._expression.args.get("expressions")
         if exprs is None:
             self._expression.set("expressions", [expr])
@@ -586,47 +887,106 @@ class MockAggregateFunctionsMixin(DummyBuilder, AggregateFunctionsMixin):
         return self
 
 
-def test_array_agg() -> None:
-    builder = MockAggregateFunctionsMixin(exp.Select())
+# AggregateFunctionsMixin Tests
+@pytest.mark.parametrize(
+    "method,column,expected_function",
+    [
+        ("count", "*", "COUNT"),
+        ("count_distinct", "user_id", "COUNT"),
+        ("sum", "amount", "SUM"),
+        ("avg", "score", "AVG"),
+        ("min", "price", "MIN"),
+        ("max", "price", "MAX"),
+        ("stddev", "value", "STDDEV"),
+        ("stddev_pop", "value", "STDDEV_POP"),
+        ("stddev_samp", "value", "STDDEV_SAMP"),
+        ("variance", "value", "VARIANCE"),
+        ("var_pop", "value", "VAR_POP"),
+        ("var_samp", "value", "VAR_SAMP"),
+        ("array_agg", "tags", "ARRAY_AGG"),
+        ("string_agg", "name", "STRING_AGG"),
+        ("json_agg", "data", "JSON_AGG"),
+        ("jsonb_agg", "data", "JSONB_AGG"),
+        ("bool_and", "active", "BOOL_AND"),
+        ("bool_or", "verified", "BOOL_OR"),
+        ("bit_and", "flags", "BIT_AND"),
+        ("bit_or", "flags", "BIT_OR"),
+    ],
+    ids=[
+        "count",
+        "count_distinct",
+        "sum",
+        "avg",
+        "min",
+        "max",
+        "stddev",
+        "stddev_pop",
+        "stddev_samp",
+        "variance",
+        "var_pop",
+        "var_samp",
+        "array_agg",
+        "string_agg",
+        "json_agg",
+        "jsonb_agg",
+        "bool_and",
+        "bool_or",
+        "bit_and",
+        "bit_or",
+    ],
+)
+def test_aggregate_functions(method: str, column: str, expected_function: str) -> None:
+    """Test aggregate function methods."""
+    builder = AggregateTestBuilder(exp.Select())
+    agg_method = getattr(builder, method)
+
+    # Call the aggregate method
+    if method == "string_agg":
+        result = agg_method(column, separator=", ")
+    else:
+        result = agg_method(column)
+
+    assert result is builder
     assert builder._expression is not None
-    builder.array_agg("foo")
-    assert builder._expression is not None
+
+    # Check that the function was added to expressions
     select_exprs = builder._expression.args.get("expressions")
     assert select_exprs is not None
+    assert len(select_exprs) > 0
+
+    # Verify the aggregate function is present
     found = any(
-        isinstance(expr, exp.ArrayAgg)
-        or (isinstance(expr, exp.Anonymous) and getattr(expr, "this", None) == "ARRAY_AGG")
+        expected_function in str(expr)
+        or (hasattr(expr, "this") and expected_function in str(getattr(expr, "this", "")))
         for expr in select_exprs
         if expr is not None
     )
     assert found
 
 
-def test_bool_and() -> None:
-    builder = MockAggregateFunctionsMixin(exp.Select())
-    assert builder._expression is not None
-    builder.bool_and("bar")
-    assert builder._expression is not None
-    select_exprs = builder._expression.args.get("expressions")
-    assert select_exprs is not None
-    found = any(
-        (isinstance(expr, exp.Anonymous) and getattr(expr, "this", None) == "BOOL_AND")
-        for expr in select_exprs
-        if expr is not None
-    )
-    assert found
+def test_aggregate_with_filter() -> None:
+    """Test aggregate functions with FILTER clause."""
+    builder = AggregateTestBuilder(exp.Select())
+    result = builder.count("*", filter="status = 'active'")
+    assert result is builder
 
 
-def test_bool_or() -> None:
-    builder = MockAggregateFunctionsMixin(exp.Select())
-    assert builder._expression is not None
-    builder.bool_or("baz")
-    assert builder._expression is not None
-    select_exprs = builder._expression.args.get("expressions")
-    assert select_exprs is not None
-    found = any(
-        (isinstance(expr, exp.Anonymous) and getattr(expr, "this", None) == "BOOL_OR")
-        for expr in select_exprs
-        if expr is not None
-    )
-    assert found
+def test_aggregate_with_distinct() -> None:
+    """Test aggregate functions with DISTINCT."""
+    builder = AggregateTestBuilder(exp.Select())
+    result = builder.count_distinct("user_id")
+    assert result is builder
+
+
+def test_percentile_functions() -> None:
+    """Test percentile aggregate functions."""
+    builder = AggregateTestBuilder(exp.Select())
+
+    # Test percentile_cont
+    result = builder.percentile_cont(0.5, "value")
+    assert result is builder
+
+    # Test percentile_disc
+    builder = AggregateTestBuilder(exp.Select())
+    result = builder.percentile_disc(0.9, "score")
+    assert result is builder

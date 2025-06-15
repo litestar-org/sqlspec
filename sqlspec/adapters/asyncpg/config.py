@@ -129,6 +129,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         "min_size",
         "passfile",
         "password",
+        "pool_instance",
         "port",
         "record_class",
         "server_settings",

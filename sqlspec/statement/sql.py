@@ -33,7 +33,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.statement.filters import StatementFilter, apply_filter
 from sqlspec.statement.parameters import ParameterConverter, ParameterStyle, ParameterValidator
-from sqlspec.statement.pipelines import StatementPipeline
+from sqlspec.statement.pipelines import SQLValidator, StatementPipeline
 from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
 from sqlspec.statement.pipelines.context import PipelineResult, SQLProcessingContext
 from sqlspec.statement.pipelines.result_types import ValidationError
@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from sqlglot.expressions import Condition, Expression
 
     from sqlspec.statement.parameters import ParameterInfo
-    from sqlspec.statement.pipelines import ProcessorProtocol, SQLValidator
+    from sqlspec.statement.pipelines import ProcessorProtocol
     from sqlspec.statement.pipelines.analyzers import StatementAnalysis
     from sqlspec.typing import SQLParameterType
 
@@ -78,8 +78,6 @@ class _ProcessedState:
 
 
 def _default_validator() -> "SQLValidator":
-    from sqlspec.statement.pipelines import SQLValidator
-
     # Return an empty SQLValidator since individual validators are now handled
     # as ProcessorProtocol instances in the pipeline
     return SQLValidator(validators=[])
@@ -1363,11 +1361,9 @@ class SQL:
             A new SQL instance with is_many=True and the provided parameters.
 
         Example:
-            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many([
-            ...     ["John"],
-            ...     ["Jane"],
-            ...     ["Bob"],
-            ... ])
+            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many(
+            ...     [["John"], ["Jane"], ["Bob"]]
+            ... )
             >>> # This creates a statement ready for executemany with 3 parameter sets
         """
         # Use provided parameters or keep existing ones (use _raw_parameters to avoid validation)

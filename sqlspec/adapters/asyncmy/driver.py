@@ -13,10 +13,8 @@ from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
-from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from asyncmy.cursors import Cursor
     from sqlglot.dialects.dialect import DialectType
 
 __all__ = ("AsyncmyConnection", "AsyncmyDriver")
@@ -50,39 +48,15 @@ class AsyncmyDriver(
     ) -> None:
         super().__init__(connection=connection, config=config, default_row_type=default_row_type)
 
-    # AsyncMy-specific type coercion overrides (MySQL specifics)
-    def _coerce_boolean(self, value: Any) -> Any:
-        """MySQL stores booleans as integers (0/1)."""
-        if isinstance(value, bool):
-            return 1 if value else 0
-        return value
-
-    def _coerce_decimal(self, value: Any) -> Any:
-        """MySQL has native decimal support, but ensure proper format."""
-        # Keep decimals as-is, MySQL handles them natively
-        return value
-
-    def _coerce_json(self, value: Any) -> Any:
-        """MySQL has native JSON support."""
-        if isinstance(value, (dict, list)):
-            return to_json(value)
-        return value
-
-    def _coerce_array(self, value: Any) -> Any:
-        """MySQL doesn't have native arrays - store as JSON strings."""
-        if isinstance(value, (list, tuple)):
-            return to_json(list(value))
-        return value
-
     @asynccontextmanager
-    async def _get_cursor(self, connection: "Optional[AsyncmyConnection]" = None) -> "AsyncGenerator[Cursor, None]":
+    async def _get_cursor(self, connection: "Optional[AsyncmyConnection]" = None) -> "AsyncGenerator[Any, None]":
         conn_to_use = connection or self.connection
-        cursor: Cursor = await conn_to_use.cursor()
+        cursor = await conn_to_use.cursor()  # type: ignore[no-untyped-call]
         try:
             yield cursor
         finally:
-            if callable(cursor.close):
-                await ensure_async_callable(cursor.close)()
+            if callable(getattr(cursor, "close", None)):
+                await ensure_async_callable(cursor.close)()  # type: ignore[no-untyped-call]
 
     async def _execute_statement(
         self, statement: SQL, connection: "Optional[AsyncmyConnection]" = None, **kwargs: Any
@@ -112,7 +86,7 @@ class AsyncmyDriver(
             parameters = None
         async with self._get_cursor(conn) as cursor:
             # AsyncMy expects list/tuple parameters or dict for named params
-            await cursor.execute(sql, parameters)
+            await cursor.execute(sql, parameters)  # type: ignore[no-untyped-call]
 
             # For SELECT queries, return cursor so _wrap_select_result can fetch from it
             is_select = self.returns_rows(statement.expression)
@@ -122,14 +96,14 @@ class AsyncmyDriver(
 
             if is_select:
                 # For SELECT queries, fetch data and return SelectResultDict
-                data = await cursor.fetchall()
-                column_names = [desc[0] for desc in cursor.description or []]
+                data = await cursor.fetchall()  # type: ignore[no-untyped-call]
+                column_names = [desc[0] for desc in cursor.description or []]  # type: ignore[attr-defined]
                 result: SelectResultDict = {"data": data, "column_names": column_names, "rows_affected": len(data)}
                 return result
 
             # For DML/DDL queries, return DMLResultDict
             dml_result: DMLResultDict = {
-                "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,  # type: ignore[attr-defined]
                 "status_message": "OK",
             }
             return dml_result
@@ -151,9 +125,9 @@ class AsyncmyDriver(
                     params_list.append([param_set])
 
         async with self._get_cursor(conn) as cursor:
-            await cursor.executemany(sql, params_list)
+            await cursor.executemany(sql, params_list)  # type: ignore[no-untyped-call]
             result: DMLResultDict = {
-                "rows_affected": cursor.rowcount if cursor.rowcount != -1 else len(params_list),
+                "rows_affected": cursor.rowcount if cursor.rowcount != -1 else len(params_list),  # type: ignore[attr-defined]
                 "status_message": "OK",
             }
             return result
@@ -170,11 +144,33 @@ class AsyncmyDriver(
         async with self._get_cursor(conn) as cursor:
             for statement_str in statements:
                 if statement_str:
-                    await cursor.execute(statement_str)
+                    await cursor.execute(statement_str)  # type: ignore[no-untyped-call]
                     statements_executed += 1
 
         result: ScriptResultDict = {"statements_executed": statements_executed, "status_message": "SCRIPT EXECUTED"}
         return result
+
+    async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
+        self._ensure_pyarrow_installed()
+        conn = self._connection(None)
+
+        async with self._get_cursor(conn) as cursor:
+            if mode == "replace":
+                await cursor.execute(f"TRUNCATE TABLE {table_name}")  # type: ignore[no-untyped-call]
+            elif mode == "create":
+                msg = "'create' mode is not supported for asyncmy ingestion."
+                raise NotImplementedError(msg)
+
+            data_for_ingest = table.to_pylist()
+            if not data_for_ingest:
+                return 0
+
+            # Generate column placeholders: %s, %s, etc.
+            num_columns = len(data_for_ingest[0])
+            placeholders = ", ".join("%s" for _ in range(num_columns))
+            sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
+            await cursor.executemany(sql, data_for_ingest)  # type: ignore[no-untyped-call]
+            return cursor.rowcount if cursor.rowcount is not None else -1  # type: ignore[attr-defined]
 
     async def _wrap_select_result(
         self, statement: SQL, result: SelectResultDict, schema_type: "Optional[type[ModelDTOT]]" = None, **kwargs: Any
@@ -241,6 +237,6 @@ class AsyncmyDriver(
             metadata={"status_message": status_message},
         )
 
-    def _connection(self, connection: Optional[Connection] = None) -> Connection:
+    def _connection(self, connection: Optional[AsyncmyConnection] = None) -> AsyncmyConnection:
         """Get the connection to use for the operation."""
         return connection or self.connection

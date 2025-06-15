@@ -1,9 +1,11 @@
 # ruff: noqa: PLR6301
 import contextlib
+import csv
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Optional, Union
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from typing_extensions import TypeAlias
 
@@ -159,7 +161,7 @@ class SqliteDriver(
         # Convert parameter list to proper format for executemany
         formatted_params: list[tuple[Any, ...]] = []
         if param_list and isinstance(param_list, list):
-            for param_set in param_list:
+            for param_set in cast("list[Union[list, tuple]]", param_list):
                 if isinstance(param_set, (list, tuple)):
                     formatted_params.append(tuple(param_set))
                 elif param_set is None:
@@ -181,6 +183,28 @@ class SqliteDriver(
         conn.commit()
         result: ScriptResultDict = {"statements_executed": -1, "status_message": "SCRIPT EXECUTED"}
         return result
+
+    def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
+        """Database-specific bulk load implementation."""
+        if format != "csv":
+            msg = f"SQLite driver only supports CSV for bulk loading, not {format}."
+            raise NotImplementedError(msg)
+
+        conn = self._connection(None)
+        with self._get_cursor(conn) as cursor:
+            if mode == "replace":
+                cursor.execute(f"DELETE FROM {table_name}")
+
+            with open(file_path, encoding="utf-8") as f:
+                reader = csv.reader(f, **options)
+                header = next(reader)  # Skip header
+                placeholders = ", ".join("?" for _ in header)
+                sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
+
+                # executemany is efficient for bulk inserts
+                data_iter = list(reader)  # Read all data into memory
+                cursor.executemany(sql, data_iter)
+                return cursor.rowcount
 
     def _wrap_select_result(
         self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
@@ -220,7 +244,7 @@ class SqliteDriver(
         return SQLResult[RowT](
             statement=statement,
             data=[],
-            rows_affected=result.get("rows_affected", -1),
+            rows_affected=cast("int", result.get("rows_affected", -1)),
             operation_type=statement.expression.key.upper() if statement.expression else "UNKNOWN",
             metadata={"status_message": result.get("status_message", "")},
         )

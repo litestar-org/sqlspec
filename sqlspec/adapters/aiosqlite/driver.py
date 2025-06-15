@@ -1,6 +1,8 @@
+import csv
 import logging
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 import aiosqlite
@@ -152,10 +154,13 @@ class AiosqliteDriver(
                 result: SelectResultDict = {
                     "data": data_list,
                     "column_names": column_names,
-                    "rows_affected": cursor.rowcount,
+                    "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
                 }
                 return result
-            dml_result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
+            dml_result: DMLResultDict = {
+                "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                "status_message": "OK",
+            }
             return dml_result
 
     async def _execute_many(
@@ -194,6 +199,32 @@ class AiosqliteDriver(
         }
         return result
 
+    async def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
+        """Database-specific bulk load implementation."""
+        if format != "csv":
+            msg = f"aiosqlite driver only supports CSV for bulk loading, not {format}."
+            raise NotImplementedError(msg)
+
+        conn = await self._create_connection()  # type: ignore[attr-defined]
+        try:
+            async with self._get_cursor(conn) as cursor:
+                if mode == "replace":
+                    await cursor.execute(f"DELETE FROM {table_name}")
+
+                # Using sync file IO here as it's a fallback path and aiofiles is not a dependency
+                with open(file_path, encoding="utf-8") as f:
+                    reader = csv.reader(f, **options)
+                    header = next(reader)  # Skip header
+                    placeholders = ", ".join("?" for _ in header)
+                    sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
+                    data_iter = list(reader)
+                    await cursor.executemany(sql, data_iter)
+                    rowcount = cursor.rowcount if cursor.rowcount is not None else -1
+                await conn.commit()
+                return rowcount
+        finally:
+            await conn.close()
+
     async def _wrap_select_result(
         self, statement: SQL, result: SelectResultDict, schema_type: "Optional[type[ModelDTOT]]" = None, **kwargs: Any
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
@@ -207,7 +238,7 @@ class AiosqliteDriver(
             converted_data_seq = self.to_schema(data=rows_as_dicts, schema_type=schema_type)
             return SQLResult[ModelDTOT](
                 statement=statement,
-                data=list(converted_data_seq) if converted_data_seq is not None else [],
+                data=list(converted_data_seq),
                 column_names=column_names,
                 rows_affected=rows_affected,
                 operation_type="SELECT",
@@ -227,31 +258,26 @@ class AiosqliteDriver(
         if statement.expression:
             operation_type = str(statement.expression.key).upper()
 
-        # Handle TypedDict results
-        if isinstance(result, dict):
-            # Check if this is a ScriptResultDict
-            if "statements_executed" in result:
-                return SQLResult[RowT](
-                    statement=statement,
-                    data=[],
-                    rows_affected=0,
-                    operation_type=operation_type or "SCRIPT",
-                    metadata={"status_message": result["status_message"]},
-                )
+        if "statements_executed" in result:
+            return SQLResult[RowT](
+                statement=statement,
+                data=[],
+                rows_affected=0,
+                operation_type=operation_type or "SCRIPT",
+                metadata={"status_message": result["status_message"]},
+            )
 
-            # Check if this is a DMLResultDict (type narrowing)
-            if "rows_affected" in result and "statements_executed" not in result:
-                # We know this is a DMLResultDict
-                dml_result = cast("DMLResultDict", result)
-                rows_affected = dml_result["rows_affected"]
-                status_message = result["status_message"]
-                return SQLResult[RowT](
-                    statement=statement,
-                    data=[],
-                    rows_affected=rows_affected,
-                    operation_type=operation_type,
-                    metadata={"status_message": status_message},
-                )
+        if "rows_affected" in result:
+            dml_result = cast("DMLResultDict", result)
+            rows_affected = dml_result["rows_affected"]
+            status_message = dml_result["status_message"]
+            return SQLResult[RowT](
+                statement=statement,
+                data=[],
+                rows_affected=rows_affected,
+                operation_type=operation_type,
+                metadata={"status_message": status_message},
+            )
 
         # This shouldn't happen with TypedDict approach
         msg = f"Unexpected result type: {type(result)}"

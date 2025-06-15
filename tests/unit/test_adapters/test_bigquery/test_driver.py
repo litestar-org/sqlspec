@@ -1,199 +1,203 @@
-"""Unit tests for BigQuery driver."""
+"""Unit tests for BigQuery driver.
+
+This module tests the BigQueryDriver class including:
+- Driver initialization and configuration
+- Statement execution (single, many, script)
+- Result wrapping and formatting
+- Parameter style handling
+- Type coercion overrides
+- Storage functionality
+- Error handling
+- BigQuery-specific features (job callbacks, parameter types)
+"""
 
 import datetime
 import math
 from decimal import Decimal
-from typing import Union
-from unittest.mock import Mock, patch
+from typing import TYPE_CHECKING, Any
+from unittest.mock import MagicMock, patch
 
 import pytest
-from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, QueryJobConfig, ScalarQueryParameter
 
-from sqlspec.adapters.bigquery.driver import BigQueryDriver
+from sqlspec.adapters.bigquery import BigQueryDriver
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.statement.parameters import ParameterInfo, ParameterStyle
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
+if TYPE_CHECKING:
+    pass
 
+
+# Test Fixtures
 @pytest.fixture
-def mock_bigquery_connection() -> Mock:
+def mock_connection() -> MagicMock:
     """Create a mock BigQuery connection."""
-    mock_conn = Mock(spec=Client)
+    mock_conn = MagicMock()
+
+    # Set up connection attributes
     mock_conn.project = "test-project"
     mock_conn.location = "US"
+    mock_conn.default_query_job_config = None
+
+    # Mock query method
+    mock_job = MagicMock()
+    mock_job.job_id = "test-job-123"
+    mock_job.num_dml_affected_rows = 0
+    mock_job.state = "DONE"
+    mock_job.errors = None
+    mock_job.schema = []
+    mock_job.statement_type = "SELECT"
+    mock_job.result.return_value = iter([])
+    mock_job.to_arrow.return_value = None
+
+    mock_conn.query.return_value = mock_job
+
     return mock_conn
 
 
 @pytest.fixture
-def bigquery_driver(mock_bigquery_connection: Mock) -> BigQueryDriver:
-    """Create a BigQuery driver with mock connection."""
-    return BigQueryDriver(connection=mock_bigquery_connection, config=SQLConfig(strict_mode=False))
+def driver(mock_connection: MagicMock) -> BigQueryDriver:
+    """Create a BigQuery driver with mocked connection."""
+    config = SQLConfig()
+    return BigQueryDriver(connection=mock_connection, config=config)
 
 
-@pytest.fixture
-def mock_query_job() -> Mock:
-    """Create a mock BigQuery QueryJob."""
-    mock_job = Mock(spec=QueryJob)
-    mock_job.job_id = "test-job-123"
-    mock_job.num_dml_affected_rows = 5
-    return mock_job
+# Initialization Tests
+def test_driver_initialization() -> None:
+    """Test driver initialization with various parameters."""
+    mock_conn = MagicMock()
+    config = SQLConfig()
 
+    driver = BigQueryDriver(connection=mock_conn, config=config)
 
-def test_bigquery_driver_initialization(mock_bigquery_connection: Mock) -> None:
-    """Test BigQueryDriver initialization with default parameters."""
-    driver = BigQueryDriver(connection=mock_bigquery_connection)
-
-    assert driver.connection == mock_bigquery_connection
+    assert driver.connection is mock_conn
+    assert driver.config is config
     assert driver.dialect == "bigquery"
-    assert driver.supports_native_arrow_export is False
-    assert driver.supports_native_arrow_import is False
-    assert driver.default_row_type == DictRow
-    assert isinstance(driver.config, SQLConfig)
+    assert driver.default_parameter_style == ParameterStyle.NAMED_AT
+    assert driver.supported_parameter_styles == (ParameterStyle.NAMED_AT,)
 
 
-def test_bigquery_driver_initialization_with_config(mock_bigquery_connection: Mock) -> None:
-    """Test BigQueryDriver initialization with custom configuration."""
-    config = SQLConfig(strict_mode=False)
+def test_driver_default_row_type() -> None:
+    """Test driver default row type."""
+    mock_conn = MagicMock()
 
-    driver = BigQueryDriver(connection=mock_bigquery_connection, config=config)
+    # Default row type
+    driver = BigQueryDriver(connection=mock_conn)
+    assert driver.default_row_type == dict[str, Any]
 
-    assert driver.config == config
+    # Custom row type
+    custom_type: type[DictRow] = dict
+    driver = BigQueryDriver(connection=mock_conn, default_row_type=custom_type)
+    assert driver.default_row_type is custom_type
 
 
-def test_bigquery_driver_initialization_with_callbacks(mock_bigquery_connection: Mock) -> None:
-    """Test BigQueryDriver initialization with callback functions."""
-    job_start_callback = Mock()
-    job_complete_callback = Mock()
+def test_driver_initialization_with_callbacks() -> None:
+    """Test driver initialization with job callback functions."""
+    mock_conn = MagicMock()
+    job_start_callback = MagicMock()
+    job_complete_callback = MagicMock()
 
     driver = BigQueryDriver(
-        connection=mock_bigquery_connection, on_job_start=job_start_callback, on_job_complete=job_complete_callback
+        connection=mock_conn, on_job_start=job_start_callback, on_job_complete=job_complete_callback
     )
 
-    assert driver.on_job_start == job_start_callback
-    assert driver.on_job_complete == job_complete_callback
+    assert driver.on_job_start is job_start_callback
+    assert driver.on_job_complete is job_complete_callback
 
 
-def test_bigquery_driver_initialization_with_job_config(mock_bigquery_connection: Mock) -> None:
-    """Test BigQueryDriver initialization with default query job config."""
+def test_driver_initialization_with_job_config() -> None:
+    """Test driver initialization with default query job config."""
+    from google.cloud.bigquery import QueryJobConfig
+
+    mock_conn = MagicMock()
     job_config = QueryJobConfig()
     job_config.dry_run = True
 
-    driver = BigQueryDriver(connection=mock_bigquery_connection, default_query_job_config=job_config)
+    driver = BigQueryDriver(connection=mock_conn, default_query_job_config=job_config)
 
-    assert driver._default_query_job_config == job_config
-
-
-def test_bigquery_driver_get_placeholder_style(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQueryDriver placeholder style is NAMED_AT."""
-    style = bigquery_driver.default_parameter_style
-    assert style == ParameterStyle.NAMED_AT
+    assert driver._default_query_job_config is job_config
 
 
-def test_bigquery_driver_get_bq_param_type_bool(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQuery parameter type detection for boolean values."""
-    param_type, array_type = bigquery_driver._get_bq_param_type(True)
-    assert param_type == "BOOL"
-    assert array_type is None
+# Arrow Support Tests
+def test_arrow_support_flags() -> None:
+    """Test driver Arrow support flags."""
+    mock_conn = MagicMock()
+    driver = BigQueryDriver(connection=mock_conn)
+
+    assert driver.supports_native_arrow_export is True
+    assert driver.supports_native_arrow_import is True
+    assert BigQueryDriver.supports_native_arrow_export is True
+    assert BigQueryDriver.supports_native_arrow_import is True
 
 
-def test_bigquery_driver_get_bq_param_type_int(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQuery parameter type detection for integer values."""
-    param_type, array_type = bigquery_driver._get_bq_param_type(42)
-    assert param_type == "INT64"
-    assert array_type is None
+# Parameter Type Detection Tests
+@pytest.mark.parametrize(
+    "value,expected_type,expected_array_type",
+    [
+        (True, "BOOL", None),
+        (False, "BOOL", None),
+        (42, "INT64", None),
+        (math.pi, "FLOAT64", None),
+        (Decimal("123.45"), "BIGNUMERIC", None),
+        ("test string", "STRING", None),
+        (b"test bytes", "BYTES", None),
+        (datetime.date(2023, 1, 1), "DATE", None),
+        (datetime.time(12, 30, 0), "TIME", None),
+        (datetime.datetime(2023, 1, 1, 12, 0, 0), "DATETIME", None),
+        (datetime.datetime(2023, 1, 1, 12, 0, 0, tzinfo=datetime.timezone.utc), "TIMESTAMP", None),
+        (["a", "b", "c"], "ARRAY", "STRING"),
+        ([1, 2, 3], "ARRAY", "INT64"),
+        ({"key": "value"}, "JSON", None),
+    ],
+    ids=[
+        "bool_true",
+        "bool_false",
+        "int",
+        "float",
+        "decimal",
+        "string",
+        "bytes",
+        "date",
+        "time",
+        "datetime_naive",
+        "datetime_tz",
+        "array_string",
+        "array_int",
+        "json",
+    ],
+)
+def test_get_bq_param_type(
+    driver: BigQueryDriver, value: Any, expected_type: str, expected_array_type: "str | None"
+) -> None:
+    """Test BigQuery parameter type detection."""
+    param_type, array_type = driver._get_bq_param_type(value)
+    assert param_type == expected_type
+    assert array_type == expected_array_type
 
 
-def test_bigquery_driver_get_bq_param_type_float(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQuery parameter type detection for float values."""
-    param_type, array_type = bigquery_driver._get_bq_param_type(math.pi)
-    assert param_type == "FLOAT64"
-    assert array_type is None
-
-
-def test_bigquery_driver_get_bq_param_type_decimal(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQuery parameter type detection for decimal values."""
-    param_type, array_type = bigquery_driver._get_bq_param_type(Decimal("123.45"))
-    assert param_type == "BIGNUMERIC"
-    assert array_type is None
-
-
-def test_bigquery_driver_get_bq_param_type_string(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQuery parameter type detection for string values."""
-    param_type, array_type = bigquery_driver._get_bq_param_type("test string")
-    assert param_type == "STRING"
-    assert array_type is None
-
-
-def test_bigquery_driver_get_bq_param_type_bytes(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQuery parameter type detection for bytes values."""
-    param_type, array_type = bigquery_driver._get_bq_param_type(b"test bytes")
-    assert param_type == "BYTES"
-    assert array_type is None
-
-
-def test_bigquery_driver_get_bq_param_type_date(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQuery parameter type detection for date values."""
-    param_type, array_type = bigquery_driver._get_bq_param_type(datetime.date(2023, 1, 1))
-    assert param_type == "DATE"
-    assert array_type is None
-
-
-def test_bigquery_driver_get_bq_param_type_datetime_with_tz(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQuery parameter type detection for datetime with timezone."""
-    dt = datetime.datetime(2023, 1, 1, 12, 0, 0, tzinfo=datetime.timezone.utc)
-    param_type, array_type = bigquery_driver._get_bq_param_type(dt)
-    assert param_type == "TIMESTAMP"
-    assert array_type is None
-
-
-def test_bigquery_driver_get_bq_param_type_datetime_without_tz(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQuery parameter type detection for datetime without timezone."""
-    dt = datetime.datetime(2023, 1, 1, 12, 0, 0)
-    param_type, array_type = bigquery_driver._get_bq_param_type(dt)
-    assert param_type == "DATETIME"
-    assert array_type is None
-
-
-def test_bigquery_driver_get_bq_param_type_time(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQuery parameter type detection for time values."""
-    param_type, array_type = bigquery_driver._get_bq_param_type(datetime.time(12, 30, 0))
-    assert param_type == "TIME"
-    assert array_type is None
-
-
-def test_bigquery_driver_get_bq_param_type_array_string(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQuery parameter type detection for string arrays."""
-    param_type, array_type = bigquery_driver._get_bq_param_type(["a", "b", "c"])
-    assert param_type == "ARRAY"
-    assert array_type == "STRING"
-
-
-def test_bigquery_driver_get_bq_param_type_array_int(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQuery parameter type detection for integer arrays."""
-    param_type, array_type = bigquery_driver._get_bq_param_type([1, 2, 3])
-    assert param_type == "ARRAY"
-    assert array_type == "INT64"
-
-
-def test_bigquery_driver_get_bq_param_type_array_empty(bigquery_driver: BigQueryDriver) -> None:
+def test_get_bq_param_type_empty_array(driver: BigQueryDriver) -> None:
     """Test BigQuery parameter type detection raises error for empty arrays."""
     with pytest.raises(SQLSpecError, match="Cannot determine BigQuery ARRAY type for empty sequence"):
-        bigquery_driver._get_bq_param_type([])
+        driver._get_bq_param_type([])
 
 
-def test_bigquery_driver_get_bq_param_type_unsupported(bigquery_driver: BigQueryDriver) -> None:
+def test_get_bq_param_type_unsupported(driver: BigQueryDriver) -> None:
     """Test BigQuery parameter type detection for unsupported types."""
-    param_type, array_type = bigquery_driver._get_bq_param_type(object())
+    param_type, array_type = driver._get_bq_param_type(object())
     assert param_type is None
     assert array_type is None
 
 
-def test_bigquery_driver_prepare_bq_query_parameters_scalar(bigquery_driver: BigQueryDriver) -> None:
+# Parameter Preparation Tests
+def test_prepare_bq_query_parameters_scalar(driver: BigQueryDriver) -> None:
     """Test BigQuery query parameter preparation for scalar values."""
+    from google.cloud.bigquery import ScalarQueryParameter
+
     params_dict = {"@name": "John", "@age": 30, "@active": True, "@score": 95.5}
 
-    bq_params = bigquery_driver._prepare_bq_query_parameters(params_dict)
+    bq_params = driver._prepare_bq_query_parameters(params_dict)
 
     assert len(bq_params) == 4
     assert all(isinstance(p, ScalarQueryParameter) for p in bq_params)
@@ -206,315 +210,449 @@ def test_bigquery_driver_prepare_bq_query_parameters_scalar(bigquery_driver: Big
     assert "score" in param_names
 
 
-def test_bigquery_driver_prepare_bq_query_parameters_array(bigquery_driver: BigQueryDriver) -> None:
+def test_prepare_bq_query_parameters_array(driver: BigQueryDriver) -> None:
     """Test BigQuery query parameter preparation for array values."""
+    from google.cloud.bigquery import ArrayQueryParameter
+
     params_dict = {"@tags": ["python", "sql", "bigquery"], "@numbers": [1, 2, 3, 4, 5]}
 
-    bq_params = bigquery_driver._prepare_bq_query_parameters(params_dict)
+    bq_params = driver._prepare_bq_query_parameters(params_dict)
 
     assert len(bq_params) == 2
     assert all(isinstance(p, ArrayQueryParameter) for p in bq_params)
 
     # Find the tags parameter
     tags_param = next(p for p in bq_params if p.name == "tags")
-    assert not isinstance(tags_param, ScalarQueryParameter)
-    assert tags_param.array_type == "STRING"  # pyright: ignore
-    assert tags_param.values == ["python", "sql", "bigquery"]  # pyright: ignore
+    assert tags_param.array_type == "STRING"
+    assert tags_param.values == ["python", "sql", "bigquery"]
 
     # Find the numbers parameter
     numbers_param = next(p for p in bq_params if p.name == "numbers")
-    assert not isinstance(numbers_param, ScalarQueryParameter)
-    assert numbers_param.array_type == "INT64"  # pyright: ignore
-    assert numbers_param.values == [1, 2, 3, 4, 5]  # pyright: ignore
+    assert numbers_param.array_type == "INT64"
+    assert numbers_param.values == [1, 2, 3, 4, 5]
 
 
-def test_bigquery_driver_prepare_bq_query_parameters_empty(bigquery_driver: BigQueryDriver) -> None:
+def test_prepare_bq_query_parameters_empty(driver: BigQueryDriver) -> None:
     """Test BigQuery query parameter preparation with empty parameters."""
-    bq_params = bigquery_driver._prepare_bq_query_parameters({})
+    bq_params = driver._prepare_bq_query_parameters({})
     assert bq_params == []
 
 
-def test_bigquery_driver_prepare_bq_query_parameters_unsupported(bigquery_driver: BigQueryDriver) -> None:
+def test_prepare_bq_query_parameters_unsupported(driver: BigQueryDriver) -> None:
     """Test BigQuery query parameter preparation raises error for unsupported types."""
     params_dict = {"@obj": object()}
 
     with pytest.raises(SQLSpecError, match="Unsupported BigQuery parameter type"):
-        bigquery_driver._prepare_bq_query_parameters(params_dict)
+        driver._prepare_bq_query_parameters(params_dict)
 
 
-@patch("sqlspec.adapters.bigquery.driver.datetime")
-def test_bigquery_driver_run_query_job(
-    mock_datetime: Mock, bigquery_driver: BigQueryDriver, mock_bigquery_connection: Mock, mock_query_job: Mock
+# Execute Statement Tests
+@pytest.mark.parametrize(
+    "sql_text,is_script,is_many,expected_method",
+    [
+        ("SELECT * FROM users", False, False, "_execute"),
+        ("INSERT INTO users VALUES (@id)", False, True, "_execute_many"),
+        ("CREATE TABLE test; INSERT INTO test;", True, False, "_execute_script"),
+    ],
+    ids=["select", "execute_many", "script"],
+)
+def test_execute_statement_routing(
+    driver: BigQueryDriver,
+    mock_connection: MagicMock,
+    sql_text: str,
+    is_script: bool,
+    is_many: bool,
+    expected_method: str,
 ) -> None:
-    """Test BigQueryDriver._run_query_job execution."""
-    mock_datetime.datetime.now.return_value.strftime.return_value = "20231201-120000"
-    mock_bigquery_connection.query.return_value = mock_query_job
+    """Test that _execute_statement routes to correct method."""
+    statement = SQL(sql_text)
+    statement._is_script = is_script
+    statement._is_many = is_many
 
-    sql_str = "SELECT * FROM users WHERE id = @user_id"
-    bq_params: list[Union[ScalarQueryParameter, ArrayQueryParameter]] = [ScalarQueryParameter("user_id", "INT64", 123)]
-
-    result = bigquery_driver._run_query_job(sql_str, bq_params)
-
-    assert result == mock_query_job
-    mock_bigquery_connection.query.assert_called_once()
-
-    # Check that query was called with correct SQL and job config
-    call_args = mock_bigquery_connection.query.call_args
-    assert call_args[0][0] == sql_str
-    assert isinstance(call_args.kwargs["job_config"], QueryJobConfig)
-    assert call_args.kwargs["job_config"].query_parameters == bq_params
+    with patch.object(driver, expected_method, return_value={"rows_affected": 0}) as mock_method:
+        driver._execute_statement(statement)
+        mock_method.assert_called_once()
 
 
-def test_bigquery_driver_run_query_job_with_callbacks(
-    bigquery_driver: BigQueryDriver, mock_bigquery_connection: Mock, mock_query_job: Mock
+def test_execute_select_statement(driver: BigQueryDriver, mock_connection: MagicMock) -> None:
+    """Test executing a SELECT statement."""
+    # Set up mock job with schema
+    mock_job = mock_connection.query.return_value
+    mock_field = MagicMock()
+    mock_field.name = "id"
+    mock_job.schema = [mock_field]
+    mock_job.statement_type = "SELECT"
+    mock_job.result.return_value = iter([])
+
+    statement = SQL("SELECT * FROM users")
+    result = driver._execute_statement(statement)
+
+    assert result == {"data": [], "column_names": ["id"], "rows_affected": 0}
+
+    mock_connection.query.assert_called_once()
+
+
+def test_execute_dml_statement(driver: BigQueryDriver, mock_connection: MagicMock) -> None:
+    """Test executing a DML statement (INSERT/UPDATE/DELETE)."""
+    mock_job = mock_connection.query.return_value
+    mock_job.num_dml_affected_rows = 1
+    mock_job.job_id = "test-job-123"
+    mock_job.schema = None
+    mock_job.state = "DONE"
+    mock_job.errors = None
+
+    statement = SQL("INSERT INTO users (name) VALUES (@name)", {"name": "Alice"})
+    result = driver._execute_statement(statement)
+
+    assert result == {"rows_affected": 1, "status_message": "OK - job_id: test-job-123"}
+
+    mock_connection.query.assert_called_once()
+
+
+# Parameter Style Handling Tests
+@pytest.mark.parametrize(
+    "sql_text,detected_style,expected_style",
+    [
+        ("SELECT * FROM users WHERE id = @user_id", ParameterStyle.NAMED_AT, ParameterStyle.NAMED_AT),
+        ("SELECT * FROM users WHERE id = :user_id", ParameterStyle.NAMED_COLON, ParameterStyle.NAMED_AT),  # Converted
+        ("SELECT * FROM users WHERE id = ?", ParameterStyle.QMARK, ParameterStyle.NAMED_AT),  # Converted
+    ],
+    ids=["named_at", "named_colon_converted", "qmark_converted"],
+)
+def test_parameter_style_handling(
+    driver: BigQueryDriver,
+    mock_connection: MagicMock,
+    sql_text: str,
+    detected_style: ParameterStyle,
+    expected_style: ParameterStyle,
 ) -> None:
-    """Test BigQueryDriver._run_query_job with job callbacks."""
-    job_start_callback = Mock()
-    job_complete_callback = Mock()
-    bigquery_driver.on_job_start = job_start_callback
-    bigquery_driver.on_job_complete = job_complete_callback
+    """Test parameter style detection and conversion."""
+    statement = SQL(sql_text)
+    statement._parameter_info = [ParameterInfo(name="p1", position=0, style=detected_style)]
 
-    mock_bigquery_connection.query.return_value = mock_query_job
+    with patch.object(statement, "compile") as mock_compile:
+        mock_compile.return_value = (sql_text, None)
+        driver._execute_statement(statement)
+
+        mock_compile.assert_called_with(placeholder_style=expected_style)
+
+
+# Execute Many Tests
+def test_execute_many(driver: BigQueryDriver, mock_connection: MagicMock) -> None:
+    """Test executing a statement multiple times."""
+    mock_job = mock_connection.query.return_value
+    mock_job.num_dml_affected_rows = 3
+    mock_job.job_id = "batch-job-123"
+
+    sql = "INSERT INTO users (name) VALUES (@name)"
+    params = [{"name": "Alice"}, {"name": "Bob"}, {"name": "Charlie"}]
+
+    result = driver._execute_many(sql, params)
+
+    assert result == {"rows_affected": 3, "status_message": "OK - executed batch job batch-job-123"}
+
+    mock_connection.query.assert_called_once()
+
+
+def test_execute_many_with_non_dict_parameters(driver: BigQueryDriver, mock_connection: MagicMock) -> None:
+    """Test execute_many raises error for non-dict parameters."""
+    sql = "INSERT INTO users VALUES (@id)"
+    params = [["Alice"], ["Bob"]]  # Should be dicts
+
+    with pytest.raises(SQLSpecError, match="BigQuery executemany requires dict parameters"):
+        driver._execute_many(sql, params)
+
+
+# Execute Script Tests
+def test_execute_script(driver: BigQueryDriver, mock_connection: MagicMock) -> None:
+    """Test executing a SQL script."""
+    mock_job = mock_connection.query.return_value
+    mock_job.job_id = "script-job-123"
+
+    script = """
+    CREATE TABLE test (id INTEGER);
+    INSERT INTO test VALUES (1);
+    INSERT INTO test VALUES (2);
+    """
+
+    result = driver._execute_script(script)
+
+    assert result == {"statements_executed": 3, "status_message": "SCRIPT EXECUTED"}
+
+    # Should be called once for each non-empty statement
+    assert mock_connection.query.call_count == 3
+
+
+# Result Wrapping Tests
+def test_wrap_select_result(driver: BigQueryDriver) -> None:
+    """Test wrapping SELECT results."""
+    statement = SQL("SELECT * FROM users")
+    result = {
+        "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
+        "column_names": ["id", "name"],
+        "rows_affected": 2,
+    }
+
+    wrapped = driver._wrap_select_result(statement, result)
+
+    assert isinstance(wrapped, SQLResult)
+    assert wrapped.statement is statement
+    assert len(wrapped.data) == 2
+    assert wrapped.column_names == ["id", "name"]
+    assert wrapped.rows_affected == 2
+    assert wrapped.operation_type == "SELECT"
+
+
+def test_wrap_select_result_with_schema(driver: BigQueryDriver) -> None:
+    """Test wrapping SELECT results with schema type."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class User:
+        id: int
+        name: str
+
+    statement = SQL("SELECT * FROM users")
+    result = {
+        "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
+        "column_names": ["id", "name"],
+        "rows_affected": 2,
+    }
+
+    wrapped = driver._wrap_select_result(statement, result, schema_type=User)
+
+    assert isinstance(wrapped, SQLResult)
+    assert all(isinstance(item, User) for item in wrapped.data)
+    assert wrapped.data[0].id == 1
+    assert wrapped.data[0].name == "Alice"
+
+
+def test_wrap_execute_result_dml(driver: BigQueryDriver) -> None:
+    """Test wrapping DML results."""
+    statement = SQL("INSERT INTO users VALUES (@id)")
+    statement._expression = MagicMock()
+    statement._expression.key = "insert"
+
+    result = {"rows_affected": 1, "status_message": "OK - job_id: test-job"}
+
+    wrapped = driver._wrap_execute_result(statement, result)
+
+    assert isinstance(wrapped, SQLResult)
+    assert wrapped.data == []
+    assert wrapped.rows_affected == 1
+    assert wrapped.operation_type == "INSERT"
+    assert wrapped.metadata["status_message"] == "OK - job_id: test-job"
+
+
+def test_wrap_execute_result_script(driver: BigQueryDriver) -> None:
+    """Test wrapping script results."""
+    statement = SQL("CREATE TABLE test; INSERT INTO test;")
+    statement._expression = None
+
+    result = {"statements_executed": 2, "status_message": "SCRIPT EXECUTED"}
+
+    wrapped = driver._wrap_execute_result(statement, result)
+
+    assert isinstance(wrapped, SQLResult)
+    assert wrapped.data == []
+    assert wrapped.rows_affected == 0
+    assert wrapped.operation_type == "UNKNOWN"
+    assert wrapped.metadata["status_message"] == "SCRIPT EXECUTED"
+    assert wrapped.metadata["statements_executed"] == 2
+
+
+# Connection Tests
+def test_connection_method(driver: BigQueryDriver, mock_connection: MagicMock) -> None:
+    """Test _connection method."""
+    # Test default connection return
+    assert driver._connection() is mock_connection
+
+    # Test connection override
+    override_connection = MagicMock()
+    assert driver._connection(override_connection) is override_connection
+
+
+# Storage Mixin Tests
+def test_storage_methods_available(driver: BigQueryDriver) -> None:
+    """Test that driver has all storage methods from SyncStorageMixin."""
+    storage_methods = [
+        "fetch_arrow_table",
+        "ingest_arrow_table",
+        "export_to_storage",
+        "import_from_storage",
+        "read_parquet_direct",
+        "write_parquet_direct",
+    ]
+
+    for method in storage_methods:
+        assert hasattr(driver, method)
+        assert callable(getattr(driver, method))
+
+
+def test_translator_mixin_integration(driver: BigQueryDriver) -> None:
+    """Test SQLTranslatorMixin integration."""
+    assert hasattr(driver, "returns_rows")
+
+    # Test with SELECT statement
+    select_stmt = SQL("SELECT * FROM users")
+    assert driver.returns_rows(select_stmt.expression) is True
+
+    # Test with INSERT statement
+    insert_stmt = SQL("INSERT INTO users VALUES (1, 'test')")
+    assert driver.returns_rows(insert_stmt.expression) is False
+
+
+# Job Configuration Tests
+def test_job_config_inheritance() -> None:
+    """Test BigQuery driver inherits job config from connection."""
+    from google.cloud.bigquery import QueryJobConfig
+
+    mock_conn = MagicMock()
+    default_job_config = QueryJobConfig()
+    default_job_config.use_query_cache = True
+    mock_conn.default_query_job_config = default_job_config
+
+    driver = BigQueryDriver(connection=mock_conn)
+
+    assert driver._default_query_job_config is default_job_config
+
+
+def test_job_config_precedence() -> None:
+    """Test BigQuery driver job config override takes precedence."""
+    from google.cloud.bigquery import QueryJobConfig
+
+    mock_conn = MagicMock()
+    connection_job_config = QueryJobConfig()
+    connection_job_config.use_query_cache = True
+    mock_conn.default_query_job_config = connection_job_config
+
+    # Override with driver-specific job config
+    driver_job_config = QueryJobConfig()
+    driver_job_config.dry_run = True
+
+    driver = BigQueryDriver(connection=mock_conn, default_query_job_config=driver_job_config)
+
+    assert driver._default_query_job_config is driver_job_config
+
+
+# Job Callback Tests
+def test_run_query_job_with_callbacks(driver: BigQueryDriver, mock_connection: MagicMock) -> None:
+    """Test BigQuery job execution with callbacks."""
+    job_start_callback = MagicMock()
+    job_complete_callback = MagicMock()
+    driver.on_job_start = job_start_callback
+    driver.on_job_complete = job_complete_callback
+
+    mock_job = mock_connection.query.return_value
+    mock_job.job_id = "test-job-123"
 
     sql_str = "SELECT * FROM users"
-    result = bigquery_driver._run_query_job(sql_str, [])
+    result = driver._run_query_job(sql_str, [])
 
-    assert result == mock_query_job
+    assert result is mock_job
     job_start_callback.assert_called_once()
-    job_complete_callback.assert_called_once_with(mock_query_job.job_id, mock_query_job)
+    job_complete_callback.assert_called_once_with("test-job-123", mock_job)
 
 
-def test_bigquery_driver_run_query_job_callback_exceptions(
-    bigquery_driver: BigQueryDriver, mock_bigquery_connection: Mock, mock_query_job: Mock
-) -> None:
-    """Test BigQueryDriver._run_query_job handles callback exceptions gracefully."""
-    bigquery_driver.on_job_start = Mock(side_effect=Exception("Start callback error"))
-    bigquery_driver.on_job_complete = Mock(side_effect=Exception("Complete callback error"))
+def test_run_query_job_callback_exceptions(driver: BigQueryDriver, mock_connection: MagicMock) -> None:
+    """Test BigQuery job execution handles callback exceptions gracefully."""
+    driver.on_job_start = MagicMock(side_effect=Exception("Start callback error"))
+    driver.on_job_complete = MagicMock(side_effect=Exception("Complete callback error"))
 
-    mock_bigquery_connection.query.return_value = mock_query_job
+    mock_job = mock_connection.query.return_value
+    mock_job.job_id = "test-job-123"
 
     # Should not raise exception even if callbacks fail
-    result = bigquery_driver._run_query_job("SELECT 1", [])
-    assert result == mock_query_job
+    result = driver._run_query_job("SELECT 1", [])
+    assert result is mock_job
 
 
-def test_bigquery_driver_rows_to_results(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQueryDriver._rows_to_results conversion."""
+# Edge Cases
+def test_execute_with_no_parameters(driver: BigQueryDriver, mock_connection: MagicMock) -> None:
+    """Test executing statement with no parameters."""
+    mock_job = mock_connection.query.return_value
+    mock_job.num_dml_affected_rows = 0
+    mock_job.job_id = "test-job"
+    mock_job.schema = None
+    mock_job.state = "DONE"
+    mock_job.errors = None
+
+    statement = SQL("CREATE TABLE test (id INTEGER)")
+    driver._execute_statement(statement)
+
+    mock_connection.query.assert_called_once()
+
+
+def test_execute_select_with_empty_result(driver: BigQueryDriver, mock_connection: MagicMock) -> None:
+    """Test SELECT with empty result set."""
+    mock_job = mock_connection.query.return_value
+    mock_field = MagicMock()
+    mock_field.name = "id"
+    mock_job.schema = [mock_field]
+    mock_job.statement_type = "SELECT"
+    mock_job.result.return_value = iter([])
+
+    statement = SQL("SELECT * FROM users WHERE 1=0")
+    result = driver._execute_statement(statement)
+
+    assert result == {"data": [], "column_names": ["id"], "rows_affected": 0}
+
+
+def test_rows_to_results_conversion(driver: BigQueryDriver) -> None:
+    """Test BigQuery rows to results conversion."""
     # Create mock BigQuery rows
-    # Don't use spec to allow setting __iter__
-    mock_row1 = Mock()
-    mock_row1.__iter__ = Mock(return_value=iter([("id", 1), ("name", "John")]))
-    mock_row1.keys.return_value = ["id", "name"]
-    mock_row1.values.return_value = [1, "John"]
+    mock_row1 = MagicMock()
+    mock_row1.__iter__ = MagicMock(return_value=iter([("id", 1), ("name", "John")]))
 
-    mock_row2 = Mock()
-    mock_row2.__iter__ = Mock(return_value=iter([("id", 2), ("name", "Jane")]))
-    mock_row2.keys.return_value = ["id", "name"]
-    mock_row2.values.return_value = [2, "Jane"]
+    mock_row2 = MagicMock()
+    mock_row2.__iter__ = MagicMock(return_value=iter([("id", 2), ("name", "Jane")]))
 
     # Mock dict() constructor for BigQuery rows
     with patch("builtins.dict") as mock_dict:
         mock_dict.side_effect = [{"id": 1, "name": "John"}, {"id": 2, "name": "Jane"}]
 
         rows_iterator = iter([mock_row1, mock_row2])
-        result = bigquery_driver._rows_to_results(rows_iterator)
+        result = driver._rows_to_results(rows_iterator)
 
         assert result == [{"id": 1, "name": "John"}, {"id": 2, "name": "Jane"}]
 
 
-def test_bigquery_driver_execute_statement_select(
-    bigquery_driver: BigQueryDriver, mock_bigquery_connection: Mock, mock_query_job: Mock
-) -> None:
-    """Test BigQueryDriver._execute_statement for SELECT statements."""
-    mock_bigquery_connection.query.return_value = mock_query_job
-
-    # Mock query job result to iterate properly
-    mock_result = Mock()
-    mock_result.__iter__ = Mock(return_value=iter([]))  # No rows
-    mock_field = Mock()
-    mock_field.name = "id"
-
-    # Set up schema on the query job, not on the result
-    mock_query_job.schema = [mock_field]
-    mock_query_job.result.return_value = mock_result
-    mock_query_job.num_dml_affected_rows = None
-    mock_query_job.statement_type = "SELECT"
-
-    parameters = {"user_id": 123}
-    statement = SQL("SELECT * FROM users WHERE id = @user_id", parameters=parameters)
-    result = bigquery_driver._execute_statement(statement)
-
-    # Should return a dict with data and column_names for SELECT queries
-    assert isinstance(result, dict)
-    assert "data" in result
-    assert "column_names" in result
-    assert result["data"] == []  # No rows # pyright: ignore
-    # Column names will be empty list due to Mock handling, which is expected for unit tests
-    assert isinstance(result["column_names"], list)  # pyright: ignore
-    mock_bigquery_connection.query.assert_called_once()
-
-
-def test_bigquery_driver_from_query_builder(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQueryDriver with query builder integration."""
-    from sqlspec.statement.builder import QueryBuilder
-
-    mock_builder = Mock(spec=QueryBuilder)
-    mock_builder.to_statement.return_value = SQL("SELECT * FROM users")
-
-    # Should be able to handle QueryBuilder objects
-    result = bigquery_driver._build_statement(mock_builder, None, None, *())
-    assert isinstance(result, SQL)
-
-
-def test_bigquery_driver_parameter_processing_dict(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQuery driver processes dictionary parameters correctly."""
-    params_dict = {"user_id": 123, "name": "John"}
-
-    bq_params = bigquery_driver._prepare_bq_query_parameters(params_dict)
-
-    assert len(bq_params) == 2
-    param_names = [p.name for p in bq_params]
-    assert "user_id" in param_names
-    assert "name" in param_names
-
-
-def test_bigquery_driver_parameter_processing_mixed_types(bigquery_driver: BigQueryDriver) -> None:
-    """Test BigQuery driver processes mixed parameter types correctly."""
-    params_dict = {
-        "@string_param": "test",
-        "@int_param": 42,
-        "@bool_param": True,
-        "@float_param": math.pi,
-        "@array_param": [1, 2, 3],
-        "@date_param": datetime.date(2023, 1, 1),
-    }
-
-    bq_params = bigquery_driver._prepare_bq_query_parameters(params_dict)
-
-    assert len(bq_params) == 6
-
-    # Check that array parameter is correctly identified
-    array_params = [p for p in bq_params if isinstance(p, ArrayQueryParameter)]
-    assert len(array_params) == 1
-    assert array_params[0].name == "array_param"
-    assert array_params[0].array_type == "INT64"
-
-
-def test_bigquery_driver_connection_override(bigquery_driver: BigQueryDriver) -> None:
+def test_connection_override(driver: BigQueryDriver) -> None:
     """Test BigQuery driver with connection override."""
-    override_connection = Mock(spec=Client)
-    override_connection.query.return_value = Mock()
+    override_connection = MagicMock()
+    override_connection.query.return_value = MagicMock()
 
     statement = SQL("SELECT 1")
 
     # Should use override connection instead of driver's connection
-    bigquery_driver._execute_statement(statement, connection=override_connection)
+    driver._execute_statement(statement, connection=override_connection)
 
     override_connection.query.assert_called_once()
     # Original connection should not be called
-    bigquery_driver.connection.query.assert_not_called()  # pyright: ignore
+    driver.connection.query.assert_not_called()
 
 
-def test_bigquery_driver_job_config_inheritance(mock_bigquery_connection: Mock) -> None:
-    """Test BigQuery driver inherits job config from connection."""
-    # Mock connection with default job config
-    default_job_config = QueryJobConfig()
-    default_job_config.use_query_cache = True
-    mock_bigquery_connection.default_query_job_config = default_job_config
-
-    driver = BigQueryDriver(connection=mock_bigquery_connection)
-
-    assert driver._default_query_job_config == default_job_config
-
-
-def test_bigquery_driver_job_config_precedence(mock_bigquery_connection: Mock) -> None:
-    """Test BigQuery driver job config override takes precedence."""
-    # Mock connection with default job config
-    connection_job_config = QueryJobConfig()
-    connection_job_config.use_query_cache = True
-    mock_bigquery_connection.default_query_job_config = connection_job_config
-
-    # Override with driver-specific job config
-    driver_job_config = QueryJobConfig()
-    driver_job_config.dry_run = True
-
-    driver = BigQueryDriver(connection=mock_bigquery_connection, default_query_job_config=driver_job_config)
-
-    assert driver._default_query_job_config == driver_job_config
-
-
-def test_to_parquet_raises_if_not_gcs(bigquery_driver: BigQueryDriver) -> None:
-    """Test that to_parquet raises if the path is not a gs:// URI."""
-    # Skip this test - unified storage mixin supports any path, not just GCS
-    pytest.skip("Unified storage mixin supports any path, not just GCS")
-
-
-def test_to_parquet_raises_if_bucket_not_registered(
-    bigquery_driver: BigQueryDriver, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Test that to_parquet raises if the GCS bucket is not registered as a storage backend."""
-    # Skip this test - unified storage mixin handles unregistered paths differently
-    pytest.skip("Unified storage mixin handles unregistered paths differently")
-
-
-def test_to_parquet_calls_extract_table(monkeypatch: pytest.MonkeyPatch, bigquery_driver: BigQueryDriver) -> None:
-    """Test that to_parquet calls extract_table with correct arguments if path and bucket are valid."""
-    # Skip this test - unified storage mixin doesn't use extract_table anymore
-    pytest.skip("Unified storage mixin doesn't use BigQuery extract_table")
-
-
-def test_bigquery_driver_fetch_arrow_table_native(bigquery_driver: BigQueryDriver, mock_query_job: Mock) -> None:
-    """Test BigQueryDriver._fetch_arrow_table uses native QueryJob.to_arrow()."""
+def test_fetch_arrow_table_native(driver: BigQueryDriver, mock_connection: MagicMock) -> None:
+    """Test BigQuery native Arrow table fetch."""
     import pyarrow as pa
 
     from sqlspec.statement.result import ArrowResult
 
     # Setup mock arrow table for native fetch
     mock_arrow_table = pa.table({"id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"]})
-    mock_query_job.to_arrow.return_value = mock_arrow_table
-
-    # Mock the job result to complete successfully
-    mock_query_job.result.return_value = None
-
-    # Mock _execute to return the query job
-    bigquery_driver.connection.query.return_value = mock_query_job  # pyright: ignore
+    mock_job = mock_connection.query.return_value
+    mock_job.to_arrow.return_value = mock_arrow_table
+    mock_job.result.return_value = None
 
     statement = SQL("SELECT * FROM users")
-    result = bigquery_driver.fetch_arrow_table(statement)
+    result = driver.fetch_arrow_table(statement)
 
     assert isinstance(result, ArrowResult)
-    assert result.data is mock_arrow_table  # Should be the exact same table
-    assert result.data.num_rows == 3  # # pyright: ignore
-    assert result.data.column_names == ["id", "name"]  # pyright: ignore
+    assert result.data is mock_arrow_table
+    assert result.data.num_rows == 3
+    assert result.data.column_names == ["id", "name"]
 
     # Verify native to_arrow was called
-    mock_query_job.to_arrow.assert_called_once()
+    mock_job.to_arrow.assert_called_once()
     # Verify query job was waited on
-    mock_query_job.result.assert_called_once()
-
-
-def test_bigquery_driver_fetch_arrow_table_with_options(bigquery_driver: BigQueryDriver, mock_query_job: Mock) -> None:
-    """Test BigQueryDriver._fetch_arrow_table passes through BigQuery-specific options."""
-    import pyarrow as pa
-
-    from sqlspec.statement.result import ArrowResult
-
-    # Setup mock arrow table for native fetch
-    mock_arrow_table = pa.table({"id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"]})
-    mock_query_job.to_arrow.return_value = mock_arrow_table
-    mock_query_job.result.return_value = None
-
-    # Mock _execute to return the query job
-    bigquery_driver.connection.query.return_value = mock_query_job  # pyright: ignore
-
-    statement = SQL("SELECT * FROM users")
-
-    # Test with BigQuery Storage API disabled
-    result = bigquery_driver.fetch_arrow_table(statement, use_bqstorage_api=False, bq_job_timeout=30)
-
-    assert isinstance(result, ArrowResult)
-
-    # Verify to_arrow was called with correct options
-    mock_query_job.to_arrow.assert_called_once_with(create_bqstorage_client=False)
-    # Verify timeout was passed to result()
-    mock_query_job.result.assert_called_once_with(timeout=30)
+    mock_job.result.assert_called_once()

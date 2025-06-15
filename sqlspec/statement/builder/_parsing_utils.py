@@ -121,7 +121,7 @@ def parse_condition_expression(
     except Exception:
         # If that fails, try parsing as a general expression
         try:
-            parsed = exp.maybe_parse(condition_input)
+            parsed = exp.maybe_parse(condition_input)  # type: ignore[var-annotated]
             if parsed:
                 return parsed
         except Exception:  # noqa: S110

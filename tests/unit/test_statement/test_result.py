@@ -1,561 +1,448 @@
-# pyright: reportMissingParameterType=false, reportAttributeAccessIssue=false, reportArgumentType=false
-"""Unit tests for sqlspec.statement.result module.
+"""Unit tests for sqlspec.statement.result module."""
 
-Tests the result wrapper classes for handling different types of SQL operations
-including SELECT, INSERT/UPDATE/DELETE, script execution, and Arrow results.
-"""
-
-from typing import Any
+from typing import TYPE_CHECKING, Any, Optional
 from unittest.mock import Mock
 
 import pytest
 
 from sqlspec.statement.result import ArrowResult, SQLResult, StatementResult
 from sqlspec.statement.sql import SQL
-from sqlspec.typing import RowT
+
+if TYPE_CHECKING:
+    pass
 
 
+# Test StatementResult abstract base class
 def test_statement_result_is_abstract() -> None:
     """Test that StatementResult cannot be instantiated directly."""
     with pytest.raises(TypeError, match="abstract"):
         StatementResult(statement=SQL("test"), data=["test"])  # type: ignore[abstract]
 
 
-def test_statement_result_metadata_methods() -> None:
-    """Test metadata getter and setter methods."""
+def test_statement_result_metadata_operations() -> None:
+    """Test metadata getter and setter methods on concrete implementation."""
 
     # Create a concrete implementation for testing
     class ConcreteResult(StatementResult[dict[str, Any]]):
         def is_success(self) -> bool:
             return True
 
-        def get_data(self) -> list[dict[str, Any]]:
-            return self.data  # type: ignore
+        def get_data(self) -> Any:
+            return self.data
 
-    result = ConcreteResult(statement=SQL("test"), data=[{"test": "data"}], metadata={"key1": "value1"})
+    result = ConcreteResult(
+        statement=SQL("test"), data=[{"test": "data"}], metadata={"key1": "value1", "key2": "value2"}
+    )
 
     # Test metadata access
     assert result.get_metadata("key1") == "value1"
+    assert result.get_metadata("key2") == "value2"
     assert result.get_metadata("missing", "default") == "default"
     assert result.get_metadata("missing") is None
 
     # Test metadata setting
-    result.set_metadata("key2", "value2")
-    assert result.get_metadata("key2") == "value2"
+    result.set_metadata("key3", "value3")
+    assert result.get_metadata("key3") == "value3"
+
+    # Test overwriting metadata
+    result.set_metadata("key1", "updated")
+    assert result.get_metadata("key1") == "updated"
 
 
-@pytest.fixture
-def sample_rows() -> list[dict[str, Any]]:
-    """Sample row data for testing."""
-    return [
-        {"id": 1, "name": "Alice", "email": "alice@example.com"},
-        {"id": 2, "name": "Bob", "email": "bob@example.com"},
-        {"id": 3, "name": "Charlie", "email": "charlie@example.com"},
-    ]
-
-
-@pytest.fixture
-def basic_sql_result_select(sample_rows: list[dict[str, Any]]) -> SQLResult[RowT]:
-    """Basic SQLResult for SELECT-like operations for testing."""
-    return SQLResult(
-        statement=SQL("SELECT * FROM users"),
-        data=sample_rows,
-        column_names=["id", "name", "email"],
-        rows_affected=len(sample_rows),  # For SELECT, this can be count of rows returned
-        operation_type="SELECT",
-    )
-
-
-def test_sql_result_initialization_select(sample_rows: list[dict[str, Any]]) -> None:
-    """Test SQLResult initialization for SELECT-like operations."""
+# Test SQLResult for SELECT operations
+@pytest.mark.parametrize(
+    "data,column_names,rows_affected,expected_success",
+    [
+        ([{"id": 1}, {"id": 2}], ["id"], 2, True),
+        ([], ["id"], 0, True),  # Empty result set is still successful
+        ([{"id": 1}], ["id"], None, True),  # None rows_affected is ok for SELECT
+        ([{"id": 1}], ["id"], -1, False),  # Negative rows_affected indicates failure
+        (None, [], None, False),  # None data indicates failure
+    ],
+    ids=["normal_select", "empty_select", "none_rows_affected", "negative_rows_affected", "none_data"],
+)
+def test_sql_result_select_is_success(
+    data: Optional[list[dict[str, Any]]], column_names: list[str], rows_affected: Optional[int], expected_success: bool
+) -> None:
+    """Test is_success method for SELECT operations."""
     result = SQLResult[dict[str, Any]](
         statement=SQL("SELECT * FROM users"),
-        data=sample_rows,
-        column_names=["id", "name", "email"],
-        rows_affected=len(sample_rows),
+        data=data,
+        column_names=column_names,
+        rows_affected=rows_affected,
         operation_type="SELECT",
+    )
+    assert result.is_success() == expected_success
+
+
+def test_sql_result_select_initialization() -> None:
+    """Test SQLResult initialization for SELECT operations."""
+    data = [
+        {"id": 1, "name": "Alice", "email": "alice@example.com"},
+        {"id": 2, "name": "Bob", "email": "bob@example.com"},
+    ]
+
+    result = SQLResult[dict[str, Any]](
+        statement=SQL("SELECT * FROM users"),
+        data=data,
+        column_names=["id", "name", "email"],
+        rows_affected=2,
+        operation_type="SELECT",
+        total_count=100,  # Total rows in table (for pagination context)
+        has_more=True,  # More pages available
         execution_time=0.5,
         metadata={"query_id": "123"},
     )
 
-    assert result.statement.to_sql() == "SELECT * FROM users"
-    assert result.data == sample_rows
+    assert result.statement.sql == "SELECT * FROM users"
+    assert result.data == data
     assert result.column_names == ["id", "name", "email"]
-    assert result.rows_affected == len(sample_rows)
+    assert result.rows_affected == 2
     assert result.operation_type == "SELECT"
-    # These attributes are part of the unified SQLResult class
-    assert result.total_count == len(sample_rows)  # Should be set in __post_init__
-    assert result.has_more is False  # Default value
+    assert result.total_count == 100
+    assert result.has_more is True
     assert result.execution_time == 0.5
     assert result.metadata == {"query_id": "123"}
 
 
-def test_sql_result_is_success_select(basic_sql_result_select: SQLResult[RowT]) -> None:
-    """Test is_success method for SELECT-like SQLResult."""
-    assert basic_sql_result_select.is_success() is True
+def test_sql_result_select_auto_column_names() -> None:
+    """Test automatic column name inference from dict data."""
+    data = [{"id": 1, "name": "Test", "active": True}]
 
-    # Test with empty data list (still a successful select)
-    empty_result = SQLResult[RowT](statement=SQL("SELECT * FROM empty"), data=[], operation_type="SELECT")
-    assert empty_result.is_success() is True
+    result = SQLResult[dict[str, Any]](statement=SQL("SELECT * FROM users"), data=data, operation_type="SELECT")
 
-    # Test with rows_affected = -1 (indicates an issue with execution)
-    failed_result = SQLResult[RowT](
-        statement=SQL("SELECT * FROM empty"), data=[], operation_type="SELECT", rows_affected=-1
+    # Column names should be inferred from first row
+    assert result.column_names == ["id", "name", "active"]
+
+
+def test_sql_result_select_methods() -> None:
+    """Test SELECT-specific methods."""
+    data = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}, {"id": 3, "name": "Charlie"}]
+
+    result = SQLResult[dict[str, Any]](
+        statement=SQL("SELECT * FROM users"), data=data, column_names=["id", "name"], operation_type="SELECT"
     )
-    assert failed_result.is_success() is False
 
+    # Test get_data
+    assert result.get_data() == data
 
-def test_sql_result_get_data_select(basic_sql_result_select: SQLResult[RowT]) -> None:
-    """Test get_data method returns data for SELECT-like SQLResult."""
-    data = basic_sql_result_select.get_data()
-    assert data == basic_sql_result_select.data
-    assert len(data) == 3
+    # Test get_first
+    assert result.get_first() == {"id": 1, "name": "Alice"}
 
+    # Test get_count
+    assert result.get_count() == 3
 
-def test_sql_result_get_first_select(sample_rows: list[dict[str, Any]]) -> None:
-    """Test get_first method for SELECT-like SQLResult."""
-    result = SQLResult[dict[str, Any]](statement=SQL("SELECT * FROM users"), data=sample_rows, operation_type="SELECT")
-    first_row = result.get_first()
+    # Test is_empty
+    assert result.is_empty() is False
 
-    assert first_row == sample_rows[0]
-    if first_row is not None:
-        assert first_row["name"] == "Alice"
-
-    # Test with empty data
-    empty_result = SQLResult[dict[str, Any]](statement=SQL("SELECT * FROM empty"), data=[], operation_type="SELECT")
-    assert empty_result.get_first() is None
-
-
-def test_sql_result_get_count_select(basic_sql_result_select: SQLResult[RowT]) -> None:
-    """Test get_count method for SELECT-like SQLResult."""
-    assert basic_sql_result_select.get_count() == 3
-
-    # Test with empty data
-    empty_result = SQLResult[RowT](statement=SQL("SELECT * FROM empty"), data=[], operation_type="SELECT")
-    assert empty_result.get_count() == 0
-
-
-def test_sql_result_is_empty_select(basic_sql_result_select: SQLResult[RowT]) -> None:
-    """Test is_empty method for SELECT-like SQLResult."""
-    assert basic_sql_result_select.is_empty() is False
-
-    # Test with empty data
-    empty_result = SQLResult[RowT](statement=SQL("SELECT * FROM empty"), data=[], operation_type="SELECT")
-    assert empty_result.is_empty() is True
+    # Test num_columns
+    assert result.num_columns == 2
 
 
 @pytest.mark.parametrize(
-    ("rows", "expected_count", "expected_empty"),
-    [([], 0, True), ([{"id": 1}], 1, False), ([{"id": 1}, {"id": 2}], 2, False)],
-    ids=["empty_rows", "single_row", "multiple_rows"],
+    "data,expected_first,expected_count,expected_empty",
+    [([], None, 0, True), ([{"id": 1}], {"id": 1}, 1, False), ([{"id": 1}, {"id": 2}], {"id": 1}, 2, False)],
+    ids=["empty", "single_row", "multiple_rows"],
 )
-def test_sql_result_row_operations_select(
-    rows: list[dict[str, Any]], expected_count: int, expected_empty: bool
+def test_sql_result_select_row_operations(
+    data: list[dict[str, Any]], expected_first: Optional[dict[str, Any]], expected_count: int, expected_empty: bool
 ) -> None:
-    """Test row operations with different row counts for SELECT-like SQLResult."""
-    result = SQLResult[dict[str, Any]](statement=SQL("SELECT * FROM test"), data=rows, operation_type="SELECT")
+    """Test row operations with different data sets."""
+    result = SQLResult[dict[str, Any]](statement=SQL("SELECT * FROM test"), data=data, operation_type="SELECT")
 
+    assert result.get_first() == expected_first
     assert result.get_count() == expected_count
     assert result.is_empty() == expected_empty
 
-    if rows:
-        assert result.get_first() == rows[0]
-    else:
-        assert result.get_first() is None
 
-
-@pytest.fixture
-def basic_sql_result_execute() -> SQLResult[RowT]:  # Changed from None to dict[str, Any]
-    """Basic SQLResult for EXECUTE-like operations for testing."""
-    return SQLResult(
-        statement=SQL("INSERT INTO users VALUES (1, 'test')"),
-        data=[],  # Empty list instead of None for execute operations
-        rows_affected=5,
-        last_inserted_id=123,  # This might be in metadata or a specific attribute if needed
-        operation_type="INSERT",
-        metadata={"last_inserted_id": 123},  # Store last_inserted_id in metadata
-    )
-
-
-def test_sql_result_initialization_execute() -> None:
-    """Test SQLResult initialization for EXECUTE-like operations."""
+# Test SQLResult for DML operations
+@pytest.mark.parametrize(
+    "operation_type,rows_affected,expected_success",
+    [
+        ("INSERT", 1, True),
+        ("UPDATE", 5, True),
+        ("DELETE", 3, True),
+        ("INSERT", 0, True),  # 0 rows affected is still success
+        ("UPDATE", None, False),  # None rows_affected is failure for DML
+        ("DELETE", -1, False),  # Negative rows_affected is failure
+    ],
+)
+def test_sql_result_dml_is_success(operation_type: str, rows_affected: Optional[int], expected_success: bool) -> None:
+    """Test is_success method for DML operations."""
     result = SQLResult[dict[str, Any]](
-        statement=SQL("UPDATE users SET name = 'John'"),
-        data=[],  # Empty list instead of None
-        rows_affected=10,
-        operation_type="UPDATE",
-        execution_time=0.25,
-        metadata={"transaction_id": "tx-456", "last_inserted_id": "uuid-123"},
+        statement=SQL(f"{operation_type} ..."),
+        data=[],  # DML typically has empty data unless RETURNING
+        rows_affected=rows_affected,
+        operation_type=operation_type,
+    )
+    assert result.is_success() == expected_success
+
+
+def test_sql_result_dml_operations() -> None:
+    """Test DML-specific methods and attributes."""
+    result = SQLResult[dict[str, Any]](
+        statement=SQL("INSERT INTO users VALUES (?, ?)"),
+        data=[],
+        rows_affected=1,
+        operation_type="INSERT",
+        last_inserted_id=123,
+        inserted_ids=[123],
+        metadata={"transaction_id": "tx-456"},
     )
 
-    # The SQL may be parameterized, so check the original SQL or accept parameterized form
-    assert result.statement.to_sql() in ["UPDATE users SET name = 'John'", "UPDATE users SET name = ?"]
-    assert result.rows_affected == 10
-    assert result.get_metadata("last_inserted_id") == "uuid-123"
-    assert result.operation_type == "UPDATE"
-    assert result.execution_time == 0.25
-    assert result.metadata == {"transaction_id": "tx-456", "last_inserted_id": "uuid-123"}
-    assert result.data == []  # data should be empty list for execute
-
-
-def test_sql_result_is_success_execute() -> None:
-    """Test is_success method for EXECUTE-like SQLResult."""
-    # Successful operation
-    success_result = SQLResult[dict[str, Any]](
-        statement=SQL("INSERT INTO test"), data=[], rows_affected=5, operation_type="INSERT"
-    )
-    assert success_result.is_success() is True
-
-    # Zero rows affected (still success for some operations like UPDATE that might not change anything)
-    zero_result = SQLResult[dict[str, Any]](
-        statement=SQL("UPDATE test"), data=[], rows_affected=0, operation_type="UPDATE"
-    )
-    assert zero_result.is_success() is True
-
-    # None rows affected (can indicate failure or that it's not applicable)
-    # SQLResult.is_success() primarily checks rows_affected >= 0
-    none_result = SQLResult[dict[str, Any]](
-        statement=SQL("UPDATE test"), data=[], rows_affected=None, operation_type="UPDATE"
-    )
-    assert none_result.is_success() is False  # rows_affected is None, so it's not >= 0
-
-    # Negative rows affected (failure)
-    negative_result = SQLResult[dict[str, Any]](
-        statement=SQL("UPDATE test"), data=[], rows_affected=-1, operation_type="UPDATE"
-    )
-    assert negative_result.is_success() is False
-
-
-def test_sql_result_get_data_execute(basic_sql_result_execute: SQLResult[RowT]) -> None:
-    """Test get_data method returns empty list for EXECUTE-like SQLResult."""
-    data = basic_sql_result_execute.get_data()
-    assert data == []  # For execute-like results, data is empty list
-
-
-def test_sql_result_get_affected_count_execute(basic_sql_result_execute: SQLResult[RowT]) -> None:
-    """Test get_affected_count method for EXECUTE-like SQLResult."""
-    assert basic_sql_result_execute.get_affected_count() == 5
-
-    # Test with None rows_affected
-    none_result = SQLResult[RowT](statement=SQL("UPDATE test"), data=[], rows_affected=None, operation_type="UPDATE")
-    assert none_result.get_affected_count() == 0  # get_affected_count returns 0 if rows_affected is None
-
-
-def test_sql_result_get_inserted_id_from_metadata(basic_sql_result_execute: SQLResult[RowT]) -> None:
-    """Test getting last_inserted_id from metadata for EXECUTE-like SQLResult."""
-    assert basic_sql_result_execute.get_metadata("last_inserted_id") == 123
-
-    # Test with no last_inserted_id in metadata
-    no_id_result = SQLResult[RowT](statement=SQL("INSERT INTO test"), data=[], operation_type="INSERT")
-    assert no_id_result.get_metadata("last_inserted_id") is None
+    assert result.get_affected_count() == 1
+    assert result.get_inserted_id() == 123
+    assert result.get_inserted_ids() == [123]
+    assert result.was_inserted() is True
+    assert result.was_updated() is False
+    assert result.was_deleted() is False
 
 
 @pytest.mark.parametrize(
-    ("operation_type", "expected_insert", "expected_update", "expected_delete"),
+    "operation_type,expected_insert,expected_update,expected_delete",
     [
         ("INSERT", True, False, False),
-        ("UPDATE", False, True, False),
-        ("DELETE", False, False, True),
-        ("MERGE", False, False, False),
         ("insert", True, False, False),  # Case insensitive
+        ("UPDATE", False, True, False),
         ("update", False, True, False),
+        ("DELETE", False, False, True),
         ("delete", False, False, True),
+        ("MERGE", False, False, False),
+        ("SELECT", False, False, False),
     ],
-    ids=["insert_upper", "update_upper", "delete_upper", "merge_upper", "insert_lower", "update_lower", "delete_lower"],
 )
-def test_execute_result_operation_type_checks(
+def test_sql_result_operation_type_checks(
     operation_type: str, expected_insert: bool, expected_update: bool, expected_delete: bool
 ) -> None:
     """Test operation type checking methods."""
-    result = SQLResult[dict[str, Any]](statement=SQL("SQL"), data=[], operation_type=operation_type)
+    result = SQLResult[dict[str, Any]](statement=SQL("..."), data=[], operation_type=operation_type)
 
     assert result.was_inserted() == expected_insert
     assert result.was_updated() == expected_update
     assert result.was_deleted() == expected_delete
 
 
-@pytest.fixture
-def sample_statement_results_for_script() -> list[SQLResult[Any]]:  # Now uses SQLResult
-    """Sample statement results for script testing."""
-    return [
-        SQLResult(statement=SQL("INSERT INTO test"), data=[], rows_affected=2, operation_type="INSERT"),
-        SQLResult(statement=SQL("UPDATE test"), data=[], rows_affected=1, operation_type="UPDATE"),
-        SQLResult(statement=SQL("DELETE FROM test"), data=[], rows_affected=3, operation_type="DELETE"),
+def test_sql_result_dml_with_returning() -> None:
+    """Test DML operations with RETURNING clause."""
+    returned_data = [
+        {"id": 1, "name": "Alice", "created_at": "2023-01-01"},
+        {"id": 2, "name": "Bob", "created_at": "2023-01-01"},
     ]
 
+    result = SQLResult[dict[str, Any]](
+        statement=SQL("INSERT INTO users ... RETURNING *"),
+        data=returned_data,
+        column_names=["id", "name", "created_at"],
+        rows_affected=2,
+        operation_type="INSERT",
+        inserted_ids=[1, 2],
+    )
 
-@pytest.fixture
-def basic_script_result(sample_statement_results_for_script: list[SQLResult[Any]]) -> SQLResult[Any]:
-    """Basic SQLResult[Any] for testing."""
-    result = SQLResult[Any](statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
-    # Add the sample statement results to simulate script execution
-    for stmt_result in sample_statement_results_for_script:
-        result.add_statement_result(stmt_result)
-    return result
+    assert result.is_success() is True
+    assert result.get_data() == returned_data
+    assert result.get_returning_data() == returned_data
+    assert result.get_affected_count() == 2
+    assert result.get_inserted_ids() == [1, 2]
 
 
-def test_script_result_initialization() -> None:
-    """Test SQLResult[Any] initialization."""
+# Test SQLResult for script execution
+def test_sql_result_script_initialization() -> None:
+    """Test SQLResult initialization for script execution."""
     result = SQLResult[Any](
-        statement=SQL("SCRIPT"),
+        statement=SQL("-- Script\nINSERT ...; UPDATE ...;"),
         data=[],
         operation_type="SCRIPT",
         execution_time=1.5,
         metadata={"script_id": "script-123"},
     )
 
-    # SQL may be normalized to lowercase
-    assert result.statement.to_sql().upper() == "SCRIPT"
     assert result.operation_type == "SCRIPT"
-    assert result.execution_time == 1.5
-    assert result.metadata == {"script_id": "script-123"}
+    assert result.statement_results == []
+    assert result.errors == []
+    assert result.total_statements == 0
+    assert result.successful_statements == 0
 
 
-def test_script_result_is_success(basic_script_result: SQLResult[Any]) -> None:
-    """Test is_success method."""
-    # All statements successful, no errors
-    assert basic_script_result.is_success() is True
+def test_sql_result_script_execution() -> None:
+    """Test script execution tracking."""
+    script_result = SQLResult[Any](statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
 
-    # Add an error
-    basic_script_result.add_error("Test error")
-    assert basic_script_result.is_success() is False
+    # Add successful statements
+    stmt1 = SQLResult[Any](statement=SQL("INSERT INTO test"), data=[], rows_affected=2, operation_type="INSERT")
+    script_result.add_statement_result(stmt1)
 
-    # Reset errors but make total != successful
-    error_result = SQLResult[Any](statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
-    error_result.total_statements = 2
-    error_result.successful_statements = 1
-    assert error_result.is_success() is False
+    stmt2 = SQLResult[Any](statement=SQL("UPDATE test"), data=[], rows_affected=3, operation_type="UPDATE")
+    script_result.add_statement_result(stmt2)
+
+    # Add failed statement
+    stmt3 = SQLResult[Any](
+        statement=SQL("DELETE FROM test"),
+        data=[],
+        rows_affected=None,  # Indicates failure
+        operation_type="DELETE",
+    )
+    script_result.add_statement_result(stmt3)
+
+    assert script_result.total_statements == 3
+    assert script_result.successful_statements == 2
+    assert script_result.is_success() is False  # Not all statements succeeded
 
 
-def test_script_result_get_data(basic_script_result: SQLResult[Any]) -> None:
-    """Test get_data method returns SQLResult[Any]Data."""
-    data = basic_script_result.get_data()
+def test_sql_result_script_errors() -> None:
+    """Test script error tracking."""
+    script_result = SQLResult[Any](statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
 
+    # Add errors
+    script_result.add_error("Syntax error in statement 1")
+    script_result.add_error("Connection lost")
+
+    assert script_result.has_errors() is True
+    assert script_result.get_errors() == ["Syntax error in statement 1", "Connection lost"]
+    assert script_result.is_success() is False
+
+
+def test_sql_result_script_get_data() -> None:
+    """Test get_data returns summary for script execution."""
+    script_result = SQLResult[Any](statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
+
+    # Add some statement results
+    for i in range(3):
+        stmt = SQLResult[Any](statement=SQL(f"Statement {i}"), data=[], rows_affected=i + 1, operation_type="INSERT")
+        script_result.add_statement_result(stmt)
+
+    data = script_result.get_data()
     assert isinstance(data, dict)
     assert data["total_statements"] == 3
     assert data["successful_statements"] == 3
     assert data["failed_statements"] == 0
     assert data["errors"] == []
     assert len(data["statement_results"]) == 3
-    assert data["total_rows_affected"] == 6  # 2 + 1 + 3
+    assert data["total_rows_affected"] == 6  # 1 + 2 + 3
 
 
-def test_script_result_add_statement_result() -> None:
-    """Test add_statement_result method."""
+def test_sql_result_script_statement_access() -> None:
+    """Test accessing individual statement results."""
     script_result = SQLResult[Any](statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
 
-    # Add successful statement
-    success_stmt = SQLResult[None](statement=SQL("INSERT"), data=[], rows_affected=5, operation_type="INSERT")
-    script_result.add_statement_result(success_stmt)
+    # Add statements
+    stmts = []
+    for i in range(3):
+        stmt = SQLResult[Any](statement=SQL(f"Statement {i}"), data=[], rows_affected=1, operation_type="INSERT")
+        stmts.append(stmt)
+        script_result.add_statement_result(stmt)
 
-    assert script_result.total_statements == 1
-    assert script_result.successful_statements == 1
-    assert len(script_result.statement_results) == 1
+    # Test valid access
+    assert script_result.get_statement_result(0) == stmts[0]
+    assert script_result.get_statement_result(1) == stmts[1]
+    assert script_result.get_statement_result(2) == stmts[2]
 
-    # Add failed statement (rows_affected is None)
-    failed_stmt = SQLResult[None](statement=SQL("UPDATE"), data=[], rows_affected=None, operation_type="UPDATE")
-    script_result.add_statement_result(failed_stmt)
-
-    assert script_result.total_statements == 2
-    assert script_result.successful_statements == 1  # Still 1, as second one failed
-    assert len(script_result.statement_results) == 2
-
-
-def test_script_result_add_error(basic_script_result: SQLResult[Any]) -> None:
-    """Test add_error method."""
-    basic_script_result.add_error("First error")
-    basic_script_result.add_error("Second error")
-
-    assert len(basic_script_result.errors) == 2
-    assert basic_script_result.errors == ["First error", "Second error"]
+    # Test invalid access
+    assert script_result.get_statement_result(-1) is None
+    assert script_result.get_statement_result(3) is None
 
 
-def test_script_result_get_statement_result(basic_script_result: SQLResult[Any]) -> None:
-    """Test get_statement_result method."""
-    # Valid indices
-    assert basic_script_result.get_statement_result(0) is not None
-    assert basic_script_result.get_statement_result(1) is not None
-    assert basic_script_result.get_statement_result(2) is not None
+def test_sql_result_script_total_rows_affected() -> None:
+    """Test calculating total rows affected across all statements."""
+    script_result = SQLResult[Any](statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
 
-    # Invalid indices
-    assert basic_script_result.get_statement_result(-1) is None
-    assert basic_script_result.get_statement_result(3) is None
-    assert basic_script_result.get_statement_result(100) is None
-
-
-def test_script_result_get_total_rows_affected(basic_script_result: SQLResult[Any]) -> None:
-    """Test get_total_rows_affected method."""
-    assert basic_script_result.get_total_rows_affected() == 6  # 2 + 1 + 3
-
-    # Test with statements that have None rows_affected
-    script_with_none = SQLResult[Any](statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
-    script_with_none.add_statement_result(
-        SQLResult[None](statement=SQL("INSERT"), data=[], rows_affected=5, operation_type="INSERT")
+    # Add statements with various rows_affected values
+    script_result.add_statement_result(
+        SQLResult[Any](statement=SQL("INSERT"), data=[], rows_affected=5, operation_type="INSERT")
     )
-    script_with_none.add_statement_result(
-        SQLResult[None](statement=SQL("UPDATE"), data=[], rows_affected=None, operation_type="UPDATE")
+    script_result.add_statement_result(
+        SQLResult[Any](statement=SQL("UPDATE"), data=[], rows_affected=3, operation_type="UPDATE")
     )
-    script_with_none.add_statement_result(
-        SQLResult[None](statement=SQL("DELETE"), data=[], rows_affected=3, operation_type="DELETE")
+    script_result.add_statement_result(
+        SQLResult[Any](statement=SQL("DELETE"), data=[], rows_affected=None, operation_type="DELETE")  # Failed
     )
 
-    assert script_with_none.get_total_rows_affected() == 8  # 5 + 0 + 3
+    assert script_result.get_total_rows_affected() == 8  # 5 + 3 + 0
+    assert script_result.num_rows == 8  # Property alias
 
 
-def test_script_result_get_errors(basic_script_result: SQLResult[Any]) -> None:
-    """Test get_errors method."""
-    # Initially no errors
-    assert basic_script_result.get_errors() == []
-
-    # Add errors
-    basic_script_result.add_error("Error 1")
-    basic_script_result.add_error("Error 2")
-
-    errors = basic_script_result.get_errors()
-    assert errors == ["Error 1", "Error 2"]
-
-
-def test_script_result_has_errors(basic_script_result: SQLResult[Any]) -> None:
-    """Test has_errors method."""
-    # Initially no errors
-    assert basic_script_result.has_errors() is False
-
-    # Add error
-    basic_script_result.add_error("Test error")
-    assert basic_script_result.has_errors() is True
-
-
-@pytest.fixture
-def mock_arrow_table() -> Mock:
-    """Mock Apache Arrow table for testing."""
+# Test ArrowResult
+def test_arrow_result_initialization() -> None:
+    """Test ArrowResult initialization."""
     mock_table = Mock()
     mock_table.column_names = ["id", "name", "value"]
     mock_table.num_rows = 100
     mock_table.num_columns = 3
-    return mock_table
 
-
-@pytest.fixture
-def basic_arrow_result(mock_arrow_table: Mock) -> ArrowResult:
-    """Basic ArrowResult for testing."""
-    return ArrowResult(statement=SQL("SELECT * FROM users"), data=mock_arrow_table, schema={"version": "1.0"})
-
-
-def test_arrow_result_initialization(mock_arrow_table: Mock) -> None:
-    """Test ArrowResult initialization."""
     result = ArrowResult(
         statement=SQL("SELECT * FROM users"),
-        data=mock_arrow_table,
-        schema={"version": "1.0", "metadata": {"created": "2023-01-01"}},
+        data=mock_table,
+        schema={"version": "1.0", "fields": ["id", "name", "value"]},
         execution_time=0.75,
         metadata={"query_id": "arrow-123"},
     )
 
-    assert result.statement.to_sql() == "SELECT * FROM users"
-    assert result.data == mock_arrow_table
-    assert result.schema == {"version": "1.0", "metadata": {"created": "2023-01-01"}}
+    assert result.statement.sql == "SELECT * FROM users"
+    assert result.data == mock_table
+    assert result.schema == {"version": "1.0", "fields": ["id", "name", "value"]}
     assert result.execution_time == 0.75
     assert result.metadata == {"query_id": "arrow-123"}
 
 
-def test_arrow_result_is_success(mock_arrow_table: Mock) -> None:
-    """Test is_success method."""
-    # With arrow table
-    success_result = ArrowResult(statement=SQL("SELECT * FROM users"), data=mock_arrow_table)
-    assert success_result.is_success() is True
-
-    # Without arrow table - create a mock that returns None for data
-    none_mock = Mock()
-    none_mock.return_value = None
-    none_result = ArrowResult(statement=SQL("SELECT * FROM users"), data=none_mock)
-    # Override the data attribute to be None for this test
-    none_result.data = None  # type: ignore[assignment]
-    assert none_result.is_success() is False
+@pytest.mark.parametrize("has_data,expected_success", [(True, True), (False, False)])
+def test_arrow_result_is_success(has_data: bool, expected_success: bool) -> None:
+    """Test is_success method for ArrowResult."""
+    mock_table = Mock() if has_data else None
+    result = ArrowResult(
+        statement=SQL("SELECT * FROM users"),
+        data=mock_table,  # type: ignore[arg-type]
+    )
+    assert result.is_success() == expected_success
 
 
-def test_arrow_result_get_data(basic_arrow_result: ArrowResult, mock_arrow_table: Mock) -> None:
-    """Test get_data method."""
-    data = basic_arrow_result.get_data()
-    assert data is mock_arrow_table
+def test_arrow_result_get_data() -> None:
+    """Test get_data method for ArrowResult."""
+    mock_table = Mock()
+    result = ArrowResult(statement=SQL("SELECT * FROM users"), data=mock_table)
 
-    # Test with None data - create a result with None data
-    none_result = ArrowResult(statement=SQL("SELECT * FROM users"), data=mock_arrow_table)
-    none_result.data = None  # type: ignore[assignment]
+    assert result.get_data() == mock_table
+
+    # Test with None data
+    none_result = ArrowResult(
+        statement=SQL("SELECT * FROM users"),
+        data=None,  # type: ignore[arg-type]
+    )
     with pytest.raises(ValueError, match="No Arrow table available"):
         none_result.get_data()
 
 
-def test_arrow_result_column_names(basic_arrow_result: ArrowResult) -> None:
-    """Test column_names property."""
-    columns = basic_arrow_result.column_names
-    assert columns == ["id", "name", "value"]
-
-    # Test with None data - create a result with None data
-    none_result = ArrowResult(statement=SQL("SELECT * FROM users"), data=basic_arrow_result.data)
-    none_result.data = None  # type: ignore[assignment]
-    with pytest.raises(ValueError, match="No Arrow table available"):
-        none_result.column_names
-
-
-def test_arrow_result_num_rows(basic_arrow_result: ArrowResult) -> None:
-    """Test num_rows method."""
-    rows = basic_arrow_result.num_rows
-    assert rows == 100  # From mock_arrow_table.num_rows
-
-    # Test with None data
-    none_result = ArrowResult(statement=SQL("SELECT * FROM users"), data=basic_arrow_result.data)
-    none_result.data = None  # type: ignore[assignment]
-    with pytest.raises(ValueError, match="No Arrow table available"):
-        none_result.num_rows
-
-
-def test_arrow_result_num_columns(basic_arrow_result: ArrowResult) -> None:
-    """Test num_columns method."""
-    columns = basic_arrow_result.num_columns
-    assert columns == 3  # From mock_arrow_table.num_columns
-
-    # Test with None data
-    none_result = ArrowResult(statement=SQL("SELECT * FROM users"), data=basic_arrow_result.data)
-    none_result.data = None  # type: ignore[assignment]
-    with pytest.raises(ValueError, match="No Arrow table available"):
-        none_result.num_columns
-
-
-@pytest.mark.parametrize(
-    ("method_name", "expected_error"),
-    [
-        ("get_data", "No Arrow table available for this result"),
-        ("column_names", "No Arrow table available"),
-        ("num_rows", "No Arrow table available"),
-        ("num_columns", "No Arrow table available"),
-    ],
-    ids=["get_data", "column_names", "num_rows", "num_columns"],
-)
-def test_arrow_result_methods_with_none_table(method_name: str, expected_error: str) -> None:
-    """Test ArrowResult methods raise appropriate errors when table is None."""
-    # Create a result with None data
+def test_arrow_result_properties() -> None:
+    """Test ArrowResult properties."""
     mock_table = Mock()
-    none_result = ArrowResult(statement=SQL("SELECT * FROM users"), data=mock_table)
-    none_result.data = None  # type: ignore[assignment]
+    mock_table.column_names = ["id", "name", "value"]
+    mock_table.num_rows = 100
+    mock_table.num_columns = 3
 
-    # For properties, we need to check if accessing raises immediately
-    # For methods, we need to call them
-    if method_name in ["column_names", "num_rows", "num_columns"]:  # These are properties
-        with pytest.raises(ValueError, match=expected_error):
-            _ = getattr(none_result, method_name)
-    else:  # These are methods
-        method = getattr(none_result, method_name)
-        with pytest.raises(ValueError, match=expected_error):
-            method()
+    result = ArrowResult(statement=SQL("SELECT * FROM users"), data=mock_table)
+
+    assert result.column_names == ["id", "name", "value"]
+    assert result.num_rows == 100
+    assert result.num_columns == 3
 
 
-def test_result_inheritance_chain() -> None:
+@pytest.mark.parametrize("property_name", ["column_names", "num_rows", "num_columns"])
+def test_arrow_result_properties_with_none_data(property_name: str) -> None:
+    """Test ArrowResult properties raise error when data is None."""
+    result = ArrowResult(
+        statement=SQL("SELECT * FROM users"),
+        data=None,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ValueError, match="No Arrow table available"):
+        _ = getattr(result, property_name)
+
+
+# Test inheritance and common functionality
+def test_result_inheritance() -> None:
     """Test that all result classes properly inherit from StatementResult."""
-    # Check inheritance
     assert issubclass(SQLResult, StatementResult)
     assert issubclass(ArrowResult, StatementResult)
 
-    # Check they all implement required methods
+    # Check required methods are implemented
     for result_class in [SQLResult, ArrowResult]:
         assert hasattr(result_class, "is_success")
         assert hasattr(result_class, "get_data")
@@ -564,28 +451,57 @@ def test_result_inheritance_chain() -> None:
 
 
 @pytest.mark.parametrize(
-    ("result_class", "init_args"),
+    "result_factory",
     [
-        (SQLResult, {"statement": "SELECT", "data": [], "operation_type": "SELECT"}),
-        (SQLResult, {"statement": "INSERT", "data": [], "rows_affected": 1, "operation_type": "INSERT"}),
-        (ArrowResult, {"statement": "SELECT", "data": Mock()}),
-        (SQLResult, {"statement": "SCRIPT", "data": [], "operation_type": "SCRIPT"}),
+        lambda: SQLResult(statement=SQL("SELECT"), data=[], operation_type="SELECT"),
+        lambda: SQLResult(statement=SQL("INSERT"), data=[], rows_affected=1, operation_type="INSERT"),
+        lambda: SQLResult(statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT"),
+        lambda: ArrowResult(statement=SQL("SELECT"), data=Mock()),
     ],
-    ids=["sql_result_select", "sql_result_execute", "arrow_result", "sql_result_script"],
+    ids=["sql_select", "sql_dml", "sql_script", "arrow"],
 )
-def test_metadata_operations_all_result_types(result_class: type, init_args: dict[str, Any]) -> None:
-    """Test metadata operations work for all result types."""
-    # Initialize with metadata
-    result = result_class(**init_args, metadata={"initial": "value"})
+def test_common_metadata_operations(result_factory: Any) -> None:
+    """Test metadata operations work consistently across all result types."""
+    result = result_factory()
 
-    # Test initial metadata
-    assert result.get_metadata("initial") == "value"
+    # Test setting and getting metadata
+    result.set_metadata("test_key", "test_value")
+    assert result.get_metadata("test_key") == "test_value"
+
+    # Test default value
     assert result.get_metadata("missing", "default") == "default"
+    assert result.get_metadata("missing") is None
 
-    # Test setting metadata
-    result.set_metadata("new_key", "new_value")
-    assert result.get_metadata("new_key") == "new_value"
+    # Test overwriting
+    result.set_metadata("test_key", "updated")
+    assert result.get_metadata("test_key") == "updated"
 
-    # Test overwriting metadata
-    result.set_metadata("initial", "updated_value")
-    assert result.get_metadata("initial") == "updated_value"
+
+def test_sql_result_edge_cases() -> None:
+    """Test edge cases and special scenarios."""
+    # Test with None data but operation type SELECT
+    result = SQLResult[dict[str, Any]](
+        statement=SQL("SELECT * FROM empty"),
+        data=None,  # type: ignore[arg-type]
+        operation_type="SELECT",
+    )
+    assert result.is_success() is False
+    assert result.get_count() == 0
+    assert result.is_empty() is True
+
+    # Test total_count inference
+    result_with_data = SQLResult[dict[str, Any]](
+        statement=SQL("SELECT * FROM users"), data=[{"id": 1}, {"id": 2}], operation_type="SELECT"
+    )
+    assert result_with_data.total_count == 2  # Should be inferred from data length
+
+
+def test_sql_result_returning_data_alias() -> None:
+    """Test that get_returning_data is an alias for get_data."""
+    data = [{"id": 1, "name": "Test"}]
+    result = SQLResult[dict[str, Any]](
+        statement=SQL("INSERT INTO users ... RETURNING *"), data=data, operation_type="INSERT"
+    )
+
+    assert result.get_returning_data() == result.get_data()
+    assert result.get_returning_data() == data

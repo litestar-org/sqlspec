@@ -111,24 +111,6 @@ class BigQueryDriver(
         else:
             self._default_query_job_config = None
 
-    def _coerce_boolean(self, value: Any) -> Any:
-        """BigQuery has native boolean support, return as-is."""
-        return value
-
-    def _coerce_decimal(self, value: Any) -> Any:
-        """BigQuery has native decimal support via BIGNUMERIC."""
-        if isinstance(value, str):
-            return Decimal(value)
-        return value
-
-    def _coerce_json(self, value: Any) -> Any:
-        """BigQuery has native JSON support, return as-is."""
-        return value
-
-    def _coerce_array(self, value: Any) -> Any:
-        """BigQuery has native array support, return as-is."""
-        return value
-
     def _copy_job_config_attrs(self, source_config: QueryJobConfig, target_config: QueryJobConfig) -> None:
         """Copy non-private attributes from source config to target config."""
         for attr in dir(source_config):
@@ -279,12 +261,9 @@ class BigQueryDriver(
             except Exception as e:
                 logger.warning("Job start callback failed: %s", str(e), extra={"adapter": "bigquery"})
 
-        query_job = conn.query(sql_str, job_config=final_job_config)
+        query_job = conn.query(sql_str, job_config=final_job_config, job_id=job_id)
         if self.on_job_complete:
-            try:
-                self.on_job_complete(query_job.job_id or job_id, query_job)
-            except Exception as e:
-                logger.warning("Job complete callback failed: %s", str(e), extra={"adapter": "bigquery"})
+            self.on_job_complete(job_id, query_job)
 
         return query_job
 
@@ -404,20 +383,6 @@ class BigQueryDriver(
             # BigQuery emulator may not properly report num_dml_affected_rows
             num_affected = query_job.num_dml_affected_rows
 
-            # Debug logging to understand what BigQuery is returning
-            logger.debug(
-                "BigQuery job details - job_id: %s, statement_type: %s, num_dml_affected_rows: %s, "
-                "total_bytes_processed: %s, created: %s, ended: %s, state: %s, is_dml: %s",
-                query_job.job_id,
-                query_job.statement_type,
-                query_job.num_dml_affected_rows,
-                query_job.total_bytes_processed,
-                query_job.created,
-                query_job.ended,
-                query_job.state,
-                is_dml,
-            )
-
             # BigQuery emulator workaround: if num_dml_affected_rows is None or 0 for DML, assume success
             if (
                 (num_affected is None or num_affected == 0)
@@ -426,12 +391,6 @@ class BigQueryDriver(
                 and not query_job.errors
             ):
                 num_affected = 1
-                logger.debug(
-                    "BigQuery emulator workaround: assuming 1 row affected for successful DML "
-                    "(original num_dml_affected_rows=%s, reported statement_type=%s)",
-                    query_job.num_dml_affected_rows,
-                    query_job.statement_type,
-                )
 
         except Exception:
             logger.exception("BigQuery job failed")
@@ -493,7 +452,7 @@ class BigQueryDriver(
         return {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
 
     def _wrap_select_result(
-        self, statement: SQL, result: SelectResultDict, schema_type: "Optional[type]" = None, **kwargs: Any
+        self, statement: SQL, result: SelectResultDict, schema_type: "Optional[type[ModelDTOT]]" = None, **kwargs: Any
     ) -> "Union[SQLResult[RowT], SQLResult[ModelDTOT]]":
         if schema_type:
             return SQLResult(
@@ -583,7 +542,7 @@ class BigQueryDriver(
         arrow_table = query_job.to_arrow(create_bqstorage_client=kwargs.get("use_bqstorage_api", True))
         return ArrowResult(statement=sql, data=arrow_table)
 
-    def _ingest_arrow_table(self, table: "Any", target_table: str, mode: str, **options: Any) -> int:
+    def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
         """BigQuery-optimized Arrow table ingestion.
 
         BigQuery can load Arrow tables directly via the load API for optimal performance.
@@ -591,7 +550,7 @@ class BigQueryDriver(
 
         Args:
             table: Arrow table to ingest
-            target_table: Target BigQuery table name
+            table_name: Target BigQuery table name
             mode: Ingestion mode ('append', 'replace', 'create')
             **options: Additional BigQuery load job options
 
@@ -600,19 +559,19 @@ class BigQueryDriver(
         """
         self._ensure_pyarrow_installed()
         connection = self._connection(None)
-        if "." in target_table:
-            parts = target_table.split(".")
+        if "." in table_name:
+            parts = table_name.split(".")
             if len(parts) == DATASET_TABLE_PARTS:
                 dataset_id, table_id = parts
                 project_id = connection.project
             elif len(parts) == FULLY_QUALIFIED_PARTS:
                 project_id, dataset_id, table_id = parts
             else:
-                msg = f"Invalid BigQuery table name format: {target_table}"
+                msg = f"Invalid BigQuery table name format: {table_name}"
                 raise ValueError(msg)
         else:
             # Assume default dataset
-            table_id = target_table
+            table_id = table_name
             dataset_id_opt = getattr(connection, "default_dataset", None)
             project_id = connection.project
             if not dataset_id_opt:

@@ -1,7 +1,7 @@
 """Psqlpy Driver Implementation."""
 
+import io
 import logging
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from psqlpy import Connection
@@ -20,13 +20,6 @@ __all__ = ("PsqlpyConnection", "PsqlpyDriver")
 
 PsqlpyConnection = Connection
 logger = logging.getLogger("sqlspec")
-
-
-@dataclass
-class BatchResult:
-    def __init__(self, affected_rows: int) -> None:
-        self.affected_rows = affected_rows
-        self.rowcount = affected_rows
 
 
 class PsqlpyDriver(
@@ -126,6 +119,24 @@ class PsqlpyDriver(
             "statements_executed": -1,  # Not directly supported, but script is executed
             "status_message": "SCRIPT EXECUTED",
         }
+
+    async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
+        self._ensure_pyarrow_installed()
+        import pyarrow.csv as pacsv
+
+        conn = self._connection(None)
+        if mode == "replace":
+            await conn.execute(f"TRUNCATE TABLE {table_name}")
+        elif mode == "create":
+            msg = "'create' mode is not supported for psqlpy ingestion."
+            raise NotImplementedError(msg)
+
+        buffer = io.BytesIO()
+        pacsv.write_csv(table, buffer)
+        buffer.seek(0)
+
+        await conn.copy_from_query(f"COPY {table_name} FROM STDIN WITH (FORMAT CSV, HEADER)", data=buffer.read())  # pyright: ignore
+        return table.num_rows
 
     async def _wrap_select_result(
         self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any

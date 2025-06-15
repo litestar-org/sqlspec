@@ -7,7 +7,7 @@ from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.statement.builder import DeleteBuilder, InsertBuilder, QueryBuilder, SelectBuilder, UpdateBuilder
 from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
-from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, RowT, SQLParameterType, StatementParameters
+from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, RowT, StatementParameters
 from sqlspec.utils.logging import get_logger
 
 logger = get_logger("sqlspec")
@@ -44,32 +44,13 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
     def _build_statement(
         self,
         statement: "Union[Statement, QueryBuilder[Any]]",
-        parameters: "Optional[SQLParameterType]" = None,
-        filters: "Optional[list[StatementFilter]]" = None,
+        *parameters: "Union[StatementParameters, StatementFilter]",
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> "SQL":
-        if isinstance(statement, SQL):
-            # If parameters or kwargs are provided, create a new SQL object with those parameters
-            if parameters is not None or kwargs:
-                return SQL(
-                    statement.sql,
-                    parameters,
-                    *filters or [],
-                    dialect=self.dialect,
-                    config=config or statement._config,
-                    **kwargs,
-                )
-            return statement
         if isinstance(statement, QueryBuilder):
             return statement.to_statement(config=config or self.config)
-        sql_obj = SQL(
-            statement, parameters, *filters or [], dialect=self.dialect, config=config or self.config, **kwargs
-        )
-        # Don't access expression/parameters here as it triggers processing
-        # which may fail for execute_many when parameters=None
-        logger.debug("Built SQL object for statement")
-        return sql_obj
+        return SQL(statement, *parameters, dialect=self.dialect, config=config or self.config, **kwargs)
 
     @abstractmethod
     def _execute_statement(
@@ -166,30 +147,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
-        # Separate parameters from filters
-        param_values = []
-        filters = []
-        for param in parameters:
-            if isinstance(param, StatementFilter):
-                filters.append(param)
-            else:
-                param_values.append(param)
-
-        # Use first parameter as the primary parameter value, or None if no parameters
-        primary_params = param_values[0] if param_values else None
-
-        sql_statement = self._build_statement(
-            statement, primary_params, filters=filters, config=_config or self.config, **kwargs
-        )
+        sql_statement = self._build_statement(statement, *parameters, config=_config or self.config, **kwargs)
         result = self._execute_statement(statement=sql_statement, connection=self._connection(_connection), **kwargs)
-        is_select = self.returns_rows(sql_statement.expression)
-        # If expression is None (parsing disabled or failed), check SQL string
-        # TODO: improve this.  why can't use just use parameter parsing?
-        if not is_select and sql_statement.expression is None:
-            sql_upper = sql_statement.sql.strip().upper()
-            is_select = any(sql_upper.startswith(prefix) for prefix in ["SELECT", "WITH", "VALUES", "TABLE"])
-        logger.debug("Is SELECT query: %s (expression: %s)", is_select, sql_statement.expression)
-        if is_select:
+
+        if self.returns_rows(sql_statement.expression):
             return self._wrap_select_result(
                 sql_statement, cast("SelectResultDict", result), schema_type=schema_type, **kwargs
             )
@@ -220,9 +181,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
 
         # For execute_many, don't pass the parameter sequence to _build_statement
         # to avoid individual parameter validation. Parse once without parameters.
-        sql_statement = self._build_statement(
-            statement, parameters=None, filters=filters, config=_config or self.config, **kwargs
-        )
+        sql_statement = self._build_statement(statement, config=_config or self.config, **kwargs)
         # Mark the statement for batch execution with the parameter sequence
         sql_statement = sql_statement.as_many(param_sequence)
         result = self._execute_statement(

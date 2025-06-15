@@ -1,83 +1,340 @@
-"""Unit tests for DuckDB driver."""
+"""Unit tests for DuckDB driver.
 
-from unittest.mock import Mock
+This module tests the DuckDBDriver class including:
+- Driver initialization and configuration
+- Statement execution (single, many, script)
+- Result wrapping and formatting
+- Parameter style handling
+- Type coercion overrides
+- Storage functionality
+- Error handling
+- DuckDB-specific features (Arrow integration, native export)
+"""
+
+from typing import TYPE_CHECKING, Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sqlspec.adapters.duckdb import DuckDBConnection, DuckDBDriver
-from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult
+from sqlspec.adapters.duckdb import DuckDBDriver
+from sqlspec.statement.parameters import ParameterInfo, ParameterStyle
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.typing import DictRow
+
+if TYPE_CHECKING:
+    pass
 
 
+# Test Fixtures
 @pytest.fixture
-def mock_duckdb_connection() -> Mock:
+def mock_connection() -> MagicMock:
     """Create a mock DuckDB connection."""
-    mock_connection = Mock(spec=DuckDBConnection)
-    mock_cursor = Mock()
-    mock_connection.cursor.return_value = mock_cursor
-    mock_cursor.close.return_value = None
+    mock_conn = MagicMock()
+
+    # Set up cursor methods
+    mock_cursor = MagicMock()
     mock_cursor.execute.return_value = mock_cursor
     mock_cursor.executemany.return_value = mock_cursor
     mock_cursor.fetchall.return_value = []
-    mock_cursor.description = None
+    mock_cursor.fetchone.return_value = None
+    mock_cursor.description = []
     mock_cursor.rowcount = 0
-    return mock_connection
+    mock_cursor.close.return_value = None
+
+    mock_conn.cursor.return_value = mock_cursor
+
+    # Set up execute method
+    mock_result = MagicMock()
+    mock_result.fetchall.return_value = []
+    mock_result.fetchone.return_value = None
+    mock_result.description = []
+    mock_result.arrow.return_value = MagicMock()
+    mock_result.fetch_record_batch.return_value = iter([])
+
+    mock_conn.execute.return_value = mock_result
+
+    return mock_conn
 
 
 @pytest.fixture
-def duckdb_driver(mock_duckdb_connection: Mock) -> DuckDBDriver:
+def driver(mock_connection: MagicMock) -> DuckDBDriver:
     """Create a DuckDB driver with mocked connection."""
-    config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
-    return DuckDBDriver(connection=mock_duckdb_connection, config=config)
-
-
-def test_duckdb_driver_initialization(mock_duckdb_connection: Mock) -> None:
-    """Test DuckDB driver initialization."""
     config = SQLConfig()
-    driver = DuckDBDriver(connection=mock_duckdb_connection, config=config)
+    return DuckDBDriver(connection=mock_connection, config=config)
 
-    # Test driver attributes are set correctly
-    assert driver.connection is mock_duckdb_connection
+
+# Initialization Tests
+def test_driver_initialization() -> None:
+    """Test driver initialization with various parameters."""
+    mock_conn = MagicMock()
+    config = SQLConfig()
+
+    driver = DuckDBDriver(connection=mock_conn, config=config)
+
+    assert driver.connection is mock_conn
     assert driver.config is config
     assert driver.dialect == "duckdb"
-    assert driver.supports_native_arrow_export is False
-    assert driver.supports_native_arrow_import is False
+    assert driver.default_parameter_style == ParameterStyle.QMARK
+    assert driver.supported_parameter_styles == (ParameterStyle.QMARK, ParameterStyle.NUMERIC)
 
 
-def test_duckdb_driver_dialect_property(duckdb_driver: DuckDBDriver) -> None:
-    """Test DuckDB driver dialect property."""
-    assert duckdb_driver.dialect == "duckdb"
+def test_driver_default_row_type() -> None:
+    """Test driver default row type."""
+    mock_conn = MagicMock()
+
+    # Default row type
+    driver = DuckDBDriver(connection=mock_conn)
+    assert driver.default_row_type == dict[str, Any]
+
+    # Custom row type
+    custom_type: type[DictRow] = dict
+    driver = DuckDBDriver(connection=mock_conn, default_row_type=custom_type)
+    assert driver.default_row_type is custom_type
 
 
-def test_duckdb_driver_supports_arrow(duckdb_driver: DuckDBDriver) -> None:
-    """Test DuckDB driver Arrow support."""
-    assert duckdb_driver.supports_native_arrow_export is False
-    assert duckdb_driver.supports_native_arrow_import is False
-    assert DuckDBDriver.supports_native_arrow_export is False
-    assert DuckDBDriver.supports_native_arrow_import is False
+# Arrow Support Tests
+def test_arrow_support_flags() -> None:
+    """Test driver Arrow support flags."""
+    mock_conn = MagicMock()
+    driver = DuckDBDriver(connection=mock_conn)
+
+    assert driver.supports_native_arrow_export is True
+    assert driver.supports_native_arrow_import is True
+    assert DuckDBDriver.supports_native_arrow_export is True
+    assert DuckDBDriver.supports_native_arrow_import is True
 
 
-def test_duckdb_driver_placeholder_style(duckdb_driver: DuckDBDriver) -> None:
-    """Test DuckDB driver placeholder style detection."""
-    placeholder_style = duckdb_driver.default_parameter_style
-    assert placeholder_style == ParameterStyle.QMARK
+def test_parquet_support_flags() -> None:
+    """Test driver Parquet support flags."""
+    mock_conn = MagicMock()
+    driver = DuckDBDriver(connection=mock_conn)
+
+    assert driver.supports_native_parquet_export is True
+    assert driver.supports_native_parquet_import is True
+    assert DuckDBDriver.supports_native_parquet_export is True
+    assert DuckDBDriver.supports_native_parquet_import is True
 
 
-def test_duckdb_config_dialect_property() -> None:
-    """Test DuckDB config dialect property."""
-    from sqlspec.adapters.duckdb import DuckDBConfig
+# Execute Statement Tests
+@pytest.mark.parametrize(
+    "sql_text,is_script,is_many,expected_method",
+    [
+        ("SELECT * FROM users", False, False, "_execute"),
+        ("INSERT INTO users VALUES (?)", False, True, "_execute_many"),
+        ("CREATE TABLE test; INSERT INTO test;", True, False, "_execute_script"),
+    ],
+    ids=["select", "execute_many", "script"],
+)
+def test_execute_statement_routing(
+    driver: DuckDBDriver,
+    mock_connection: MagicMock,
+    sql_text: str,
+    is_script: bool,
+    is_many: bool,
+    expected_method: str,
+) -> None:
+    """Test that _execute_statement routes to correct method."""
+    statement = SQL(sql_text)
+    statement._is_script = is_script
+    statement._is_many = is_many
 
-    config = DuckDBConfig(connection_config={"database": ":memory:"})
-    assert config.dialect == "duckdb"
+    with patch.object(driver, expected_method, return_value={"rows_affected": 0}) as mock_method:
+        driver._execute_statement(statement)
+        mock_method.assert_called_once()
 
 
-def test_duckdb_driver_get_cursor(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
-    """Test DuckDB driver _get_cursor context manager."""
-    mock_cursor = Mock()
-    mock_duckdb_connection.cursor.return_value = mock_cursor
+def test_execute_select_statement(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
+    """Test executing a SELECT statement."""
+    # Set up mock result
+    mock_result = mock_connection.execute.return_value
+    mock_result.fetchall.return_value = [(1, "Alice", "alice@example.com"), (2, "Bob", "bob@example.com")]
+    mock_result.description = [("id",), ("name",), ("email",)]
 
-    with duckdb_driver._get_cursor(mock_duckdb_connection) as cursor:
+    statement = SQL("SELECT * FROM users")
+    result = driver._execute_statement(statement)
+
+    assert result == {
+        "data": [(1, "Alice", "alice@example.com"), (2, "Bob", "bob@example.com")],
+        "column_names": ["id", "name", "email"],
+        "rows_affected": 2,
+    }
+
+    mock_connection.execute.assert_called_once_with("SELECT * FROM users", [])
+
+
+def test_execute_dml_statement(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
+    """Test executing a DML statement (INSERT/UPDATE/DELETE)."""
+    mock_result = mock_connection.execute.return_value
+    mock_result.fetchone.return_value = (1,)  # Rows affected
+
+    statement = SQL("INSERT INTO users (name, email) VALUES (?, ?)", ["Alice", "alice@example.com"])
+    result = driver._execute_statement(statement)
+
+    assert result == {"rows_affected": 1}
+
+    mock_connection.execute.assert_called_once_with(
+        "INSERT INTO users (name, email) VALUES (?, ?)", ["Alice", "alice@example.com"]
+    )
+
+
+# Parameter Style Handling Tests
+@pytest.mark.parametrize(
+    "sql_text,detected_style,expected_style",
+    [
+        ("SELECT * FROM users WHERE id = ?", ParameterStyle.QMARK, ParameterStyle.QMARK),
+        ("SELECT * FROM users WHERE id = $1", ParameterStyle.NUMERIC, ParameterStyle.QMARK),  # Converted
+        ("SELECT * FROM users WHERE id = :id", ParameterStyle.NAMED_COLON, ParameterStyle.QMARK),  # Converted
+    ],
+    ids=["qmark", "numeric_converted", "named_colon_converted"],
+)
+def test_parameter_style_handling(
+    driver: DuckDBDriver,
+    mock_connection: MagicMock,
+    sql_text: str,
+    detected_style: ParameterStyle,
+    expected_style: ParameterStyle,
+) -> None:
+    """Test parameter style detection and conversion."""
+    statement = SQL(sql_text)
+    statement._parameter_info = [ParameterInfo(name="p1", position=0, style=detected_style)]
+
+    with patch.object(statement, "compile") as mock_compile:
+        mock_compile.return_value = (sql_text, None)
+        driver._execute_statement(statement)
+
+        mock_compile.assert_called_with(placeholder_style=expected_style)
+
+
+# Execute Many Tests
+def test_execute_many(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
+    """Test executing a statement multiple times."""
+    mock_cursor = mock_connection.cursor.return_value
+    mock_cursor.rowcount = 3
+
+    sql = "INSERT INTO users (name, email) VALUES (?, ?)"
+    params = [["Alice", "alice@example.com"], ["Bob", "bob@example.com"], ["Charlie", "charlie@example.com"]]
+
+    result = driver._execute_many(sql, params)
+
+    assert result == {"rows_affected": 3}
+
+    mock_cursor.executemany.assert_called_once_with(sql, params)
+
+
+# Execute Script Tests
+def test_execute_script(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
+    """Test executing a SQL script."""
+    mock_cursor = mock_connection.cursor.return_value
+
+    script = """
+    CREATE TABLE test (id INTEGER PRIMARY KEY);
+    INSERT INTO test VALUES (1);
+    INSERT INTO test VALUES (2);
+    """
+
+    result = driver._execute_script(script)
+
+    assert result == {
+        "statements_executed": -1,
+        "status_message": "Script executed successfully.",
+        "description": "The script was sent to the database.",
+    }
+
+    mock_cursor.execute.assert_called_once_with(script)
+
+
+# Result Wrapping Tests
+def test_wrap_select_result(driver: DuckDBDriver) -> None:
+    """Test wrapping SELECT results."""
+    statement = SQL("SELECT * FROM users")
+    result = {"data": [(1, "Alice"), (2, "Bob")], "column_names": ["id", "name"], "rows_affected": 2}
+
+    wrapped = driver._wrap_select_result(statement, result)
+
+    assert isinstance(wrapped, SQLResult)
+    assert wrapped.statement is statement
+    assert len(wrapped.data) == 2
+    assert wrapped.data == [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+    assert wrapped.column_names == ["id", "name"]
+    assert wrapped.rows_affected == 2
+    assert wrapped.operation_type == "SELECT"
+
+
+def test_wrap_select_result_with_schema(driver: DuckDBDriver) -> None:
+    """Test wrapping SELECT results with schema type."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class User:
+        id: int
+        name: str
+
+    statement = SQL("SELECT * FROM users")
+    result = {"data": [(1, "Alice"), (2, "Bob")], "column_names": ["id", "name"], "rows_affected": 2}
+
+    wrapped = driver._wrap_select_result(statement, result, schema_type=User)
+
+    assert isinstance(wrapped, SQLResult)
+    assert all(isinstance(item, User) for item in wrapped.data)
+    assert wrapped.data[0].id == 1
+    assert wrapped.data[0].name == "Alice"
+
+
+def test_wrap_execute_result_dml(driver: DuckDBDriver) -> None:
+    """Test wrapping DML results."""
+    statement = SQL("INSERT INTO users VALUES (?)")
+    statement._expression = MagicMock()
+    statement._expression.key = "insert"
+
+    result = {"rows_affected": 1}
+
+    wrapped = driver._wrap_execute_result(statement, result)
+
+    assert isinstance(wrapped, SQLResult)
+    assert wrapped.data == []
+    assert wrapped.rows_affected == 1
+    assert wrapped.operation_type == "INSERT"
+
+
+def test_wrap_execute_result_script(driver: DuckDBDriver) -> None:
+    """Test wrapping script results."""
+    statement = SQL("CREATE TABLE test; INSERT INTO test;")
+    statement._expression = None
+
+    result = {
+        "statements_executed": 2,
+        "status_message": "Script executed successfully.",
+        "description": "The script was sent to the database.",
+    }
+
+    wrapped = driver._wrap_execute_result(statement, result)
+
+    assert isinstance(wrapped, SQLResult)
+    assert wrapped.data == []
+    assert wrapped.rows_affected == 0
+    assert wrapped.operation_type == "SCRIPT"
+    assert wrapped.metadata["status_message"] == "Script executed successfully."
+
+
+# Connection Tests
+def test_connection_method(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
+    """Test _connection method."""
+    # Test default connection return
+    assert driver._connection() is mock_connection
+
+    # Test connection override
+    override_connection = MagicMock()
+    assert driver._connection(override_connection) is override_connection
+
+
+# Cursor Context Manager Tests
+def test_get_cursor_context_manager(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
+    """Test _get_cursor context manager."""
+    mock_cursor = MagicMock()
+    mock_connection.cursor.return_value = mock_cursor
+
+    with driver._get_cursor(mock_connection) as cursor:
         assert cursor is mock_cursor
         mock_cursor.close.assert_not_called()
 
@@ -85,191 +342,293 @@ def test_duckdb_driver_get_cursor(duckdb_driver: DuckDBDriver, mock_duckdb_conne
     mock_cursor.close.assert_called_once()
 
 
-def test_duckdb_driver_execute_statement_select(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
-    """Test DuckDB driver _execute_statement for SELECT statements."""
-    # Setup mock cursor and arrow table
-    mock_arrow_table = Mock()
-    mock_result = Mock()
-    mock_result.arrow.return_value = mock_arrow_table
+# Storage Mixin Tests
+def test_storage_methods_available(driver: DuckDBDriver) -> None:
+    """Test that driver has all storage methods from SyncStorageMixin."""
+    storage_methods = [
+        "fetch_arrow_table",
+        "ingest_arrow_table",
+        "export_to_storage",
+        "import_from_storage",
+        "read_parquet_direct",
+        "write_parquet_direct",
+    ]
 
-    # Set up the connection.execute() method to return a result with arrow() method
-    mock_duckdb_connection.execute.return_value = mock_result
-
-    # Also ensure the driver's connection is set to our mock
-    duckdb_driver.connection = mock_duckdb_connection
-
-    # Create SQL statement with parameters
-    statement = SQL("SELECT * FROM users WHERE id = ?", parameters=[1])
-    result = duckdb_driver.fetch_arrow_table(statement)
-
-    # Verify result
-    assert isinstance(result, ArrowResult)
-    assert result.statement is statement
-    assert result.data is mock_arrow_table
-
-    # Verify operations - DuckDB uses connection.execute() with parameters
-    mock_duckdb_connection.execute.assert_called_once_with("SELECT * FROM users WHERE id = ?", [1])
-    mock_result.arrow.assert_called_once()
+    for method in storage_methods:
+        assert hasattr(driver, method)
+        assert callable(getattr(driver, method))
 
 
-def test_duckdb_driver_fetch_arrow_table_with_parameters(
-    duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Test DuckDB driver fetch_arrow_table method with parameters."""
-    # Setup mock cursor and arrow table
-    Mock()
-    mock_arrow_table = Mock()
-    mock_arrow_table.num_rows = 1  # Mock the num_rows attribute
+def test_translator_mixin_integration(driver: DuckDBDriver) -> None:
+    """Test SQLTranslatorMixin integration."""
+    assert hasattr(driver, "returns_rows")
 
-    # Mock the DuckDB-style native Arrow path: conn.execute(sql, params).arrow()
-    mock_execute_result = Mock()
-    mock_execute_result.arrow.return_value = mock_arrow_table
-    mock_duckdb_connection.execute.return_value = mock_execute_result
-
-    # Create SQL statement with parameters
-    statement = SQL("SELECT id, name FROM users WHERE id = ?", parameters=[42])
-
-    # Execute fetch_arrow_table - will use DuckDB's native implementation
-    result = duckdb_driver.fetch_arrow_table(statement)
-
-    # Verify result
-    assert isinstance(result, ArrowResult)
-    assert result.statement.sql == statement.sql
-    assert result.data is mock_arrow_table
-
-    # Verify DuckDB native method was called with SQL and parameters
-    mock_duckdb_connection.execute.assert_called_once()
-    call_args = mock_duckdb_connection.execute.call_args
-    assert call_args[0][0] == "SELECT id, name FROM users WHERE id = ?"  # SQL string
-    assert call_args[0][1] == [42]  # Parameters
-    mock_execute_result.arrow.assert_called_once()
-
-
-def test_duckdb_driver_fetch_arrow_table_non_query_error(duckdb_driver: DuckDBDriver) -> None:
-    """Test DuckDB driver fetch_arrow_table with non-query statement."""
-    # Skip this test - unified storage mixin doesn't raise this specific error
-    pytest.skip("Unified storage mixin handles non-query statements differently")
-
-
-def test_duckdb_driver_fetch_arrow_table_execute_returns_none(
-    duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock
-) -> None:
-    """Test DuckDB driver fetch_arrow_table when execute returns None."""
-    # Skip this test - unified storage mixin handles None returns differently
-    pytest.skip("Unified storage mixin handles None returns differently")
-
-
-def test_duckdb_driver_fetch_arrow_table_fetch_error(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
-    """Test DuckDB driver fetch_arrow_table when fetch_arrow_table fails."""
-    # Skip this test - unified storage mixin handles errors differently
-    pytest.skip("Unified storage mixin handles fetch errors differently")
-
-
-def test_duckdb_driver_fetch_arrow_table_with_sql_object(
-    duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Test DuckDB driver fetch_arrow_table with SQL object directly."""
-    # Setup mock cursor and arrow table
-    mock_cursor = Mock()
-    mock_arrow_table = Mock()
-    mock_duckdb_connection.cursor.return_value = mock_cursor
-    mock_cursor.execute.return_value = mock_cursor
-    mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
-    mock_cursor.description = [("id",), ("name",), ("active",)]  # Mock cursor description
-    mock_cursor.fetchall.return_value = [(1, "Test User", True)]  # Mock fetchall with actual data
-
-    # Mock the DuckDB-style native Arrow path: conn.execute(sql).arrow()
-    mock_execute_result = Mock()
-    mock_execute_result.arrow.return_value = mock_arrow_table
-    mock_duckdb_connection.execute.return_value = mock_execute_result
-
-    # Set the driver's connection to use our mock
-    duckdb_driver.connection = mock_duckdb_connection
-
-    # Create SQL statement object
-    sql_statement = SQL("SELECT id, name FROM users WHERE active = ?", parameters=[True])
-
-    # Execute fetch_arrow_table - should use the native DuckDB path
-    result = duckdb_driver.fetch_arrow_table(sql_statement)
-
-    # Verify result - should be an ArrowResult with the mock arrow table from native path
-    assert isinstance(result, ArrowResult)
-    assert result.statement is sql_statement
-    assert result.data is mock_arrow_table
-
-    # Verify the native DuckDB path was used
-    mock_duckdb_connection.execute.assert_called_once_with("SELECT id, name FROM users WHERE active = ?", [True])
-    mock_execute_result.arrow.assert_called_once()
-
-
-def test_duckdb_driver_fetch_arrow_table_with_connection_override(duckdb_driver: DuckDBDriver) -> None:
-    """Test DuckDB driver fetch_arrow_table with connection override."""
-    # Create override connection
-    override_connection = Mock()
-    mock_cursor = Mock()
-    mock_arrow_table = Mock()
-    override_connection.cursor.return_value = mock_cursor
-    mock_cursor.execute.return_value = mock_cursor
-    mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
-    mock_cursor.description = [("id",)]  # Mock cursor description
-    mock_cursor.fetchall.return_value = [(1,)]  # Mock fetchall with actual data
-
-    # Mock the DuckDB-style native Arrow path: conn.execute(sql).arrow()
-    mock_execute_result = Mock()
-    mock_execute_result.arrow.return_value = mock_arrow_table
-    override_connection.execute.return_value = mock_execute_result
-
-    # Create SQL statement
-    statement = SQL("SELECT id FROM users")
-
-    # Execute with connection override
-    result = duckdb_driver.fetch_arrow_table(statement, connection=override_connection)
-
-    # Verify result
-    assert isinstance(result, ArrowResult)
-    assert result.data is mock_arrow_table
-
-    # Verify override connection was used for DuckDB-style native path
-    override_connection.execute.assert_called_once_with("SELECT id FROM users", [])
-    mock_execute_result.arrow.assert_called_once()
-
-
-def test_duckdb_driver_mixins_integration(duckdb_driver: DuckDBDriver) -> None:
-    """Test DuckDB driver mixin integration."""
-    # Test that driver has all expected mixins
-    from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
-
-    assert isinstance(duckdb_driver, SQLTranslatorMixin)
-    assert isinstance(duckdb_driver, SyncStorageMixin)
-    assert isinstance(duckdb_driver, ToSchemaMixin)
-
-    # Test mixin methods are available
-    assert hasattr(duckdb_driver, "fetch_arrow_table")
-    assert hasattr(duckdb_driver, "to_schema")
-    assert hasattr(duckdb_driver, "returns_rows")
-
-
-def test_duckdb_driver_returns_rows_method(duckdb_driver: DuckDBDriver) -> None:
-    """Test DuckDB driver returns_rows method."""
     # Test with SELECT statement
     select_stmt = SQL("SELECT * FROM users")
-    assert duckdb_driver.returns_rows(select_stmt.expression) is True
+    assert driver.returns_rows(select_stmt.expression) is True
 
     # Test with INSERT statement
     insert_stmt = SQL("INSERT INTO users VALUES (1, 'test')")
-    assert duckdb_driver.returns_rows(insert_stmt.expression) is False
+    assert driver.returns_rows(insert_stmt.expression) is False
 
 
-def test_duckdb_driver_fetch_arrow_table_streaming(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
-    """Test DuckDB driver fetch_arrow_table with streaming mode."""
-    # Skip this test - complex PyArrow mocking is difficult in unit tests
-    # Integration tests better suited for this functionality
-    pytest.skip("Complex PyArrow mocking - better tested in integration tests")
+def test_to_schema_mixin_integration(driver: DuckDBDriver) -> None:
+    """Test ToSchemaMixin integration."""
+    assert hasattr(driver, "to_schema")
+    assert callable(driver.to_schema)
 
 
-def test_duckdb_driver_to_parquet(
-    duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Test export_to_storage using unified storage mixin."""
-    # Skip this complex test - the unified storage mixin integration tests better suited for integration testing
-    pytest.skip("Complex storage backend mocking - unified storage integration better tested in integration tests")
+# DuckDB-Specific Arrow Tests
+def test_fetch_arrow_table_native(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
+    """Test DuckDB native Arrow table fetch."""
+    import pyarrow as pa
+
+    # Setup mock arrow table
+    mock_arrow_table = pa.table({"id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"]})
+    mock_result = mock_connection.execute.return_value
+    mock_result.arrow.return_value = mock_arrow_table
+
+    statement = SQL("SELECT * FROM users")
+    result = driver.fetch_arrow_table(statement)
+
+    assert isinstance(result, ArrowResult)
+    assert result.data is mock_arrow_table
+    assert result.statement is statement
+
+    # Verify DuckDB native method was called
+    mock_connection.execute.assert_called_once_with("SELECT * FROM users", [])
+    mock_result.arrow.assert_called_once()
+
+
+def test_fetch_arrow_table_with_parameters(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
+    """Test DuckDB Arrow table fetch with parameters."""
+    import pyarrow as pa
+
+    # Setup mock arrow table
+    mock_arrow_table = pa.table({"id": [1], "name": ["Alice"]})
+    mock_result = mock_connection.execute.return_value
+    mock_result.arrow.return_value = mock_arrow_table
+
+    statement = SQL("SELECT * FROM users WHERE id = ?", [42])
+    result = driver.fetch_arrow_table(statement)
+
+    assert isinstance(result, ArrowResult)
+    assert result.data is mock_arrow_table
+
+    # Verify DuckDB native method was called with parameters
+    mock_connection.execute.assert_called_once_with("SELECT * FROM users WHERE id = ?", [42])
+    mock_result.arrow.assert_called_once()
+
+
+def test_fetch_arrow_table_streaming(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
+    """Test DuckDB Arrow table fetch with streaming (batch_size)."""
+    import pyarrow as pa
+
+    # Setup mock for streaming
+    mock_batch = pa.record_batch({"id": [1, 2], "name": ["Alice", "Bob"]})
+    mock_result = mock_connection.execute.return_value
+    mock_result.fetch_record_batch.return_value = iter([mock_batch])
+
+    statement = SQL("SELECT * FROM users")
+    result = driver.fetch_arrow_table(statement, batch_size=1000)
+
+    assert isinstance(result, ArrowResult)
+    assert result.statement is statement
+
+    # Verify DuckDB streaming method was called
+    mock_connection.execute.assert_called_once_with("SELECT * FROM users", [])
+    mock_result.fetch_record_batch.assert_called_once_with(1000)
+
+
+def test_fetch_arrow_table_with_connection_override(driver: DuckDBDriver) -> None:
+    """Test DuckDB Arrow table fetch with connection override."""
+    import pyarrow as pa
+
+    # Create override connection
+    override_connection = MagicMock()
+    mock_arrow_table = pa.table({"id": [1], "name": ["Alice"]})
+    mock_result = MagicMock()
+    mock_result.arrow.return_value = mock_arrow_table
+    override_connection.execute.return_value = mock_result
+
+    statement = SQL("SELECT * FROM users")
+    result = driver.fetch_arrow_table(statement, connection=override_connection)
+
+    assert isinstance(result, ArrowResult)
+    assert result.data is mock_arrow_table
+
+    # Verify override connection was used
+    override_connection.execute.assert_called_once_with("SELECT * FROM users", [])
+    mock_result.arrow.assert_called_once()
+
+
+# Native Storage Capability Tests
+@pytest.mark.parametrize(
+    "operation,format,expected",
+    [
+        ("export", "parquet", True),
+        ("export", "csv", True),
+        ("export", "json", True),
+        ("export", "xlsx", False),
+        ("import", "parquet", True),
+        ("import", "csv", True),
+        ("import", "json", True),
+        ("import", "xlsx", False),
+        ("read", "parquet", True),
+        ("read", "csv", False),
+        ("unknown", "parquet", False),
+    ],
+    ids=[
+        "export_parquet",
+        "export_csv",
+        "export_json",
+        "export_xlsx_unsupported",
+        "import_parquet",
+        "import_csv",
+        "import_json",
+        "import_xlsx_unsupported",
+        "read_parquet",
+        "read_csv_unsupported",
+        "unknown_operation",
+    ],
+)
+def test_has_native_capability(driver: DuckDBDriver, operation: str, format: str, expected: bool) -> None:
+    """Test DuckDB native capability detection."""
+    result = driver._has_native_capability(operation, format=format)
+    assert result == expected
+
+
+def test_export_native_parquet(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
+    """Test DuckDB native Parquet export."""
+    query = "SELECT * FROM users"
+    destination_uri = "/path/to/output.parquet"
+
+    result = driver._export_native(query, destination_uri, "parquet", compression="snappy", row_group_size=10000)
+
+    # Should return 0 for successful export (mocked)
+    assert result == 0
+
+    # Verify DuckDB COPY command was executed
+    mock_connection.execute.assert_called_once()
+    call_args = mock_connection.execute.call_args[0][0]
+    assert "COPY (" in call_args
+    assert query in call_args
+    assert destination_uri in call_args
+    assert "FORMAT PARQUET" in call_args
+    assert "COMPRESSION 'SNAPPY'" in call_args
+    assert "ROW_GROUP_SIZE 10000" in call_args
+
+
+def test_export_native_csv(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
+    """Test DuckDB native CSV export."""
+    query = "SELECT * FROM users"
+    destination_uri = "/path/to/output.csv"
+
+    result = driver._export_native(query, destination_uri, "csv", delimiter=";", quote='"')
+
+    # Should return 0 for successful export (mocked)
+    assert result == 0
+
+    # Verify DuckDB COPY command was executed
+    mock_connection.execute.assert_called_once()
+    call_args = mock_connection.execute.call_args[0][0]
+    assert "COPY (" in call_args
+    assert query in call_args
+    assert destination_uri in call_args
+    assert "FORMAT CSV" in call_args
+    assert "HEADER" in call_args
+    assert "DELIMITER ';'" in call_args
+
+
+def test_export_native_json(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
+    """Test DuckDB native JSON export."""
+    query = "SELECT * FROM users"
+    destination_uri = "/path/to/output.json"
+
+    result = driver._export_native(query, destination_uri, "json", compression="gzip")
+
+    # Should return 0 for successful export (mocked)
+    assert result == 0
+
+    # Verify DuckDB COPY command was executed
+    mock_connection.execute.assert_called_once()
+    call_args = mock_connection.execute.call_args[0][0]
+    assert "COPY (" in call_args
+    assert query in call_args
+    assert destination_uri in call_args
+    assert "FORMAT JSON" in call_args
+    assert "COMPRESSION 'GZIP'" in call_args
+
+
+# Edge Cases
+def test_execute_with_no_parameters(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
+    """Test executing statement with no parameters."""
+    mock_result = mock_connection.execute.return_value
+    mock_result.fetchone.return_value = (0,)
+
+    statement = SQL("CREATE TABLE test (id INTEGER)")
+    driver._execute_statement(statement)
+
+    mock_connection.execute.assert_called_once_with("CREATE TABLE test (id INTEGER)", [])
+
+
+def test_execute_select_with_empty_result(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
+    """Test SELECT with empty result set."""
+    mock_result = mock_connection.execute.return_value
+    mock_result.fetchall.return_value = []
+    mock_result.description = [("id",), ("name",)]
+
+    statement = SQL("SELECT * FROM users WHERE 1=0")
+    result = driver._execute_statement(statement)
+
+    assert result == {"data": [], "column_names": ["id", "name"], "rows_affected": 0}
+
+
+def test_execute_many_with_empty_parameters(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
+    """Test execute_many with empty parameter list."""
+    mock_cursor = mock_connection.cursor.return_value
+    mock_cursor.rowcount = 0
+
+    sql = "INSERT INTO users (name) VALUES (?)"
+    params: list[list[str]] = []
+
+    result = driver._execute_many(sql, params)
+
+    assert result == {"rows_affected": 0}
+
+    mock_cursor.executemany.assert_called_once_with(sql, [])
+
+
+def test_connection_override_in_execute(driver: DuckDBDriver) -> None:
+    """Test DuckDB driver with connection override in execute methods."""
+    override_connection = MagicMock()
+    override_result = MagicMock()
+    override_result.fetchone.return_value = (1,)
+    override_connection.execute.return_value = override_result
+
+    statement = SQL("INSERT INTO test VALUES (1)")
+    driver._execute_statement(statement, connection=override_connection)
+
+    override_connection.execute.assert_called_once()
+    # Original connection should not be called
+    driver.connection.execute.assert_not_called()
+
+
+def test_fetch_arrow_table_empty_batch_list(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
+    """Test DuckDB Arrow table fetch with empty batch list in streaming mode."""
+    import pyarrow as pa
+
+    # Setup mock for empty streaming
+    mock_result = mock_connection.execute.return_value
+    mock_result.fetch_record_batch.return_value = iter([])  # Empty iterator
+
+    statement = SQL("SELECT * FROM empty_table")
+    result = driver.fetch_arrow_table(statement, batch_size=1000)
+
+    assert isinstance(result, ArrowResult)
+    assert result.statement is statement
+    # Should create empty table when no batches
+    assert isinstance(result.data, pa.Table)
+
+    mock_connection.execute.assert_called_once_with("SELECT * FROM empty_table", [])
+    mock_result.fetch_record_batch.assert_called_once_with(1000)

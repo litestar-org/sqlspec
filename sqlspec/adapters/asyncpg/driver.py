@@ -153,13 +153,7 @@ class AsyncpgDriver(
                 else:
                     params_list.append((param_set,))
 
-            result = await conn.executemany(sql, params_list)
-
-            if result and isinstance(result, str):
-                # Parse PostgreSQL status like "INSERT 0 5"
-                match = ASYNC_PG_STATUS_REGEX.match(result)
-                if match and len(match.groups()) >= EXPECTED_REGEX_GROUPS:
-                    rows_affected = int(match.group(3))
+            await conn.executemany(sql, params_list)
 
         dml_result: DMLResultDict = {"rows_affected": rows_affected, "status_message": "OK"}
         return dml_result
