@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from sqlspec.adapters.asyncpg import AsyncpgDriver
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -27,25 +26,17 @@ def mock_asyncpg_connection() -> AsyncMock:
 def asyncpg_driver(mock_asyncpg_connection: AsyncMock) -> AsyncpgDriver:
     """Create an AsyncPG driver with mocked connection."""
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
-    instrumentation_config = InstrumentationConfig()
-    return AsyncpgDriver(
-        connection=mock_asyncpg_connection, config=config, instrumentation_config=instrumentation_config
-    )
+    return AsyncpgDriver(connection=mock_asyncpg_connection, config=config)
 
 
 def test_asyncpg_driver_initialization(mock_asyncpg_connection: AsyncMock) -> None:
     """Test AsyncPG driver initialization."""
     config = SQLConfig()
-    instrumentation_config = InstrumentationConfig(log_queries=True)
-
-    driver = AsyncpgDriver(
-        connection=mock_asyncpg_connection, config=config, instrumentation_config=instrumentation_config
-    )
+    driver = AsyncpgDriver(connection=mock_asyncpg_connection, config=config)
 
     # Test driver attributes are set correctly
     assert driver.connection is mock_asyncpg_connection
     assert driver.config is config
-    assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "postgres"
     assert driver.supports_native_arrow_export is False
     assert driver.supports_native_arrow_import is False
@@ -416,23 +407,6 @@ async def test_asyncpg_driver_error_handling(asyncpg_driver: AsyncpgDriver, mock
 
 
 @pytest.mark.asyncio
-async def test_asyncpg_driver_instrumentation(asyncpg_driver: AsyncpgDriver) -> None:
-    """Test AsyncPG driver instrumentation integration."""
-    # Test instrumentation config is accessible
-    assert asyncpg_driver.instrumentation_config is not None
-    assert isinstance(asyncpg_driver.instrumentation_config, InstrumentationConfig)
-
-    # Test logging configuration
-    assert hasattr(asyncpg_driver.instrumentation_config, "log_queries")
-    assert hasattr(asyncpg_driver.instrumentation_config, "log_parameters")
-    assert hasattr(asyncpg_driver.instrumentation_config, "log_results_count")
-
-    # Test basic execution works (no need to test executemany here)
-    # This test is about instrumentation, not executemany functionality
-    pass
-
-
-@pytest.mark.asyncio
 async def test_asyncpg_driver_operation_type_detection(asyncpg_driver: AsyncpgDriver) -> None:
     """Test AsyncPG driver operation type detection."""
     # Test different SQL statement types (DDL allowed with strict_mode=False)
@@ -484,26 +458,6 @@ async def test_asyncpg_driver_arrow_support_flag(asyncpg_driver: AsyncpgDriver) 
     assert asyncpg_driver.supports_native_arrow_export is False
     assert asyncpg_driver.supports_native_arrow_import is False
     assert hasattr(asyncpg_driver, "_rows_to_arrow_table")
-
-
-@pytest.mark.asyncio
-async def test_asyncpg_driver_logging_configuration(
-    asyncpg_driver: AsyncpgDriver, mock_asyncpg_connection: AsyncMock
-) -> None:
-    """Test AsyncPG driver logging configuration."""
-    # Enable logging
-    asyncpg_driver.instrumentation_config.log_queries = True
-    asyncpg_driver.instrumentation_config.log_parameters = True
-    asyncpg_driver.instrumentation_config.log_results_count = True
-
-    # Create SQL statement with parameters
-    statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[1], config=asyncpg_driver.config)
-
-    # Execute with logging enabled
-    await asyncpg_driver._execute_statement(statement=statement)
-
-    # Verify execution worked
-    mock_asyncpg_connection.fetch.assert_called_once_with("SELECT * FROM users WHERE id = $1", 1)
 
 
 def test_asyncpg_driver_mixins_integration(asyncpg_driver: AsyncpgDriver) -> None:

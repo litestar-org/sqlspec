@@ -31,13 +31,14 @@ from sqlspec.exceptions import (
     SQLValidationError,
     wrap_exceptions,
 )
-
-# Updated imports for pipeline components
 from sqlspec.statement.filters import StatementFilter, apply_filter
 from sqlspec.statement.parameters import ParameterConverter, ParameterStyle, ParameterValidator
-from sqlspec.statement.pipelines.base import StatementPipeline
+from sqlspec.statement.pipelines import StatementPipeline
+from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
 from sqlspec.statement.pipelines.context import PipelineResult, SQLProcessingContext
 from sqlspec.statement.pipelines.result_types import ValidationError
+from sqlspec.statement.pipelines.transformers import CommentRemover, ParameterizeLiterals
+from sqlspec.statement.pipelines.validators import DMLSafetyValidator, PerformanceValidator, SecurityValidator
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -137,10 +138,6 @@ class SQLConfig:
         Prioritizes explicit transformer/validator/analyzer lists if provided.
         Otherwise, uses default components based on enable_* flags
         """
-        from sqlspec.statement.pipelines import StatementPipeline
-        from sqlspec.statement.pipelines.analyzers import StatementAnalyzer
-        from sqlspec.statement.pipelines.transformers import CommentRemover, ParameterizeLiterals
-        from sqlspec.statement.pipelines.validators import DMLSafetyValidator, PerformanceValidator, SecurityValidator
 
         # Determine components for each stage
         # If explicit lists are given, use them
@@ -241,33 +238,68 @@ class SQL:
     def __init__(
         self,
         statement: Statement,
-        parameters: "Optional[SQLParameterType]" = None,
-        *filters: "StatementFilter",
+        *parameters: Any,  # Can be parameters AND/OR filters
         dialect: "Optional[DialectType]" = None,
         config: "Optional[SQLConfig]" = None,
         _builder_result_type: Optional[type] = None,
         _existing_statement_data: Optional[dict[str, Any]] = None,
-        **kwargs: Any,
+        **kwargs: Any,  # Named parameters
     ) -> None:
         """Initialize a SQLStatement instance.
 
         Args:
-            statement: The SQL statement or expression.
-            parameters: Positional or named parameters for the statement.
-            *filters: Statement filters to apply.
-            dialect: SQL dialect.
-            config: Statement configuration.
-            _builder_result_type: (Internal) builder result type.
-            _existing_statement_data: (Internal) for optimized copying.
-            **kwargs: Additional named parameters for the statement (tracked for parameter merging).
+            statement: SQL string, SQL object, or sqlglot Expression
+            *parameters: Mixed parameters and filters:
+                - Parameters: values to bind to placeholders
+                - StatementFilter: filters to apply
+                - List/tuple of parameters: treated as parameter list
+            dialect: Optional dialect override
+            config: Optional SQL configuration
+            _builder_result_type: (Internal) builder result type
+            _existing_statement_data: (Internal) for optimized copying
+            **kwargs: Named parameters to bind
+
+        Examples:
+            # Traditional API still works
+            SQL("SELECT * FROM users WHERE id = ?", [123])
+
+            # New simplified positional
+            SQL("SELECT * FROM users WHERE id = ?", 123)
+
+            # Named parameters via kwargs
+            SQL("SELECT * FROM users WHERE name = :name", name="Alice")
+
+            # Mixed parameters and filters
+            SQL("SELECT * FROM users WHERE active = ?",
+                True,  # parameter
+                LimitOffsetFilter(limit=10, offset=0))  # filter
         """
         _existing_statement_data = _existing_statement_data or {}
         config = config or SQLConfig()
-        actual_filters = list(filters)
-        actual_parameters = parameters
-        if parameters is not None and isinstance(parameters, StatementFilter):
-            actual_filters.insert(0, parameters)
+
+        # Sort parameters into filters and actual parameters
+        actual_filters = []
+        param_values = []
+
+        for param in parameters:
+            if isinstance(param, StatementFilter):
+                actual_filters.append(param)
+            elif isinstance(param, list) and param and all(isinstance(item, StatementFilter) for item in param):
+                # Handle list of filters passed as single arg
+                actual_filters.extend(param)
+            else:
+                param_values.append(param)
+
+        # Determine actual parameters based on what was passed
+        if not param_values:
             actual_parameters = None
+        elif len(param_values) == 1:
+            # Single parameter value - use it directly
+            actual_parameters = param_values[0]
+        else:
+            # Multiple parameter values - treat as positional list
+            actual_parameters = param_values
+
         if isinstance(statement, SQL):
             self._copy_from_existing(
                 existing=statement, parameters=actual_parameters, kwargs=kwargs, dialect=dialect, config=config
@@ -859,14 +891,12 @@ class SQL:
         if not parameters_info:
             return sql
 
-        result_sql = sql
         for param_info in reversed(parameters_info):
             start_pos = param_info.position
             end_pos = start_pos + len(param_info.placeholder_text)
-            value = self._get_parameter_value_for_substitution(param_info)
-            escaped_value = self._escape_value(value)
-            result_sql = result_sql[:start_pos] + escaped_value + result_sql[end_pos:]
-        return result_sql
+            escaped_value = self._escape_value(self._get_parameter_value_for_substitution(param_info))
+            sql = sql[:start_pos] + escaped_value + sql[end_pos:]
+        return sql
 
     def _get_parameter_value_for_substitution(self, param_info: "ParameterInfo") -> Any:
         if not self.parameters:
@@ -1610,7 +1640,11 @@ class SQL:
 
     @staticmethod
     def _merge_extracted_parameters(pipeline_result: "PipelineResult", context: "SQLProcessingContext") -> None:
-        """Merge extracted parameters from pipeline transformers."""
+        """Merge extracted parameters from pipeline transformers.
+
+        This method now handles TypedParameter objects from the literal parameterizer,
+        preserving type information while maintaining the user-friendly API.
+        """
         if not context.extracted_parameters_from_pipeline:
             return
 
@@ -1619,12 +1653,30 @@ class SQL:
         extracted_params = context.extracted_parameters_from_pipeline
 
         if isinstance(final_merged_parameters, dict):
+            # For named parameters, use intelligent naming from TypedParameter if available
             for i, param in enumerate(extracted_params):
-                param_name = f"param_{i}"
+                # Check if it's a TypedParameter and has a semantic name
+                if hasattr(param, "semantic_name") and param.semantic_name:
+                    # Try to use semantic name if it doesn't conflict
+                    param_name = param.semantic_name
+                    counter = 1
+                    while param_name in final_merged_parameters:
+                        param_name = f"{param.semantic_name}_{counter}"
+                        counter += 1
+                else:
+                    # Fall back to generic naming
+                    param_name = f"param_{i}"
+                    while param_name in final_merged_parameters:
+                        param_name = f"param_{i}_{counter}"
+                        counter += 1
+
+                # Store the TypedParameter object directly - drivers will handle extraction
                 final_merged_parameters[param_name] = param
         elif isinstance(final_merged_parameters, list):
+            # For positional parameters, just append TypedParameter objects
             final_merged_parameters.extend(extracted_params)
         else:
+            # No existing parameters, use extracted ones
             pipeline_result.context.merged_parameters = extracted_params
 
     def _run_validation_only(self, context: "SQLProcessingContext") -> "PipelineResult":

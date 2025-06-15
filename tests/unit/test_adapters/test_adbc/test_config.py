@@ -1,7 +1,6 @@
 """Unit tests for ADBC configuration."""
 
 from sqlspec.adapters.adbc import CONNECTION_FIELDS, AdbcConfig, AdbcDriver
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.sql import SQLConfig
 
 
@@ -78,20 +77,12 @@ def test_adbc_config_initialization() -> None:
     # Test with default parameters
     config = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory")
     assert isinstance(config.statement_config, SQLConfig)
-    assert isinstance(config.instrumentation, InstrumentationConfig)
-
     # Test with custom parameters
     custom_statement_config = SQLConfig()
-    custom_instrumentation = InstrumentationConfig(log_queries=True)
-
     config = AdbcConfig(
-        driver_name="adbc_driver_sqlite",
-        uri="file::memory:?mode=memory",
-        statement_config=custom_statement_config,
-        instrumentation=custom_instrumentation,
+        driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory", statement_config=custom_statement_config
     )
     assert config.statement_config is custom_statement_config
-    assert config.instrumentation.log_queries is True
 
 
 def test_adbc_config_provide_session() -> None:
@@ -104,7 +95,6 @@ def test_adbc_config_provide_session() -> None:
         # Check that parameter styles were set
         assert session.config.allowed_parameter_styles == ("qmark", "named_colon")
         assert session.config.target_parameter_style == "qmark"
-        assert session.instrumentation_config == config.instrumentation
 
 
 def test_adbc_config_driver_type() -> None:

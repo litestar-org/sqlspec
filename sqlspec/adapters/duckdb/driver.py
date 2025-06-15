@@ -8,33 +8,32 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 from duckdb import DuckDBPyConnection
 
 from sqlspec.driver import SyncDriverAdapterProtocol
-from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
-from sqlspec.exceptions import wrap_exceptions
+from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin, TypeCoercionMixin
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import ArrowTable, DictRow, ModelDTOT, RowT
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.telemetry import instrument_operation
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.config import InstrumentationConfig
     from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict
     from sqlspec.typing import ArrowTable
 
 __all__ = ("DuckDBConnection", "DuckDBDriver")
 
-
 DuckDBConnection = DuckDBPyConnection
-
 
 logger = get_logger("adapters.duckdb")
 
 
 class DuckDBDriver(
-    SyncDriverAdapterProtocol["DuckDBConnection", RowT], SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
+    SyncDriverAdapterProtocol["DuckDBConnection", RowT],
+    SQLTranslatorMixin,
+    TypeCoercionMixin,
+    SyncStorageMixin,
+    ToSchemaMixin,
 ):
     """DuckDB Sync Driver Adapter with modern architecture.
 
@@ -55,20 +54,36 @@ class DuckDBDriver(
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
+    __slots__ = ("config", "connection", "default_row_type")
 
     def __init__(
         self,
         connection: "DuckDBConnection",
         config: "Optional[SQLConfig]" = None,
-        instrumentation_config: "Optional[InstrumentationConfig]" = None,
         default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
-        super().__init__(
-            connection=connection,
-            config=config,
-            instrumentation_config=instrumentation_config,
-            default_row_type=default_row_type,
-        )
+        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+
+    # DuckDB-specific type coercion overrides (DuckDB has rich type system)
+    def _coerce_boolean(self, value: Any) -> Any:
+        """DuckDB has native boolean support."""
+        # Keep booleans as-is, DuckDB handles them natively
+        return value
+
+    def _coerce_decimal(self, value: Any) -> Any:
+        """DuckDB has native decimal/numeric support."""
+        # Keep decimals as-is, DuckDB handles them natively
+        return value
+
+    def _coerce_json(self, value: Any) -> Any:
+        """DuckDB has native JSON support."""
+        # DuckDB can handle dict/list directly for JSON columns
+        return value
+
+    def _coerce_array(self, value: Any) -> Any:
+        """DuckDB has excellent native array support."""
+        # Keep arrays as-is, DuckDB handles them natively
+        return value
 
     @staticmethod
     @contextmanager
@@ -88,22 +103,23 @@ class DuckDBDriver(
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=self.default_parameter_style)
+
+            # Process parameter list through type coercion
+            params = self._process_parameters(params)
+
             return self._execute_many(sql, params, connection=connection, **kwargs)
 
         sql, params = statement.compile(placeholder_style=self.default_parameter_style)
+
+        # Process parameters through type coercion
+        params = self._process_parameters(params)
+
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
     ) -> "Union[SelectResultDict, DMLResultDict]":
         conn = self._connection(connection)
-
-        if self.instrumentation_config.log_queries:
-            logger.debug("Executing SQL: %s", sql)
-
-        if self.instrumentation_config.log_parameters and parameters:
-            logger.debug("Query parameters: %s", parameters)
-
         # Use connection.execute() which returns a DuckDBPyRelation
         result = conn.execute(sql, parameters or [])
 
@@ -122,9 +138,9 @@ class DuckDBDriver(
         self, sql: str, param_list: Any, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
     ) -> "DMLResultDict":
         conn = self._connection(connection)
-        if self.instrumentation_config.log_queries:
+        if self.config.log_queries:
             logger.debug("Executing SQL (executemany): %s", sql)
-        if self.instrumentation_config.log_parameters and param_list:
+        if self.config.log_parameters and param_list:
             logger.debug("Query parameters (batch): %s", param_list)
 
         with self._get_cursor(conn) as cursor:
@@ -135,9 +151,6 @@ class DuckDBDriver(
         self, script: str, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
     ) -> "ScriptResultDict":
         conn = self._connection(connection)
-        if self.instrumentation_config.log_queries:
-            logger.debug("Executing SQL script: %s", script)
-
         # Use a cursor to execute the script
         with self._get_cursor(conn) as cursor:
             cursor.execute(script)
@@ -153,68 +166,61 @@ class DuckDBDriver(
     def _wrap_select_result(
         self, statement: SQL, result: "SelectResultDict", schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
-        with instrument_operation(self, "duckdb_wrap_select", "database"):
-            fetched_tuples = result["data"]
-            column_names = result["column_names"]
-            rows_affected = result["rows_affected"]
+        fetched_tuples = result["data"]
+        column_names = result["column_names"]
+        rows_affected = result["rows_affected"]
 
-            rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row)) for row in fetched_tuples]
+        rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row)) for row in fetched_tuples]
 
-            if self.instrumentation_config.log_results_count:
-                logger.debug("Query returned %d rows", len(rows_as_dicts))
+        logger.debug("Query returned %d rows", len(rows_as_dicts))
 
-            if schema_type:
-                converted_data = self.to_schema(data=rows_as_dicts, schema_type=schema_type)
-                return SQLResult[ModelDTOT](
-                    statement=statement,
-                    data=list(converted_data),
-                    column_names=column_names,
-                    rows_affected=rows_affected,
-                    operation_type="SELECT",
-                )
-
-            return SQLResult[RowT](
+        if schema_type:
+            converted_data = self.to_schema(data=rows_as_dicts, schema_type=schema_type)
+            return SQLResult[ModelDTOT](
                 statement=statement,
-                data=rows_as_dicts,
+                data=list(converted_data),
                 column_names=column_names,
                 rows_affected=rows_affected,
                 operation_type="SELECT",
             )
 
+        return SQLResult[RowT](
+            statement=statement,
+            data=rows_as_dicts,
+            column_names=column_names,
+            rows_affected=rows_affected,
+            operation_type="SELECT",
+        )
+
     def _wrap_execute_result(
         self, statement: SQL, result: "Union[DMLResultDict, ScriptResultDict]", **kwargs: Any
     ) -> SQLResult[RowT]:
-        with instrument_operation(self, "duckdb_wrap_execute", "database"):
-            operation_type = "UNKNOWN"
-            if statement.expression:
-                operation_type = str(statement.expression.key).upper()
+        operation_type = "UNKNOWN"
+        if statement.expression:
+            operation_type = str(statement.expression.key).upper()
 
-            # Check if this is a ScriptResultDict
-            if "statements_executed" in result:
-                script_result = cast("ScriptResultDict", result)
-                return SQLResult[RowT](
-                    statement=statement,
-                    data=[],
-                    rows_affected=0,
-                    operation_type=operation_type or "SCRIPT",
-                    metadata={"status_message": script_result.get("status_message", "")},
-                )
-
-            # Otherwise, assume DMLResultDict
-            dml_result = cast("DMLResultDict", result)
-            rows_affected = dml_result.get("rows_affected", -1)
-            status_message = dml_result.get("status_message", "")
-
-            if self.instrumentation_config.log_results_count:
-                logger.debug("Execute operation affected %d rows", rows_affected)
-
+        # Check if this is a ScriptResultDict
+        if "statements_executed" in result:
+            script_result = cast("ScriptResultDict", result)
             return SQLResult[RowT](
                 statement=statement,
                 data=[],
-                rows_affected=rows_affected,
-                operation_type=operation_type,
-                metadata={"status_message": status_message},
+                rows_affected=0,
+                operation_type=operation_type or "SCRIPT",
+                metadata={"status_message": script_result.get("status_message", "")},
             )
+
+        # Otherwise, assume DMLResultDict
+        dml_result = cast("DMLResultDict", result)
+        rows_affected = dml_result.get("rows_affected", -1)
+        status_message = dml_result.get("status_message", "")
+        return SQLResult[RowT](
+            statement=statement,
+            data=[],
+            rows_affected=rows_affected,
+            operation_type=operation_type,
+            metadata={"status_message": status_message},
+        )
 
     # ============================================================================
     # DuckDB Native Arrow Support
@@ -235,49 +241,38 @@ class DuckDBDriver(
             ArrowResult with native Arrow table
         """
         conn = self._connection(connection)
+        sql_string, parameters = sql.compile(placeholder_style=self.default_parameter_style)
+        # Execute with proper parameters
+        result = conn.execute(sql_string, parameters or [])
 
-        with wrap_exceptions():
-            # Use DuckDB's native execute() with parameters for optimal performance
-            sql_string, parameters = sql.compile(placeholder_style=self.default_parameter_style)
+        # Check for streaming batch_size option
+        batch_size = kwargs.get("batch_size")
+        if batch_size:
+            # Streaming mode - use RecordBatchReader for large datasets
+            arrow_reader = result.fetch_record_batch(batch_size)
+            # Convert to table by reading all batches
+            import pyarrow as pa
 
-            if self.instrumentation_config.log_queries:
-                logger.debug("Executing DuckDB Arrow query: %s", sql_string)
-            if self.instrumentation_config.log_parameters and parameters:
-                logger.debug("DuckDB Arrow query parameters: %s", parameters)
+            batches = []
+            while True:
+                try:
+                    batch = arrow_reader.read_next_batch()
+                    batches.append(batch)
+                except StopIteration:  # noqa: PERF203
+                    break
 
-            # Execute with proper parameters
-            result = conn.execute(sql_string, parameters or [])
+            arrow_table = pa.Table.from_batches(batches) if batches else pa.table({})
 
-            # Check for streaming batch_size option
-            batch_size = kwargs.get("batch_size")
-            if batch_size:
-                # Streaming mode - use RecordBatchReader for large datasets
-                arrow_reader = result.fetch_record_batch(batch_size)
-                # Convert to table by reading all batches
-                import pyarrow as pa
+            logger.debug(
+                "Fetched Arrow table (streaming) with %d rows in %d batches", arrow_table.num_rows, len(batches)
+            )
+        else:
+            # Direct Arrow table - zero-copy from DuckDB
+            arrow_table = result.arrow()
 
-                batches = []
-                while True:
-                    try:
-                        batch = arrow_reader.read_next_batch()
-                        batches.append(batch)
-                    except StopIteration:  # noqa: PERF203
-                        break
+            logger.debug("Fetched Arrow table (zero-copy) with %d rows", arrow_table.num_rows)
 
-                arrow_table = pa.Table.from_batches(batches) if batches else pa.table({})
-
-                if self.instrumentation_config.log_results_count:
-                    logger.debug(
-                        "Fetched Arrow table (streaming) with %d rows in %d batches", arrow_table.num_rows, len(batches)
-                    )
-            else:
-                # Direct Arrow table - zero-copy from DuckDB
-                arrow_table = result.arrow()
-
-                if self.instrumentation_config.log_results_count:
-                    logger.debug("Fetched Arrow table (zero-copy) with %d rows", arrow_table.num_rows)
-
-            return ArrowResult(statement=sql, data=arrow_table)
+        return ArrowResult(statement=sql, data=arrow_table)
 
     # ============================================================================
     # DuckDB Native Storage Operations (Override base implementations)
@@ -298,180 +293,13 @@ class DuckDBDriver(
 
     def _export_native(self, query: str, destination_uri: str, format: str, **options: Any) -> int:
         """Enhanced DuckDB native COPY TO with advanced options support."""
-        with instrument_operation(self, "duckdb_export_native", "database"):
-            connection = self._connection(None)
+        conn = self._connection(None)
 
-            # Build advanced COPY TO statement with options
-            copy_options = []
+        # Build advanced COPY TO statement with options
+        copy_options = []
 
-            if format.lower() == "parquet":
-                copy_options.append("FORMAT PARQUET")
-
-                # Add Parquet-specific options
-                if "compression" in options:
-                    copy_options.append(f"COMPRESSION '{options['compression'].upper()}'")
-                if "row_group_size" in options:
-                    copy_options.append(f"ROW_GROUP_SIZE {options['row_group_size']}")
-
-                # Handle partitioning
-                if "partition_by" in options:
-                    partition_by = options["partition_by"]
-                    partition_cols = [partition_by] if isinstance(partition_by, str) else partition_by
-                    partition_str = ", ".join(partition_cols)
-                    copy_options.append(f"PARTITION_BY ({partition_str})")
-
-            elif format.lower() == "csv":
-                copy_options.extend(("FORMAT CSV", "HEADER"))
-
-                # Add CSV-specific options
-                if "compression" in options:
-                    copy_options.append(f"COMPRESSION '{options['compression'].upper()}'")
-                if "delimiter" in options:
-                    copy_options.append(f"DELIMITER '{options['delimiter']}'")
-                if "quote" in options:
-                    copy_options.append(f"QUOTE '{options['quote']}'")
-
-            elif format.lower() == "json":
-                copy_options.append("FORMAT JSON")
-
-                # Add JSON-specific options
-                if "compression" in options:
-                    copy_options.append(f"COMPRESSION '{options['compression'].upper()}'")
-
-            else:
-                msg = f"Unsupported format for DuckDB native export: {format}"
-                raise ValueError(msg)
-
-            # Build final COPY statement
-            options_str = f"({', '.join(copy_options)})" if copy_options else ""
-            copy_sql = f"COPY ({query}) TO '{destination_uri}' {options_str}"
-
-            if self.instrumentation_config.log_queries:
-                logger.debug("Executing DuckDB export: %s", copy_sql)
-
-            # Execute the COPY TO statement
-            result = connection.execute(copy_sql).fetchone()
-            rows_exported = result[0] if result and isinstance(result, tuple) else 0
-
-            if self.instrumentation_config.log_results_count:
-                logger.debug("Exported %d rows to %s", rows_exported, destination_uri)
-
-            return rows_exported if rows_exported is not None else 0
-
-    def _import_native(self, source_uri: str, table_name: str, format: str, mode: str, **options: Any) -> int:
-        """Use DuckDB's native reading capabilities for efficient import."""
-        with instrument_operation(self, "duckdb_import_native", "database"):
-            connection = self._connection(None)
-            # Determine read function based on format
-            if format == "parquet":
-                read_func = f"read_parquet('{source_uri}')"
-            elif format == "csv":
-                read_func = f"read_csv_auto('{source_uri}')"
-            elif format == "json":
-                read_func = f"read_json_auto('{source_uri}')"
-            else:
-                msg = f"Unsupported format for DuckDB native import: {format}"
-                raise ValueError(msg)
-
-            # Handle different import modes
-            if mode == "create":
-                sql = f"CREATE TABLE {table_name} AS SELECT * FROM {read_func}"
-            elif mode == "replace":
-                sql = f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM {read_func}"
-            elif mode == "append":
-                sql = f"INSERT INTO {table_name} SELECT * FROM {read_func}"
-            else:
-                msg = f"Unsupported import mode: {mode}"
-                raise ValueError(msg)
-
-            # Execute the import
-            result = connection.execute(sql).fetchone()
-            if result:
-                rows_imported = int(result[0]) if isinstance(result, tuple) else 0
-                logger.debug("Imported %d rows to table %s", rows_imported, table_name)
-                return rows_imported
-
-            # If no result, get count from the table
-            count_result = connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
-            return int(count_result[0]) if count_result else 0
-
-    def _read_parquet_native(
-        self, source_uri: str, columns: Optional[list[str]] = None, **options: Any
-    ) -> "SQLResult[dict[str, Any]]":
-        """Enhanced DuckDB native Parquet reader with multiple file and filter support."""
-
-        with instrument_operation(self, "duckdb_read_parquet_native", "database"):
-            connection = self._connection(None)
-
-            # Handle different source types
-            if isinstance(source_uri, list):
-                # Multiple files - use DuckDB's list syntax
-                file_list = "[" + ", ".join(f"'{f}'" for f in source_uri) + "]"
-                read_func = f"read_parquet({file_list})"
-            elif "*" in source_uri or "?" in source_uri:
-                # Glob pattern - DuckDB handles this natively
-                read_func = f"read_parquet('{source_uri}')"
-            else:
-                # Single file
-                read_func = f"read_parquet('{source_uri}')"
-
-            # Build column selection
-            column_list = ", ".join(columns) if columns else "*"
-
-            # Build query with potential filters
-            query = f"SELECT {column_list} FROM {read_func}"
-
-            # Add filters from options if provided
-            filters = options.get("filters")
-            if filters:
-                where_clauses = []
-                filter_spec_parts = 3
-                for filter_spec in filters:
-                    if len(filter_spec) == filter_spec_parts:
-                        col, op, val = filter_spec
-                        if isinstance(val, str):
-                            where_clauses.append(f"'{col}' {op} '{val}'")
-                        else:
-                            where_clauses.append(f"'{col}' {op} {val}")
-                if where_clauses:
-                    query += " WHERE " + " AND ".join(where_clauses)
-
-            if self.instrumentation_config.log_queries:
-                logger.debug("Executing DuckDB Parquet query: %s", query)
-
-            # DuckDB can read Parquet and return as Arrow table directly
-            arrow_table = connection.execute(query).arrow()
-
-            if self.instrumentation_config.log_results_count:
-                logger.debug("Read %d rows from Parquet source: %s", arrow_table.num_rows, source_uri)
-
-            # Convert Arrow table to dict rows for SQLResult compatibility
-            arrow_dict = arrow_table.to_pydict()
-            column_names = arrow_table.column_names
-            num_rows = arrow_table.num_rows
-
-            # Convert columnar dict to row-wise dicts
-            rows = []
-            for i in range(num_rows):
-                row = {col: arrow_dict[col][i] for col in column_names}
-                rows.append(row)
-
-            return SQLResult[dict[str, Any]](
-                statement=SQL(query),
-                data=rows,
-                column_names=column_names,
-                rows_affected=num_rows,
-                operation_type="SELECT",
-            )
-
-    def _write_parquet_native(self, data: Union[str, "ArrowTable"], destination_uri: str, **options: Any) -> None:
-        """Enhanced DuckDB native Parquet writer with advanced options."""
-
-        with instrument_operation(self, "duckdb_write_parquet_native", "database"):
-            connection = self._connection(None)
-
-            # Build COPY options
-            copy_options = ["FORMAT PARQUET"]
+        if format.lower() == "parquet":
+            copy_options.append("FORMAT PARQUET")
 
             # Add Parquet-specific options
             if "compression" in options:
@@ -479,35 +307,170 @@ class DuckDBDriver(
             if "row_group_size" in options:
                 copy_options.append(f"ROW_GROUP_SIZE {options['row_group_size']}")
 
-            options_str = f"({', '.join(copy_options)})"
+            # Handle partitioning
+            if "partition_by" in options:
+                partition_by = options["partition_by"]
+                partition_cols = [partition_by] if isinstance(partition_by, str) else partition_by
+                partition_str = ", ".join(partition_cols)
+                copy_options.append(f"PARTITION_BY ({partition_str})")
 
-            if isinstance(data, str):
-                # Direct query to Parquet
-                copy_sql = f"COPY ({data}) TO '{destination_uri}' {options_str}"
+        elif format.lower() == "csv":
+            copy_options.extend(("FORMAT CSV", "HEADER"))
 
-                if self.instrumentation_config.log_queries:
-                    logger.debug("Executing DuckDB Parquet write (query): %s", copy_sql)
+            # Add CSV-specific options
+            if "compression" in options:
+                copy_options.append(f"COMPRESSION '{options['compression'].upper()}'")
+            if "delimiter" in options:
+                copy_options.append(f"DELIMITER '{options['delimiter']}'")
+            if "quote" in options:
+                copy_options.append(f"QUOTE '{options['quote']}'")
 
-                connection.execute(copy_sql)
-            else:
-                # Arrow table to Parquet
-                temp_name = f"_arrow_data_{uuid.uuid4().hex[:8]}"
-                connection.register(temp_name, data)
+        elif format.lower() == "json":
+            copy_options.append("FORMAT JSON")
 
-                try:
-                    copy_sql = f"COPY {temp_name} TO '{destination_uri}' {options_str}"
+            # Add JSON-specific options
+            if "compression" in options:
+                copy_options.append(f"COMPRESSION '{options['compression'].upper()}'")
 
-                    if self.instrumentation_config.log_queries:
-                        logger.debug("Executing DuckDB Parquet write (Arrow): %s", copy_sql)
+        else:
+            msg = f"Unsupported format for DuckDB native export: {format}"
+            raise ValueError(msg)
 
-                    connection.execute(copy_sql)
+        # Build final COPY statement
+        options_str = f"({', '.join(copy_options)})" if copy_options else ""
+        copy_sql = f"COPY ({query}) TO '{destination_uri}' {options_str}"
+        # Execute the COPY TO statement
+        result = conn.execute(copy_sql).fetchone()
+        rows_exported = result[0] if result and isinstance(result, tuple) else 0
+        return rows_exported if rows_exported is not None else 0
 
-                    if self.instrumentation_config.log_results_count:
-                        logger.debug("Wrote Arrow table with %d rows to %s", data.num_rows, destination_uri)
+    def _import_native(self, source_uri: str, table_name: str, format: str, mode: str, **options: Any) -> int:
+        """Use DuckDB's native reading capabilities for efficient import."""
+        conn = self._connection(None)
+        # Determine read function based on format
+        if format == "parquet":
+            read_func = f"read_parquet('{source_uri}')"
+        elif format == "csv":
+            read_func = f"read_csv_auto('{source_uri}')"
+        elif format == "json":
+            read_func = f"read_json_auto('{source_uri}')"
+        else:
+            msg = f"Unsupported format for DuckDB native import: {format}"
+            raise ValueError(msg)
 
-                finally:
-                    with contextlib.suppress(Exception):
-                        connection.unregister(temp_name)
+        # Handle different import modes
+        if mode == "create":
+            sql = f"CREATE TABLE {table_name} AS SELECT * FROM {read_func}"
+        elif mode == "replace":
+            sql = f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM {read_func}"
+        elif mode == "append":
+            sql = f"INSERT INTO {table_name} SELECT * FROM {read_func}"
+        else:
+            msg = f"Unsupported import mode: {mode}"
+            raise ValueError(msg)
+
+        # Execute the import
+        result = conn.execute(sql).fetchone()
+        if result:
+            rows_imported = int(result[0]) if isinstance(result, tuple) else 0
+            logger.debug("Imported %d rows to table %s", rows_imported, table_name)
+            return rows_imported
+
+        # If no result, get count from the table
+        count_result = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
+        return int(count_result[0]) if count_result else 0
+
+    def _read_parquet_native(
+        self, source_uri: str, columns: Optional[list[str]] = None, **options: Any
+    ) -> "SQLResult[dict[str, Any]]":
+        """Enhanced DuckDB native Parquet reader with multiple file and filter support."""
+        conn = self._connection(None)
+
+        # Handle different source types
+        if isinstance(source_uri, list):
+            # Multiple files - use DuckDB's list syntax
+            file_list = "[" + ", ".join(f"'{f}'" for f in source_uri) + "]"
+            read_func = f"read_parquet({file_list})"
+        elif "*" in source_uri or "?" in source_uri:
+            # Glob pattern - DuckDB handles this natively
+            read_func = f"read_parquet('{source_uri}')"
+        else:
+            # Single file
+            read_func = f"read_parquet('{source_uri}')"
+
+        # Build column selection
+        column_list = ", ".join(columns) if columns else "*"
+
+        # Build query with potential filters
+        query = f"SELECT {column_list} FROM {read_func}"
+
+        # Add filters from options if provided
+        filters = options.get("filters")
+        if filters:
+            where_clauses = []
+            filter_spec_parts = 3
+            for filter_spec in filters:
+                if len(filter_spec) == filter_spec_parts:
+                    col, op, val = filter_spec
+                    if isinstance(val, str):
+                        where_clauses.append(f"'{col}' {op} '{val}'")
+                    else:
+                        where_clauses.append(f"'{col}' {op} {val}")
+            if where_clauses:
+                query += " WHERE " + " AND ".join(where_clauses)
+        # DuckDB can read Parquet and return as Arrow table directly
+        arrow_table = conn.execute(query).arrow()
+        # Convert Arrow table to dict rows for SQLResult compatibility
+        arrow_dict = arrow_table.to_pydict()
+        column_names = arrow_table.column_names
+        num_rows = arrow_table.num_rows
+
+        # Convert columnar dict to row-wise dicts
+        rows = []
+        for i in range(num_rows):
+            row = {col: arrow_dict[col][i] for col in column_names}
+            rows.append(row)
+
+        return SQLResult[dict[str, Any]](
+            statement=SQL(query), data=rows, column_names=column_names, rows_affected=num_rows, operation_type="SELECT"
+        )
+
+    def _write_parquet_native(self, data: Union[str, "ArrowTable"], destination_uri: str, **options: Any) -> None:
+        """Enhanced DuckDB native Parquet writer with advanced options."""
+        conn = self._connection(None)
+
+        # Build COPY options
+        copy_options = ["FORMAT PARQUET"]
+
+        # Add Parquet-specific options
+        if "compression" in options:
+            copy_options.append(f"COMPRESSION '{options['compression'].upper()}'")
+        if "row_group_size" in options:
+            copy_options.append(f"ROW_GROUP_SIZE {options['row_group_size']}")
+
+        options_str = f"({', '.join(copy_options)})"
+
+        if isinstance(data, str):
+            # Direct query to Parquet
+            copy_sql = f"COPY ({data}) TO '{destination_uri}' {options_str}"
+
+            logger.debug("Executing DuckDB Parquet write (query): %s", copy_sql)
+
+            conn.execute(copy_sql)
+        else:
+            # Arrow table to Parquet
+            temp_name = f"_arrow_data_{uuid.uuid4().hex[:8]}"
+            conn.register(temp_name, data)
+
+            try:
+                copy_sql = f"COPY {temp_name} TO '{destination_uri}' {options_str}"
+
+                logger.debug("Executing DuckDB Parquet write (Arrow): %s", copy_sql)
+
+                conn.execute(copy_sql)
+            finally:
+                with contextlib.suppress(Exception):
+                    conn.unregister(temp_name)
 
     def _ingest_arrow_table(self, table: "ArrowTable", target_table: str, mode: str, **options: Any) -> int:
         """DuckDB-optimized Arrow table ingestion using native registration.
@@ -525,64 +488,54 @@ class DuckDBDriver(
             Number of rows ingested
         """
         self._ensure_pyarrow_installed()
+        conn = self._connection(None)
+        temp_name = f"_arrow_temp_{uuid.uuid4().hex[:8]}"
 
-        with wrap_exceptions():
-            connection = self._connection(None)
-            temp_name = f"_arrow_temp_{uuid.uuid4().hex[:8]}"
+        try:
+            # Register Arrow table with DuckDB
+            conn.register(temp_name, table)
 
-            try:
-                # Register Arrow table with DuckDB
-                connection.register(temp_name, table)
+            if mode == "create":
+                # Use sqlglot to build safe SQL
+                from sqlglot import exp
 
-                if mode == "create":
-                    # Use sqlglot to build safe SQL
-                    from sqlglot import exp
+                create = exp.Create(
+                    this=exp.Table(this=exp.Identifier(this=target_table)),
+                    expression=exp.Select().from_(temp_name).select("*"),
+                    kind="TABLE",
+                )
+                sql = create.sql()
+            elif mode == "append":
+                # Use sqlglot to build safe SQL
+                from sqlglot import exp
 
-                    create = exp.Create(
-                        this=exp.Table(this=exp.Identifier(this=target_table)),
-                        expression=exp.Select().from_(temp_name).select("*"),
-                        kind="TABLE",
-                    )
-                    sql = create.sql()
-                elif mode == "append":
-                    # Use sqlglot to build safe SQL
-                    from sqlglot import exp
+                insert = exp.Insert(
+                    this=exp.Table(this=exp.Identifier(this=target_table)),
+                    expression=exp.Select().from_(temp_name).select("*"),
+                )
+                sql = insert.sql()
+            elif mode == "replace":
+                # Use sqlglot to build safe SQL - CREATE OR REPLACE
+                from sqlglot import exp
 
-                    insert = exp.Insert(
-                        this=exp.Table(this=exp.Identifier(this=target_table)),
-                        expression=exp.Select().from_(temp_name).select("*"),
-                    )
-                    sql = insert.sql()
-                elif mode == "replace":
-                    # Use sqlglot to build safe SQL - CREATE OR REPLACE
-                    from sqlglot import exp
+                create = exp.Create(
+                    this=exp.Table(this=exp.Identifier(this=target_table)),
+                    expression=exp.Select().from_(temp_name).select("*"),
+                    kind="TABLE",
+                    replace=True,  # CREATE OR REPLACE TABLE
+                )
+                sql = create.sql()
+            else:
+                msg = f"Unsupported mode: {mode}"
+                raise ValueError(msg)
+            from sqlspec.statement.sql import SQL
 
-                    create = exp.Create(
-                        this=exp.Table(this=exp.Identifier(this=target_table)),
-                        expression=exp.Select().from_(temp_name).select("*"),
-                        kind="TABLE",
-                        replace=True,  # CREATE OR REPLACE TABLE
-                    )
-                    sql = create.sql()
-                else:
-                    msg = f"Unsupported mode: {mode}"
-                    raise ValueError(msg)
+            result = self.execute(SQL(sql))
+            return result.rows_affected or table.num_rows
 
-                if self.instrumentation_config.log_queries:
-                    logger.debug("DuckDB native Arrow ingest: %s", sql)
-
-                from sqlspec.statement.sql import SQL
-
-                result = self.execute(SQL(sql))
-
-                if self.instrumentation_config.log_results_count:
-                    logger.debug("Ingested %d rows into %s", table.num_rows, target_table)
-
-                return result.rows_affected or table.num_rows
-
-            finally:
-                with contextlib.suppress(Exception):
-                    connection.unregister(temp_name)
+        finally:
+            with contextlib.suppress(Exception):
+                conn.unregister(temp_name)
 
     def read_parquet_direct(
         self, source_uri: str, columns: "Optional[list[str]]" = None, **options: Any

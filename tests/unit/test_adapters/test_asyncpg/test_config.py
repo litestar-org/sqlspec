@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from sqlspec.adapters.asyncpg import CONNECTION_FIELDS, POOL_FIELDS, AsyncpgConfig, AsyncpgDriver
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.sql import SQLConfig
 
 
@@ -100,15 +99,7 @@ def test_asyncpg_config_extras_handling() -> None:
     assert config.extras["debug"] is True
 
     # Test with kwargs going to extras
-    config2 = AsyncpgConfig(
-        host="localhost",
-        port=5432,
-        user="test_user",
-        password="test_password",
-        database="test_db",
-        unknown_param="test",
-        another_param=42,
-    )
+    config2 = AsyncpgConfig(host="localhost", port=5432, user="test_user", password="test_password", database="test_db")
     assert config2.extras["unknown_param"] == "test"
     assert config2.extras["another_param"] == 42
 
@@ -119,12 +110,8 @@ def test_asyncpg_config_initialization() -> None:
     config = AsyncpgConfig(host="localhost", port=5432, user="test_user", password="test_password", database="test_db")
     assert config.host == "localhost"
     assert isinstance(config.statement_config, SQLConfig)
-    assert isinstance(config.instrumentation, InstrumentationConfig)
-
     # Test with custom parameters
     custom_statement_config = SQLConfig()
-    custom_instrumentation = InstrumentationConfig(log_queries=True)
-
     config = AsyncpgConfig(
         host="custom_host",
         port=5433,
@@ -135,13 +122,11 @@ def test_asyncpg_config_initialization() -> None:
         min_size=2,
         max_size=20,
         statement_config=custom_statement_config,
-        instrumentation=custom_instrumentation,
     )
     assert config.host == "custom_host"
     assert config.port == 5433
     assert config.connect_timeout == 60.0
     assert config.statement_config is custom_statement_config
-    assert config.instrumentation.log_queries is True
 
 
 @pytest.mark.asyncio
@@ -233,9 +218,7 @@ async def test_asyncpg_config_provide_session(mock_connect: Mock) -> None:
         assert session.config.enable_validation == config.statement_config.enable_validation
         # Check that parameter styles were set
         assert session.config.allowed_parameter_styles == ("numeric",)
-        assert session.config.target_parameter_style == "numeric"
-        assert session.instrumentation_config is config.instrumentation
-        # Verify connection is not closed yet
+        assert session.config.target_parameter_style == "numeric"  # Verify connection is not closed yet
         mock_connection.close.assert_not_called()
 
     # Verify connection was closed after context exit
@@ -402,70 +385,3 @@ def test_asyncpg_config_pool_settings() -> None:
     assert config.max_size == 20
     assert config.max_queries == 50000
     assert config.max_inactive_connection_lifetime == 300.0
-
-
-def test_asyncpg_config_from_pool_config() -> None:
-    """Test asyncpg config from_pool_config backward compatibility."""
-    # Test basic backward compatibility
-    pool_config = {
-        "host": "localhost",
-        "port": 5432,
-        "user": "test_user",
-        "password": "test_password",
-        "database": "test_db",
-        "min_size": 1,
-        "max_size": 10,
-    }
-    config = AsyncpgConfig.from_pool_config(pool_config)
-    assert config.host == "localhost"
-    assert config.port == 5432
-    assert config.user == "test_user"
-    assert config.min_size == 1
-    assert config.max_size == 10
-    assert config.extras == {}
-
-    # Test with connection config
-    connection_config = {"host": "conn_host", "port": 5433, "connect_timeout": 30.0}
-    pool_config_override = {
-        "host": "pool_host",  # Should override connection_config
-        "port": 5432,
-        "user": "test_user",
-        "password": "test_password",
-        "database": "test_db",
-        "min_size": 2,
-        "max_size": 20,
-    }
-    config2 = AsyncpgConfig.from_pool_config(pool_config_override, connection_config=connection_config)
-    assert config2.host == "pool_host"  # Pool config takes precedence
-    assert config2.port == 5432
-    assert config2.connect_timeout == 30.0  # From connection_config
-    assert config2.min_size == 2
-    assert config2.max_size == 20
-
-    # Test with extra parameters
-    pool_config_with_extras = {
-        "host": "localhost",
-        "port": 5432,
-        "user": "test_user",
-        "password": "test_password",
-        "database": "test_db",
-        "unknown_param": "test_value",
-        "another_param": 42,
-    }
-    config_extras = AsyncpgConfig.from_pool_config(pool_config_with_extras)
-    assert config_extras.host == "localhost"
-    assert config_extras.extras["unknown_param"] == "test_value"
-    assert config_extras.extras["another_param"] == 42
-
-
-def test_asyncpg_config_with_extras() -> None:
-    """Test asyncpg config with minimal configuration and extras."""
-    config = AsyncpgConfig(user="test_user", password="test_password", database="test_db", custom_option="custom_value")
-
-    # Should work without host/port
-    assert config.user == "test_user"
-    assert config.password == "test_password"
-    assert config.database == "test_db"
-    assert config.host is None
-    assert config.port is None
-    assert config.extras["custom_option"] == "custom_value"

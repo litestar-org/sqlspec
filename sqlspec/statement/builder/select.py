@@ -4,7 +4,6 @@ This module provides a fluent interface for building SQL queries safely,
 with automatic parameter binding and validation.
 """
 
-import logging
 import re
 from dataclasses import dataclass, field
 from typing import Optional, Union, cast
@@ -34,8 +33,6 @@ from sqlspec.statement.result import SQLResult
 from sqlspec.typing import RowT
 
 __all__ = ("SelectBuilder",)
-
-logger = logging.getLogger("sqlspec")
 
 
 @dataclass
@@ -198,7 +195,7 @@ class SelectBuilder(
                         # More precise regex that captures the table and optional alias
                         pattern = rf"\b{re.escape(table)}\b(\s+AS\s+\w+)?"
 
-                        def replacement_func(match: re.Match) -> str:
+                        def replacement_func(match: re.Match[str]) -> str:
                             alias_part = match.group(1) or ""
                             return f"/*+ {hint} */ {table}{alias_part}"  # noqa: B023
 

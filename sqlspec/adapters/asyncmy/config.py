@@ -9,10 +9,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 import asyncmy
 
 from sqlspec.adapters.asyncmy.driver import AsyncmyConnection, AsyncmyDriver
-from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig
+from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow, Empty
-from sqlspec.utils.telemetry import instrument_operation_async
 
 if TYPE_CHECKING:
     from asyncmy.cursors import Cursor, DictCursor
@@ -79,7 +78,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
     is_async: ClassVar[bool] = True
     supports_connection_pooling: ClassVar[bool] = True
     driver_type: type[AsyncmyDriver] = AsyncmyDriver
-    connection_type: type[AsyncmyConnection] = AsyncmyConnection
+    connection_type: type[AsyncmyConnection] = AsyncmyConnection  # pyright: ignore
 
     # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional",)
@@ -91,7 +90,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
     def __init__(
         self,
         statement_config: Optional[SQLConfig] = None,
-        instrumentation: Optional[InstrumentationConfig] = None,
         default_row_type: type[DictRow] = DictRow,
         # Connection parameters
         host: Optional[str] = None,
@@ -109,21 +107,18 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         ssl: Optional[Any] = None,
         sql_mode: Optional[str] = None,
         init_command: Optional[str] = None,
-        cursor_class: Optional["type[Union[Cursor, DictCursor]]"] = None,
+        cursor_class: Optional["type[Union[Cursor, DictCursor]]"] = None,  # pyright: ignore
         # Pool parameters
         minsize: Optional[int] = None,
         maxsize: Optional[int] = None,
         echo: Optional[bool] = None,
         pool_recycle: Optional[int] = None,
-        # User-defined extras
-        extras: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize Asyncmy configuration.
 
         Args:
             statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
             default_row_type: Default row type for results
             host: Host where the database server is located
             user: The username used to authenticate with the database
@@ -145,7 +140,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             maxsize: Maximum number of connections allowed in the pool
             echo: If True, logging will be enabled for all SQL statements
             pool_recycle: Number of seconds after which a connection is recycled
-            extras: Additional connection parameters not explicitly defined
             **kwargs: Additional parameters (stored in extras)
         """
         # Store connection parameters as instance attributes
@@ -164,25 +158,20 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         self.ssl = ssl
         self.sql_mode = sql_mode
         self.init_command = init_command
-        self.cursor_class = cursor_class
+        self.cursor_class = cursor_class  # pyright: ignore
 
         # Store pool parameters as instance attributes
         self.minsize = minsize
         self.maxsize = maxsize
         self.echo = echo
         self.pool_recycle = pool_recycle
-
-        # Handle extras and additional kwargs
-        self.extras = extras or {}
-        self.extras.update(kwargs)
+        self.extras = kwargs or {}
 
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
-        super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig()  # pyright: ignore
-        )
+        super().__init__()  # pyright: ignore
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
@@ -236,10 +225,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         Returns:
             An Asyncmy connection instance.
         """
-        async with instrument_operation_async(self, "asyncmy_create_connection", "database"):
-            if self.pool_instance is None:
-                self.pool_instance = await self.create_pool()
-            return await self.pool_instance.acquire()  # pyright: ignore
+        if self.pool_instance is None:
+            self.pool_instance = await self.create_pool()
+        return await self.pool_instance.acquire()  # pyright: ignore
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncmyConnection, None]:  # pyright: ignore
@@ -278,9 +266,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
                     target_parameter_style=self.preferred_parameter_style,
                 )
 
-            yield self.driver_type(
-                connection=connection, config=statement_config, instrumentation_config=self.instrumentation
-            )
+            yield self.driver_type(connection=connection, config=statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool":  # pyright: ignore
         """Provide async pool instance.

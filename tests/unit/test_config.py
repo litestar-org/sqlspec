@@ -13,7 +13,6 @@ from sqlspec.config import (
     AsyncDatabaseConfig,
     DatabaseConfigProtocol,
     GenericPoolConfig,
-    InstrumentationConfig,
     NoPoolAsyncConfig,
     NoPoolSyncConfig,
     SyncDatabaseConfig,
@@ -76,10 +75,8 @@ class MockDriver(SyncDriverAdapterProtocol[MockConnection, DictRow]):
     dialect = "mock"
     parameter_style = ParameterStyle.QMARK
 
-    def __init__(
-        self, connection: MockConnection, instrumentation_config: Any = None, default_row_type: Any = None
-    ) -> None:
-        super().__init__(connection, None, instrumentation_config, default_row_type)
+    def __init__(self, connection: MockConnection, default_row_type: Any = None) -> None:
+        super().__init__(connection, None, default_row_type)
 
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.QMARK
@@ -108,10 +105,8 @@ class MockAsyncDriver(AsyncDriverAdapterProtocol[MockAsyncConnection, DictRow]):
     dialect = "mock_async"
     parameter_style = ParameterStyle.QMARK
 
-    def __init__(
-        self, connection: MockAsyncConnection, instrumentation_config: Any = None, default_row_type: Any = None
-    ) -> None:
-        super().__init__(connection, None, instrumentation_config, default_row_type)
+    def __init__(self, connection: MockAsyncConnection, default_row_type: Any = None) -> None:
+        super().__init__(connection, None, default_row_type)
 
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.QMARK
@@ -254,105 +249,6 @@ class MockAsyncPoolConfig(AsyncDatabaseConfig[MockAsyncConnection, MockAsyncPool
             self._pool = None
 
 
-# InstrumentationConfig Tests
-
-
-def test_instrumentation_config_default_values() -> None:
-    """Test InstrumentationConfig default values."""
-    config = InstrumentationConfig()
-
-    assert config.log_queries is True
-    assert config.log_runtime is True
-    assert config.log_parameters is False
-    assert config.log_results_count is True
-    assert config.log_pool_operations is True
-    assert config.enable_opentelemetry is False
-    assert config.enable_prometheus is False
-    assert config.slow_query_threshold_ms == 1000.0
-    assert config.slow_pool_operation_ms == 5000.0
-    assert config.service_name == "sqlspec"
-    assert config.custom_tags == {}
-    assert config.prometheus_latency_buckets is None
-
-
-def test_instrumentation_config_custom_values() -> None:
-    """Test InstrumentationConfig with custom values."""
-    custom_tags = {"env": "test", "version": "1.0"}
-    custom_buckets = [0.1, 0.5, 1.0, 5.0]
-
-    config = InstrumentationConfig(
-        log_queries=False,
-        log_runtime=False,
-        log_parameters=True,
-        log_results_count=False,
-        log_pool_operations=False,
-        enable_opentelemetry=True,
-        enable_prometheus=True,
-        slow_query_threshold_ms=500.0,
-        slow_pool_operation_ms=2000.0,
-        service_name="custom_service",
-        custom_tags=custom_tags,
-        prometheus_latency_buckets=custom_buckets,
-    )
-
-    assert config.log_queries is False
-    assert config.log_runtime is False
-    assert config.log_parameters is True
-    assert config.log_results_count is False
-    assert config.log_pool_operations is False
-    assert config.enable_opentelemetry is True
-    assert config.enable_prometheus is True
-    assert config.slow_query_threshold_ms == 500.0
-    assert config.slow_pool_operation_ms == 2000.0
-    assert config.service_name == "custom_service"
-    assert config.custom_tags == custom_tags
-    assert config.prometheus_latency_buckets == custom_buckets
-
-
-@pytest.mark.parametrize(
-    ("threshold", "expected"),
-    [(0.0, 0.0), (100.0, 100.0), (1000.0, 1000.0), (5000.0, 5000.0), (float("inf"), float("inf"))],
-    ids=["zero", "small", "default", "large", "infinite"],
-)
-def test_instrumentation_config_threshold_values(threshold: float, expected: float) -> None:
-    """Test InstrumentationConfig with various threshold values."""
-    config = InstrumentationConfig(slow_query_threshold_ms=threshold)
-    assert config.slow_query_threshold_ms == expected
-
-
-def test_instrumentation_config_custom_tags_immutability() -> None:
-    """Test that custom_tags dict is properly isolated."""
-    original_tags = {"env": "test"}
-    config = InstrumentationConfig(custom_tags=original_tags)
-
-    # Modifying original should not affect config
-    original_tags["new_key"] = "new_value"
-    assert "new_key" not in config.custom_tags
-
-    # Modifying config tags should not affect original
-    config.custom_tags["config_key"] = "config_value"
-    assert "config_key" not in original_tags
-
-
-def test_instrumentation_config_prometheus_buckets() -> None:
-    """Test InstrumentationConfig with various prometheus bucket configurations."""
-    # Test with None (default)
-    config1 = InstrumentationConfig()
-    assert config1.prometheus_latency_buckets is None
-
-    # Test with custom buckets
-    custom_buckets = [0.001, 0.01, 0.1, 1.0, 10.0]
-    config2 = InstrumentationConfig(prometheus_latency_buckets=custom_buckets)
-    assert config2.prometheus_latency_buckets == custom_buckets
-
-    # Test with empty list
-    config3 = InstrumentationConfig(prometheus_latency_buckets=[])
-    assert config3.prometheus_latency_buckets == []
-
-
-# NoPoolSyncConfig Tests
-
-
 def test_no_pool_sync_config_basic() -> None:
     """Test basic NoPoolSyncConfig functionality."""
     config = MockSyncConfig()
@@ -378,42 +274,6 @@ def test_no_pool_sync_config_pool_operations() -> None:
     assert config.create_pool() is None  # type: ignore[func-returns-value]
     assert config.close_pool() is None  # type: ignore[func-returns-value]
     assert config.provide_pool() is None  # type: ignore[func-returns-value]
-
-
-def test_no_pool_sync_config_instrumentation() -> None:
-    """Test NoPoolSyncConfig instrumentation integration."""
-    custom_instrumentation = InstrumentationConfig(service_name="test_service", enable_opentelemetry=True)
-
-    config = MockSyncConfig()
-    config.instrumentation = custom_instrumentation
-
-    assert config.instrumentation.service_name == "test_service"
-    assert config.instrumentation.enable_opentelemetry is True
-
-
-def test_no_pool_sync_config_instrument_sync_operation() -> None:
-    """Test NoPoolSyncConfig sync operation instrumentation."""
-    config = MockSyncConfig()
-    mock_func = Mock(return_value="test_result")
-
-    result = config.instrument_sync_operation(
-        "test_operation", "database", {}, mock_func, config, "arg1", kwarg1="value1"
-    )
-
-    assert result == "test_result"
-    mock_func.assert_called_once_with(config, "arg1", kwarg1="value1")
-
-
-def test_no_pool_sync_config_instrument_sync_operation_with_exception() -> None:
-    """Test NoPoolSyncConfig sync operation instrumentation with exception."""
-    config = MockSyncConfig()
-    mock_func = Mock(side_effect=ValueError("Test error"))
-
-    with pytest.raises(ValueError, match="Test error"):
-        config.instrument_sync_operation("test_operation", "database", {}, mock_func, config)
-
-
-# NoPoolAsyncConfig Tests
 
 
 def test_no_pool_async_config_basic() -> None:
@@ -443,31 +303,6 @@ async def test_no_pool_async_config_pool_operations() -> None:
     assert await config.create_pool() is None  # type: ignore[func-returns-value]
     assert await config.close_pool() is None  # type: ignore[func-returns-value]
     assert config.provide_pool() is None  # type: ignore[func-returns-value]
-
-
-async def test_no_pool_async_config_instrument_async_operation() -> None:
-    """Test NoPoolAsyncConfig async operation instrumentation."""
-    config = MockAsyncConfig()
-    mock_func = AsyncMock(return_value="async_result")
-
-    result = await config.instrument_async_operation(
-        "test_async_operation", "database", {}, mock_func, config, "arg1", kwarg1="value1"
-    )
-
-    assert result == "async_result"
-    mock_func.assert_called_once_with(config, "arg1", kwarg1="value1")
-
-
-async def test_no_pool_async_config_instrument_async_operation_with_exception() -> None:
-    """Test NoPoolAsyncConfig async operation instrumentation with exception."""
-    config = MockAsyncConfig()
-    mock_func = AsyncMock(side_effect=RuntimeError("Async test error"))
-
-    with pytest.raises(RuntimeError, match="Async test error"):
-        await config.instrument_async_operation("test_async_operation", "database", {}, mock_func, config)
-
-
-# SyncDatabaseConfig Tests
 
 
 def test_sync_database_config_basic() -> None:
@@ -520,7 +355,6 @@ def test_sync_database_config_pool_metrics() -> None:
     # Mock metrics
     mock_counter = Mock()
     mock_gauge = Mock()
-    config._pool_metrics = {"pool_operations": mock_counter, "pool_connections": mock_gauge}
 
     # Patch the isinstance calls in the config module to return True for our mocks
     with patch("sqlspec.config.isinstance") as mock_isinstance:
@@ -532,19 +366,6 @@ def test_sync_database_config_pool_metrics() -> None:
 
         mock_counter.labels.assert_called()
         mock_gauge.labels.assert_called()
-
-
-def test_sync_database_config_instrumentation_logging() -> None:
-    """Test SyncDatabaseConfig with different instrumentation settings."""
-    # Test with logging disabled
-    config = MockSyncPoolConfig()
-    config.instrumentation = InstrumentationConfig(log_pool_operations=False)
-
-    with patch("sqlspec.config.logger") as mock_logger:
-        config.create_pool()
-
-        # Should not log when disabled
-        mock_logger.info.assert_not_called()
 
 
 # AsyncDatabaseConfig Tests
@@ -591,27 +412,6 @@ async def test_async_database_config_pool_closure() -> None:
         mock_logger.info.assert_called()  # type: ignore[unreachable]
         log_calls = [str(call) for call in mock_logger.info.call_args_list]
         assert any("Closing async database connection pool" in call for call in log_calls)
-
-
-async def test_async_database_config_pool_metrics() -> None:
-    """Test AsyncDatabaseConfig with pool metrics."""
-    config = MockAsyncPoolConfig()
-
-    # Mock metrics
-    mock_counter = Mock()
-    mock_gauge = Mock()
-    config._pool_metrics = {"pool_operations": mock_counter, "pool_connections": mock_gauge}
-
-    # Patch the isinstance calls in the config module to return True for our mocks
-    with patch("sqlspec.config.isinstance") as mock_isinstance:
-        mock_isinstance.return_value = True
-
-        # Test pool creation with metrics
-        pool = await config.create_pool()
-        assert isinstance(pool, MockAsyncPool)
-
-        mock_counter.labels.assert_called()
-        mock_gauge.labels.assert_called()
 
 
 async def test_async_database_config_concurrent_pool_operations() -> None:
@@ -765,81 +565,6 @@ async def test_async_config_close_pool_exception_handling() -> None:
             await config.close_pool()
 
 
-# Instrumentation Integration Tests
-
-
-def test_config_instrumentation_operation_success() -> None:
-    """Test configuration instrumentation for successful operations."""
-    config = MockSyncConfig()
-    config.instrumentation = InstrumentationConfig(log_queries=True)
-
-    mock_func = Mock(return_value="success")
-
-    with patch("sqlspec.config.logger") as mock_logger:
-        result = config.instrument_sync_operation(
-            "test_operation", "database", {"custom_tag": "value"}, mock_func, config
-        )
-
-        assert result == "success"
-        mock_logger.info.assert_called()
-
-
-async def test_async_config_instrumentation_operation_success() -> None:
-    """Test async configuration instrumentation for successful operations."""
-    config = MockAsyncConfig()
-    config.instrumentation = InstrumentationConfig(log_queries=True)
-
-    mock_func = AsyncMock(return_value="async_success")
-
-    with patch("sqlspec.config.logger") as mock_logger:
-        result = await config.instrument_async_operation(
-            "test_async_operation", "database", {"custom_tag": "value"}, mock_func, config
-        )
-
-        assert result == "async_success"
-        mock_logger.info.assert_called()
-
-
-def test_config_instrumentation_logging_disabled() -> None:
-    """Test configuration instrumentation with logging disabled."""
-    config = MockSyncConfig()
-    config.instrumentation = InstrumentationConfig(log_queries=False)
-
-    mock_func = Mock(return_value="success")
-
-    with patch("sqlspec.config.logger") as mock_logger:
-        result = config.instrument_sync_operation("test_operation", "database", {}, mock_func, config)
-
-        assert result == "success"
-        mock_logger.info.assert_not_called()
-
-
-def test_config_instrumentation_exception_logging() -> None:
-    """Test configuration instrumentation exception logging."""
-    config = MockSyncConfig()
-    config.instrumentation = InstrumentationConfig(log_queries=True)
-
-    mock_func = Mock(side_effect=ValueError("Test exception"))
-
-    with patch("sqlspec.config.logger") as mock_logger:
-        with pytest.raises(ValueError, match="Test exception"):
-            config.instrument_sync_operation("test_operation", "database", {}, mock_func, config)
-
-        mock_logger.exception.assert_called()
-
-
-# Performance and Stress Tests
-
-
-def test_config_large_custom_tags() -> None:
-    """Test InstrumentationConfig with large number of custom tags."""
-    large_tags = {f"tag_{i}": f"value_{i}" for i in range(1000)}
-
-    config = InstrumentationConfig(custom_tags=large_tags)
-    assert len(config.custom_tags) == 1000
-    assert config.custom_tags["tag_500"] == "value_500"
-
-
 async def test_config_concurrent_pool_creation_and_closure() -> None:
     """Test concurrent pool creation and closure operations."""
     config = MockAsyncPoolConfig()
@@ -852,43 +577,6 @@ async def test_config_concurrent_pool_creation_and_closure() -> None:
     # Run multiple concurrent create/close cycles
     results = await asyncio.gather(*[create_and_close() for _ in range(10)])
     assert len(results) == 10
-
-
-def test_config_instrumentation_performance() -> None:
-    """Test instrumentation performance with many operations."""
-    config = MockSyncConfig()
-    mock_func = Mock(return_value="result")
-
-    # Run many instrumented operations
-    for i in range(1000):
-        result = config.instrument_sync_operation(f"operation_{i}", "database", {"iteration": i}, mock_func, config)
-        assert result == "result"
-
-    assert mock_func.call_count == 1000
-
-
-# Integration Tests
-
-
-def test_config_with_real_instrumentation_config() -> None:
-    """Test configuration with realistic instrumentation settings."""
-    instrumentation = InstrumentationConfig(
-        log_queries=True,
-        log_runtime=True,
-        log_parameters=True,
-        enable_opentelemetry=True,
-        enable_prometheus=True,
-        service_name="integration_test",
-        custom_tags={"env": "test", "component": "database"},
-        slow_query_threshold_ms=100.0,
-    )
-
-    config = MockSyncPoolConfig()
-    config.instrumentation = instrumentation
-
-    assert config.instrumentation.service_name == "integration_test"
-    assert config.instrumentation.custom_tags["env"] == "test"
-    assert config.instrumentation.slow_query_threshold_ms == 100.0
 
 
 def test_config_type_validation() -> None:

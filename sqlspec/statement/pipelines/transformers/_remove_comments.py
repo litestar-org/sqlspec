@@ -45,9 +45,9 @@ class CommentRemover(ProcessorProtocol):
                 for comment in node.comments:
                     comment_text = str(comment).strip()
                     hint_keywords = ["INDEX", "USE_NL", "USE_HASH", "PARALLEL", "FULL", "FIRST_ROWS", "ALL_ROWS"]
-                    is_oracle_hint = any(keyword in comment_text.upper() for keyword in hint_keywords)
+                    is_hint = any(keyword in comment_text.upper() for keyword in hint_keywords)
 
-                    if is_oracle_hint or (comment_text.startswith("!") and comment_text.endswith("")):
+                    if is_hint or (comment_text.startswith("!") and comment_text.endswith("")):
                         comments_to_keep.append(comment)
 
                 if len(comments_to_keep) < original_comment_count:

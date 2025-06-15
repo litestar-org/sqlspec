@@ -43,7 +43,6 @@ class SQLSpec:
 
     def _cleanup_pools(self) -> None:
         """Clean up all registered connection pools."""
-        logger.info("Cleaning up all registered database connection pools")
         cleaned_count = 0
 
         for config_type, config in self._configs.items():
@@ -56,7 +55,7 @@ class SQLSpec:
                                 loop = asyncio.get_running_loop()
                                 if loop.is_running():
                                     _task = asyncio.ensure_future(close_pool_awaitable, loop=loop)  # noqa: RUF006
-                                    # Don't wait for task completion since we're cleaning up
+
                                 else:
                                     asyncio.run(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
                             except RuntimeError:  # No running event loop
@@ -64,12 +63,10 @@ class SQLSpec:
                     else:
                         config.close_pool()
                     cleaned_count += 1
-                    logger.debug("Cleaned up pool for config: %s", config_type.__name__)
                 except Exception as e:
                     logger.warning("Failed to clean up pool for config %s: %s", config_type.__name__, e)
 
         self._configs.clear()
-        logger.info("Pool cleanup completed. Cleaned %d pools", cleaned_count)
 
     @overload
     def add_config(self, config: "SyncConfigT") -> "type[SyncConfigT]":  # pyright: ignore[reportInvalidTypeVarUse]
@@ -91,19 +88,7 @@ class SQLSpec:
         config_type = type(config)
         if config_type in self._configs:
             logger.warning("Configuration for %s already exists. Overwriting.", config_type.__name__)
-
         self._configs[config_type] = config
-        logger.info(
-            "Added configuration: %s (async: %s, pooling: %s)",
-            config_type.__name__,
-            config.is_async,
-            config.supports_connection_pooling,
-            extra={
-                "config_type": config_type.__name__,
-                "is_async": config.is_async,
-                "supports_pooling": config.supports_connection_pooling,
-            },
-        )
         return config_type
 
     @overload
@@ -245,27 +230,16 @@ class SQLSpec:
         if isinstance(connection_obj, Awaitable):
 
             async def _create_driver_async() -> "DriverT":
-                resolved_connection = await connection_obj
-                logger.debug("Created async driver session for config: %s", config_name)
-                return cast(
+                resolved_connection = await connection_obj  # pyright: ignore
+                return cast(  # pyright: ignore
                     "DriverT",
-                    config.driver_type(
-                        connection=resolved_connection,
-                        instrumentation_config=config.instrumentation,
-                        default_row_type=config.default_row_type,
-                    ),
+                    config.driver_type(connection=resolved_connection, default_row_type=config.default_row_type),
                 )
 
             return _create_driver_async()
 
-        logger.debug("Created sync driver session for config: %s", config_name)
-        return cast(
-            "DriverT",
-            config.driver_type(
-                connection=connection_obj,
-                instrumentation_config=config.instrumentation,
-                default_row_type=config.default_row_type,
-            ),
+        return cast(  # pyright: ignore
+            "DriverT", config.driver_type(connection=connection_obj, default_row_type=config.default_row_type)
         )
 
     @overload

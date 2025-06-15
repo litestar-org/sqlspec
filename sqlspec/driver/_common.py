@@ -6,11 +6,10 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional
 
 from sqlglot import exp
 
-from sqlspec.config import InstrumentationConfig
 from sqlspec.exceptions import NotFoundError
 from sqlspec.statement import SQLConfig
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
-from sqlspec.typing import ConnectionT, Counter, DictRow, Gauge, Histogram, RowT, T, trace
+from sqlspec.typing import ConnectionT, DictRow, RowT, T
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -24,20 +23,9 @@ logger = get_logger("driver")
 
 
 class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
-    """Enhanced common attributes and methods for driver adapters with instrumentation."""
+    """Common attributes and methods for driver adapters."""
 
-    __slots__ = (
-        "_error_counter",
-        "_latency_histogram",
-        "_pool_connections_gauge",
-        "_pool_latency_histogram",
-        "_query_counter",
-        "_tracer",
-        "config",
-        "connection",
-        "default_row_type",
-        "instrumentation_config",
-    )
+    __slots__ = ("config", "connection", "default_row_type")
 
     dialect: "DialectType"  # DialectType
     """The SQL dialect supported by the underlying database driver."""
@@ -62,80 +50,18 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         self,
         connection: "ConnectionT",
         config: "Optional[SQLConfig]" = None,
-        instrumentation_config: "Optional[InstrumentationConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
+        default_row_type: "type[DictRow]" = dict[str, Any],
     ) -> None:
-        """Initialize with connection, config, instrumentation_config, and default_row_type.
+        """Initialize with connection, config, and default_row_type.
 
         Args:
             connection: The database connection
             config: SQL statement configuration
-            instrumentation_config: Instrumentation configuration
             default_row_type: Default row type for results (DictRow, TupleRow, etc.)
         """
         self.connection = connection
         self.config = config or SQLConfig()
-        self.instrumentation_config = instrumentation_config or InstrumentationConfig()
-        self.default_row_type = default_row_type or DictRow  # type: ignore[assignment]
-        self._setup_instrumentation()
-
-    def _setup_instrumentation(self) -> None:
-        """Set up OpenTelemetry and Prometheus instrumentation."""
-        if self.instrumentation_config.enable_opentelemetry:
-            self._setup_opentelemetry()
-        if self.instrumentation_config.enable_prometheus:
-            self._setup_prometheus()
-
-    def _setup_opentelemetry(self) -> None:
-        """Set up OpenTelemetry tracer with proper service naming."""
-        if trace is None:
-            logger.warning("OpenTelemetry not installed, skipping OpenTelemetry setup.")
-            return
-        self._tracer = trace.get_tracer(
-            self.instrumentation_config.service_name
-            # __version__ # Consider adding version here if available
-        )
-
-    def _setup_prometheus(self) -> None:  # pragma: no cover
-        """Set up Prometheus metrics with proper labeling and semantic naming."""
-        try:
-            service_name = self.instrumentation_config.service_name
-            custom_tag_keys = list(self.instrumentation_config.custom_tags.keys())
-
-            # Database operation metrics
-            self._query_counter = Counter(
-                f"{service_name}_db_operations_total",
-                "Total number of database operations executed",
-                ["operation", "status", "db_system", *custom_tag_keys],
-            )
-            self._error_counter = Counter(
-                f"{service_name}_db_errors_total",
-                "Total number of database errors",
-                ["operation", "error_type", "db_system", *custom_tag_keys],
-            )
-            self._latency_histogram = Histogram(
-                f"{service_name}_db_operation_duration_seconds",
-                "Database operation duration in seconds",
-                ["operation", "db_system", *custom_tag_keys],
-                buckets=self.instrumentation_config.prometheus_latency_buckets
-                or [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2.5, 5, 10],  # Default buckets
-            )
-
-            # Connection pool metrics
-            self._pool_latency_histogram = Histogram(
-                f"{service_name}_db_pool_operation_duration_seconds",
-                "Database connection pool operation duration in seconds",
-                ["operation", "db_system", *custom_tag_keys],
-                buckets=self.instrumentation_config.prometheus_latency_buckets
-                or [0.001, 0.005, 0.01, 0.05, 0.1, 5, 10],  # Buckets for pool operations
-            )
-            self._pool_connections_gauge = Gauge(
-                f"{service_name}_db_pool_connections",
-                "Number of database connections in the pool by status",
-                ["db_system", "status", *custom_tag_keys],
-            )
-        except (ImportError, AttributeError) as e:  # pragma: no cover
-            logger.warning("Prometheus client not available or misconfigured, skipping Prometheus setup: %s", e)
+        self.default_row_type = default_row_type or dict[str, Any]  # type: ignore[assignment]
 
     def _connection(self, connection: "Optional[ConnectionT]" = None) -> "ConnectionT":
         return connection or self.connection
@@ -153,14 +79,11 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         """
         if expression is None:
             return False
-        if isinstance(
-            expression, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma, exp.Command)
-        ):  # Added more types including Command for SHOW/EXPLAIN statements
+        if isinstance(expression, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma, exp.Command)):
             return True
         if isinstance(expression, exp.With) and expression.expressions:
-            # Check the final expression in the WITH clause
             return CommonDriverAttributesMixin.returns_rows(expression.expressions[-1])
-        if isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):  # Check for RETURNING
+        if isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
             return bool(expression.find(exp.Returning))
         return False
 
@@ -214,16 +137,11 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         if target_style is None:
             target_style = self.default_parameter_style
 
-        # Override target style based on what's actually in the SQL
-        # This handles cases where the driver supports multiple styles
-        if param_info_list:
-            actual_styles = {p.style for p in param_info_list if p.style}
-            if len(actual_styles) == 1:
-                # All parameters use the same style - use that
-                detected_style = actual_styles.pop()
-                if detected_style != target_style:
-                    # The SQL uses a different style than the driver default
-                    target_style = detected_style
+        actual_styles = {p.style for p in param_info_list if p.style}
+        if len(actual_styles) == 1:
+            detected_style = actual_styles.pop()
+            if detected_style != target_style:
+                target_style = detected_style
 
         # Analyze what format the driver expects based on the placeholder style
         driver_expects_dict = target_style in {
@@ -248,12 +166,9 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
                 if param_info.name:
                     return {param_info.name: parameters}
                 return {f"param_{param_info.ordinal}": parameters}
-            # Return as single-element list for positional
             return [parameters]
 
-        # If formats match, check if conversion is still needed for special cases
         if driver_expects_dict and params_are_dict:
-            # Special case: Oracle numeric style with named dict parameters
             if target_style == ParameterStyle.POSITIONAL_COLON and all(
                 p.name and p.name.isdigit() for p in param_info_list
             ):

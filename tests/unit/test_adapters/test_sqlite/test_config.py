@@ -5,7 +5,6 @@ from unittest.mock import Mock, patch
 import pytest
 
 from sqlspec.adapters.sqlite import CONNECTION_FIELDS, SqliteConfig, SqliteDriver
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.sql import SQLConfig
 
 
@@ -72,22 +71,12 @@ def test_sqlite_config_initialization() -> None:
     config = SqliteConfig(database=":memory:")
     assert config.database == ":memory:"
     assert isinstance(config.statement_config, SQLConfig)
-    assert isinstance(config.instrumentation, InstrumentationConfig)
-
     # Test with custom parameters
     custom_statement_config = SQLConfig()
-    custom_instrumentation = InstrumentationConfig(log_queries=True)
-
-    config = SqliteConfig(
-        database="/tmp/custom.db",
-        timeout=60.0,
-        statement_config=custom_statement_config,
-        instrumentation=custom_instrumentation,
-    )
+    config = SqliteConfig(database="/tmp/custom.db", timeout=60.0, statement_config=custom_statement_config)
     assert config.database == "/tmp/custom.db"
     assert config.timeout == 60.0
     assert config.statement_config is custom_statement_config
-    assert config.instrumentation.log_queries is True
 
 
 @patch("sqlspec.adapters.sqlite.config.sqlite3.connect")
@@ -155,9 +144,7 @@ def test_sqlite_config_provide_session(mock_connect: Mock) -> None:
         assert session.connection is mock_connection
         # Check that parameter style settings were injected
         assert session.config.allowed_parameter_styles == ("qmark", "named_colon")
-        assert session.config.target_parameter_style == "qmark"
-        assert session.instrumentation_config is config.instrumentation
-        # Verify connection is not closed yet
+        assert session.config.target_parameter_style == "qmark"  # Verify connection is not closed yet
         mock_connection.close.assert_not_called()
 
     # Verify connection was closed after context exit

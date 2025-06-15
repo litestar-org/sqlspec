@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
-from sqlglot import exp
+from sqlglot import exp, parse_one
 from sqlglot.errors import ParseError as SQLGlotParseError
 
 from sqlspec.statement.pipelines.base import ProcessorProtocol
@@ -185,21 +185,13 @@ class StatementAnalyzer(ProcessorProtocol):
             expr = self._parse_cache[parse_cache_key]
         else:
             try:
-                # Use maybe_parse for graceful parsing
                 expr = exp.maybe_parse(sql_string, dialect=dialect)
                 if expr is None:
-                    # Use parse_one for better error messages
-                    import sqlglot
-
-                    expr = sqlglot.parse_one(sql_string, dialect=dialect)
-
-                # Cache the parsed expression
+                    expr = parse_one(sql_string, dialect=dialect)
                 if len(self._parse_cache) < self.cache_size:
                     self._parse_cache[parse_cache_key] = expr
-
             except (SQLGlotParseError, Exception) as e:
                 logger.warning("Failed to parse SQL statement: %s", e)
-                # Return minimal analysis for bad SQL
                 return StatementAnalysis(statement_type="Unknown", expression=exp.Anonymous(this="UNKNOWN"))
 
         return self.analyze_expression(expr)
@@ -213,8 +205,6 @@ class StatementAnalyzer(ProcessorProtocol):
         # For simplicity, let's assume for now direct expression analysis is cacheable if validation_result is not used deeply.
         cache_key = expression.sql()  # Simplified cache key
         if cache_key in self._analysis_cache:
-            # Potentially re-evaluate if critical context like validation_result changed, or make cache more sophisticated.
-            # For now, return cached if expression is identical.
             return self._analysis_cache[cache_key]
 
         analysis = StatementAnalysis(
@@ -224,18 +214,14 @@ class StatementAnalyzer(ProcessorProtocol):
             columns=self._extract_columns(expression),
             has_returning=bool(expression.find(exp.Returning)),
             is_from_select=self._is_insert_from_select(expression),
-            parameters=self._extract_parameters(expression),  # This might use context.merged_parameters
+            parameters=self._extract_parameters(expression),
             tables=self._extract_all_tables(expression),
             uses_subqueries=self._has_subqueries(expression),
-            join_count=self._count_joins(expression),  # Simple count
+            join_count=self._count_joins(expression),
             aggregate_functions=self._extract_aggregate_functions(expression),
         )
-
-        # Enhanced complexity analysis
         self._analyze_complexity(expression, analysis)
         analysis.complexity_score = self._calculate_comprehensive_complexity_score(analysis)
-
-        # Populate additional fields for aggregator compatibility
         analysis.subquery_count = len(list(expression.find_all(exp.Subquery)))
         analysis.operations = self._extract_operations(expression)
         analysis.has_aggregation = len(analysis.aggregate_functions) > 0
@@ -248,27 +234,23 @@ class StatementAnalyzer(ProcessorProtocol):
 
     def _analyze_complexity(self, expression: exp.Expression, analysis: StatementAnalysis) -> None:
         """Perform comprehensive complexity analysis."""
-        # Analyze JOIN complexity
         join_analysis_res = self._analyze_joins(expression)
         analysis.join_types = join_analysis_res["join_types"]
         analysis.potential_cartesian_products = join_analysis_res["potential_cartesian_products"]
         analysis.complexity_warnings.extend(join_analysis_res["warnings"])
         analysis.complexity_issues.extend(join_analysis_res["issues"])
 
-        # Analyze subquery complexity
         subquery_analysis = self._analyze_subqueries(expression)
         analysis.max_subquery_depth = subquery_analysis["max_subquery_depth"]
         analysis.correlated_subquery_count = subquery_analysis["correlated_subquery_count"]
         analysis.complexity_warnings.extend(subquery_analysis["warnings"])
         analysis.complexity_issues.extend(subquery_analysis["issues"])
 
-        # Analyze WHERE clause complexity
         where_analysis = self._analyze_where_clauses(expression)
         analysis.where_condition_count = where_analysis["total_where_conditions"]
         analysis.complexity_warnings.extend(where_analysis["warnings"])
         analysis.complexity_issues.extend(where_analysis["issues"])
 
-        # Analyze function usage
         function_analysis = self._analyze_functions(expression)
         analysis.function_count = function_analysis["function_count"]
         analysis.complexity_warnings.extend(function_analysis["warnings"])

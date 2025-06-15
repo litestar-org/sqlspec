@@ -5,7 +5,6 @@ from unittest.mock import Mock
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConnection, DuckDBDriver
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -30,23 +29,17 @@ def mock_duckdb_connection() -> Mock:
 def duckdb_driver(mock_duckdb_connection: Mock) -> DuckDBDriver:
     """Create a DuckDB driver with mocked connection."""
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
-    instrumentation_config = InstrumentationConfig()
-    return DuckDBDriver(connection=mock_duckdb_connection, config=config, instrumentation_config=instrumentation_config)
+    return DuckDBDriver(connection=mock_duckdb_connection, config=config)
 
 
 def test_duckdb_driver_initialization(mock_duckdb_connection: Mock) -> None:
     """Test DuckDB driver initialization."""
     config = SQLConfig()
-    instrumentation_config = InstrumentationConfig(log_queries=True)
-
-    driver = DuckDBDriver(
-        connection=mock_duckdb_connection, config=config, instrumentation_config=instrumentation_config
-    )
+    driver = DuckDBDriver(connection=mock_duckdb_connection, config=config)
 
     # Test driver attributes are set correctly
     assert driver.connection is mock_duckdb_connection
     assert driver.config is config
-    assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "duckdb"
     assert driver.supports_native_arrow_export is False
     assert driver.supports_native_arrow_import is False
@@ -239,34 +232,6 @@ def test_duckdb_driver_fetch_arrow_table_with_connection_override(duckdb_driver:
     # Verify override connection was used for DuckDB-style native path
     override_connection.execute.assert_called_once_with("SELECT id FROM users", [])
     mock_execute_result.arrow.assert_called_once()
-
-
-def test_duckdb_driver_logging_configuration(duckdb_driver: DuckDBDriver, mock_duckdb_connection: Mock) -> None:
-    """Test DuckDB driver logging configuration."""
-    # Setup mock cursor
-    mock_cursor = Mock()
-    mock_duckdb_connection.cursor.return_value = mock_cursor
-    mock_cursor.description = [("id",), ("name",)]  # Mock cursor description
-    mock_cursor.fetchall.return_value = [(1, "Test User")]  # Mock fetchall with actual data
-
-    # Enable logging
-    duckdb_driver.instrumentation_config.log_queries = True
-    duckdb_driver.instrumentation_config.log_parameters = True
-    duckdb_driver.instrumentation_config.log_results_count = True
-
-    # Create SQL statement with parameters
-    statement = SQL("SELECT * FROM users WHERE id = ?", parameters=[1])
-
-    # Execute with logging enabled
-    result = duckdb_driver._execute_statement(statement=statement)
-
-    # Verify execution worked - result should be fetched data and columns
-    assert isinstance(result, dict)
-    assert "data" in result
-    assert "columns" in result
-    assert result["data"] == [(1, "Test User")]
-    assert result["columns"] == ["id", "name"]
-    mock_cursor.execute.assert_called_once_with("SELECT * FROM users WHERE id = ?", [1])
 
 
 def test_duckdb_driver_mixins_integration(duckdb_driver: DuckDBDriver) -> None:

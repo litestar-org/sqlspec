@@ -1,5 +1,6 @@
 """Unit tests for SQL file loader module."""
 
+from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -71,21 +72,21 @@ INSERT INTO users (username, email) VALUES (:username, :email);
 """
 
     @pytest.fixture
-    def mock_path_read(self, sample_sql_content: str) -> Mock:
+    def mock_path_read(self, sample_sql_content: str) -> Generator[Mock, None, None]:
         """Mock Path.read_bytes."""
         with patch.object(Path, "read_bytes") as mock_read:
             mock_read.return_value = sample_sql_content.encode("utf-8")
             yield mock_read
 
     @pytest.fixture
-    def mock_path_exists(self) -> Mock:
+    def mock_path_exists(self) -> Generator[Mock, None, None]:
         """Mock Path.exists."""
         with patch.object(Path, "exists") as mock_exists:
             mock_exists.return_value = True
             yield mock_exists
 
     @pytest.fixture
-    def mock_path_is_file(self) -> Mock:
+    def mock_path_is_file(self) -> Generator[Mock, None, None]:
         """Mock Path.is_file."""
         with patch.object(Path, "is_file") as mock_is_file:
             mock_is_file.return_value = True
@@ -271,7 +272,7 @@ SELECT * FROM users WHERE id = 2;
         # Get as SQL object
         sql = loader.get_sql("custom_query")
         assert isinstance(sql, SQL)
-        assert "SELECT * FROM custom_table" in sql._sql
+        assert "SELECT * FROM custom_table" in sql.sql
 
         # Should show in query list
         assert "custom_query" in loader.list_queries()

@@ -3,7 +3,6 @@
 from unittest.mock import MagicMock, patch
 
 from sqlspec.adapters.bigquery import CONNECTION_FIELDS, BigQueryConfig, BigQueryDriver
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.sql import SQLConfig
 
 
@@ -75,20 +74,10 @@ def test_bigquery_config_initialization() -> None:
     # Test with default parameters
     config = BigQueryConfig(project="test-project", dataset_id="test_dataset")
     assert isinstance(config.statement_config, SQLConfig)
-    assert isinstance(config.instrumentation, InstrumentationConfig)
-
     # Test with custom parameters
     custom_statement_config = SQLConfig()
-    custom_instrumentation = InstrumentationConfig(log_queries=True)
-
-    config = BigQueryConfig(
-        project="test-project",
-        dataset_id="test_dataset",
-        statement_config=custom_statement_config,
-        instrumentation=custom_instrumentation,
-    )
+    config = BigQueryConfig(project="test-project", dataset_id="test_dataset", statement_config=custom_statement_config)
     assert config.statement_config is custom_statement_config
-    assert config.instrumentation.log_queries is True
 
 
 def test_bigquery_config_provide_session() -> None:
@@ -104,7 +93,6 @@ def test_bigquery_config_provide_session() -> None:
             # Check that parameter styles were set
             assert session.config.allowed_parameter_styles == ("named_at",)
             assert session.config.target_parameter_style == "named_at"
-            assert session.instrumentation_config is config.instrumentation
 
 
 def test_bigquery_config_driver_type() -> None:

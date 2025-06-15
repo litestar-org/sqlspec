@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from sqlspec.adapters.oracledb import OracleAsyncConnection, OracleAsyncDriver, OracleSyncConnection, OracleSyncDriver
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQLConfig
 
@@ -26,35 +25,24 @@ def mock_oracle_async_connection() -> AsyncMock:
 def oracle_sync_driver(mock_oracle_sync_connection: Mock) -> OracleSyncDriver:
     """Create an Oracle sync driver with mocked connection."""
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
-    instrumentation_config = InstrumentationConfig()
-    return OracleSyncDriver(
-        connection=mock_oracle_sync_connection, config=config, instrumentation_config=instrumentation_config
-    )
+    return OracleSyncDriver(connection=mock_oracle_sync_connection, config=config)
 
 
 @pytest.fixture
 def oracle_async_driver(mock_oracle_async_connection: Mock) -> OracleAsyncDriver:
     """Create an Oracle async driver with mocked connection."""
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
-    instrumentation_config = InstrumentationConfig()
-    return OracleAsyncDriver(
-        connection=mock_oracle_async_connection, config=config, instrumentation_config=instrumentation_config
-    )
+    return OracleAsyncDriver(connection=mock_oracle_async_connection, config=config)
 
 
 def test_oracle_sync_driver_initialization(mock_oracle_sync_connection: Mock) -> None:
     """Test Oracle sync driver initialization."""
     config = SQLConfig()
-    instrumentation_config = InstrumentationConfig(log_queries=True)
-
-    driver = OracleSyncDriver(
-        connection=mock_oracle_sync_connection, config=config, instrumentation_config=instrumentation_config
-    )
+    driver = OracleSyncDriver(connection=mock_oracle_sync_connection, config=config)
 
     # Test driver attributes are set correctly
     assert driver.connection is mock_oracle_sync_connection
     assert driver.config is config
-    assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "oracle"
     assert driver.supports_native_arrow_export is False
     assert driver.supports_native_arrow_import is False
@@ -63,16 +51,11 @@ def test_oracle_sync_driver_initialization(mock_oracle_sync_connection: Mock) ->
 def test_oracle_async_driver_initialization(mock_oracle_async_connection: AsyncMock) -> None:
     """Test Oracle async driver initialization."""
     config = SQLConfig()
-    instrumentation_config = InstrumentationConfig(log_queries=True)
-
-    driver = OracleAsyncDriver(
-        connection=mock_oracle_async_connection, config=config, instrumentation_config=instrumentation_config
-    )
+    driver = OracleAsyncDriver(connection=mock_oracle_async_connection, config=config)
 
     # Test driver attributes are set correctly
     assert driver.connection is mock_oracle_async_connection
     assert driver.config is config
-    assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "oracle"
     assert driver.supports_native_arrow_export is False
     assert driver.supports_native_arrow_import is False

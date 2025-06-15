@@ -10,11 +10,10 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional
 import aiosqlite
 
 from sqlspec.adapters.aiosqlite.driver import AiosqliteConnection, AiosqliteDriver
-from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig
+from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow, Empty
-from sqlspec.utils.telemetry import instrument_operation_async
 
 if TYPE_CHECKING:
     from typing import Literal
@@ -65,7 +64,6 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
         self,
         database: str = ":memory:",
         statement_config: Optional[SQLConfig] = None,
-        instrumentation: Optional[InstrumentationConfig] = None,
         default_row_type: type[DictRow] = DictRow,
         # Connection parameters
         timeout: Optional[float] = None,
@@ -74,8 +72,6 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
         check_same_thread: Optional[bool] = None,
         cached_statements: Optional[int] = None,
         uri: Optional[bool] = None,
-        # User-defined extras
-        extras: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize Aiosqlite configuration.
@@ -83,7 +79,6 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
         Args:
             database: The path to the database file to be opened. Pass ":memory:" for in-memory database
             statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
             default_row_type: Default row type for results
             timeout: How many seconds the connection should wait before raising an OperationalError when a table is locked
             detect_types: Control whether and how data types are detected. It can be 0 (default) or a combination of PARSE_DECLTYPES and PARSE_COLNAMES
@@ -91,7 +86,6 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
             check_same_thread: If True (default), ProgrammingError is raised if the database connection is used by a thread other than the one that created it
             cached_statements: The number of statements that SQLite will cache for this connection. The default is 128
             uri: If set to True, database is interpreted as a URI with supported options
-            extras: Additional connection parameters not explicitly defined
             **kwargs: Additional parameters (stored in extras)
         """
         # Store connection parameters as instance attributes
@@ -102,16 +96,12 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
         self.check_same_thread = check_same_thread
         self.cached_statements = cached_statements
         self.uri = uri
-
-        # Handle extras and additional kwargs
-        self.extras = extras or {}
-        self.extras.update(kwargs)
-
+        self.extras = kwargs or {}
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
-        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
+        super().__init__()
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
@@ -142,13 +132,12 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
         Returns:
             An Aiosqlite connection instance.
         """
-        async with instrument_operation_async(self, "aiosqlite_create_connection", "database"):
-            try:
-                config = self.connection_config_dict
-                return await aiosqlite.connect(**config)
-            except Exception as e:
-                msg = f"Could not configure the Aiosqlite connection. Error: {e!s}"
-                raise ImproperConfigurationError(msg) from e
+        try:
+            config = self.connection_config_dict
+            return await aiosqlite.connect(**config)
+        except Exception as e:
+            msg = f"Could not configure the Aiosqlite connection. Error: {e!s}"
+            raise ImproperConfigurationError(msg) from e
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AiosqliteConnection, None]:
@@ -188,9 +177,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
                     target_parameter_style=self.preferred_parameter_style,
                 )
 
-            yield self.driver_type(
-                connection=connection, config=statement_config, instrumentation_config=self.instrumentation
-            )
+            yield self.driver_type(connection=connection, config=statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> None:
         """Aiosqlite doesn't support pooling."""

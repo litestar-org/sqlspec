@@ -5,8 +5,6 @@ with automatic parameter binding and validation. Enhanced with SQLGlot's
 advanced builder patterns and optimization capabilities.
 """
 
-import contextlib
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, NoReturn, Optional, Union
@@ -26,16 +24,11 @@ from typing_extensions import Self
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import RowT
-from sqlspec.utils.correlation import CorrelationContext
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from sqlspec.config import InstrumentationConfig
     from sqlspec.statement.result import SQLResult
 
 __all__ = ("QueryBuilder", "SafeQuery")
-
-logger = get_logger("statement.builder")
 
 
 @dataclass(frozen=True)
@@ -44,7 +37,7 @@ class SafeQuery:
 
     sql: str
     parameters: dict[str, Any] = field(default_factory=dict)
-    dialect: Optional[DialectType] = None
+    dialect: Optional[DialectType] = field(default=None)
 
 
 @dataclass
@@ -63,7 +56,6 @@ class QueryBuilder(ABC, Generic[RowT]):
     """
 
     dialect: DialectType = field(default=None)
-    instrumentation_config: Optional["InstrumentationConfig"] = field(default=None)
     schema: Optional[dict[str, dict[str, str]]] = field(default=None)
     _expression: Optional[exp.Expression] = field(default=None, init=False, repr=False, compare=False, hash=False)
     # Internally, builders will use a dictionary for named parameters.
@@ -76,10 +68,6 @@ class QueryBuilder(ABC, Generic[RowT]):
     optimize_joins: bool = field(default=True, init=True)
     optimize_predicates: bool = field(default=True, init=True)
     simplify_expressions: bool = field(default=True, init=True)
-
-    # Caching for performance
-    _cached_sql: Optional[str] = field(default=None, init=False, repr=False, compare=False, hash=False)
-    _cache_valid: bool = field(default=False, init=False, repr=False, compare=False, hash=False)
 
     def __post_init__(self) -> None:
         self._expression = self._create_base_expression()
@@ -123,11 +111,6 @@ class QueryBuilder(ABC, Generic[RowT]):
         """
         raise SQLBuilderError(message) from cause
 
-    def _invalidate_cache(self) -> None:
-        """Invalidate the cached SQL when the query changes."""
-        self._cached_sql = None
-        self._cache_valid = False
-
     def _add_parameter(self, value: Any, context: Optional[str] = None) -> str:
         """Adds a parameter to the query and returns its placeholder name.
 
@@ -138,7 +121,6 @@ class QueryBuilder(ABC, Generic[RowT]):
         Returns:
             str: The placeholder name for the parameter (e.g., :param_1 or :where_param_1).
         """
-        self._invalidate_cache()
         self._parameter_counter += 1
 
         # Use context-aware naming if provided
@@ -232,11 +214,6 @@ class QueryBuilder(ABC, Generic[RowT]):
                 self._raise_sql_builder_error(msg, e)
         elif isinstance(query, exp.Select):
             cte_select_expression = query.copy()
-        else:
-            msg = (
-                f"Invalid query type for CTE: {type(query).__name__}. Must be QueryBuilder, str, or sqlglot.exp.Select."
-            )
-            self._raise_sql_builder_error(msg)
 
         self._with_ctes[alias] = exp.CTE(this=cte_select_expression, alias=exp.to_table(alias))
         return self
@@ -247,25 +224,9 @@ class QueryBuilder(ABC, Generic[RowT]):
         Returns:
             SafeQuery: A dataclass containing the SQL string and parameters.
         """
-        correlation_id = CorrelationContext.get()
-        start_time = time.perf_counter()
-
-        # Log builder start if configured
-        if self.instrumentation_config and self.instrumentation_config.log_queries:
-            logger.info(
-                "Building %s query",
-                self.__class__.__name__,
-                extra={
-                    "builder_type": self.__class__.__name__,
-                    "has_ctes": bool(self._with_ctes),
-                    "parameter_count": len(self._parameters),
-                    "correlation_id": correlation_id,
-                },
-            )
-
         if self._expression is None:
             self._raise_sql_builder_error("QueryBuilder expression not initialized.")
-        # self._expression is known to be not None here.
+
         final_expression = self._expression.copy()
 
         if self._with_ctes:
@@ -279,10 +240,6 @@ class QueryBuilder(ABC, Generic[RowT]):
                 and self._with_ctes
             ):
                 final_expression = exp.With(expressions=list(self._with_ctes.values()), this=final_expression)
-            else:
-                logger.warning(
-                    "Expression type %s may not support CTEs. CTEs will not be added.", type(final_expression).__name__
-                )
 
         # Apply SQLGlot optimizations if enabled
         if self.enable_optimization:
@@ -291,31 +248,9 @@ class QueryBuilder(ABC, Generic[RowT]):
         try:
             sql_string = final_expression.sql(dialect=self.dialect_name, pretty=True)
         except Exception as e:
-            problematic_sql_for_log = "Could not serialize problematic expression."
-            with contextlib.suppress(Exception):
-                problematic_sql_for_log = final_expression.sql(dialect=self.dialect_name)
-
-            logger.exception("Error generating SQL. Problematic SQL (approx): %s", problematic_sql_for_log)
             err_msg = f"Error generating SQL from expression: {e!s}"
-            # self._raise_sql_builder_error will make sql_string known as potentially unbound if not for NoReturn
             self._raise_sql_builder_error(err_msg, e)
 
-        if self.instrumentation_config and self.instrumentation_config.log_queries:
-            duration = time.perf_counter() - start_time
-            logger.info(
-                "Built %s query in %.3fms",
-                self.__class__.__name__,
-                duration * 1000,
-                extra={
-                    "builder_type": self.__class__.__name__,
-                    "sql_length": len(sql_string),
-                    "parameter_count": len(self._parameters),
-                    "duration_ms": duration * 1000,
-                    "correlation_id": correlation_id,
-                },
-            )
-
-        # sql_string is now guaranteed to be assigned if no error was raised.
         return SafeQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=self.dialect)
 
     def _optimize_expression(self, expression: exp.Expression) -> exp.Expression:
@@ -330,38 +265,30 @@ class QueryBuilder(ABC, Generic[RowT]):
         if not self.enable_optimization:
             return expression
 
-        optimized = expression
-
         try:
             # Use SQLGlot's comprehensive optimizer if schema is available
             if hasattr(self, "schema") and self.schema:
-                optimized = optimize(optimized.copy(), schema=self.schema, dialect=self.dialect_name)
-            else:
-                # Apply individual optimizations in order
-                if self.simplify_expressions:
-                    optimized = simplify(optimized.copy())
+                return optimize(expression.copy(), schema=self.schema, dialect=self.dialect_name)
 
-                if self.optimize_predicates and isinstance(optimized, (exp.Select, exp.Update, exp.Delete)):
-                    optimized = pushdown_predicates(optimized.copy(), dialect=self.dialect_name)  # type: ignore[no-untyped-call]
+            # Apply individual optimizations in order
+            optimized = expression
+            if self.simplify_expressions:
+                optimized = simplify(optimized.copy())
 
-                if self.optimize_joins and isinstance(optimized, exp.Select):
-                    optimized = optimize_joins(optimized.copy())  # type: ignore[no-untyped-call]
+            if self.optimize_predicates and isinstance(optimized, (exp.Select, exp.Update, exp.Delete)):
+                optimized = pushdown_predicates(optimized.copy(), dialect=self.dialect_name)
 
-                # Apply additional SQLGlot optimizations
-                if isinstance(optimized, exp.Select):
-                    optimized = eliminate_subqueries(optimized.copy())
+            if self.optimize_joins and isinstance(optimized, exp.Select):
+                optimized = optimize_joins(optimized.copy())
 
-                    optimized = unnest_subqueries(optimized.copy())  # type: ignore[no-untyped-call]
+            # Apply additional SQLGlot optimizations
+            if isinstance(optimized, exp.Select):
+                optimized = eliminate_subqueries(optimized.copy())
+                optimized = unnest_subqueries(optimized.copy())
 
-        except Exception as e:
-            # Log optimization failure but continue with unoptimized query
-            logger.warning(
-                "Query optimization failed: %s. Using unoptimized query.",
-                str(e),
-                extra={"error": str(e), "expression_type": type(expression).__name__},
-            )
+        except Exception:
+            # Continue with unoptimized query on failure
             return expression
-
         return optimized
 
     def to_statement(self, config: "Optional[SQLConfig]" = None) -> "SQL":

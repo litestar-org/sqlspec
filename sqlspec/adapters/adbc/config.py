@@ -6,7 +6,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
 
 from sqlspec.adapters.adbc.driver import AdbcConnection, AdbcDriver
-from sqlspec.config import InstrumentationConfig, NoPoolSyncConfig
+from sqlspec.config import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow, Empty
@@ -118,7 +118,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     def __init__(
         self,
         statement_config: Optional[SQLConfig] = None,
-        instrumentation: Optional[InstrumentationConfig] = None,
         default_row_type: type[DictRow] = DictRow,
         on_connection_create: Optional[Callable[[AdbcConnection], None]] = None,
         # Core connection parameters
@@ -156,8 +155,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         # Flight SQL specific
         authorization_header: Optional[str] = None,
         grpc_options: Optional[dict[str, Any]] = None,
-        # User-defined extras
-        extras: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize ADBC configuration with universal connectivity features.
@@ -194,7 +191,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             role: Role name (Snowflake)
             authorization_header: Authorization header for Flight SQL
             grpc_options: gRPC specific options for Flight SQL
-            extras: Additional connection parameters not explicitly defined
             **kwargs: Additional parameters (stored in extras)
 
         Example:
@@ -247,18 +243,14 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self.authorization_header = authorization_header
         self.grpc_options = grpc_options
 
-        # Handle extras and additional kwargs
-        self.extras = extras or {}
-        self.extras.update(kwargs)
+        self.extras = kwargs or {}
 
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
         self.on_connection_create = on_connection_create
         self._dialect: DialectType = None
-        super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig()  # pyright: ignore
-        )
+        super().__init__()
 
     def _resolve_driver_name(self) -> str:
         """Resolve and normalize the ADBC driver name.
@@ -340,20 +332,12 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         """
         driver_path = self._resolve_driver_name()
 
-        if self.instrumentation.log_pool_operations:
-            logger.debug("Loading ADBC driver: %s", driver_path, extra={"adapter": "adbc"})
-
         try:
             connect_func = import_string(driver_path)
         except ImportError as e:
-            # Try adding .dbapi.connect suffix as fallback
             driver_path_with_suffix = f"{driver_path}.dbapi.connect"
             try:
                 connect_func = import_string(driver_path_with_suffix)
-                if self.instrumentation.log_pool_operations:
-                    logger.info(
-                        "Loaded ADBC driver with suffix: %s", driver_path_with_suffix, extra={"adapter": "adbc"}
-                    )
             except ImportError as e2:
                 msg = (
                     f"Failed to import ADBC connect function from '{driver_path}' or "
@@ -428,35 +412,16 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         Raises:
             ImproperConfigurationError: If the connection could not be established.
         """
-        if self.instrumentation.log_pool_operations:
-            logger.info("Creating ADBC connection", extra={"adapter": "adbc"})
 
         try:
             connect_func = self._get_connect_func()
-            config_dict = self.connection_config_dict
+            connection = connect_func(**self.connection_config_dict)
 
-            if self.instrumentation.log_pool_operations:
-                logger.debug("ADBC connection config: %s", config_dict, extra={"adapter": "adbc"})
-
-            connection = connect_func(**config_dict)
-
-            if self.instrumentation.log_pool_operations:
-                logger.info("ADBC connection created successfully", extra={"adapter": "adbc"})
-
-            # Execute connection creation hook
             if self.on_connection_create:
-                try:
-                    self.on_connection_create(connection)
-                    if self.instrumentation.log_pool_operations:
-                        logger.debug("Executed connection creation hook", extra={"adapter": "adbc"})
-                except Exception as e:
-                    if self.instrumentation.log_pool_operations:
-                        logger.warning("Connection creation hook failed", extra={"adapter": "adbc", "error": str(e)})
-
+                self.on_connection_create(connection)
         except Exception as e:
             driver_name = self.driver_name or "Unknown"
             msg = f"Could not configure ADBC connection using driver '{driver_name}'. Error: {e}"
-            logger.exception(msg, extra={"adapter": "adbc", "error": str(e)})
             raise ImproperConfigurationError(msg) from e
         return connection
 

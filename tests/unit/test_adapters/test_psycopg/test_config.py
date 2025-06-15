@@ -12,7 +12,6 @@ from sqlspec.adapters.psycopg import (
     PsycopgSyncConfig,
     PsycopgSyncDriver,
 )
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.sql import SQLConfig
 
 
@@ -157,12 +156,8 @@ def test_psycopg_sync_config_initialization() -> None:
     )
     assert config.host == "localhost"
     assert isinstance(config.statement_config, SQLConfig)
-    assert isinstance(config.instrumentation, InstrumentationConfig)
-
     # Test with custom parameters
     custom_statement_config = SQLConfig(strict_mode=False)
-    custom_instrumentation = InstrumentationConfig(log_queries=True)
-
     config = PsycopgSyncConfig(
         host="custom_host",
         port=5433,
@@ -172,14 +167,12 @@ def test_psycopg_sync_config_initialization() -> None:
         min_size=2,
         max_size=15,
         statement_config=custom_statement_config,
-        instrumentation=custom_instrumentation,
     )
     assert config.host == "custom_host"
     assert config.port == 5433
     assert config.min_size == 2
     assert config.max_size == 15
     assert config.statement_config is custom_statement_config
-    assert config.instrumentation.log_queries is True
 
 
 def test_psycopg_async_config_initialization() -> None:
@@ -190,7 +183,6 @@ def test_psycopg_async_config_initialization() -> None:
     )
     assert config.host == "localhost"
     assert isinstance(config.statement_config, SQLConfig)
-    assert isinstance(config.instrumentation, InstrumentationConfig)
 
 
 def test_psycopg_config_connection_config_dict() -> None:
@@ -437,9 +429,7 @@ def test_psycopg_sync_config_provide_session(mock_connect: Mock) -> None:
         assert session.connection is mock_connection
         # Check that parameter styles were set
         assert session.config.allowed_parameter_styles == ("pyformat_positional", "pyformat_named")
-        assert session.config.target_parameter_style == "pyformat_positional"
-        assert session.instrumentation_config is config.instrumentation
-        # Verify connection is not closed yet
+        assert session.config.target_parameter_style == "pyformat_positional"  # Verify connection is not closed yet
         mock_connection.close.assert_not_called()
 
     # Verify connection was closed after context exit
@@ -463,9 +453,7 @@ async def test_psycopg_async_config_provide_session(mock_connect: Mock) -> None:
         assert session.connection is mock_connection
         # Check that parameter styles were set
         assert session.config.allowed_parameter_styles == ("pyformat_positional", "pyformat_named")
-        assert session.config.target_parameter_style == "pyformat_positional"
-        assert session.instrumentation_config is config.instrumentation
-        # Verify connection is not closed yet
+        assert session.config.target_parameter_style == "pyformat_positional"  # Verify connection is not closed yet
         mock_connection.close.assert_not_called()
 
     # Verify connection was closed after context exit
@@ -561,62 +549,6 @@ def test_psycopg_config_ssl_configuration() -> None:
     assert config.sslcert == "/path/to/cert.pem"
     assert config.sslkey == "/path/to/key.pem"
     assert config.sslrootcert == "/path/to/ca.pem"
-
-
-def test_psycopg_config_from_pool_config() -> None:
-    """Test Psycopg config from_pool_config backward compatibility."""
-    # Test basic backward compatibility
-    pool_config = {
-        "host": "localhost",
-        "port": 5432,
-        "user": "test_user",
-        "password": "test_password",
-        "dbname": "test_db",
-        "min_size": 1,
-        "max_size": 10,
-    }
-    config = PsycopgSyncConfig.from_pool_config(pool_config)
-    assert config.host == "localhost"
-    assert config.port == 5432
-    assert config.user == "test_user"
-    assert config.min_size == 1
-    assert config.max_size == 10
-    assert config.extras == {}
-
-    # Test with connection config
-    connection_config = {"sslmode": "require", "connect_timeout": 30.0}
-    pool_config_override = {
-        "host": "pool_host",
-        "port": 5432,
-        "user": "test_user",
-        "password": "test_password",
-        "dbname": "test_db",
-        "min_size": 2,
-        "max_size": 20,
-        "sslmode": "prefer",  # Should override connection_config
-    }
-    config2 = PsycopgSyncConfig.from_pool_config(pool_config_override, connection_config=connection_config)
-    assert config2.host == "pool_host"
-    assert config2.port == 5432
-    assert config2.connect_timeout == 30.0  # From connection_config
-    assert config2.sslmode == "prefer"  # Pool config takes precedence
-    assert config2.min_size == 2
-    assert config2.max_size == 20
-
-    # Test with extra parameters
-    pool_config_with_extras = {
-        "host": "localhost",
-        "port": 5432,
-        "user": "test_user",
-        "password": "test_password",
-        "dbname": "test_db",
-        "unknown_param": "test_value",
-        "another_param": 42,
-    }
-    config_extras = PsycopgSyncConfig.from_pool_config(pool_config_with_extras)
-    assert config_extras.host == "localhost"
-    assert config_extras.extras["unknown_param"] == "test_value"
-    assert config_extras.extras["another_param"] == 42
 
 
 def test_psycopg_config_conninfo() -> None:

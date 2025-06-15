@@ -15,10 +15,9 @@ from sqlspec.adapters.oracledb.driver import (
     OracleSyncConnection,
     OracleSyncDriver,
 )
-from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig, SyncDatabaseConfig
+from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow, Empty
-from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -125,7 +124,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
     def __init__(
         self,
         statement_config: "Optional[SQLConfig]" = None,
-        instrumentation: "Optional[InstrumentationConfig]" = None,
         default_row_type: "type[DictRow]" = DictRow,
         # Connection parameters
         dsn: Optional[str] = None,
@@ -158,15 +156,12 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         max_sessions_per_shard: Optional[int] = None,
         soda_metadata_cache: Optional[bool] = None,
         ping_interval: Optional[int] = None,
-        # User-defined extras
-        extras: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize Oracle synchronous configuration.
 
         Args:
             statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
             default_row_type: Default row type for results
             dsn: Connection string for the database
             user: Username for database authentication
@@ -197,7 +192,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
             max_sessions_per_shard: Maximum number of sessions per shard
             soda_metadata_cache: Whether to enable SODA metadata caching
             ping_interval: Interval for pinging pooled connections
-            extras: Additional connection parameters not explicitly defined
             **kwargs: Additional parameters (stored in extras)
         """
         # Store connection parameters as instance attributes
@@ -233,15 +227,14 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         self.soda_metadata_cache = soda_metadata_cache
         self.ping_interval = ping_interval
 
-        # Handle extras and additional kwargs
-        self.extras = extras or {}
+        self.extras = kwargs or {}
         self.extras.update(kwargs)
 
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
-        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
+        super().__init__()
 
     def _create_pool(self) -> "ConnectionPool":
         """Create the actual connection pool."""
@@ -259,10 +252,9 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         Returns:
             An Oracle Connection instance.
         """
-        with instrument_operation(self, "oracle_create_connection", "database"):
-            if self.pool_instance is None:
-                self.pool_instance = self.create_pool()
-            return self.pool_instance.acquire()
+        if self.pool_instance is None:
+            self.pool_instance = self.create_pool()
+        return self.pool_instance.acquire()
 
     @contextlib.contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[OracleSyncConnection, None, None]":
@@ -304,9 +296,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
                     target_parameter_style=self.preferred_parameter_style,
                 )
 
-            driver = self.driver_type(
-                connection=conn, config=statement_config, instrumentation_config=self.instrumentation
-            )
+            driver = self.driver_type(connection=conn, config=statement_config)
             yield driver
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
@@ -410,7 +400,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
     def __init__(
         self,
         statement_config: "Optional[SQLConfig]" = None,
-        instrumentation: "Optional[InstrumentationConfig]" = None,
         default_row_type: "type[DictRow]" = DictRow,
         # Connection parameters
         dsn: Optional[str] = None,
@@ -443,15 +432,12 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         max_sessions_per_shard: Optional[int] = None,
         soda_metadata_cache: Optional[bool] = None,
         ping_interval: Optional[int] = None,
-        # User-defined extras
-        extras: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize Oracle asynchronous configuration.
 
         Args:
             statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
             default_row_type: Default row type for results
             dsn: Connection string for the database
             user: Username for database authentication
@@ -482,7 +468,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
             max_sessions_per_shard: Maximum number of sessions per shard
             soda_metadata_cache: Whether to enable SODA metadata caching
             ping_interval: Interval for pinging pooled connections
-            extras: Additional connection parameters not explicitly defined
             **kwargs: Additional parameters (stored in extras)
         """
         # Store connection parameters as instance attributes
@@ -518,15 +503,13 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         self.soda_metadata_cache = soda_metadata_cache
         self.ping_interval = ping_interval
 
-        # Handle extras and additional kwargs
-        self.extras = extras or {}
-        self.extras.update(kwargs)
+        self.extras = kwargs or {}
 
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
-        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
+        super().__init__()
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
@@ -572,10 +555,9 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         Returns:
             An Oracle AsyncConnection instance.
         """
-        async with instrument_operation_async(self, "oracle_async_create_connection", "database"):
-            if self.pool_instance is None:
-                self.pool_instance = await self.create_pool()
-            return cast("OracleAsyncConnection", await self.pool_instance.acquire())
+        if self.pool_instance is None:
+            self.pool_instance = await self.create_pool()
+        return cast("OracleAsyncConnection", await self.pool_instance.acquire())
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[OracleAsyncConnection, None]:
@@ -617,9 +599,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
                     target_parameter_style=self.preferred_parameter_style,
                 )
 
-            driver = self.driver_type(
-                connection=conn, config=statement_config, instrumentation_config=self.instrumentation
-            )
+            driver = self.driver_type(connection=conn, config=statement_config)
             yield driver
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":

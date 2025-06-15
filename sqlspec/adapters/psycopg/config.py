@@ -15,7 +15,7 @@ from sqlspec.adapters.psycopg.driver import (
     PsycopgSyncConnection,
     PsycopgSyncDriver,
 )
-from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig, SyncDatabaseConfig
+from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow, Empty
 
@@ -114,7 +114,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     def __init__(
         self,
         statement_config: "Optional[SQLConfig]" = None,
-        instrumentation: "Optional[InstrumentationConfig]" = None,
         default_row_type: "type[DictRow]" = DictRow,
         # Connection parameters
         conninfo: Optional[str] = None,
@@ -151,7 +150,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
         Args:
             statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
             default_row_type: Default row type for results
             conninfo: Connection string in libpq format
             host: Database server host
@@ -218,7 +216,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
-        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
+        super().__init__()
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
@@ -268,13 +266,11 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
     def _create_pool(self) -> "ConnectionPool":
         """Create the actual connection pool."""
-        if self.instrumentation.log_pool_operations:
-            logger.info("Creating Psycopg connection pool", extra={"adapter": "psycopg"})
+        logger.info("Creating Psycopg connection pool", extra={"adapter": "psycopg"})
 
         try:
             pool = ConnectionPool(**self.pool_config_dict)
-            if self.instrumentation.log_pool_operations:
-                logger.info("Psycopg connection pool created successfully", extra={"adapter": "psycopg"})
+            logger.info("Psycopg connection pool created successfully", extra={"adapter": "psycopg"})
         except Exception as e:
             logger.exception("Failed to create Psycopg connection pool", extra={"adapter": "psycopg", "error": str(e)})
             raise
@@ -285,13 +281,11 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         if not self.pool_instance:
             return
 
-        if self.instrumentation.log_pool_operations:
-            logger.info("Closing Psycopg connection pool", extra={"adapter": "psycopg"})
+        logger.info("Closing Psycopg connection pool", extra={"adapter": "psycopg"})
 
         try:
             self.pool_instance.close()
-            if self.instrumentation.log_pool_operations:
-                logger.info("Psycopg connection pool closed successfully", extra={"adapter": "psycopg"})
+            logger.info("Psycopg connection pool closed successfully", extra={"adapter": "psycopg"})
         except Exception as e:
             logger.exception("Failed to close Psycopg connection pool", extra={"adapter": "psycopg", "error": str(e)})
             raise
@@ -348,9 +342,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                     target_parameter_style=self.preferred_parameter_style,
                 )
 
-            driver = self.driver_type(
-                connection=conn, config=statement_config, instrumentation_config=self.instrumentation
-            )
+            driver = self.driver_type(connection=conn, config=statement_config)
             yield driver
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
@@ -415,7 +407,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     def __init__(
         self,
         statement_config: "Optional[SQLConfig]" = None,
-        instrumentation: "Optional[InstrumentationConfig]" = None,
         default_row_type: "type[DictRow]" = DictRow,
         # Connection parameters
         conninfo: Optional[str] = None,
@@ -452,7 +443,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         Args:
             statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
             default_row_type: Default row type for results
             conninfo: Connection string in libpq format
             host: Database server host
@@ -519,7 +509,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
-        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
+        super().__init__()
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
@@ -569,14 +559,12 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
     async def _create_pool(self) -> "AsyncConnectionPool":
         """Create the actual async connection pool."""
-        if self.instrumentation.log_pool_operations:
-            logger.info("Creating async Psycopg connection pool", extra={"adapter": "psycopg"})
+        logger.info("Creating async Psycopg connection pool", extra={"adapter": "psycopg"})
 
         try:
             pool = AsyncConnectionPool(**self.pool_config_dict)
             await pool.open()
-            if self.instrumentation.log_pool_operations:
-                logger.info("Async Psycopg connection pool created successfully", extra={"adapter": "psycopg"})
+            logger.info("Async Psycopg connection pool created successfully", extra={"adapter": "psycopg"})
         except Exception as e:
             logger.exception(
                 "Failed to create async Psycopg connection pool", extra={"adapter": "psycopg", "error": str(e)}
@@ -589,13 +577,11 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if not self.pool_instance:
             return
 
-        if self.instrumentation.log_pool_operations:
-            logger.info("Closing async Psycopg connection pool", extra={"adapter": "psycopg"})
+        logger.info("Closing async Psycopg connection pool", extra={"adapter": "psycopg"})
 
         try:
             await self.pool_instance.close()
-            if self.instrumentation.log_pool_operations:
-                logger.info("Async Psycopg connection pool closed successfully", extra={"adapter": "psycopg"})
+            logger.info("Async Psycopg connection pool closed successfully", extra={"adapter": "psycopg"})
         except Exception as e:
             logger.exception(
                 "Failed to close async Psycopg connection pool", extra={"adapter": "psycopg", "error": str(e)}
@@ -608,7 +594,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         Returns:
             A psycopg AsyncConnection instance configured with DictRow.
         """
-        # TODO: this should still create a pool and return a connection from it
         if self.pool_instance is None:
             self.pool_instance = await self.create_pool()
         return cast("PsycopgAsyncConnection", await self.pool_instance.getconn())  # pyright: ignore
@@ -655,9 +640,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
                     target_parameter_style=self.preferred_parameter_style,
                 )
 
-            driver = self.driver_type(
-                connection=conn, config=statement_config, instrumentation_config=self.instrumentation
-            )
+            driver = self.driver_type(connection=conn, config=statement_config)
             yield driver
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":

@@ -182,22 +182,33 @@ class ParameterizeLiterals(ProcessorProtocol):
         if self._should_preserve_literal_in_context(literal, context):
             return literal
 
-        # Extract the literal value with type preservation
-        literal_value, literal_type = self._extract_literal_value_and_type(literal)
+        # Use optimized extraction for single-pass processing
+        value, type_hint, sqlglot_type, semantic_name = self._extract_literal_value_and_type_optimized(literal, context)
 
-        # Add to parameters list with metadata
-        self.extracted_parameters.append(literal_value)
+        # Create TypedParameter object
+        from sqlspec.statement.parameters import TypedParameter
+
+        typed_param = TypedParameter(
+            value=value,
+            sqlglot_type=sqlglot_type or exp.DataType.build("VARCHAR"),  # Fallback type
+            type_hint=type_hint,
+            semantic_name=semantic_name,
+        )
+
+        # Add to parameters list
+        self.extracted_parameters.append(typed_param)
         self._parameter_metadata.append(
             {
                 "index": len(self.extracted_parameters) - 1,
-                "type": literal_type,
-                "original_sql": literal.sql(),
+                "type": type_hint,
+                "semantic_name": semantic_name,
                 "context": self._get_context_description(context),
+                # Note: We avoid calling literal.sql() for performance
             }
         )
 
         # Create appropriate placeholder
-        return self._create_placeholder()
+        return self._create_placeholder(hint=semantic_name)
 
     def _should_preserve_literal_in_context(self, literal: exp.Literal, context: ParameterizationContext) -> bool:
         """Context-aware decision on literal preservation."""
@@ -290,6 +301,110 @@ class ParameterizeLiterals(ProcessorProtocol):
         # Fallback
         return str(literal.this), "unknown"
 
+    def _extract_literal_value_and_type_optimized(
+        self, literal: exp.Literal, context: ParameterizationContext
+    ) -> "tuple[Any, str, Optional[exp.DataType], Optional[str]]":
+        """Single-pass extraction of value, type hint, SQLGlot type, and semantic name.
+
+        This optimized method extracts all information in one pass, avoiding redundant
+        AST traversals and expensive operations like literal.sql().
+
+        Args:
+            literal: The literal expression to extract from
+            context: Current parameterization context with parent stack
+
+        Returns:
+            Tuple of (value, type_hint, sqlglot_type, semantic_name)
+        """
+        # Extract value and basic type hint using existing logic
+        value, type_hint = self._extract_literal_value_and_type(literal)
+
+        # Determine SQLGlot type based on the type hint without additional parsing
+        sqlglot_type = self._infer_sqlglot_type(type_hint, value)
+
+        # Generate semantic name from context if available
+        semantic_name = self._generate_semantic_name_from_context(literal, context)
+
+        return value, type_hint, sqlglot_type, semantic_name
+
+    def _infer_sqlglot_type(self, type_hint: str, value: Any) -> "Optional[exp.DataType]":
+        """Infer SQLGlot DataType from type hint without parsing.
+
+        Args:
+            type_hint: The simple type hint string
+            value: The actual value for additional context
+
+        Returns:
+            SQLGlot DataType instance or None
+        """
+        type_mapping = {
+            "null": "NULL",
+            "boolean": "BOOLEAN",
+            "integer": "INT",
+            "bigint": "BIGINT",
+            "float": "FLOAT",
+            "decimal": "DECIMAL",
+            "string": "VARCHAR",
+            "numeric_string": "VARCHAR",
+            "unknown": "VARCHAR",
+        }
+
+        type_name = type_mapping.get(type_hint, "VARCHAR")
+
+        # Build DataType with appropriate parameters
+        if type_hint == "decimal" and isinstance(value, str):
+            # Try to infer precision and scale
+            parts = value.split(".")
+            precision = len(parts[0]) + len(parts[1]) if len(parts) > 1 else len(parts[0])
+            scale = len(parts[1]) if len(parts) > 1 else 0
+            return exp.DataType.build(type_name, expressions=[exp.Literal.number(precision), exp.Literal.number(scale)])
+        if type_hint == "string" and isinstance(value, str):
+            # Infer VARCHAR length
+            length = len(value)
+            if length > 0:
+                return exp.DataType.build(type_name, expressions=[exp.Literal.number(length)])
+
+        # Default case - just the type name
+        return exp.DataType.build(type_name)
+
+    def _generate_semantic_name_from_context(
+        self, literal: exp.Literal, context: ParameterizationContext
+    ) -> "Optional[str]":
+        """Generate semantic name from AST context using existing parent stack.
+
+        Args:
+            literal: The literal being parameterized
+            context: Current context with parent stack
+
+        Returns:
+            Semantic name or None
+        """
+        # Look for column comparisons in parent stack
+        for parent in reversed(context.parent_stack):
+            if isinstance(parent, Binary):
+                # It's a comparison - check if we're comparing to a column
+                if parent.left == literal and isinstance(parent.right, exp.Column):
+                    return parent.right.name
+                if parent.right == literal and isinstance(parent.left, exp.Column):
+                    return parent.left.name
+            elif isinstance(parent, exp.In):
+                # IN clause - check the left side for column
+                if parent.this and isinstance(parent.this, exp.Column):
+                    return f"{parent.this.name}_value"
+
+        # Check if we're in a specific SQL clause
+        for parent in reversed(context.parent_stack):
+            if isinstance(parent, exp.Where):
+                return "where_value"
+            if isinstance(parent, exp.Having):
+                return "having_value"
+            if isinstance(parent, exp.Join):
+                return "join_value"
+            if isinstance(parent, exp.Select):
+                return "select_value"
+
+        return None
+
     def _is_string_literal(self, literal: exp.Literal) -> bool:
         """Check if a literal is a string."""
         # Check if it's explicitly a string literal
@@ -346,23 +461,42 @@ class ParameterizeLiterals(ProcessorProtocol):
 
         # Extract all array elements
         array_values = []
+        element_types = []
         all_literals = True
 
         for expr in array_node.expressions:
             if isinstance(expr, Literal):
-                value, _ = self._extract_literal_value_and_type(expr)
+                value, type_hint = self._extract_literal_value_and_type(expr)
                 array_values.append(value)
+                element_types.append(type_hint)
             else:
                 all_literals = False
                 break
 
         if all_literals:
+            # Determine array element type from the first element
+            element_type = element_types[0] if element_types else "unknown"
+
+            # Create SQLGlot array type
+            element_sqlglot_type = self._infer_sqlglot_type(element_type, array_values[0] if array_values else None)
+            array_sqlglot_type = exp.DataType.build("ARRAY", expressions=[element_sqlglot_type])
+
+            # Create TypedParameter for the entire array
+            from sqlspec.statement.parameters import TypedParameter
+
+            typed_param = TypedParameter(
+                value=array_values,
+                sqlglot_type=array_sqlglot_type,
+                type_hint=f"array<{element_type}>",
+                semantic_name="array_values",
+            )
+
             # Replace entire array with a single parameter
-            self.extracted_parameters.append(array_values)
+            self.extracted_parameters.append(typed_param)
             self._parameter_metadata.append(
                 {
                     "index": len(self.extracted_parameters) - 1,
-                    "type": "array",
+                    "type": f"array<{element_type}>",
                     "length": len(array_values),
                     "context": "array_literal",
                 }

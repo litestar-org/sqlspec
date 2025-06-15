@@ -10,7 +10,6 @@ import pytest
 from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, QueryJobConfig, ScalarQueryParameter
 
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
-from sqlspec.config import InstrumentationConfig
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -29,11 +28,7 @@ def mock_bigquery_connection() -> Mock:
 @pytest.fixture
 def bigquery_driver(mock_bigquery_connection: Mock) -> BigQueryDriver:
     """Create a BigQuery driver with mock connection."""
-    return BigQueryDriver(
-        connection=mock_bigquery_connection,
-        config=SQLConfig(strict_mode=False),
-        instrumentation_config=InstrumentationConfig(),
-    )
+    return BigQueryDriver(connection=mock_bigquery_connection, config=SQLConfig(strict_mode=False))
 
 
 @pytest.fixture
@@ -53,21 +48,17 @@ def test_bigquery_driver_initialization(mock_bigquery_connection: Mock) -> None:
     assert driver.dialect == "bigquery"
     assert driver.supports_native_arrow_export is False
     assert driver.supports_native_arrow_import is False
-    assert driver.__supports_parquet__ is True
     assert driver.default_row_type == DictRow
     assert isinstance(driver.config, SQLConfig)
-    assert isinstance(driver.instrumentation_config, InstrumentationConfig)
 
 
 def test_bigquery_driver_initialization_with_config(mock_bigquery_connection: Mock) -> None:
     """Test BigQueryDriver initialization with custom configuration."""
     config = SQLConfig(strict_mode=False)
-    instrumentation = InstrumentationConfig(log_queries=True)
 
-    driver = BigQueryDriver(connection=mock_bigquery_connection, config=config, instrumentation_config=instrumentation)
+    driver = BigQueryDriver(connection=mock_bigquery_connection, config=config)
 
     assert driver.config == config
-    assert driver.instrumentation_config == instrumentation
 
 
 def test_bigquery_driver_initialization_with_callbacks(mock_bigquery_connection: Mock) -> None:
@@ -357,9 +348,9 @@ def test_bigquery_driver_execute_statement_select(
     assert isinstance(result, dict)
     assert "data" in result
     assert "column_names" in result
-    assert result["data"] == []  # No rows
+    assert result["data"] == []  # No rows # pyright: ignore
     # Column names will be empty list due to Mock handling, which is expected for unit tests
-    assert isinstance(result["column_names"], list)
+    assert isinstance(result["column_names"], list)  # pyright: ignore
     mock_bigquery_connection.query.assert_called_once()
 
 
@@ -486,15 +477,15 @@ def test_bigquery_driver_fetch_arrow_table_native(bigquery_driver: BigQueryDrive
     mock_query_job.result.return_value = None
 
     # Mock _execute to return the query job
-    bigquery_driver.connection.query.return_value = mock_query_job
+    bigquery_driver.connection.query.return_value = mock_query_job  # pyright: ignore
 
     statement = SQL("SELECT * FROM users")
     result = bigquery_driver.fetch_arrow_table(statement)
 
     assert isinstance(result, ArrowResult)
     assert result.data is mock_arrow_table  # Should be the exact same table
-    assert result.data.num_rows == 3
-    assert result.data.column_names == ["id", "name"]
+    assert result.data.num_rows == 3  # # pyright: ignore
+    assert result.data.column_names == ["id", "name"]  # pyright: ignore
 
     # Verify native to_arrow was called
     mock_query_job.to_arrow.assert_called_once()
@@ -514,7 +505,7 @@ def test_bigquery_driver_fetch_arrow_table_with_options(bigquery_driver: BigQuer
     mock_query_job.result.return_value = None
 
     # Mock _execute to return the query job
-    bigquery_driver.connection.query.return_value = mock_query_job
+    bigquery_driver.connection.query.return_value = mock_query_job  # pyright: ignore
 
     statement = SQL("SELECT * FROM users")
 

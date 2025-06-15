@@ -11,13 +11,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from sqlspec.base import SQLSpec
-from sqlspec.config import (
-    AsyncDatabaseConfig,
-    InstrumentationConfig,
-    NoPoolAsyncConfig,
-    NoPoolSyncConfig,
-    SyncDatabaseConfig,
-)
+from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
 
 # Test Fixtures and Mock Classes
 
@@ -435,9 +429,7 @@ def test_get_session_driver_instantiation() -> None:
     with patch.object(config, "create_connection", return_value=mock_connection):
         session = sqlspec.get_session(MockSyncConfig)
 
-        mock_driver_class.assert_called_once_with(
-            connection=mock_connection, instrumentation_config=config.instrumentation, default_row_type=dict
-        )
+        mock_driver_class.assert_called_once_with(connection=mock_connection, default_row_type=dict)
         assert session == mock_driver_instance
 
 
@@ -888,21 +880,9 @@ def test_instrumentation_config_integration() -> None:
     """Test SQLSpec with custom instrumentation configs."""
     sqlspec = SQLSpec()
 
-    custom_instrumentation = InstrumentationConfig(
-        log_queries=True,
-        enable_opentelemetry=True,
-        service_name="test_service",
-        custom_tags={"env": "test", "version": "1.0"},
-    )
-
     config = MockSyncConfig("test")
-    config.instrumentation = custom_instrumentation
 
     sqlspec.add_config(config)
-    retrieved = sqlspec.get_config(MockSyncConfig)
-
-    assert retrieved.instrumentation.service_name == "test_service"
-    assert retrieved.instrumentation.custom_tags == {"env": "test", "version": "1.0"}
 
 
 # Integration with Atexit

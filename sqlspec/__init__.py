@@ -1,6 +1,6 @@
 """SQLSpec: Safe and elegant SQL query building for Python."""
 
-from sqlspec import adapters, base, driver, exceptions, extensions, loader, service, statement, typing, utils
+from sqlspec import adapters, base, driver, exceptions, extensions, loader, statement, typing, utils
 from sqlspec.__metadata__ import __version__
 from sqlspec._sql import SQLFactory
 from sqlspec.base import SQLSpec
@@ -22,7 +22,6 @@ __all__ = (
     "exceptions",
     "extensions",
     "loader",
-    "service",
     "sql",
     "statement",
     "typing",

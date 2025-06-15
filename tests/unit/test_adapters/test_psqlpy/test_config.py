@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from sqlspec.adapters.psqlpy import CONNECTION_FIELDS, POOL_FIELDS, PsqlpyConfig, PsqlpyDriver
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.sql import SQLConfig
 
 
@@ -98,19 +97,12 @@ def test_psqlpy_config_initialization() -> None:
     # Test with default parameters
     config = PsqlpyConfig(dsn="postgresql://test_user:test_password@localhost:5432/test_db")
     assert isinstance(config.statement_config, SQLConfig)
-    assert isinstance(config.instrumentation, InstrumentationConfig)
-
     # Test with custom parameters
     custom_statement_config = SQLConfig()
-    custom_instrumentation = InstrumentationConfig(log_queries=True)
-
     config = PsqlpyConfig(
-        dsn="postgresql://test_user:test_password@localhost:5432/test_db",
-        statement_config=custom_statement_config,
-        instrumentation=custom_instrumentation,
+        dsn="postgresql://test_user:test_password@localhost:5432/test_db", statement_config=custom_statement_config
     )
     assert config.statement_config is custom_statement_config
-    assert config.instrumentation.log_queries is True
 
 
 @pytest.mark.asyncio
@@ -140,7 +132,6 @@ async def test_psqlpy_config_provide_session() -> None:
             # Check that parameter styles were set
             assert session.config.allowed_parameter_styles == ("numeric",)
             assert session.config.target_parameter_style == "numeric"
-            assert session.instrumentation_config is config.instrumentation
 
 
 def test_psqlpy_config_driver_type() -> None:
@@ -161,31 +152,3 @@ def test_psqlpy_config_supports_connection_pooling() -> None:
     config = PsqlpyConfig(dsn="postgresql://test_user:test_password@localhost:5432/test_db")
     assert config.supports_connection_pooling is True
     assert PsqlpyConfig.supports_connection_pooling is True
-
-
-def test_psqlpy_config_from_pool_config() -> None:
-    """Test Psqlpy config from_pool_config backward compatibility."""
-    # Test basic backward compatibility
-    pool_config = {
-        "user": "test_user",
-        "ports": "test_ports",
-        "port": "test_port",
-        "max_db_pool_size": 10,
-        "conn_recycling_method": 10,
-    }
-    config = PsqlpyConfig.from_pool_config(pool_config)
-    # Add specific assertions based on fields
-    # 'user' is not a recognized PSQLPy parameter (should be 'username'), so it goes to extras
-    # 'ports' is a valid pool field
-    assert config.extras == {"user": "test_user"}
-
-    # Test with extra parameters
-    pool_config_with_extras = {
-        "user": "test_user",
-        "ports": "test_ports",
-        "unknown_param": "test_value",
-        "another_param": 42,
-    }
-    config_extras = PsqlpyConfig.from_pool_config(pool_config_with_extras)
-    assert config_extras.extras["unknown_param"] == "test_value"
-    assert config_extras.extras["another_param"] == 42

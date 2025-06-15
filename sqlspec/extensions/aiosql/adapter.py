@@ -12,11 +12,10 @@ from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypeVar, Union, cast
 
 from sqlspec.exceptions import MissingDependencyError
-from sqlspec.service import SqlspecService
 from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import AIOSQL_INSTALLED, DictRow, ModelDTOT, RowT, aiosql
+from sqlspec.typing import AIOSQL_INSTALLED, DictRow, RowT
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -25,7 +24,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("sqlspec.extensions.aiosql")
 
-__all__ = ("AiosqlAsyncAdapter", "AiosqlService", "AiosqlSyncAdapter")
+__all__ = ("AiosqlAsyncAdapter", "AiosqlSyncAdapter")
 
 T = TypeVar("T")
 
@@ -673,137 +672,3 @@ class AiosqlAsyncAdapter:
         """
         # INSERT RETURNING is treated like a select that returns data
         return await self.select_one(conn, query_name, sql, parameters)
-
-
-class AiosqlService(
-    SqlspecService[Union["SyncDriverAdapterProtocol[Any, Any]", "AsyncDriverAdapterProtocol[Any, Any]"]]
-):
-    """Enhanced service for aiosql integration with SQLSpec.
-
-    Provides high-level abstractions for working with aiosql-loaded queries
-    while leveraging all SQLSpec features like filters, validation, and instrumentation.
-
-    Example:
-        >>> from sqlspec.extensions.aiosql import AiosqlService
-        >>> service = AiosqlService(
-        ...     driver, default_filters=[LimitOffsetFilter(100)]
-        ... )
-        >>> queries = service.load_queries("user_queries.sql")
-        >>> result = service.execute_query_with_filters(
-        ...     queries.get_users,
-        ...     connection=None,
-        ...     parameters={"active": True},
-        ...     filters=[SearchFilter("name", "John")],
-        ...     schema_type=User,
-        ... )
-    """
-
-    def __init__(
-        self,
-        driver: Union["SyncDriverAdapterProtocol[Any, Any]", "AsyncDriverAdapterProtocol[Any, Any]"],
-        default_filters: "Optional[Sequence[StatementFilter]]" = None,
-        allow_sqlspec_filters: bool = True,
-    ) -> None:
-        """Initialize the aiosql service.
-
-        Args:
-            driver: SQLSpec driver (sync or async)
-            default_filters: Default filters to apply to all queries
-            allow_sqlspec_filters: Whether to allow _sqlspec_filters parameter
-        """
-        super().__init__(driver)
-        self.default_filters = list(default_filters or [])
-        self.allow_sqlspec_filters = allow_sqlspec_filters
-
-    @property
-    def aiosql_adapter(self) -> Union[AiosqlSyncAdapter, AiosqlAsyncAdapter]:
-        """Get the appropriate aiosql adapter for this service's driver.
-
-        Returns:
-            AiosqlSyncAdapter for sync drivers, AiosqlAsyncAdapter for async drivers
-        """
-        # Check if driver has async methods to determine type
-        if hasattr(self.driver, "__aenter__") or any(
-            hasattr(self.driver, method) and callable(getattr(self.driver, method))
-            for method in ["aexecute", "aselect", "aexecute_many"]
-        ):
-            return AiosqlAsyncAdapter(
-                cast("AsyncDriverAdapterProtocol[Any, Any]", self.driver),
-                default_filters=self.default_filters,
-                allow_sqlspec_filters=self.allow_sqlspec_filters,
-            )
-        return AiosqlSyncAdapter(
-            cast("SyncDriverAdapterProtocol[Any, Any]", self.driver),
-            default_filters=self.default_filters,
-            allow_sqlspec_filters=self.allow_sqlspec_filters,
-        )
-
-    def load_queries(self, sql_path: str, **aiosql_kwargs: Any) -> Any:
-        """Load queries from SQL file using aiosql with SQLSpec adapter.
-
-        Args:
-            sql_path: Path to SQL file
-            **aiosql_kwargs: Additional arguments passed to aiosql.from_path
-
-        Returns:
-            aiosql queries object with SQLSpec power
-        """
-        if not aiosql:
-            msg = "aiosql"
-            raise MissingDependencyError(msg, "aiosql")
-
-        # aiosql expects either a string name for registered adapters or a class/instance
-        return aiosql.from_path(sql_path, self.aiosql_adapter, **aiosql_kwargs)  # type: ignore[arg-type]
-
-    def load_queries_from_str(self, sql_str: str, **aiosql_kwargs: Any) -> Any:
-        """Load queries from SQL string using aiosql with SQLSpec adapter.
-
-        Args:
-            sql_str: SQL string content
-            **aiosql_kwargs: Additional arguments passed to aiosql.from_str
-
-        Returns:
-            aiosql queries object with SQLSpec power
-        """
-        if not aiosql:
-            msg = "aiosql"
-            raise MissingDependencyError(msg, "aiosql")
-
-        # aiosql expects either a string name for registered adapters or a class/instance
-        return aiosql.from_str(sql_str, self.aiosql_adapter, **aiosql_kwargs)  # type: ignore[arg-type]
-
-    def execute_query_with_filters(
-        self,
-        query_method: Any,
-        connection: Any,
-        parameters: Optional[dict[str, Any]] = None,
-        filters: "Optional[Sequence[StatementFilter]]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> Any:
-        """Execute aiosql query method with additional SQLSpec filters.
-
-        Args:
-            query_method: aiosql query method
-            connection: Database connection
-            parameters: Query parameters
-            filters: Additional SQLSpec filters to apply
-            schema_type: Schema type for result conversion
-            **kwargs: Additional arguments
-
-        Returns:
-            Query result with applied filters and schema conversion
-        """
-        # Prepare parameters with SQLSpec enhancements
-        enhanced_params = dict(parameters or {})
-
-        # Add schema type if provided
-        if schema_type:
-            enhanced_params["_sqlspec_schema_type"] = schema_type
-
-        # Add filters if provided
-        if filters:
-            enhanced_params["_sqlspec_filters"] = list(filters)
-
-        # Execute query method
-        return query_method(connection, **enhanced_params, **kwargs)

@@ -323,33 +323,31 @@ class SecurityValidator(ProcessorProtocol):
             union_issues = self._check_union_injection(node, context)
             issues.extend(union_issues)
 
-        # Check for comment-based evasion
-        if hasattr(node, "sql"):
-            sql_text = node.sql()
-            if PATTERNS["comment_evasion"].search(sql_text):
-                issues.append(
-                    SecurityIssue(
-                        issue_type=SecurityIssueType.INJECTION,
-                        risk_level=self.config.injection_risk_level,
-                        description="Comment-based SQL injection attempt detected",
-                        location=sql_text[:100],
-                        pattern_matched="comment_evasion",
-                        recommendation="Remove or sanitize SQL comments",
-                    )
+        sql_text = node.sql()
+        if PATTERNS["comment_evasion"].search(sql_text):
+            issues.append(
+                SecurityIssue(
+                    issue_type=SecurityIssueType.INJECTION,
+                    risk_level=self.config.injection_risk_level,
+                    description="Comment-based SQL injection attempt detected",
+                    location=sql_text[:100],
+                    pattern_matched="comment_evasion",
+                    recommendation="Remove or sanitize SQL comments",
                 )
+            )
 
-            # Check for encoded characters
-            if PATTERNS["encoded_chars"].search(sql_text) or PATTERNS["hex_encoding"].search(sql_text):
-                issues.append(
-                    SecurityIssue(
-                        issue_type=SecurityIssueType.INJECTION,
-                        risk_level=self.config.injection_risk_level,
-                        description="Encoded character evasion detected",
-                        location=sql_text[:100],
-                        pattern_matched="encoding_evasion",
-                        recommendation="Validate and decode input properly",
-                    )
+        # Check for encoded characters
+        if PATTERNS["encoded_chars"].search(sql_text) or PATTERNS["hex_encoding"].search(sql_text):
+            issues.append(
+                SecurityIssue(
+                    issue_type=SecurityIssueType.INJECTION,
+                    risk_level=self.config.injection_risk_level,
+                    description="Encoded character evasion detected",
+                    location=sql_text[:100],
+                    pattern_matched="encoding_evasion",
+                    recommendation="Validate and decode input properly",
                 )
+            )
 
         # Check for system schema access
         if isinstance(node, exp.Table):
@@ -357,20 +355,17 @@ class SecurityValidator(ProcessorProtocol):
             if system_access:
                 issues.append(system_access)
 
-        # Check custom injection patterns
-        if hasattr(node, "sql"):
-            sql_text = node.sql()
-            for name, pattern in self._compiled_patterns.items():
-                if name.startswith("custom_injection_") and pattern.search(sql_text):
-                    issues.append(
-                        SecurityIssue(
-                            issue_type=SecurityIssueType.INJECTION,
-                            risk_level=self.config.injection_risk_level,
-                            description=f"Custom injection pattern matched: {name}",
-                            location=sql_text[:100],
-                            pattern_matched=name,
-                        )
+        for name, pattern in self._compiled_patterns.items():
+            if name.startswith("custom_injection_") and pattern.search(sql_text):
+                issues.append(
+                    SecurityIssue(
+                        issue_type=SecurityIssueType.INJECTION,
+                        risk_level=self.config.injection_risk_level,
+                        description=f"Custom injection pattern matched: {name}",
+                        location=sql_text[:100],
+                        pattern_matched=name,
                     )
+                )
 
         return issues
 
@@ -510,7 +505,8 @@ class SecurityValidator(ProcessorProtocol):
 
         return False
 
-    def _expressions_identical(self, expr1: "exp.Expression", expr2: "exp.Expression") -> bool:
+    @staticmethod
+    def _expressions_identical(expr1: "exp.Expression", expr2: "exp.Expression") -> bool:
         """Check if two expressions are structurally identical."""
         if type(expr1) is not type(expr2):
             return False
@@ -618,8 +614,10 @@ class SecurityValidator(ProcessorProtocol):
 
         return issues
 
+    @staticmethod
     def _check_combined_patterns(
-        self, expression: "exp.Expression", existing_issues: "list[SecurityIssue]"
+        expression: "exp.Expression",  # noqa: ARG004
+        existing_issues: "list[SecurityIssue]",
     ) -> "list[SecurityIssue]":
         """Check for combined attack patterns that indicate sophisticated attacks."""
         combined_issues: list[SecurityIssue] = []
@@ -765,7 +763,8 @@ class SecurityValidator(ProcessorProtocol):
 
         return issues
 
-    def _analyze_function_anomalies(self, func_node: Func) -> "list[SecurityIssue]":
+    @staticmethod
+    def _analyze_function_anomalies(func_node: Func) -> "list[SecurityIssue]":
         """Analyze function calls for anomalous patterns."""
         issues: list[SecurityIssue] = []
 
@@ -795,7 +794,7 @@ class SecurityValidator(ProcessorProtocol):
         # Check for unusual argument patterns
         if hasattr(func_node, "expressions") and func_node.expressions:
             arg_count = len(func_node.expressions)
-            if func_name in ["concat", "concat_ws"] and arg_count > MAX_FUNCTION_ARGS:
+            if func_name in {"concat", "concat_ws"} and arg_count > MAX_FUNCTION_ARGS:
                 issues.append(
                     SecurityIssue(
                         issue_type=SecurityIssueType.AST_ANOMALY,
@@ -861,7 +860,8 @@ class SecurityValidator(ProcessorProtocol):
 
         return issues
 
-    def _analyze_subquery_structure(self, subquery_node: Subquery) -> "list[SecurityIssue]":
+    @staticmethod
+    def _analyze_subquery_structure(subquery_node: Subquery) -> "list[SecurityIssue]":
         """Analyze subquery structure for injection patterns."""
         issues: list[SecurityIssue] = []
 
@@ -932,16 +932,18 @@ class SecurityValidator(ProcessorProtocol):
 
         return max_depth
 
-    def _count_select_columns(self, node: "exp.Expression") -> int:
+    @staticmethod
+    def _count_select_columns(node: "exp.Expression") -> int:
         """Count the number of columns in a SELECT statement."""
         if isinstance(node, exp.Select) and hasattr(node, "expressions"):
             return len(node.expressions) if node.expressions else 0
         return 0
 
-    def _is_always_true_condition(self, node: "exp.Expression") -> bool:
+    @staticmethod
+    def _is_always_true_condition(node: "exp.Expression") -> bool:
         """Check if a condition is always true using AST analysis."""
         # Check for literal true
-        if isinstance(node, Literal) and str(node.this).upper() in ["TRUE", "1"]:
+        if isinstance(node, Literal) and str(node.this).upper() in {"TRUE", "1"}:
             return True
 
         # Check for 1=1 or similar tautologies

@@ -3,7 +3,6 @@
 import pytest
 
 from sqlspec.adapters.aiosqlite import CONNECTION_FIELDS, AiosqliteConfig, AiosqliteDriver
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.sql import SQLConfig
 
 
@@ -51,17 +50,10 @@ def test_aiosqlite_config_initialization() -> None:
     # Test with default parameters
     config = AiosqliteConfig(database=":memory:")
     assert isinstance(config.statement_config, SQLConfig)
-    assert isinstance(config.instrumentation, InstrumentationConfig)
-
     # Test with custom parameters
     custom_statement_config = SQLConfig()
-    custom_instrumentation = InstrumentationConfig(log_queries=True)
-
-    config = AiosqliteConfig(
-        database=":memory:", statement_config=custom_statement_config, instrumentation=custom_instrumentation
-    )
+    config = AiosqliteConfig(database=":memory:", statement_config=custom_statement_config)
     assert config.statement_config is custom_statement_config
-    assert config.instrumentation.log_queries is True
 
 
 @pytest.mark.asyncio
@@ -75,7 +67,6 @@ async def test_aiosqlite_config_provide_session() -> None:
         # Check that parameter styles were set
         assert session.config.allowed_parameter_styles == ("qmark", "named_colon")
         assert session.config.target_parameter_style == "qmark"
-        assert session.instrumentation_config is config.instrumentation
 
 
 def test_aiosqlite_config_driver_type() -> None:

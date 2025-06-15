@@ -5,7 +5,6 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBConnection
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQLConfig
 
@@ -85,12 +84,8 @@ def test_connection_with_performance_settings() -> None:
 @pytest.mark.xdist_group("duckdb")
 def test_connection_with_data_processing_settings() -> None:
     """Test DuckDB connection with data processing settings."""
-    instrumentation = InstrumentationConfig(log_queries=True)
     config = create_permissive_config(
-        preserve_insertion_order=True,
-        default_null_order="NULLS_FIRST",
-        default_order="ASC",
-        instrumentation=instrumentation,
+        preserve_insertion_order=True, default_null_order="NULLS_FIRST", default_order="ASC"
     )
 
     with config.provide_session() as session:
@@ -113,11 +108,8 @@ def test_connection_with_data_processing_settings() -> None:
 @pytest.mark.xdist_group("duckdb")
 def test_connection_with_instrumentation() -> None:
     """Test DuckDB connection with instrumentation configuration."""
-    instrumentation = InstrumentationConfig(
-        log_queries=True, log_parameters=True, log_results_count=True, log_pool_operations=True
-    )
     statement_config = SQLConfig(strict_mode=False, enable_validation=False)
-    config = DuckDBConfig(database=":memory:", statement_config=statement_config, instrumentation=instrumentation)
+    config = DuckDBConfig(database=":memory:", statement_config=statement_config)
 
     with config.provide_session() as session:
         # Test that instrumentation doesn't interfere with operations

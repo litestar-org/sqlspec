@@ -5,16 +5,21 @@ from typing import Any, ClassVar, Optional, Union, cast
 from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 from sqlglot.dialects.dialect import DialectType
 
-from sqlspec.config import InstrumentationConfig
 from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
-from sqlspec.driver.mixins import AsyncStorageMixin, SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
+from sqlspec.driver.mixins import (
+    AsyncStorageMixin,
+    SQLTranslatorMixin,
+    SyncStorageMixin,
+    ToSchemaMixin,
+    TypeCoercionMixin,
+)
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import to_json
 from sqlspec.utils.sync_tools import ensure_async_
-from sqlspec.utils.telemetry import instrument_operation, instrument_operation_async
 
 __all__ = ("OracleAsyncConnection", "OracleAsyncDriver", "OracleSyncConnection", "OracleSyncDriver")
 
@@ -25,7 +30,11 @@ logger = get_logger("adapters.oracledb")
 
 
 class OracleSyncDriver(
-    SyncDriverAdapterProtocol[OracleSyncConnection, RowT], SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin
+    SyncDriverAdapterProtocol[OracleSyncConnection, RowT],
+    SQLTranslatorMixin,
+    TypeCoercionMixin,
+    SyncStorageMixin,
+    ToSchemaMixin,
 ):
     """Oracle Sync Driver Adapter. Refactored for new protocol."""
 
@@ -36,20 +45,41 @@ class OracleSyncDriver(
     )
     default_parameter_style: ParameterStyle = ParameterStyle.NAMED_COLON
     support_native_arrow_export = True
+    __slots__ = ("config", "connection", "default_row_type")
 
     def __init__(
         self,
         connection: OracleSyncConnection,
         config: Optional[SQLConfig] = None,
-        instrumentation_config: Optional[InstrumentationConfig] = None,
         default_row_type: type[DictRow] = DictRow,
     ) -> None:
-        super().__init__(
-            connection=connection,
-            config=config,
-            instrumentation_config=instrumentation_config,
-            default_row_type=default_row_type,
-        )
+        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+
+    def _coerce_boolean(self, value: Any) -> Any:
+        """Oracle doesn't have native boolean, convert to number."""
+        if isinstance(value, bool):
+            return 1 if value else 0
+        return value
+
+    def _coerce_decimal(self, value: Any) -> Any:
+        """Oracle handles decimal as NUMBER type."""
+        if isinstance(value, str):
+            from decimal import Decimal
+
+            return Decimal(value)
+        return value
+
+    def _coerce_json(self, value: Any) -> Any:
+        """Oracle JSON stored as CLOB, serialize to string."""
+        if isinstance(value, (dict, list)):
+            return to_json(value)
+        return value
+
+    def _coerce_array(self, value: Any) -> Any:
+        """Oracle doesn't have native arrays, serialize to JSON string."""
+        if isinstance(value, (list, tuple)):
+            return to_json(list(value))
+        return value
 
     @contextmanager
     def _get_cursor(self, connection: Optional[OracleSyncConnection] = None) -> Generator[Cursor, None, None]:
@@ -86,9 +116,11 @@ class OracleSyncDriver(
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)
+            params = self._process_parameters(params)
             return self._execute_many(sql, params, connection=connection, **kwargs)
 
         sql, params = statement.compile(placeholder_style=target_style)
+        params = self._process_parameters(params)
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
@@ -99,117 +131,96 @@ class OracleSyncDriver(
         connection: Optional[OracleSyncConnection] = None,
         **kwargs: Any,
     ) -> Union[SelectResultDict, DMLResultDict]:
-        with instrument_operation(self, "oracle_execute", "database"):
-            conn = self._connection(connection)
-            if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQL: %s", sql)
-            if self.instrumentation_config.log_parameters and parameters:
-                logger.debug("Query parameters: %s", parameters)
+        conn = self._connection(connection)
+        with self._get_cursor(conn) as cursor:
+            cursor.execute(sql, parameters or [])
 
-            with self._get_cursor(conn) as cursor:
-                cursor.execute(sql, parameters or [])
+            if self.returns_rows(statement.expression):
+                fetched_data = cursor.fetchall()
+                column_names = [col[0] for col in cursor.description or []]
+                return {"data": fetched_data, "column_names": column_names, "rows_affected": cursor.rowcount}
 
-                if self.returns_rows(statement.expression):
-                    fetched_data = cursor.fetchall()
-                    column_names = [col[0] for col in cursor.description or []]
-                    return {"data": fetched_data, "column_names": column_names, "rows_affected": cursor.rowcount}
-
-                return {"rows_affected": cursor.rowcount, "status_message": "OK"}
+            return {"rows_affected": cursor.rowcount, "status_message": "OK"}
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
-        with instrument_operation(self, "oracle_execute_many", "database"):
-            conn = self._connection(connection)
-            if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQL (executemany): %s", sql)
-            if self.instrumentation_config.log_parameters and param_list:
-                logger.debug("Query parameters (batch): %s", param_list)
-
-            with self._get_cursor(conn) as cursor:
-                cursor.executemany(sql, param_list or [])
-                return {"rows_affected": cursor.rowcount, "status_message": "OK"}
+        conn = self._connection(connection)
+        with self._get_cursor(conn) as cursor:
+            cursor.executemany(sql, param_list or [])
+            return {"rows_affected": cursor.rowcount, "status_message": "OK"}
 
     def _execute_script(
         self, script: str, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
     ) -> ScriptResultDict:
-        with instrument_operation(self, "oracle_execute_script", "database"):
-            conn = self._connection(connection)
-            if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQL script: %s", script)
+        conn = self._connection(connection)
+        statements = self._split_script_statements(script)
+        with self._get_cursor(conn) as cursor:
+            for statement in statements:
+                if statement and statement.strip():
+                    cursor.execute(statement)
 
-            statements = self._split_script_statements(script)
-            with self._get_cursor(conn) as cursor:
-                for statement in statements:
-                    if statement and statement.strip():
-                        cursor.execute(statement)
-
-            return {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
+        return {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
 
     def _wrap_select_result(
         self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
-        with instrument_operation(self, "oracle_wrap_select", "database"):
-            fetched_tuples = result.get("data", [])
-            column_names = result.get("column_names", [])
+        fetched_tuples = result.get("data", [])
+        column_names = result.get("column_names", [])
 
-            if not fetched_tuples:
-                return SQLResult[RowT](statement=statement, data=[], column_names=column_names, operation_type="SELECT")
+        if not fetched_tuples:
+            return SQLResult[RowT](statement=statement, data=[], column_names=column_names, operation_type="SELECT")
 
-            rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples]
+        rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples]
 
-            if self.instrumentation_config.log_results_count:
-                logger.debug("Query returned %d rows", len(rows_as_dicts))
-
-            if schema_type:
-                converted_data = self.to_schema(rows_as_dicts, schema_type=schema_type)
-                return SQLResult[ModelDTOT](
-                    statement=statement, data=list(converted_data), column_names=column_names, operation_type="SELECT"
-                )
-
-            return SQLResult[RowT](
-                statement=statement, data=rows_as_dicts, column_names=column_names, operation_type="SELECT"
+        if schema_type:
+            converted_data = self.to_schema(rows_as_dicts, schema_type=schema_type)
+            return SQLResult[ModelDTOT](
+                statement=statement, data=list(converted_data), column_names=column_names, operation_type="SELECT"
             )
+
+        return SQLResult[RowT](
+            statement=statement, data=rows_as_dicts, column_names=column_names, operation_type="SELECT"
+        )
 
     def _wrap_execute_result(
         self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
     ) -> SQLResult[RowT]:
-        with instrument_operation(self, "oracle_wrap_execute", "database"):
-            operation_type = "UNKNOWN"
-            if statement.expression:
-                operation_type = str(statement.expression.key).upper()
+        operation_type = "UNKNOWN"
+        if statement.expression:
+            operation_type = str(statement.expression.key).upper()
 
-            if "statements_executed" in result:
-                script_result = cast("ScriptResultDict", result)
-                return SQLResult[RowT](
-                    statement=statement,
-                    data=[],
-                    rows_affected=0,
-                    operation_type="SCRIPT",
-                    metadata={
-                        "status_message": script_result.get("status_message", ""),
-                        "statements_executed": script_result.get("statements_executed", -1),
-                    },
-                )
-
-            dml_result = cast("DMLResultDict", result)
-            rows_affected = dml_result.get("rows_affected", -1)
-            status_message = dml_result.get("status_message", "")
-
-            if self.instrumentation_config.log_results_count:
-                logger.debug("Execute operation affected %d rows", rows_affected)
-
+        if "statements_executed" in result:
+            script_result = cast("ScriptResultDict", result)
             return SQLResult[RowT](
                 statement=statement,
                 data=[],
-                rows_affected=rows_affected,
-                operation_type=operation_type,
-                metadata={"status_message": status_message},
+                rows_affected=0,
+                operation_type="SCRIPT",
+                metadata={
+                    "status_message": script_result.get("status_message", ""),
+                    "statements_executed": script_result.get("statements_executed", -1),
+                },
             )
+
+        dml_result = cast("DMLResultDict", result)
+        rows_affected = dml_result.get("rows_affected", -1)
+        status_message = dml_result.get("status_message", "")
+        return SQLResult[RowT](
+            statement=statement,
+            data=[],
+            rows_affected=rows_affected,
+            operation_type=operation_type,
+            metadata={"status_message": status_message},
+        )
 
 
 class OracleAsyncDriver(
-    AsyncDriverAdapterProtocol[OracleAsyncConnection, RowT], SQLTranslatorMixin, AsyncStorageMixin, ToSchemaMixin
+    AsyncDriverAdapterProtocol[OracleAsyncConnection, RowT],
+    SQLTranslatorMixin,
+    TypeCoercionMixin,
+    AsyncStorageMixin,
+    ToSchemaMixin,
 ):
     """Oracle Async Driver Adapter. Refactored for new protocol."""
 
@@ -221,20 +232,41 @@ class OracleAsyncDriver(
     default_parameter_style: ParameterStyle = ParameterStyle.NAMED_COLON
     __supports_arrow__: ClassVar[bool] = True
     __supports_parquet__: ClassVar[bool] = False
+    __slots__ = ("config", "connection", "default_row_type")
 
     def __init__(
         self,
         connection: OracleAsyncConnection,
         config: "Optional[SQLConfig]" = None,
-        instrumentation_config: "Optional[InstrumentationConfig]" = None,
         default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
-        super().__init__(
-            connection=connection,
-            config=config,
-            instrumentation_config=instrumentation_config,
-            default_row_type=default_row_type,
-        )
+        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+
+    def _coerce_boolean(self, value: Any) -> Any:
+        """Oracle doesn't have native boolean, convert to number."""
+        if isinstance(value, bool):
+            return 1 if value else 0
+        return value
+
+    def _coerce_decimal(self, value: Any) -> Any:
+        """Oracle handles decimal as NUMBER type."""
+        if isinstance(value, str):
+            from decimal import Decimal
+
+            return Decimal(value)
+        return value
+
+    def _coerce_json(self, value: Any) -> Any:
+        """Oracle JSON stored as CLOB, serialize to string."""
+        if isinstance(value, (dict, list)):
+            return to_json(value)
+        return value
+
+    def _coerce_array(self, value: Any) -> Any:
+        """Oracle doesn't have native arrays, serialize to JSON string."""
+        if isinstance(value, (list, tuple)):
+            return to_json(list(value))
+        return value
 
     @asynccontextmanager
     async def _get_cursor(
@@ -273,9 +305,11 @@ class OracleAsyncDriver(
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)
+            params = self._process_parameters(params)
             return await self._execute_many(sql, params, connection=connection, **kwargs)
 
         sql, params = statement.compile(placeholder_style=target_style)
+        params = self._process_parameters(params)
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
@@ -286,79 +320,59 @@ class OracleAsyncDriver(
         connection: Optional[OracleAsyncConnection] = None,
         **kwargs: Any,
     ) -> Union[SelectResultDict, DMLResultDict]:
-        async with instrument_operation_async(self, "oracle_async_execute", "database"):
-            conn = self._connection(connection)
-            if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQL: %s", sql)
+        conn = self._connection(connection)
+        async with self._get_cursor(conn) as cursor:
+            if parameters is None:
+                await cursor.execute(sql)
+            else:
+                await cursor.execute(sql, parameters)
 
-            if self.instrumentation_config.log_parameters and parameters:
-                logger.debug("Query parameters: %s", parameters)
-            async with self._get_cursor(conn) as cursor:
-                if parameters is None:
-                    await cursor.execute(sql)
-                else:
-                    await cursor.execute(sql, parameters)
-
-                # For SELECT statements, extract data while cursor is open
-                if self.returns_rows(statement.expression):
-                    fetched_data = await cursor.fetchall()
-                    column_names = [col[0] for col in cursor.description or []]
-                    result: SelectResultDict = {
-                        "data": fetched_data,
-                        "column_names": column_names,
-                        "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
-                    }
-                    return result
-
-                # For non-SELECT statements, return DML result
-                dml_result: DMLResultDict = {
+            # For SELECT statements, extract data while cursor is open
+            if self.returns_rows(statement.expression):
+                fetched_data = await cursor.fetchall()
+                column_names = [col[0] for col in cursor.description or []]
+                result: SelectResultDict = {
+                    "data": fetched_data,
+                    "column_names": column_names,
                     "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
-                    "status_message": "OK",
                 }
-                return dml_result
+                return result
+            dml_result: DMLResultDict = {
+                "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                "status_message": "OK",
+            }
+            return dml_result
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[OracleAsyncConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
-        async with instrument_operation_async(self, "oracle_async_execute_many", "database"):
-            conn = self._connection(connection)
-            if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQL (executemany): %s", sql)
-            if self.instrumentation_config.log_parameters and param_list:
-                logger.debug("Query parameters (batch): %s", param_list)
-            async with self._get_cursor(conn) as cursor:
-                await cursor.executemany(sql, param_list or [])
-                # Return DML result dict
-                result: DMLResultDict = {
-                    "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
-                    "status_message": "OK",
-                }
-                return result
+        conn = self._connection(connection)
+        async with self._get_cursor(conn) as cursor:
+            await cursor.executemany(sql, param_list or [])
+            result: DMLResultDict = {
+                "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                "status_message": "OK",
+            }
+            return result
 
     async def _execute_script(
         self, script: str, connection: Optional[OracleAsyncConnection] = None, **kwargs: Any
     ) -> ScriptResultDict:
-        async with instrument_operation_async(self, "oracle_async_execute_script", "database"):
-            conn = self._connection(connection)
-            if self.instrumentation_config.log_queries:
-                logger.debug("Executing SQL script: %s", script)
+        conn = self._connection(connection)
+        # Oracle doesn't support multi-statement scripts in a single execute
+        # Split the script into individual statements
+        statements = self._split_script_statements(script)
 
-            # Oracle doesn't support multi-statement scripts in a single execute
-            # Split the script into individual statements
-            statements = self._split_script_statements(script)
-
-            async with self._get_cursor(conn) as cursor:
-                for statement in statements:
+        async with self._get_cursor(conn) as cursor:
+            for statement in statements:
+                if statement:
+                    statement = statement.strip()
                     if statement:
-                        statement = statement.strip()
-                        if statement:
-                            # No need to manually strip semicolons - the splitter handles it
-                            if self.instrumentation_config.log_queries:
-                                logger.debug("Executing statement: %s", statement)
-                            await cursor.execute(statement)
+                        # No need to manually strip semicolons - the splitter handles it
+                        await cursor.execute(statement)
 
-            result: ScriptResultDict = {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
-            return result
+        result: ScriptResultDict = {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
+        return result
 
     async def _wrap_select_result(
         self,
@@ -367,26 +381,22 @@ class OracleAsyncDriver(
         schema_type: Optional[type[ModelDTOT]] = None,
         **kwargs: Any,  # pyright: ignore[reportUnusedParameter]
     ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
-        async with instrument_operation_async(self, "oracle_async_wrap_select", "database"):
-            fetched_tuples = result["data"]
-            column_names = result["column_names"]
+        fetched_tuples = result["data"]
+        column_names = result["column_names"]
 
-            if not fetched_tuples:
-                return SQLResult[RowT](statement=statement, data=[], column_names=column_names, operation_type="SELECT")
+        if not fetched_tuples:
+            return SQLResult[RowT](statement=statement, data=[], column_names=column_names, operation_type="SELECT")
 
-            rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples]
+        rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples]
 
-            if self.instrumentation_config.log_results_count:
-                logger.debug("Query returned %d rows", len(rows_as_dicts))
-
-            if schema_type:
-                converted_data = self.to_schema(rows_as_dicts, schema_type=schema_type)
-                return SQLResult[ModelDTOT](
-                    statement=statement, data=list(converted_data), column_names=column_names, operation_type="SELECT"
-                )
-            return SQLResult[RowT](
-                statement=statement, data=rows_as_dicts, column_names=column_names, operation_type="SELECT"
+        if schema_type:
+            converted_data = self.to_schema(rows_as_dicts, schema_type=schema_type)
+            return SQLResult[ModelDTOT](
+                statement=statement, data=list(converted_data), column_names=column_names, operation_type="SELECT"
             )
+        return SQLResult[RowT](
+            statement=statement, data=rows_as_dicts, column_names=column_names, operation_type="SELECT"
+        )
 
     async def _wrap_execute_result(
         self,
@@ -394,35 +404,30 @@ class OracleAsyncDriver(
         result: Union[DMLResultDict, ScriptResultDict],
         **kwargs: Any,  # pyright: ignore[reportUnusedParameter]
     ) -> SQLResult[RowT]:
-        async with instrument_operation_async(self, "oracle_async_wrap_execute", "database"):
-            operation_type = "UNKNOWN"
-            if statement.expression:
-                operation_type = str(statement.expression.key).upper()
+        operation_type = "UNKNOWN"
+        if statement.expression:
+            operation_type = str(statement.expression.key).upper()
 
-            if "statements_executed" in result:
-                script_result = cast("ScriptResultDict", result)
-                return SQLResult[RowT](
-                    statement=statement,
-                    data=[],
-                    rows_affected=0,
-                    operation_type="SCRIPT",
-                    metadata={
-                        "status_message": script_result.get("status_message", ""),
-                        "statements_executed": script_result.get("statements_executed", -1),
-                    },
-                )
-
-            dml_result = cast("DMLResultDict", result)
-            rows_affected = dml_result.get("rows_affected", -1)
-            status_message = dml_result.get("status_message", "")
-
-            if self.instrumentation_config.log_results_count:
-                logger.debug("Execute operation affected %d rows", rows_affected)
-
+        if "statements_executed" in result:
+            script_result = cast("ScriptResultDict", result)
             return SQLResult[RowT](
                 statement=statement,
                 data=[],
-                rows_affected=rows_affected,
-                operation_type=operation_type,
-                metadata={"status_message": status_message},
+                rows_affected=0,
+                operation_type="SCRIPT",
+                metadata={
+                    "status_message": script_result.get("status_message", ""),
+                    "statements_executed": script_result.get("statements_executed", -1),
+                },
             )
+
+        dml_result = cast("DMLResultDict", result)
+        rows_affected = dml_result.get("rows_affected", -1)
+        status_message = dml_result.get("status_message", "")
+        return SQLResult[RowT](
+            statement=statement,
+            data=[],
+            rows_affected=rows_affected,
+            operation_type=operation_type,
+            metadata={"status_message": status_message},
+        )

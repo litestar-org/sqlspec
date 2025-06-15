@@ -9,7 +9,7 @@ import duckdb
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.duckdb.driver import DuckDBConnection, DuckDBDriver
-from sqlspec.config import InstrumentationConfig, NoPoolSyncConfig
+from sqlspec.config import NoPoolSyncConfig
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow, Empty
 
@@ -165,7 +165,6 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
     def __init__(
         self,
         statement_config: "Optional[SQLConfig]" = None,
-        instrumentation: "Optional[InstrumentationConfig]" = None,
         default_row_type: type[DictRow] = DictRow,
         # Core connection parameters
         database: Optional[str] = None,
@@ -214,15 +213,12 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         extensions: "Optional[list[DuckDBExtensionConfig]]" = None,
         secrets: "Optional[list[DuckDBSecretConfig]]" = None,
         on_connection_create: "Optional[Callable[[DuckDBConnection], Optional[DuckDBConnection]]]" = None,
-        # User-defined extras
-        extras: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize DuckDB configuration with intelligent features.
 
         Args:
             statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
             default_row_type: Default row type for results
             database: Path to the DuckDB database file. Use ':memory:' for in-memory database
             read_only: Whether to open the database in read-only mode
@@ -260,7 +256,6 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
             extensions: List of extension dicts to auto-install/load with keys: name, version, repository, force_install
             secrets: List of secret dicts for AI/API integrations with keys: secret_type, name, value, scope
             on_connection_create: Callback executed when connection is created
-            extras: Additional connection parameters not explicitly defined
             **kwargs: Additional parameters (stored in extras)
 
         Example:
@@ -317,9 +312,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         self.arrow_large_buffer_size = arrow_large_buffer_size
         self.errors_as_json = errors_as_json
 
-        # Handle extras and additional kwargs
-        self.extras = extras or {}
-        self.extras.update(kwargs)
+        self.extras = kwargs or {}
 
         # Store other config
         self.statement_config = statement_config or SQLConfig()
@@ -330,7 +323,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         self.secrets = secrets or []
         self.on_connection_create = on_connection_create
 
-        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
+        super().__init__()
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
@@ -366,15 +359,12 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
     def create_connection(self) -> DuckDBConnection:
         """Create and return a DuckDB connection with intelligent configuration applied."""
 
-        if self.instrumentation.log_pool_operations:
-            logger.info("Creating DuckDB connection", extra={"adapter": "duckdb"})
+        logger.info("Creating DuckDB connection", extra={"adapter": "duckdb"})
 
         try:
             config_dict = self.connection_config_dict
             connection = duckdb.connect(**config_dict)
-
-            if self.instrumentation.log_pool_operations:
-                logger.info("DuckDB connection created successfully", extra={"adapter": "duckdb"})
+            logger.info("DuckDB connection created successfully", extra={"adapter": "duckdb"})
 
             # Install and load extensions
             for ext_config in self.extensions:
@@ -383,8 +373,6 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                     ext_name = ext_config.get("name")
                     if not ext_name:
                         continue
-
-                    # Install extension if needed
                     install_kwargs: dict[str, Any] = {}
                     if "version" in ext_config:
                         install_kwargs["version"] = ext_config["version"]
@@ -395,15 +383,11 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
 
                     if install_kwargs or self.autoinstall_known_extensions:
                         connection.install_extension(ext_name, **install_kwargs)
-
-                    # Load the extension
                     connection.load_extension(ext_name)
-
-                    if self.instrumentation.log_pool_operations:
-                        logger.debug("Loaded DuckDB extension: %s", ext_name, extra={"adapter": "duckdb"})
+                    logger.debug("Loaded DuckDB extension: %s", ext_name, extra={"adapter": "duckdb"})
 
                 except Exception as e:
-                    if self.instrumentation.log_pool_operations and ext_name:
+                    if ext_name:
                         logger.warning(
                             "Failed to load DuckDB extension: %s",
                             ext_name,
@@ -418,15 +402,11 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                     secret_value = secret_config.get("value")
 
                     if secret_type and secret_name and secret_value:
-                        # Build the secret creation SQL
                         value_pairs = []
                         for key, value in secret_value.items():
-                            # Escape single quotes in values
                             escaped_value = str(value).replace("'", "''")
                             value_pairs.append(f"'{key}' = '{escaped_value}'")
                         value_string = ", ".join(value_pairs)
-
-                        # Add scope if specified
                         scope_clause = ""
                         if "scope" in secret_config:
                             scope_clause = f" SCOPE '{secret_config['scope']}'"
@@ -438,27 +418,21 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                             ){scope_clause}
                         """
                         connection.execute(sql)
-
-                        if self.instrumentation.log_pool_operations:
-                            logger.debug("Created DuckDB secret: %s", secret_name, extra={"adapter": "duckdb"})
+                        logger.debug("Created DuckDB secret: %s", secret_name, extra={"adapter": "duckdb"})
 
                 except Exception as e:
-                    if self.instrumentation.log_pool_operations and secret_name:
+                    if secret_name:
                         logger.warning(
                             "Failed to create DuckDB secret: %s",
                             secret_name,
                             extra={"adapter": "duckdb", "error": str(e)},
                         )
-
-            # Run connection creation hook
             if self.on_connection_create:
                 try:
                     self.on_connection_create(connection)
-                    if self.instrumentation.log_pool_operations:
-                        logger.debug("Executed connection creation hook", extra={"adapter": "duckdb"})
+                    logger.debug("Executed connection creation hook", extra={"adapter": "duckdb"})
                 except Exception as e:
-                    if self.instrumentation.log_pool_operations:
-                        logger.warning("Connection creation hook failed", extra={"adapter": "duckdb", "error": str(e)})
+                    logger.warning("Connection creation hook failed", extra={"adapter": "duckdb", "error": str(e)})
 
         except Exception as e:
             logger.exception("Failed to create DuckDB connection", extra={"adapter": "duckdb", "error": str(e)})
@@ -505,9 +479,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                         target_parameter_style=self.preferred_parameter_style,
                     )
 
-                driver = self.driver_type(
-                    connection=connection, config=statement_config, instrumentation_config=self.instrumentation
-                )
+                driver = self.driver_type(connection=connection, config=statement_config)
                 yield driver
 
         return session_manager()

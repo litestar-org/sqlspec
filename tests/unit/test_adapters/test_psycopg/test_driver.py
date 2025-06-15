@@ -10,7 +10,6 @@ from sqlspec.adapters.psycopg import (
     PsycopgSyncConnection,
     PsycopgSyncDriver,
 )
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.sql import SQLConfig
 
 
@@ -51,35 +50,24 @@ def mock_psycopg_async_connection() -> AsyncMock:
 def psycopg_sync_driver(mock_psycopg_sync_connection: PsycopgSyncConnection) -> PsycopgSyncDriver:
     """Create a Psycopg sync driver with mocked connection."""
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
-    instrumentation_config = InstrumentationConfig()
-    return PsycopgSyncDriver(
-        connection=mock_psycopg_sync_connection, config=config, instrumentation_config=instrumentation_config
-    )
+    return PsycopgSyncDriver(connection=mock_psycopg_sync_connection, config=config)
 
 
 @pytest.fixture
 def psycopg_async_driver(mock_psycopg_async_connection: AsyncMock) -> PsycopgAsyncDriver:
     """Create a Psycopg async driver with mocked connection."""
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
-    instrumentation_config = InstrumentationConfig()
-    return PsycopgAsyncDriver(
-        connection=mock_psycopg_async_connection, config=config, instrumentation_config=instrumentation_config
-    )
+    return PsycopgAsyncDriver(connection=mock_psycopg_async_connection, config=config)
 
 
 def test_psycopg_sync_driver_initialization(mock_psycopg_sync_connection: PsycopgSyncConnection) -> None:
     """Test Psycopg sync driver initialization."""
     config = SQLConfig()
-    instrumentation_config = InstrumentationConfig(log_queries=True)
-
-    driver = PsycopgSyncDriver(
-        connection=mock_psycopg_sync_connection, config=config, instrumentation_config=instrumentation_config
-    )
+    driver = PsycopgSyncDriver(connection=mock_psycopg_sync_connection, config=config)
 
     # Test driver attributes are set correctly
     assert driver.connection is mock_psycopg_sync_connection
     assert driver.config is config
-    assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "postgres"
     assert driver.supports_native_arrow_export is False
     assert driver.supports_native_arrow_import is False
@@ -88,16 +76,11 @@ def test_psycopg_sync_driver_initialization(mock_psycopg_sync_connection: Psycop
 def test_psycopg_async_driver_initialization(mock_psycopg_async_connection: AsyncMock) -> None:
     """Test Psycopg async driver initialization."""
     config = SQLConfig()
-    instrumentation_config = InstrumentationConfig(log_queries=True)
-
-    driver = PsycopgAsyncDriver(
-        connection=mock_psycopg_async_connection, config=config, instrumentation_config=instrumentation_config
-    )
+    driver = PsycopgAsyncDriver(connection=mock_psycopg_async_connection, config=config)
 
     # Test driver attributes are set correctly
     assert driver.connection is mock_psycopg_async_connection
     assert driver.config is config
-    assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "postgres"
     assert driver.supports_native_arrow_export is False
     assert driver.supports_native_arrow_import is False

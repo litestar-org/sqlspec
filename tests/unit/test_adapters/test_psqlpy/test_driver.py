@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from sqlspec.adapters.psqlpy import PsqlpyDriver
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult
 from sqlspec.statement.sql import SQLConfig
@@ -27,23 +26,17 @@ def mock_psqlpy_connection() -> AsyncMock:
 def psqlpy_driver(mock_psqlpy_connection: AsyncMock) -> PsqlpyDriver:
     """Create a PSQLPy driver with mocked connection."""
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
-    instrumentation_config = InstrumentationConfig()
-    return PsqlpyDriver(connection=mock_psqlpy_connection, config=config, instrumentation_config=instrumentation_config)
+    return PsqlpyDriver(connection=mock_psqlpy_connection, config=config)
 
 
 def test_psqlpy_driver_initialization(mock_psqlpy_connection: AsyncMock) -> None:
     """Test PSQLPy driver initialization."""
     config = SQLConfig()
-    instrumentation_config = InstrumentationConfig(log_queries=True)
-
-    driver = PsqlpyDriver(
-        connection=mock_psqlpy_connection, config=config, instrumentation_config=instrumentation_config
-    )
+    driver = PsqlpyDriver(connection=mock_psqlpy_connection, config=config)
 
     # Test driver attributes are set correctly
     assert driver.connection is mock_psqlpy_connection
     assert driver.config is config
-    assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "postgres"
     assert driver.supports_native_arrow_export is False
     assert driver.supports_native_arrow_import is False

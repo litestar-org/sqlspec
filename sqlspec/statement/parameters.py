@@ -10,14 +10,24 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Final, Optional, Union
+from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from typing_extensions import TypedDict
 
 from sqlspec.exceptions import ExtraParameterError, MissingParameterError, ParameterStyleMismatchError
 from sqlspec.typing import SQLParameterType
 
-__all__ = ("ParameterConverter", "ParameterInfo", "ParameterStyle", "ParameterValidator", "SQLParameterType")
+if TYPE_CHECKING:
+    from sqlglot import exp
+
+__all__ = (
+    "ParameterConverter",
+    "ParameterInfo",
+    "ParameterStyle",
+    "ParameterValidator",
+    "SQLParameterType",
+    "TypedParameter",
+)
 
 logger = logging.getLogger("sqlspec.sql.parameters")
 
@@ -102,6 +112,31 @@ class ParameterInfo:
 
     placeholder_text: str = field(compare=False)
     """The original text of the parameter."""
+
+
+@dataclass
+class TypedParameter:
+    """Internal container for parameter values with type metadata.
+
+    This class preserves complete type information from SQL literals and user-provided
+    parameters, enabling proper type coercion for each database adapter.
+
+    Note:
+        This is an internal class. Users never create TypedParameter objects directly.
+        The system automatically wraps parameters with type information.
+    """
+
+    value: Any
+    """The actual parameter value."""
+
+    sqlglot_type: "exp.DataType"
+    """Full SQLGlot DataType instance with all type details."""
+
+    type_hint: str
+    """Simple string hint for adapter type coercion (e.g., 'integer', 'decimal', 'json')."""
+
+    semantic_name: "Optional[str]" = None
+    """Optional semantic name derived from SQL context (e.g., 'user_id', 'email')."""
 
 
 class NormalizationInfo(TypedDict, total=False):
@@ -600,6 +635,32 @@ class ParameterConverter:
 
         # Return None if nothing provided
         return None
+
+    @staticmethod
+    def wrap_parameters_with_types(
+        parameters: "SQLParameterType",
+        parameters_info: "list[ParameterInfo]",  # noqa: ARG004
+    ) -> "SQLParameterType":
+        """Wrap user-provided parameters with TypedParameter objects when needed.
+
+        This is called internally by the SQL processing pipeline after parameter
+        extraction and merging. It preserves the original parameter structure
+        while adding type information where beneficial.
+
+        Args:
+            parameters: User-provided parameters (dict, list, or scalar)
+            parameters_info: Extracted parameter information from SQL
+
+        Returns:
+            Parameters with TypedParameter wrapping where appropriate
+        """
+        if parameters is None:
+            return None
+
+        # For now, return parameters as-is. The actual wrapping will happen
+        # in the literal parameterizer when it extracts literals and creates
+        # TypedParameter objects for them.
+        return parameters
 
     def _denormalize_sql(
         self, rendered_sql: str, final_parameter_info: "list[ParameterInfo]", target_style: "ParameterStyle"

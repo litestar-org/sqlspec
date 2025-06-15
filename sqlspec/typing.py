@@ -87,8 +87,8 @@ SupportedSchemaModel: TypeAlias = "Union[Struct, BaseModel, DataclassProtocol]"
 
 :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol`
 """
-SQLParameterType: TypeAlias = "Union[Any, dict[str, Any], list[Any], tuple[Any, ...], None]"
-"""Type alias for parameter types.
+StatementParameters: TypeAlias = "Union[Any, dict[str, Any], list[Any], tuple[Any, ...], None]"
+"""Type alias for statement parameters.
 
 Represents:
 - :type:`dict[str, Any]`
@@ -96,6 +96,8 @@ Represents:
 - :type:`tuple[Any, ...]`
 - :type:`None`
 """
+# Backward compatibility alias
+SQLParameterType: TypeAlias = StatementParameters
 ModelDTOT = TypeVar("ModelDTOT", bound="SupportedSchemaModel")
 """Type variable for model DTOs.
 
@@ -604,6 +606,7 @@ __all__ = (
     "RowT",
     "SQLParameterType",
     "Span",
+    "StatementParameters",
     "Status",
     "StatusCode",
     "Struct",

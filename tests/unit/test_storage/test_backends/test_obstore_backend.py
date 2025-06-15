@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from sqlspec.config import InstrumentationConfig
 from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError
 from sqlspec.storage.backends.obstore import ObStoreBackend
 
@@ -371,11 +370,9 @@ class TestObStoreBackend:
             mock_store.write_arrow = MagicMock()
 
             with patch("obstore.store.from_url", return_value=mock_store):
-                config = InstrumentationConfig()
-
                 with caplog.at_level(logging.DEBUG):
                     # Initialize backend with debug mode to trigger debug log
-                    ObStoreBackend("s3://test", instrumentation_config=config)
+                    ObStoreBackend("s3://test")
 
                 # Should log about initialization
                 assert any("ObStore backend initialized" in record.message for record in caplog.records)

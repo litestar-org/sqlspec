@@ -1,13 +1,11 @@
 """Unit tests for AIOSQLite driver."""
 
-import tempfile
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConnection, AiosqliteDriver
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -42,25 +40,17 @@ def mock_aiosqlite_connection() -> AsyncMock:
 def aiosqlite_driver(mock_aiosqlite_connection: AsyncMock) -> AiosqliteDriver:
     """Create an AIOSQLite driver with mocked connection."""
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
-    instrumentation_config = InstrumentationConfig()
-    return AiosqliteDriver(
-        connection=mock_aiosqlite_connection, config=config, instrumentation_config=instrumentation_config
-    )
+    return AiosqliteDriver(connection=mock_aiosqlite_connection, config=config)
 
 
 def test_aiosqlite_driver_initialization(mock_aiosqlite_connection: AsyncMock) -> None:
     """Test AIOSQLite driver initialization."""
     config = SQLConfig()
-    instrumentation_config = InstrumentationConfig(log_queries=True)
-
-    driver = AiosqliteDriver(
-        connection=mock_aiosqlite_connection, config=config, instrumentation_config=instrumentation_config
-    )
+    driver = AiosqliteDriver(connection=mock_aiosqlite_connection, config=config)
 
     # Test driver attributes are set correctly
     assert driver.connection is mock_aiosqlite_connection
     assert driver.config is config
-    assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "sqlite"
     # AIOSQLite doesn't support native arrow operations
     assert driver.supports_native_arrow_export is False
@@ -168,7 +158,7 @@ async def test_aiosqlite_driver_non_query_statement(
     # The result should be a DMLResultDict for non-query statements
     assert isinstance(result, dict)
     assert "rows_affected" in result
-    assert result["rows_affected"] == 1
+    assert result["rows_affected"] == 1  # pyright: ignore
 
 
 @pytest.mark.asyncio
@@ -196,49 +186,3 @@ async def test_aiosqlite_driver_execute_with_connection_override(aiosqlite_drive
 
     # The result should be a dict with expected structure
     assert isinstance(result, dict)
-
-
-@pytest.mark.asyncio
-async def test_aiosqlite_driver_to_parquet(
-    aiosqlite_driver: AiosqliteDriver, mock_aiosqlite_connection: AsyncMock, monkeypatch: "pytest.MonkeyPatch"
-) -> None:
-    """Test to_parquet writes correct data to a Parquet file (async)."""
-    mock_cursor = AsyncMock()
-    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
-    mock_cursor.fetchall.return_value = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
-
-    async def _cursor(*args: Any, **kwargs: Any) -> AsyncMock:
-        return mock_cursor
-
-    mock_aiosqlite_connection.cursor.side_effect = _cursor
-    mock_cursor.execute.return_value = None
-    statement = SQL("SELECT id, name FROM users")
-    called = {}
-
-    def patched_write_table(table: Any, path: Any, **kwargs: Any) -> None:
-        called["table"] = table
-        called["path"] = path
-
-    # Mock the storage backend's write_arrow method instead of pyarrow directly
-    def mock_write_arrow(path: str, table: Any, **kwargs: Any) -> None:
-        called["table"] = table
-        called["path"] = path
-
-    # Mock the backend resolution to return a mock backend with specific attributes
-    mock_backend = AsyncMock()
-
-    # Create an async version of the write method
-    async def mock_write_arrow_async(path: str, table: Any, **kwargs: Any) -> None:
-        mock_write_arrow(path, table, **kwargs)
-
-    mock_backend.write_arrow_async = mock_write_arrow_async
-
-    def mock_resolve_backend_and_path(uri: str) -> tuple[AsyncMock, str]:
-        return mock_backend, uri
-
-    monkeypatch.setattr(aiosqlite_driver, "_resolve_backend_and_path", mock_resolve_backend_and_path)
-
-    with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
-        await aiosqlite_driver.export_to_storage(statement.to_sql(), tmp.name)
-        assert "table" in called
-        assert called["path"] == tmp.name

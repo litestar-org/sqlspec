@@ -5,7 +5,6 @@ This module provides a fluent interface for building SQL queries safely,
 with automatic parameter binding and validation.
 """
 
-import logging
 from dataclasses import dataclass
 
 from sqlglot import exp
@@ -23,8 +22,6 @@ from sqlspec.statement.result import SQLResult
 from sqlspec.typing import RowT
 
 __all__ = ("MergeBuilder",)
-
-logger = logging.getLogger("sqlspec")
 
 
 @dataclass(unsafe_hash=True)

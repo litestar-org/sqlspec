@@ -3,7 +3,6 @@
 from unittest.mock import MagicMock, patch
 
 from sqlspec.adapters.oracledb import CONNECTION_FIELDS, POOL_FIELDS, OracleSyncConfig, OracleSyncDriver
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.sql import SQLConfig
 
 
@@ -99,21 +98,15 @@ def test_oracledb_config_initialization() -> None:
     # Test with default parameters
     config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
     assert isinstance(config.statement_config, SQLConfig)
-    assert isinstance(config.instrumentation, InstrumentationConfig)
-
     # Test with custom parameters
     custom_statement_config = SQLConfig()
-    custom_instrumentation = InstrumentationConfig(log_queries=True)
-
     config = OracleSyncConfig(
         dsn="localhost:1521/freepdb1",
         user="test_user",
         password="test_password",
         statement_config=custom_statement_config,
-        instrumentation=custom_instrumentation,
     )
     assert config.statement_config is custom_statement_config
-    assert config.instrumentation.log_queries is True
 
 
 def test_oracledb_config_provide_session() -> None:
@@ -131,7 +124,6 @@ def test_oracledb_config_provide_session() -> None:
             # Check that parameter styles were set
             assert session.config.allowed_parameter_styles == ("named_colon", "numeric")
             assert session.config.target_parameter_style == "named_colon"
-            assert session.instrumentation_config is config.instrumentation
 
 
 def test_oracledb_config_driver_type() -> None:
@@ -152,30 +144,3 @@ def test_oracledb_config_supports_connection_pooling() -> None:
     config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
     assert config.supports_connection_pooling is True
     assert OracleSyncConfig.supports_connection_pooling is True
-
-
-def test_oracledb_config_from_pool_config() -> None:
-    """Test OracleDB config from_pool_config backward compatibility."""
-    # Test basic backward compatibility
-    pool_config = {
-        "service_name": "test_service_name",
-        "port": "test_port",
-        "tag": "test_tag",
-        "session_callback": 10,
-        "max": 10,
-    }
-    config = OracleSyncConfig.from_pool_config(pool_config)
-    # Add specific assertions based on fields
-    # 'tag' is not a recognized OracleDB parameter, so it goes to extras
-    assert config.extras == {"tag": "test_tag"}
-
-    # Test with extra parameters
-    pool_config_with_extras = {
-        "service_name": "test_service_name",
-        "port": "test_port",
-        "unknown_param": "test_value",
-        "another_param": 42,
-    }
-    config_extras = OracleSyncConfig.from_pool_config(pool_config_with_extras)
-    assert config_extras.extras["unknown_param"] == "test_value"
-    assert config_extras.extras["another_param"] == 42

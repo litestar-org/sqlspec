@@ -5,7 +5,6 @@ This module provides a fluent interface for building SQL queries safely,
 with automatic parameter binding and validation.
 """
 
-import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -28,8 +27,6 @@ if TYPE_CHECKING:
 
 
 __all__ = ("InsertBuilder",)
-
-logger = logging.getLogger("sqlspec")
 
 ERR_MSG_TABLE_NOT_SET = "The target table must be set using .into() before adding values."
 ERR_MSG_VALUES_COLUMNS_MISMATCH = (
@@ -162,18 +159,14 @@ class InsertBuilder(
         current_values_expression = insert_expr.args.get("expression")
 
         if self._values_added_count == 0:
-            # First row of values
             new_values_node = exp.Values(expressions=[exp.Tuple(expressions=list(value_placeholders))])
             insert_expr.set("expression", new_values_node)
         elif isinstance(current_values_expression, exp.Values):
-            # Subsequent rows, append to existing VALUES clause
             current_values_expression.expressions.append(exp.Tuple(expressions=list(value_placeholders)))
-            # No need to re-assign self._expression if current_values_expression is modified in place
         else:
             # This case should ideally not be reached if logic is correct:
             # means _values_added_count > 0 but expression is not exp.Values.
             # Fallback to creating a new Values node, though this might indicate an issue.
-            logger.warning("Appending values to a non-Values expression, creating new Values node.")
             new_values_node = exp.Values(expressions=[exp.Tuple(expressions=list(value_placeholders))])
             insert_expr.set("expression", new_values_node)
 
@@ -267,7 +260,7 @@ class InsertBuilder(
             insert_expr.set("on", on_conflict)
         except AttributeError:
             # Fallback for older sqlglot versions
-            logger.warning("OnConflict expression not available in this sqlglot version")
+            pass
         return self
 
     def on_duplicate_key_update(self, **set_values: Any) -> "Self":
@@ -279,11 +272,4 @@ class InsertBuilder(
         Returns:
             The current builder instance for method chaining.
         """
-        if set_values:
-            logger.warning(
-                "ON DUPLICATE KEY UPDATE syntax may not be fully supported by all sqlglot versions. "
-                "Attempting to set %s columns on duplicate key.",
-                len(set_values),
-            )
-
         return self

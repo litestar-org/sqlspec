@@ -5,6 +5,6 @@ with SQLSpec drivers. It focuses on just the file parsing functionality,
 returning SQL objects that work with existing SQLSpec execution.
 """
 
-from sqlspec.extensions.aiosql.adapter import AiosqlAsyncAdapter, AiosqlService, AiosqlSyncAdapter
+from sqlspec.extensions.aiosql.adapter import AiosqlAsyncAdapter, AiosqlSyncAdapter
 
-__all__ = ("AiosqlAsyncAdapter", "AiosqlService", "AiosqlSyncAdapter")
+__all__ = ("AiosqlAsyncAdapter", "AiosqlSyncAdapter")

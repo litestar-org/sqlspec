@@ -1,24 +1,23 @@
 """AsyncPG database configuration with direct field-based configuration."""
 
 import logging
-from collections.abc import AsyncGenerator, Awaitable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from asyncpg import Record
 from asyncpg import create_pool as asyncpg_create_pool
+from typing_extensions import NotRequired, Unpack
 
-from sqlspec._serialization import decode_json, encode_json
 from sqlspec.adapters.asyncpg.driver import AsyncpgConnection, AsyncpgDriver
-from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig
+from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow, Empty
-from sqlspec.utils.telemetry import instrument_operation_async
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
-    from collections.abc import Callable
 
     from asyncpg.pool import Pool
 
@@ -26,6 +25,52 @@ if TYPE_CHECKING:
 __all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "AsyncpgConfig")
 
 logger = logging.getLogger("sqlspec")
+
+
+class AsyncpgConnectionParams(TypedDict, total=False):
+    """TypedDict for AsyncPG connection parameters."""
+
+    dsn: NotRequired[str]
+    host: NotRequired[str]
+    port: NotRequired[int]
+    user: NotRequired[str]
+    password: NotRequired[str]
+    database: NotRequired[str]
+    ssl: NotRequired[Any]  # Can be bool, SSLContext, or specific string
+    passfile: NotRequired[str]
+    direct_tls: NotRequired[bool]
+    connect_timeout: NotRequired[float]
+    command_timeout: NotRequired[float]
+    statement_cache_size: NotRequired[int]
+    max_cached_statement_lifetime: NotRequired[int]
+    max_cacheable_statement_size: NotRequired[int]
+    server_settings: NotRequired[dict[str, str]]
+
+
+class AsyncpgPoolParams(AsyncpgConnectionParams, total=False):
+    """TypedDict for AsyncPG pool parameters, inheriting connection parameters."""
+
+    min_size: NotRequired[int]
+    max_size: NotRequired[int]
+    max_queries: NotRequired[int]
+    max_inactive_connection_lifetime: NotRequired[float]
+    setup: NotRequired["Callable[[AsyncpgConnection], Awaitable[None]]"]
+    init: NotRequired["Callable[[AsyncpgConnection], Awaitable[None]]"]
+    loop: NotRequired["AbstractEventLoop"]
+    connection_class: NotRequired[type["AsyncpgConnection"]]
+    record_class: NotRequired[type[Record]]
+
+
+class DriverParameters(AsyncpgPoolParams, total=False):
+    """TypedDict for additional parameters that can be passed to AsyncPG."""
+
+    statement_config: NotRequired[SQLConfig]
+    default_row_type: NotRequired[type[DictRow]]
+    json_serializer: NotRequired[Callable[[Any], str]]
+    json_deserializer: NotRequired[Callable[[str], Any]]
+    pool_instance: NotRequired["Pool[Record]"]
+    extras: NotRequired[dict[str, Any]]
+
 
 CONNECTION_FIELDS = {
     "dsn",
@@ -94,130 +139,45 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         "user",
     )
 
-    is_async: ClassVar[bool] = True
-    supports_connection_pooling: ClassVar[bool] = True
-
     driver_type: type[AsyncpgDriver] = AsyncpgDriver
     connection_type: type[AsyncpgConnection] = type(AsyncpgConnection)  # type: ignore[assignment]
-
-    # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("numeric",)
-    """AsyncPG only supports $1, $2, ... (numeric) parameter style."""
-
     preferred_parameter_style: ClassVar[str] = "numeric"
-    """AsyncPG's native parameter style is $1, $2, ... (numeric)."""
 
-    def __init__(
-        self,
-        statement_config: Optional[SQLConfig] = None,
-        instrumentation: Optional[InstrumentationConfig] = None,
-        default_row_type: type[DictRow] = DictRow,
-        json_serializer: "Callable[[Any], str]" = encode_json,
-        json_deserializer: "Callable[[str], Any]" = decode_json,
-        # Connection parameters
-        dsn: Optional[str] = None,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
-        user: Optional[str] = None,
-        password: Optional[str] = None,
-        database: Optional[str] = None,
-        ssl: Optional[Any] = None,
-        passfile: Optional[str] = None,
-        direct_tls: Optional[bool] = None,
-        connect_timeout: Optional[float] = None,
-        command_timeout: Optional[float] = None,
-        statement_cache_size: Optional[int] = None,
-        max_cached_statement_lifetime: Optional[int] = None,
-        max_cacheable_statement_size: Optional[int] = None,
-        server_settings: Optional[dict[str, str]] = None,
-        # Pool parameters
-        min_size: Optional[int] = None,
-        max_size: Optional[int] = None,
-        max_queries: Optional[int] = None,
-        max_inactive_connection_lifetime: Optional[float] = None,
-        setup: Optional["Callable[[AsyncpgConnection], Awaitable[None]]"] = None,
-        init: Optional["Callable[[AsyncpgConnection], Awaitable[None]]"] = None,
-        loop: Optional["AbstractEventLoop"] = None,
-        connection_class: Optional[type["AsyncpgConnection"]] = None,
-        record_class: Optional[type[Record]] = None,
-        # User-defined extras
-        extras: Optional[dict[str, Any]] = None,
-        **kwargs: Any,
-    ) -> None:
-        """Initialize AsyncPG configuration.
+    def __init__(self, **kwargs: "Unpack[DriverParameters]") -> None:
+        """Initialize AsyncPG configuration."""
+        self.dsn = kwargs.get("dsn")
+        self.host = kwargs.get("host")
+        self.port = kwargs.get("port")
+        self.user = kwargs.get("user")
+        self.password = kwargs.get("password")
+        self.database = kwargs.get("database")
+        self.ssl = kwargs.get("ssl")
+        self.passfile = kwargs.get("passfile")
+        self.direct_tls = kwargs.get("direct_tls")
+        self.connect_timeout = kwargs.get("connect_timeout")
+        self.command_timeout = kwargs.get("command_timeout")
+        self.statement_cache_size = kwargs.get("statement_cache_size")
+        self.max_cached_statement_lifetime = kwargs.get("max_cached_statement_lifetime")
+        self.max_cacheable_statement_size = kwargs.get("max_cacheable_statement_size")
+        self.server_settings = kwargs.get("server_settings")
+        self.min_size = kwargs.get("min_size")
+        self.max_size = kwargs.get("max_size")
+        self.max_queries = kwargs.get("max_queries")
+        self.max_inactive_connection_lifetime = kwargs.get("max_inactive_connection_lifetime")
+        self.setup = kwargs.get("setup")
+        self.init = kwargs.get("init")
+        self.loop = kwargs.get("loop")
+        self.connection_class = kwargs.get("connection_class")
+        self.record_class = kwargs.get("record_class")
+        self.extras = kwargs.get("extras", {})
+        self.statement_config = kwargs.get("statement_config", SQLConfig())
+        self.default_row_type = kwargs.get("default_row_type", dict[str, Any])
+        self.json_serializer = kwargs.get("json_serializer", to_json)
+        self.json_deserializer = kwargs.get("json_deserializer", from_json)
+        self.pool_instance = kwargs.get("pool_instance")
 
-        Args:
-            statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
-            default_row_type: Default row type for results
-            json_serializer: JSON serialization function
-            json_deserializer: JSON deserialization function
-            dsn: Connection DSN string
-            host: Database server host
-            port: Database server port
-            user: Database user
-            password: Database password
-            database: Database name
-            ssl: SSL configuration (True, False, or SSLContext)
-            passfile: Path to password file
-            direct_tls: Use direct TLS connection
-            connect_timeout: Connection timeout in seconds
-            command_timeout: Command timeout in seconds
-            statement_cache_size: Statement cache size
-            max_cached_statement_lifetime: Maximum cached statement lifetime in seconds
-            max_cacheable_statement_size: Maximum size of cacheable statements in bytes
-            server_settings: Server settings to apply on connection
-            min_size: Minimum number of connections in the pool
-            max_size: Maximum number of connections in the pool
-            max_queries: Maximum queries per connection before recycling
-            max_inactive_connection_lifetime: Maximum lifetime for inactive connections (seconds)
-            setup: Async callable to setup a new connection
-            init: Async callable to initialize a new connection (alias for setup)
-            loop: Asyncio event loop
-            connection_class: Custom connection class
-            record_class: Custom record class
-            extras: Additional connection parameters not explicitly defined
-            **kwargs: Additional parameters (stored in extras)
-        """
-        # Store connection parameters as instance attributes
-        self.dsn = dsn
-        self.host = host
-        self.port = port
-        self.user = user
-        self.password = password
-        self.database = database
-        self.ssl = ssl
-        self.passfile = passfile
-        self.direct_tls = direct_tls
-        self.connect_timeout = connect_timeout
-        self.command_timeout = command_timeout
-        self.statement_cache_size = statement_cache_size
-        self.max_cached_statement_lifetime = max_cached_statement_lifetime
-        self.max_cacheable_statement_size = max_cacheable_statement_size
-        self.server_settings = server_settings
-
-        # Store pool parameters as instance attributes
-        self.min_size = min_size
-        self.max_size = max_size
-        self.max_queries = max_queries
-        self.max_inactive_connection_lifetime = max_inactive_connection_lifetime
-        self.setup = setup
-        self.init = init
-        self.loop = loop
-        self.connection_class = connection_class
-        self.record_class = record_class
-
-        # Handle extras and additional kwargs
-        self.extras = extras or {}
-        self.extras.update(kwargs)
-
-        # Store other config
-        self.statement_config = statement_config or SQLConfig()
-        self.default_row_type = default_row_type
-        self.json_serializer = json_serializer
-        self.json_deserializer = json_deserializer
-
-        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
+        super().__init__()
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
@@ -272,10 +232,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Returns:
             An AsyncPG connection instance.
         """
-        async with instrument_operation_async(self, "asyncpg_create_connection", "database"):
-            if self.pool_instance is None:
-                self.pool_instance = await self._create_pool()
-            return await self.pool_instance.acquire()
+        if self.pool_instance is None:
+            self.pool_instance = await self._create_pool()
+        return await self.pool_instance.acquire()
 
     @asynccontextmanager
     async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncpgConnection, None]:
@@ -319,9 +278,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                     target_parameter_style=self.preferred_parameter_style,
                 )
 
-            yield self.driver_type(
-                connection=connection, config=statement_config, instrumentation_config=self.instrumentation
-            )
+            yield self.driver_type(connection=connection, config=statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool[Record]":
         """Provide async pool instance.

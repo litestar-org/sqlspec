@@ -8,7 +8,6 @@ import pyarrow as pa
 import pytest
 
 from sqlspec.adapters.asyncmy import AsyncmyConnection, AsyncmyDriver
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -35,25 +34,17 @@ def mock_asyncmy_connection() -> AsyncMock:
 def asyncmy_driver(mock_asyncmy_connection: AsyncMock) -> AsyncmyDriver:
     """Create an Asyncmy driver with mocked connection."""
     config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
-    instrumentation_config = InstrumentationConfig()
-    return AsyncmyDriver(
-        connection=mock_asyncmy_connection, config=config, instrumentation_config=instrumentation_config
-    )
+    return AsyncmyDriver(connection=mock_asyncmy_connection, config=config)
 
 
 def test_asyncmy_driver_initialization(mock_asyncmy_connection: AsyncMock) -> None:
     """Test Asyncmy driver initialization."""
     config = SQLConfig()
-    instrumentation_config = InstrumentationConfig(log_queries=True)
-
-    driver = AsyncmyDriver(
-        connection=mock_asyncmy_connection, config=config, instrumentation_config=instrumentation_config
-    )
+    driver = AsyncmyDriver(connection=mock_asyncmy_connection, config=config)
 
     # Test driver attributes are set correctly
     assert driver.connection is mock_asyncmy_connection
     assert driver.config is config
-    assert driver.instrumentation_config is instrumentation_config
     assert driver.dialect == "mysql"
     assert driver.supports_native_arrow_export is False
     assert driver.supports_native_arrow_import is False

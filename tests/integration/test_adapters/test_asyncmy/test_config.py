@@ -4,7 +4,6 @@ import pytest
 from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy import CONNECTION_FIELDS, POOL_FIELDS, AsyncmyConfig, AsyncmyDriver
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.sql import SQLConfig
 
 
@@ -99,11 +98,8 @@ def test_asyncmy_config_initialization() -> None:
     # Test with default parameters
     config = AsyncmyConfig(host="localhost", port=3306, user="test_user", password="test_password", database="test_db")
     assert isinstance(config.statement_config, SQLConfig)
-    assert isinstance(config.instrumentation, InstrumentationConfig)
-
     # Test with custom parameters
     custom_statement_config = SQLConfig()
-    custom_instrumentation = InstrumentationConfig(log_queries=True)  # pyright: ignore
 
     config = AsyncmyConfig(
         host="localhost",
@@ -112,10 +108,8 @@ def test_asyncmy_config_initialization() -> None:
         password="test_password",
         database="test_db",
         statement_config=custom_statement_config,
-        instrumentation=custom_instrumentation,
     )
     assert config.statement_config is custom_statement_config
-    assert config.instrumentation.log_queries is True
 
 
 @pytest.mark.asyncio
@@ -137,7 +131,6 @@ async def test_asyncmy_config_provide_session(mysql_service: MySQLService) -> No
         # Check that parameter styles were set
         assert session.config.allowed_parameter_styles == ("pyformat_positional",)
         assert session.config.target_parameter_style == "pyformat_positional"
-        assert session.instrumentation_config is config.instrumentation
 
 
 def test_asyncmy_config_driver_type() -> None:
@@ -158,29 +151,3 @@ def test_asyncmy_config_supports_connection_pooling() -> None:
     config = AsyncmyConfig(host="localhost", port=3306, user="test_user", password="test_password", database="test_db")
     assert config.supports_connection_pooling is True
     assert AsyncmyConfig.supports_connection_pooling is True
-
-
-def test_asyncmy_config_from_pool_config() -> None:
-    """Test Asyncmy config from_pool_config backward compatibility."""
-    # Test basic backward compatibility
-    pool_config = {
-        "port": "test_port",
-        "init_command": "test_init_command",
-        "local_infile": "test_local_infile",
-        "pool_recycle": 10,
-        "minsize": 10,
-    }
-    config = AsyncmyConfig.from_pool_config(pool_config)
-    # Add specific assertions based on fields
-    assert config.extras == {}
-
-    # Test with extra parameters
-    pool_config_with_extras = {
-        "port": "test_port",
-        "init_command": "test_init_command",
-        "unknown_param": "test_value",
-        "another_param": 42,
-    }
-    config_extras = AsyncmyConfig.from_pool_config(pool_config_with_extras)
-    assert config_extras.extras["unknown_param"] == "test_value"
-    assert config_extras.extras["another_param"] == 42

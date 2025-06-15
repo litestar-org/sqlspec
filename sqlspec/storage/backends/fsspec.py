@@ -1,10 +1,10 @@
 # pyright: ignore=reportUnknownVariableType
 import logging
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from sqlspec.exceptions import MissingDependencyError
-from sqlspec.storage.backends.base import InstrumentedObjectStore
+from sqlspec.storage.backends.base import ObjectStoreBase
 from sqlspec.typing import FSSPEC_INSTALLED, PYARROW_INSTALLED
 from sqlspec.utils.sync_tools import async_
 
@@ -13,7 +13,6 @@ if TYPE_CHECKING:
 
     from fsspec import AbstractFileSystem
 
-    from sqlspec.config import InstrumentationConfig
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = ("FSSpecBackend",)
@@ -39,7 +38,7 @@ def _join_path(prefix: str, path: str) -> str:
     return f"{prefix}/{path}"
 
 
-class FSSpecBackend(InstrumentedObjectStore):
+class FSSpecBackend(ObjectStoreBase):
     """Extended protocol support via fsspec.
 
     This backend implements the ObjectStoreProtocol using fsspec,
@@ -47,12 +46,7 @@ class FSSpecBackend(InstrumentedObjectStore):
     and offering fallback capabilities.
     """
 
-    def __init__(
-        self,
-        fs: "Union[str, AbstractFileSystem]",
-        base_path: str = "",
-        instrumentation_config: "Optional[InstrumentationConfig]" = None,
-    ) -> None:
+    def __init__(self, fs: "Union[str, AbstractFileSystem]", base_path: str = "") -> None:
         if not FSSPEC_INSTALLED:
             raise MissingDependencyError(package="fsspec", install_package="fsspec")
 
@@ -68,7 +62,7 @@ class FSSpecBackend(InstrumentedObjectStore):
             self.fs = fs
             self.protocol = getattr(fs, "protocol", "unknown")
             self._fs_uri = f"{self.protocol}://"
-        super().__init__(instrumentation_config, "FSSpec")
+        super().__init__()
 
     @classmethod
     def from_config(cls, config: "dict[str, Any]") -> "FSSpecBackend":
@@ -98,51 +92,51 @@ class FSSpecBackend(InstrumentedObjectStore):
         return self._fs_uri
 
     # Core Operations (sync)
-    def _read_bytes(self, path: str, **kwargs: Any) -> bytes:
+    def read_bytes(self, path: str, **kwargs: Any) -> bytes:
         """Read bytes from an object."""
         resolved_path = self._resolve_path(path)
         return self.fs.cat(resolved_path, **kwargs)  # type: ignore[no-any-return]  # pyright: ignore
 
-    def _write_bytes(self, path: str, data: bytes, **kwargs: Any) -> None:
+    def write_bytes(self, path: str, data: bytes, **kwargs: Any) -> None:
         """Write bytes to an object."""
         resolved_path = self._resolve_path(path)
         with self.fs.open(resolved_path, mode="wb", **kwargs) as f:
             f.write(data)  # pyright: ignore
 
-    def _read_text(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
+    def read_text(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from an object."""
-        data = self._read_bytes(path, **kwargs)
+        data = self.read_bytes(path, **kwargs)
         return data.decode(encoding)
 
-    def _write_text(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    def write_text(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text to an object."""
-        self._write_bytes(path, data.encode(encoding), **kwargs)
+        self.write_bytes(path, data.encode(encoding), **kwargs)
 
     # Object Operations
-    def _exists(self, path: str, **kwargs: Any) -> bool:
+    def exists(self, path: str, **kwargs: Any) -> bool:
         """Check if an object exists."""
         resolved_path = self._resolve_path(path)
         return self.fs.exists(resolved_path, **kwargs)  # type: ignore[no-any-return]
 
-    def _delete(self, path: str, **kwargs: Any) -> None:
+    def delete(self, path: str, **kwargs: Any) -> None:
         """Delete an object."""
         resolved_path = self._resolve_path(path)
         self.fs.rm(resolved_path, **kwargs)
 
-    def _copy(self, source: str, destination: str, **kwargs: Any) -> None:
+    def copy(self, source: str, destination: str, **kwargs: Any) -> None:
         """Copy an object."""
         source_path = self._resolve_path(source)
         dest_path = self._resolve_path(destination)
         self.fs.copy(source_path, dest_path, **kwargs)
 
-    def _move(self, source: str, destination: str, **kwargs: Any) -> None:
+    def move(self, source: str, destination: str, **kwargs: Any) -> None:
         """Move an object."""
         source_path = self._resolve_path(source)
         dest_path = self._resolve_path(destination)
         self.fs.mv(source_path, dest_path, **kwargs)
 
     # Arrow Operations
-    def _read_arrow(self, path: str, **kwargs: Any) -> "ArrowTable":
+    def read_arrow(self, path: str, **kwargs: Any) -> "ArrowTable":
         """Read an Arrow table from storage."""
         if not PYARROW_INSTALLED:
             raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
@@ -153,7 +147,7 @@ class FSSpecBackend(InstrumentedObjectStore):
         with self.fs.open(resolved_path, mode="rb", **kwargs) as f:
             return pq.read_table(f)
 
-    def _write_arrow(self, path: str, table: "ArrowTable", **kwargs: Any) -> None:
+    def write_arrow(self, path: str, table: "ArrowTable", **kwargs: Any) -> None:
         """Write an Arrow table to storage."""
         if not PYARROW_INSTALLED:
             raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
@@ -165,7 +159,7 @@ class FSSpecBackend(InstrumentedObjectStore):
             pq.write_table(table, f, **kwargs)  # pyright: ignore
 
     # Listing Operations
-    def _list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
+    def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """List objects with optional prefix."""
         resolved_prefix = self._resolve_path(prefix) if prefix else self.base_path
 
@@ -179,7 +173,7 @@ class FSSpecBackend(InstrumentedObjectStore):
         paths = [str(path) for path in self.fs.glob(pattern, **kwargs) if not self.fs.isdir(path)]
         return sorted(paths)
 
-    def _glob(self, pattern: str, **kwargs: Any) -> list[str]:
+    def glob(self, pattern: str, **kwargs: Any) -> list[str]:
         """Find objects matching a glob pattern."""
         resolved_pattern = self._resolve_path(pattern)
         # Use fsspec's native glob
@@ -187,17 +181,17 @@ class FSSpecBackend(InstrumentedObjectStore):
         return sorted(paths)
 
     # Path Operations
-    def _is_object(self, path: str) -> bool:
+    def is_object(self, path: str) -> bool:
         """Check if path points to an object."""
         resolved_path = self._resolve_path(path)
         return self.fs.exists(resolved_path) and not self.fs.isdir(resolved_path)
 
-    def _is_path(self, path: str) -> bool:
+    def is_path(self, path: str) -> bool:
         """Check if path points to a prefix (directory-like)."""
         resolved_path = self._resolve_path(path)
         return self.fs.isdir(resolved_path)  # type: ignore[no-any-return]
 
-    def _get_metadata(self, path: str, **kwargs: Any) -> dict[str, Any]:
+    def get_metadata(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Get object metadata."""
         info = self.fs.info(self._resolve_path(path), **kwargs)
 
@@ -227,7 +221,7 @@ class FSSpecBackend(InstrumentedObjectStore):
             parquet_file = pq.ParquetFile(f)  # pyright: ignore[reportArgumentType]
             yield from parquet_file.iter_batches()
 
-    def _stream_arrow(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
+    def stream_arrow(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
         if not FSSPEC_INSTALLED:
             raise MissingDependencyError(package="fsspec", install_package="fsspec")
         if not PYARROW_INSTALLED:
@@ -237,23 +231,23 @@ class FSSpecBackend(InstrumentedObjectStore):
         for obj_path in self.glob(pattern, **kwargs):
             yield from self._stream_file_batches(obj_path)
 
-    async def _read_bytes_async(self, path: str, **kwargs: Any) -> bytes:
+    async def read_bytes_async(self, path: str, **kwargs: Any) -> bytes:
         """Async read bytes. Wraps the sync implementation."""
-        return await async_(self._read_bytes)(path, **kwargs)
+        return await async_(self.read_bytes)(path, **kwargs)
 
-    async def _write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:
+    async def write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:
         """Async write bytes. Wras the sync implementation."""
-        return await async_(self._write_bytes)(path, data, **kwargs)
+        return await async_(self.write_bytes)(path, data, **kwargs)
 
     async def _stream_file_batches_async(self, obj_path: str) -> "AsyncIterator[ArrowRecordBatch]":
         import pyarrow.parquet as pq
 
-        data = await self._read_bytes_async(obj_path)
+        data = await self.read_bytes_async(obj_path)
         parquet_file = pq.ParquetFile(BytesIO(data))
         for batch in parquet_file.iter_batches():
             yield batch
 
-    async def _stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
+    async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
         """Async stream Arrow record batches.
 
         This implementation provides file-level async streaming. Each file is
@@ -277,42 +271,42 @@ class FSSpecBackend(InstrumentedObjectStore):
             async for batch in self._stream_file_batches_async(path):
                 yield batch
 
-    async def _read_text_async(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
+    async def read_text_async(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Async read text. Wraps the sync implementation."""
-        return await async_(self._read_text)(path, encoding, **kwargs)
+        return await async_(self.read_text)(path, encoding, **kwargs)
 
-    async def _write_text_async(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    async def write_text_async(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Async write text. Wraps the sync implementation."""
-        await async_(self._write_text)(path, data, encoding, **kwargs)
+        await async_(self.write_text)(path, data, encoding, **kwargs)
 
-    async def _list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
+    async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """Async list objects. Wraps the sync implementation."""
-        return await async_(self._list_objects)(prefix, recursive, **kwargs)
+        return await async_(self.list_objects)(prefix, recursive, **kwargs)
 
-    async def _exists_async(self, path: str, **kwargs: Any) -> bool:
+    async def exists_async(self, path: str, **kwargs: Any) -> bool:
         """Async exists check. Wraps the sync implementation."""
-        return await async_(self._exists)(path, **kwargs)
+        return await async_(self.exists)(path, **kwargs)
 
-    async def _delete_async(self, path: str, **kwargs: Any) -> None:
+    async def delete_async(self, path: str, **kwargs: Any) -> None:
         """Async delete. Wraps the sync implementation."""
-        await async_(self._delete)(path, **kwargs)
+        await async_(self.delete)(path, **kwargs)
 
-    async def _copy_async(self, source: str, destination: str, **kwargs: Any) -> None:
+    async def copy_async(self, source: str, destination: str, **kwargs: Any) -> None:
         """Async copy. Wraps the sync implementation."""
-        await async_(self._copy)(source, destination, **kwargs)
+        await async_(self.copy)(source, destination, **kwargs)
 
-    async def _move_async(self, source: str, destination: str, **kwargs: Any) -> None:
+    async def move_async(self, source: str, destination: str, **kwargs: Any) -> None:
         """Async move. Wraps the sync implementation."""
-        await async_(self._move)(source, destination, **kwargs)
+        await async_(self.move)(source, destination, **kwargs)
 
-    async def _get_metadata_async(self, path: str, **kwargs: Any) -> dict[str, Any]:
+    async def get_metadata_async(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Async get metadata. Wraps the sync implementation."""
-        return await async_(self._get_metadata)(path, **kwargs)
+        return await async_(self.get_metadata)(path, **kwargs)
 
-    async def _read_arrow_async(self, path: str, **kwargs: Any) -> "ArrowTable":
+    async def read_arrow_async(self, path: str, **kwargs: Any) -> "ArrowTable":
         """Async read Arrow. Wraps the sync implementation."""
-        return await async_(self._read_arrow)(path, **kwargs)
+        return await async_(self.read_arrow)(path, **kwargs)
 
-    async def _write_arrow_async(self, path: str, table: "ArrowTable", **kwargs: Any) -> None:
+    async def write_arrow_async(self, path: str, table: "ArrowTable", **kwargs: Any) -> None:
         """Async write Arrow. Wraps the sync implementation."""
-        await async_(self._write_arrow)(path, table, **kwargs)
+        await async_(self.write_arrow)(path, table, **kwargs)

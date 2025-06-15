@@ -8,11 +8,10 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 
 from sqlspec.adapters.bigquery.driver import BigQueryConnection, BigQueryDriver
-from sqlspec.config import InstrumentationConfig, NoPoolSyncConfig
+from sqlspec.config import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow, Empty
-from sqlspec.utils.telemetry import instrument_operation
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -130,7 +129,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     def __init__(
         self,
         statement_config: Optional[SQLConfig] = None,
-        instrumentation: Optional[InstrumentationConfig] = None,
         default_row_type: type[DictRow] = DictRow,
         # Core connection parameters
         project: Optional[str] = None,
@@ -176,15 +174,12 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         on_connection_create: Optional[Callable[[BigQueryConnection], None]] = None,
         on_job_start: Optional[Callable[[str], None]] = None,
         on_job_complete: Optional[Callable[[str, Any], None]] = None,
-        # User-defined extras
-        extras: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize BigQuery configuration with comprehensive feature support.
 
         Args:
             statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
             default_row_type: Default row type for results
             project: Google Cloud project ID
             location: Default geographic location for jobs and datasets
@@ -216,7 +211,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             on_connection_create: Callback executed when connection is created
             on_job_start: Callback executed when a BigQuery job starts
             on_job_complete: Callback executed when a BigQuery job completes
-            extras: Additional connection parameters not explicitly defined
             **kwargs: Additional parameters (stored in extras)
 
         Example:
@@ -273,9 +267,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         self.enable_continuous_queries = enable_continuous_queries
         self.enable_vector_search = enable_vector_search
 
-        # Handle extras and additional kwargs
-        self.extras = extras or {}
-        self.extras.update(kwargs)
+        self.extras = kwargs or {}
 
         # Store other config
         self.statement_config = statement_config or SQLConfig()
@@ -291,22 +283,14 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         # Store connection instance for reuse (BigQuery doesn't support traditional pooling)
         self._connection_instance: Optional[BigQueryConnection] = None
 
-        super().__init__(instrumentation=instrumentation or InstrumentationConfig())
+        super().__init__()
 
     def _setup_default_job_config(self) -> None:
         """Set up default job configuration based on connection settings."""
         job_config = QueryJobConfig()
 
-        # Set default dataset if specified
-        if self.dataset_id:
-            dataset_id = self.dataset_id
-            if isinstance(dataset_id, str):
-                # If project is specified, create fully qualified dataset ID
-                if self.project and "." not in dataset_id:
-                    dataset_id = f"{self.project}.{dataset_id}"
-                job_config.default_dataset = dataset_id
-
-        # Configure query cache
+        if self.dataset_id and self.project and "." not in self.dataset_id:
+            job_config.default_dataset = f"{self.project}.{self.dataset_id}"
         if self.use_query_cache is not None:
             job_config.use_query_cache = self.use_query_cache
         else:
@@ -332,17 +316,12 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         Returns:
             Configuration dict for BigQuery Client constructor.
         """
-        # BigQuery Client parameter names (only the ones the Client constructor accepts)
         client_fields = {"project", "location", "credentials", "client_options", "client_info"}
-
-        # Gather non-None client parameters that are valid for the Client constructor
         config = {
             field: getattr(self, field)
             for field in client_fields
             if getattr(self, field, None) is not None and getattr(self, field) is not Empty
         }
-
-        # Add relevant extras that might be valid for BigQuery Client
         config.update(self.extras)
 
         return config
@@ -356,51 +335,23 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         Raises:
             ImproperConfigurationError: If the connection could not be established.
         """
-        if self.instrumentation.log_pool_operations:
-            logger.info("Creating BigQuery connection", extra={"adapter": "bigquery"})
 
-        # Reuse existing connection for BigQuery (no traditional pooling)
         if self._connection_instance is not None:
-            if self.instrumentation.log_pool_operations:
-                logger.debug("Reusing existing BigQuery connection", extra={"adapter": "bigquery"})
             return self._connection_instance
 
         try:
-            with instrument_operation(self, "bigquery_connection_create", "database"):
-                config_dict = self.connection_config_dict
+            config_dict = self.connection_config_dict
 
-                if self.instrumentation.log_pool_operations:
-                    # Log config without sensitive data
-                    safe_config = {k: v for k, v in config_dict.items() if k != "credentials"}
-                    logger.debug("BigQuery connection config: %s", safe_config, extra={"adapter": "bigquery"})
+            connection = self.connection_type(**config_dict)
+            if self.on_connection_create:
+                self.on_connection_create(connection)
 
-                connection = self.connection_type(**config_dict)
-
-                # Execute connection creation hook
-                if self.on_connection_create:
-                    try:
-                        self.on_connection_create(connection)
-                        if self.instrumentation.log_pool_operations:
-                            logger.debug("Executed connection creation hook", extra={"adapter": "bigquery"})
-                    except Exception as e:
-                        if self.instrumentation.log_pool_operations:
-                            logger.warning(
-                                "Connection creation hook failed", extra={"adapter": "bigquery", "error": str(e)}
-                            )
-
-                # Cache the connection instance
-                self._connection_instance = connection
-
-                if self.instrumentation.log_pool_operations:
-                    logger.info("BigQuery connection created successfully", extra={"adapter": "bigquery"})
-
-                return connection
+            self._connection_instance = connection
 
         except Exception as e:
-            project_id = self.project or "Unknown"
-            msg = f"Could not configure BigQuery connection for project '{project_id}'. Error: {e}"
-            logger.exception(msg, extra={"adapter": "bigquery", "error": str(e)})
+            msg = f"Could not configure BigQuery connection for project '{self.project or 'Unknown'}'. Error: {e}"
             raise ImproperConfigurationError(msg) from e
+        return connection
 
     @contextlib.contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[BigQueryConnection, None, None]":
@@ -413,10 +364,8 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         Yields:
             A BigQuery Client instance.
         """
-        with instrument_operation(self, "bigquery_provide_connection", "database"):
-            connection = self.create_connection()
-            yield connection
-            # Note: BigQuery connections don't need explicit cleanup
+        connection = self.create_connection()
+        yield connection
 
     def provide_session(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[BigQueryDriver]":
         """Provide a BigQuery driver session context manager.
@@ -444,9 +393,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
                 driver = self.driver_type(
                     connection=connection,
                     config=statement_config,
-                    instrumentation_config=self.instrumentation,
                     default_row_type=self.default_row_type,
-                    # Pass BigQuery-specific configurations
                     default_query_job_config=self.default_query_job_config,
                     on_job_start=self.on_job_start,
                     on_job_complete=self.on_job_complete,

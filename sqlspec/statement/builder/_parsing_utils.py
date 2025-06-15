@@ -4,13 +4,10 @@ This module provides common parsing functions to handle complex SQL expressions
 that users might pass as strings to various builder methods.
 """
 
+import contextlib
 from typing import Any, Optional, Union, cast
 
 from sqlglot import exp, maybe_parse, parse_one
-
-from sqlspec.utils.logging import get_logger
-
-logger = get_logger("sqlspec")
 
 
 def parse_column_expression(column_input: Union[str, exp.Expression]) -> exp.Expression:
@@ -36,7 +33,7 @@ def parse_column_expression(column_input: Union[str, exp.Expression]) -> exp.Exp
 
 def parse_table_expression(table_input: str, explicit_alias: Optional[str] = None) -> exp.Expression:
     """Parses a table string that can be a name, a name with an alias, or a subquery string."""
-    try:
+    with contextlib.suppress(Exception):
         # Wrapping in a SELECT statement is a robust way to parse various table-like syntaxes
         parsed = parse_one(f"SELECT * FROM {table_input}")
         if isinstance(parsed, exp.Select) and parsed.args.get("from"):
@@ -44,12 +41,8 @@ def parse_table_expression(table_input: str, explicit_alias: Optional[str] = Non
             table_expr = from_clause.this
 
             if explicit_alias:
-                # exp.alias_ is safer than .as_()
                 return exp.alias_(table_expr, explicit_alias)
             return table_expr
-    except Exception:
-        # Fallback for simple table names or if parsing fails
-        logger.debug("Failed to parse table '%s' using sqlglot, using simple fallback", table_input)
 
     return exp.to_table(table_input, alias=explicit_alias)
 
@@ -72,19 +65,16 @@ def parse_order_expression(order_input: Union[str, exp.Expression]) -> exp.Expre
     if isinstance(order_input, exp.Expression):
         return order_input
 
-    try:
+    with contextlib.suppress(Exception):
         parsed = maybe_parse(str(order_input), into=exp.Ordered)
         if parsed:
             return parsed
-    except Exception:
-        # Fallback for simple column names or other expressions
-        logger.debug("Failed to parse order expression '%s' using sqlglot, using simple fallback", order_input)
 
     return parse_column_expression(order_input)
 
 
 def parse_condition_expression(
-    condition_input: Union[str, exp.Expression, tuple], builder: "Any" = None
+    condition_input: Union[str, exp.Expression, tuple[str, Any]], builder: "Any" = None
 ) -> exp.Expression:
     """Parse a condition that might be complex SQL.
 

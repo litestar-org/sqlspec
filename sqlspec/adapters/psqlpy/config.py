@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional
 from psqlpy import ConnectionPool
 
 from sqlspec.adapters.psqlpy.driver import PsqlpyConnection, PsqlpyDriver
-from sqlspec.config import AsyncDatabaseConfig, InstrumentationConfig
+from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow, Empty
 
@@ -131,7 +131,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     def __init__(
         self,
         statement_config: Optional[SQLConfig] = None,
-        instrumentation: Optional[InstrumentationConfig] = None,
         default_row_type: type[DictRow] = DictRow,
         # Connection parameters
         dsn: Optional[str] = None,
@@ -177,15 +176,12 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         conn_recycling_method: Optional[str] = None,
         max_db_pool_size: Optional[int] = None,
         configure: Optional["Callable[[ConnectionPool], None]"] = None,
-        # User-defined extras
-        extras: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize Psqlpy asynchronous configuration.
 
         Args:
             statement_config: Default SQL statement configuration
-            instrumentation: Instrumentation configuration
             default_row_type: Default row type for results
             dsn: DSN of the PostgreSQL database
             username: Username of the user in the PostgreSQL
@@ -229,7 +225,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             conn_recycling_method: How a connection is recycled
             max_db_pool_size: Maximum size of the connection pool. Defaults to 10
             configure: Callback to configure new connections
-            extras: Additional connection parameters not explicitly defined
             **kwargs: Additional parameters (stored in extras)
         """
         # Store connection parameters as instance attributes
@@ -278,17 +273,13 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         self.max_db_pool_size = max_db_pool_size
         self.configure = configure
 
-        # Handle extras and additional kwargs
-        self.extras = extras or {}
-        self.extras.update(kwargs)
+        self.extras = kwargs or {}
 
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
-        super().__init__(
-            instrumentation=instrumentation or InstrumentationConfig()  # pyright: ignore
-        )
+        super().__init__()
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:
@@ -329,14 +320,12 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
     async def _create_pool(self) -> ConnectionPool:
         """Create the actual async connection pool."""
-        if self.instrumentation.log_pool_operations:
-            logger.info("Creating psqlpy connection pool", extra={"adapter": "psqlpy"})
+        logger.info("Creating psqlpy connection pool", extra={"adapter": "psqlpy"})
 
         try:
             config = self.pool_config_dict
             pool = ConnectionPool(**config)  # pyright: ignore
-            if self.instrumentation.log_pool_operations:
-                logger.info("Psqlpy connection pool created successfully", extra={"adapter": "psqlpy"})
+            logger.info("Psqlpy connection pool created successfully", extra={"adapter": "psqlpy"})
         except Exception as e:
             logger.exception("Failed to create psqlpy connection pool", extra={"adapter": "psqlpy", "error": str(e)})
             raise
@@ -347,13 +336,11 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         if not self.pool_instance:
             return
 
-        if self.instrumentation.log_pool_operations:
-            logger.info("Closing psqlpy connection pool", extra={"adapter": "psqlpy"})
+        logger.info("Closing psqlpy connection pool", extra={"adapter": "psqlpy"})
 
         try:
             self.pool_instance.close()
-            if self.instrumentation.log_pool_operations:
-                logger.info("Psqlpy connection pool closed successfully", extra={"adapter": "psqlpy"})
+            logger.info("Psqlpy connection pool closed successfully", extra={"adapter": "psqlpy"})
         except Exception as e:
             logger.exception("Failed to close psqlpy connection pool", extra={"adapter": "psqlpy", "error": str(e)})
             raise
@@ -410,9 +397,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
                     target_parameter_style=self.preferred_parameter_style,
                 )
 
-            driver = self.driver_type(
-                connection=conn, config=statement_config, instrumentation_config=self.instrumentation
-            )
+            driver = self.driver_type(connection=conn, config=statement_config)
             yield driver
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> ConnectionPool:

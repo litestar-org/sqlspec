@@ -568,14 +568,26 @@ class PerformanceValidator(BaseValidator):
         try:
             # Try different SQLGlot optimization strategies
             optimizations = [
-                ("join_elimination", eliminate_joins, "Eliminate unnecessary joins"),
-                ("subquery_elimination", eliminate_subqueries, "Eliminate or merge subqueries"),
-                ("subquery_merging", merge_subqueries, "Merge subqueries into main query"),
-                ("predicate_pushdown", pushdown_predicates, "Push predicates closer to data sources"),
-                ("projection_pushdown", pushdown_projections, "Push projections down to reduce data movement"),
-                ("join_optimization", optimize_joins, "Optimize join order and conditions"),
+                ("join_elimination", eliminate_joins.eliminate_joins, "Eliminate unnecessary joins"),
+                ("subquery_elimination", eliminate_subqueries.eliminate_subqueries, "Eliminate or merge subqueries"),
+                ("subquery_merging", merge_subqueries.merge_subqueries, "Merge subqueries into main query"),
+                (
+                    "predicate_pushdown",
+                    pushdown_predicates.pushdown_predicates,
+                    "Push predicates closer to data sources",
+                ),
+                (
+                    "projection_pushdown",
+                    pushdown_projections.pushdown_projections,
+                    "Push projections down to reduce data movement",
+                ),
+                ("join_optimization", optimize_joins.optimize_joins, "Optimize join order and conditions"),
                 ("simplification", simplify.simplify, "Simplify expressions and conditions"),
-                ("identifier_normalization", normalize_identifiers, "Normalize identifier casing"),
+                (
+                    "identifier_normalization",
+                    normalize_identifiers.normalize_identifiers,
+                    "Normalize identifier casing",
+                ),
             ]
 
             best_optimized = expression.copy()

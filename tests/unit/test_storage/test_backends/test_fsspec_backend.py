@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sqlspec.config import InstrumentationConfig
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.storage.backends.fsspec import FSSpecBackend
 
@@ -350,7 +349,7 @@ class TestFSSpecBackend:
         # Test list_objects_async
         with patch.object(backend, "_list_objects", return_value=["file1.txt", "file2.txt"]):
             result = await backend.list_objects_async()
-            assert result == ["file1.txt", "file2.txt"]
+            assert result == ["file1.txt", "file2.txt"]  # type: ignore[compare-overlap]
 
     def test_from_config(self) -> None:
         """Test creating backend from config dict."""
@@ -370,12 +369,11 @@ class TestFSSpecBackend:
     def test_instrumentation_logging(self, caplog: pytest.LogCaptureFixture) -> None:
         """Test that operations are properly instrumented."""
         with patch("sqlspec.typing.FSSPEC_INSTALLED", True):
-            config = InstrumentationConfig(log_service_operations=True)
             mock_fs = MagicMock()
             mock_fs.protocol = "s3"
             mock_fs.cat.return_value = b"test data"
 
-            backend = FSSpecBackend(mock_fs, instrumentation_config=config)
+            backend = FSSpecBackend(mock_fs)
 
             with caplog.at_level(logging.DEBUG):
                 result = backend.read_bytes("test.txt")

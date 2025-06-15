@@ -5,7 +5,6 @@ This module provides a fluent interface for building SQL queries safely,
 with automatic parameter binding and validation.
 """
 
-import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional, Union
 
@@ -28,8 +27,6 @@ if TYPE_CHECKING:
     from sqlspec.statement.builder.select import SelectBuilder
 
 __all__ = ("UpdateBuilder",)
-
-logger = logging.getLogger("sqlspec")
 
 
 @dataclass(unsafe_hash=True)

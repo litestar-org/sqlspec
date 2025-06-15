@@ -119,7 +119,8 @@ class DMLSafetyValidator(BaseValidator):
             "migration_mode": self.config.migration_mode,
         }
 
-    def _categorize_statement(self, expression: "exp.Expression") -> StatementCategory:
+    @staticmethod
+    def _categorize_statement(expression: "exp.Expression") -> StatementCategory:
         """Categorize SQL statement type.
 
         Args:
@@ -145,7 +146,8 @@ class DMLSafetyValidator(BaseValidator):
 
         return StatementCategory.DQL  # Default to query
 
-    def _get_operation_type(self, expression: "exp.Expression") -> str:
+    @staticmethod
+    def _get_operation_type(expression: "exp.Expression") -> str:
         """Get specific operation name.
 
         Args:
@@ -156,7 +158,8 @@ class DMLSafetyValidator(BaseValidator):
         """
         return expression.__class__.__name__.upper()
 
-    def _has_where_clause(self, expression: "exp.Expression") -> bool:
+    @staticmethod
+    def _has_where_clause(expression: "exp.Expression") -> bool:
         """Check if DML statement has WHERE clause.
 
         Args:
@@ -193,7 +196,8 @@ class DMLSafetyValidator(BaseValidator):
 
         return 10000  # Conservative estimate
 
-    def _has_unique_condition(self, where: "exp.Expression") -> bool:
+    @staticmethod
+    def _has_unique_condition(where: "exp.Expression") -> bool:
         """Check if WHERE clause uses unique columns.
 
         Args:
@@ -222,14 +226,15 @@ class DMLSafetyValidator(BaseValidator):
         """
         # Look for common indexed column patterns
         for condition in where.find_all(exp.Predicate):
-            if hasattr(condition, "left") and isinstance(condition.left, exp.Column):
-                col_name = condition.left.name.lower()
+            if hasattr(condition, "left") and isinstance(condition.left, exp.Column):  # pyright: ignore
+                col_name = condition.left.name.lower()  # pyright: ignore
                 # Common indexed columns
                 if col_name in {"created_at", "updated_at", "email", "username", "status", "type"}:
                     return True
         return False
 
-    def _extract_affected_tables(self, expression: "exp.Expression") -> "list[str]":
+    @staticmethod
+    def _extract_affected_tables(expression: "exp.Expression") -> "list[str]":
         """Extract table names affected by the statement.
 
         Args:

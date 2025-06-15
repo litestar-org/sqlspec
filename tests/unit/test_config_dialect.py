@@ -5,13 +5,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from sqlspec.config import (
-    AsyncDatabaseConfig,
-    InstrumentationConfig,
-    NoPoolAsyncConfig,
-    NoPoolSyncConfig,
-    SyncDatabaseConfig,
-)
+from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
 from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQLConfig
@@ -71,10 +65,9 @@ class TestSyncConfigDialect:
         """Test that NoPoolSyncConfig returns dialect from driver class."""
 
         class TestNoPoolConfig(NoPoolSyncConfig[MockConnection, MockDriver]):
-            driver_class: ClassVar[type[MockDriver]] = MockDriver
+            driver_type: ClassVar[type[MockDriver]] = MockDriver
 
             def __init__(self, **kwargs: Any) -> None:
-                self.instrumentation = InstrumentationConfig()
                 self.statement_config = SQLConfig()
                 self.host = "localhost"
                 self.connection_type = MockConnection  # type: ignore[assignment]
@@ -91,8 +84,8 @@ class TestSyncConfigDialect:
         config = TestNoPoolConfig()
         assert config.dialect == "sqlite"
 
-    def test_no_pool_sync_config_dialect_with_missing_driver_class(self) -> None:
-        """Test that config raises AttributeError when driver_class is not set and driver has no dialect."""
+    def test_no_pool_sync_config_dialect_with_missing_driver_type(self) -> None:
+        """Test that config raises AttributeError when driver_type is not set and driver has no dialect."""
 
         # Create a driver without dialect attribute
         class DriverWithoutDialect(SyncDriverAdapterProtocol[MockConnection, DictRow]):
@@ -114,10 +107,9 @@ class TestSyncConfigDialect:
                 return ParameterStyle.QMARK
 
         class BrokenNoPoolConfig(NoPoolSyncConfig[MockConnection, DriverWithoutDialect]):
-            # Intentionally not setting driver_class
+            # Intentionally not setting driver_type
 
             def __init__(self, **kwargs: Any) -> None:
-                self.instrumentation = InstrumentationConfig()
                 self.statement_config = SQLConfig()
                 self.host = "localhost"
                 super().__init__(**kwargs)
@@ -133,7 +125,7 @@ class TestSyncConfigDialect:
         with pytest.raises(AttributeError) as exc_info:
             _ = config.dialect
 
-        assert "driver_class" in str(exc_info.value)
+        assert "driver_type" in str(exc_info.value)
 
     def test_sync_database_config_dialect(self) -> None:
         """Test that SyncDatabaseConfig returns dialect from driver class."""
@@ -142,10 +134,9 @@ class TestSyncConfigDialect:
             pass
 
         class TestSyncDbConfig(SyncDatabaseConfig[MockConnection, MockPool, MockDriver]):
-            driver_class: ClassVar[type[MockDriver]] = MockDriver
+            driver_type: type[MockDriver] = MockDriver
 
             def __init__(self, **kwargs: Any) -> None:
-                self.instrumentation = InstrumentationConfig()
                 self.statement_config = SQLConfig()
                 self.connection_config = {"host": "localhost"}
                 self.pool_instance = None
@@ -180,7 +171,6 @@ class TestAsyncConfigDialect:
             connection_type: type[MockConnection] = MockConnection
 
             def __init__(self, **kwargs: Any) -> None:
-                self.instrumentation = InstrumentationConfig()
                 self.statement_config = SQLConfig()
                 self.connection_config = {"host": "localhost"}
                 super().__init__(**kwargs)
@@ -207,10 +197,9 @@ class TestAsyncConfigDialect:
             pass
 
         class TestAsyncDbConfig(AsyncDatabaseConfig[MockConnection, MockAsyncPool, MockAsyncDriver]):
-            driver_class: ClassVar[type[MockAsyncDriver]] = MockAsyncDriver
+            driver_type: type[MockAsyncDriver] = MockAsyncDriver
 
             def __init__(self, **kwargs: Any) -> None:
-                self.instrumentation = InstrumentationConfig()
                 self.statement_config = SQLConfig()
                 self.connection_config = {"host": "localhost"}
                 self.pool_instance = None
@@ -240,9 +229,9 @@ class TestRealAdapterDialects:
         """Test SQLite config dialect property."""
         from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 
-        # SqliteConfig should have driver_class set
-        assert hasattr(SqliteConfig, "driver_class")
-        assert SqliteConfig.driver_class == SqliteDriver
+        # SqliteConfig should have driver_type set
+        assert hasattr(SqliteConfig, "driver_type")
+        assert SqliteConfig.driver_type == SqliteDriver
 
         # Create instance and check dialect
         config = SqliteConfig(database=":memory:")
@@ -252,9 +241,9 @@ class TestRealAdapterDialects:
         """Test DuckDB config dialect property."""
         from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 
-        # DuckDBConfig should have driver_class set
-        assert hasattr(DuckDBConfig, "driver_class")
-        assert DuckDBConfig.driver_class == DuckDBDriver
+        # DuckDBConfig should have driver_type set
+        assert hasattr(DuckDBConfig, "driver_type")
+        assert DuckDBConfig.driver_type == DuckDBDriver
 
         # Create instance and check dialect
         config = DuckDBConfig(connection_config={"database": ":memory:"})
@@ -265,9 +254,9 @@ class TestRealAdapterDialects:
         """Test AsyncPG config dialect property."""
         from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 
-        # AsyncpgConfig should have driver_class set
-        assert hasattr(AsyncpgConfig, "driver_class")
-        assert AsyncpgConfig.driver_class == AsyncpgDriver
+        # AsyncpgConfig should have driver_type set
+        assert hasattr(AsyncpgConfig, "driver_type")
+        assert AsyncpgConfig.driver_type == AsyncpgDriver
 
         # Create instance and check dialect
         config = AsyncpgConfig(host="localhost", port=5432, database="test", user="test", password="test")
@@ -277,9 +266,9 @@ class TestRealAdapterDialects:
         """Test Psycopg config dialect property."""
         from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
 
-        # PsycopgConfig should have driver_class set
-        assert hasattr(PsycopgSyncConfig, "driver_class")
-        assert PsycopgSyncConfig.driver_class == PsycopgSyncDriver
+        # PsycopgConfig should have driver_type set
+        assert hasattr(PsycopgSyncConfig, "driver_type")
+        assert PsycopgSyncConfig.driver_type == PsycopgSyncDriver
 
         # Create instance and check dialect
         config = PsycopgSyncConfig(conninfo="postgresql://test:test@localhost/test")
@@ -290,9 +279,9 @@ class TestRealAdapterDialects:
         """Test AsyncMy config dialect property."""
         from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
 
-        # AsyncmyConfig should have driver_class set
-        assert hasattr(AsyncmyConfig, "driver_class")
-        assert AsyncmyConfig.driver_class == AsyncmyDriver
+        # AsyncmyConfig should have driver_type set
+        assert hasattr(AsyncmyConfig, "driver_type")
+        assert AsyncmyConfig.driver_type == AsyncmyDriver
 
         # Create instance and check dialect
         config = AsyncmyConfig(
@@ -374,8 +363,8 @@ class TestDialectValidation:
             # Should not raise during initialization
             assert sql._dialect == dialect
 
-    def test_config_missing_driver_class_attribute_error(self) -> None:
-        """Test proper error when accessing dialect on config without driver_class."""
+    def test_config_missing_driver_type_attribute_error(self) -> None:
+        """Test proper error when accessing dialect on config without driver_type."""
 
         # Create a driver without dialect attribute
         class DriverWithoutDialect(SyncDriverAdapterProtocol[MockConnection, DictRow]):
@@ -397,10 +386,9 @@ class TestDialectValidation:
                 return ParameterStyle.QMARK
 
         class IncompleteConfig(NoPoolSyncConfig[MockConnection, DriverWithoutDialect]):
-            # No driver_class attribute
+            # No driver_type attribute
 
             def __init__(self, **kwargs: Any) -> None:
-                self.instrumentation = InstrumentationConfig()
                 self.statement_config = SQLConfig()
                 self.host = "localhost"
                 super().__init__(**kwargs)
@@ -418,4 +406,4 @@ class TestDialectValidation:
         with pytest.raises(AttributeError) as exc_info:
             _ = config.dialect
 
-        assert "driver_class" in str(exc_info.value)
+        assert "driver_type" in str(exc_info.value)

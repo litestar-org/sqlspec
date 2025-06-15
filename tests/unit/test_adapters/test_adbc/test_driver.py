@@ -9,7 +9,6 @@ import pytest
 from adbc_driver_manager.dbapi import Connection, Cursor
 
 from sqlspec.adapters.adbc.driver import AdbcDriver
-from sqlspec.config import InstrumentationConfig
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -37,11 +36,7 @@ def mock_cursor() -> Mock:
 @pytest.fixture
 def adbc_driver(mock_adbc_connection: Mock) -> AdbcDriver:
     """Create an ADBC driver with mock connection."""
-    return AdbcDriver(
-        connection=mock_adbc_connection,
-        config=SQLConfig(strict_mode=False),
-        instrumentation_config=InstrumentationConfig(),
-    )
+    return AdbcDriver(connection=mock_adbc_connection, config=SQLConfig(strict_mode=False))
 
 
 def test_adbc_driver_initialization(mock_adbc_connection: Mock) -> None:
@@ -54,18 +49,15 @@ def test_adbc_driver_initialization(mock_adbc_connection: Mock) -> None:
     assert driver.supports_native_arrow_import is True
     assert driver.default_row_type == DictRow
     assert isinstance(driver.config, SQLConfig)
-    assert isinstance(driver.instrumentation_config, InstrumentationConfig)
 
 
 def test_adbc_driver_initialization_with_config(mock_adbc_connection: Mock) -> None:
     """Test AdbcDriver initialization with custom configuration."""
     config = SQLConfig(strict_mode=False)
-    instrumentation = InstrumentationConfig()
 
-    driver = AdbcDriver(connection=mock_adbc_connection, config=config, instrumentation_config=instrumentation)
+    driver = AdbcDriver(connection=mock_adbc_connection, config=config)
 
     assert driver.config == config
-    assert driver.instrumentation_config == instrumentation
 
 
 def test_adbc_driver_get_dialect_postgresql() -> None:
@@ -385,9 +377,8 @@ def test_adbc_driver_fetch_arrow_table_with_connection_override(adbc_driver: Adb
 
 def test_adbc_driver_instrumentation_logging(mock_adbc_connection: Mock, mock_cursor: Mock) -> None:
     """Test AdbcDriver with instrumentation logging enabled."""
-    instrumentation = InstrumentationConfig(log_queries=True, log_parameters=True, log_results_count=True)
 
-    driver = AdbcDriver(connection=mock_adbc_connection, instrumentation_config=instrumentation)
+    driver = AdbcDriver(connection=mock_adbc_connection)
 
     mock_adbc_connection.cursor.return_value = mock_cursor
     mock_cursor.fetchall.return_value = [(1, "John")]
@@ -486,8 +477,8 @@ def test_adbc_driver_fetch_arrow_table_native(adbc_driver: AdbcDriver, mock_curs
 
     assert isinstance(result, ArrowResult)
     assert result.data is mock_arrow_table  # Should be the exact same table
-    assert result.data.num_rows == 3
-    assert result.data.column_names == ["id", "name"]
+    assert result.data.num_rows == 3  # pyright: ignore
+    assert result.data.column_names == ["id", "name"]  # pyright: ignore
 
     # Verify native fetch_arrow_table was called
     mock_cursor.fetch_arrow_table.assert_called_once()

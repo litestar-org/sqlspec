@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional, TypeVar, Union
 
-from sqlspec.typing import ConnectionT, Counter, Gauge, PoolT  # pyright: ignore
+from sqlspec.typing import ConnectionT, PoolT  # pyright: ignore
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -26,7 +26,6 @@ __all__ = (
     "DatabaseConfigProtocol",
     "DriverT",
     "GenericPoolConfig",
-    "InstrumentationConfig",
     "NoPoolAsyncConfig",
     "NoPoolSyncConfig",
     "StatementResultType",
@@ -46,108 +45,6 @@ logger = get_logger("config")
 
 
 @dataclass
-class InstrumentationConfig:
-    """Configuration for built-in driver instrumentation.
-
-    This configuration controls logging, telemetry, and performance monitoring
-    for all database operations in SQLSpec.
-    """
-
-    # Core logging settings
-    log_queries: bool = True
-    """Whether to log database queries."""
-
-    log_runtime: bool = True
-    """Whether to log query execution times."""
-
-    log_parameters: bool = False  # Security: off by default
-    """Whether to log query parameters (disabled by default for security)."""
-
-    log_results_count: bool = True
-    """Whether to log the number of rows returned by queries."""
-
-    log_pool_operations: bool = True
-    """Whether to log connection pool operations."""
-
-    log_service_operations: bool = True
-    """Whether to log service layer operations."""
-
-    log_storage_operations: bool = True
-    """Whether to log storage operations (e.g., file I/O, caching)."""
-    # Sampling configuration
-    trace_sample_rate: float = 1.0
-    """Sampling rate for traces (0.0 to 1.0)."""
-
-    log_sample_rate: float = 1.0
-    """Sampling rate for logs (0.0 to 1.0)."""
-
-    log_format: str = "structured"
-    """Log format: 'structured' (JSON) or 'simple' (text)."""
-
-    structured_logging: bool = True
-    """Whether to use structured logging with extra fields."""
-
-    log_connection_events: bool = True
-    """Whether to log connection lifecycle events."""
-
-    log_transaction_events: bool = True
-    """Whether to log transaction begin/commit/rollback events."""
-
-    # Optional advanced instrumentation
-    enable_opentelemetry: bool = False
-    """Whether to enable OpenTelemetry tracing."""
-
-    enable_prometheus: bool = False
-    """Whether to enable Prometheus metrics collection."""
-
-    # Performance thresholds
-    slow_query_threshold_ms: float = 1000.0
-    """Queries slower than this threshold are logged as warnings."""
-
-    slow_pool_operation_ms: float = 5000.0
-    """Pool operations slower than this threshold are logged as warnings."""
-
-    # Correlation tracking
-    correlation_id_header: str = "X-Correlation-ID"
-    """HTTP header name for correlation ID tracking."""
-
-    generate_correlation_id: bool = True
-    """Whether to generate correlation IDs if not provided."""
-
-    # Custom span configuration
-    service_name: str = "sqlspec"
-    """Service name for telemetry spans."""
-
-    custom_tags: dict[str, str] = field(default_factory=dict)
-    """Custom tags to add to all telemetry spans."""
-
-    prometheus_latency_buckets: Optional[list[float]] = None
-    """Custom latency buckets for Prometheus histograms."""
-    # Resource limits
-    max_query_log_length: int = 1000
-    """Maximum length of queries to log (truncate if longer)."""
-
-    max_parameter_log_count: int = 10
-    """Maximum number of parameters to log."""
-
-    # Export configuration
-    telemetry_endpoint: Optional[str] = None
-    """OpenTelemetry collector endpoint."""
-
-    metrics_endpoint: Optional[str] = None
-    """Prometheus metrics endpoint."""
-
-    def __post_init__(self) -> None:
-        """Ensure custom_tags is properly isolated and validate configuration."""
-        if self.custom_tags is not None:
-            self.custom_tags = dict(self.custom_tags)
-
-        # Auto-enable structured logging if format is structured
-        if self.log_format == "structured":
-            self.structured_logging = True
-
-
-@dataclass
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Protocol defining the interface for database configurations."""
 
@@ -160,9 +57,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     connection_type: "type[ConnectionT]" = field(init=False, repr=False, hash=False, compare=False)
     driver_type: "type[DriverT]" = field(init=False, repr=False, hash=False, compare=False)
     pool_instance: "Optional[PoolT]" = field(default=None)
-    instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
     default_row_type: "type[Any]" = field(init=False)
-    _pool_metrics: Optional[dict[str, Any]] = field(default=None, init=False, repr=False, hash=False, compare=False)
     _dialect: "DialectType" = field(default=None, init=False, repr=False, hash=False, compare=False)
 
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ()
@@ -244,56 +139,16 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """Provide pool instance."""
         raise NotImplementedError
 
-    def instrument_sync_operation(
-        self,
-        operation_name: str,
-        operation_type: str,
-        custom_tags_from_decorator: dict[str, Any],
-        func_to_execute: Any,
-        original_self: Any,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
-        """Sync instrumentation for config operations (simplified version for configs)."""
-        if self.instrumentation.log_queries:
-            logger.info("Config operation: %s", operation_name, extra={"operation_type": operation_type})
-        try:
-            return func_to_execute(original_self, *args, **kwargs)
-        except Exception as e:
-            if self.instrumentation.log_queries:
-                logger.exception("Config operation failed: %s", operation_name, extra={"error_type": type(e).__name__})
-            raise
 
-    async def instrument_async_operation(
-        self,
-        operation_name: str,
-        operation_type: str,
-        custom_tags_from_decorator: dict[str, Any],
-        func_to_execute: Any,
-        original_self: Any,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
-        """Async instrumentation for config operations (simplified version for configs)."""
-        if self.instrumentation.log_queries:
-            logger.info("Config operation: %s", operation_name, extra={"operation_type": operation_type})
-        try:
-            return await func_to_execute(original_self, *args, **kwargs)
-        except Exception as e:
-            if self.instrumentation.log_queries:
-                logger.exception("Config operation failed: %s", operation_name, extra={"error_type": type(e).__name__})
-            raise
-
-
+@dataclass
 class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for a sync database configurations that do not implement a pool."""
 
-    __slots__ = ()  # All slots defined in parent
+    __slots__ = ()
 
-    is_async = False
-    supports_connection_pooling = False
+    is_async: "ClassVar[bool]" = field(init=False, default=False)
+    supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
     pool_instance: None = None
-    instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
 
     def create_connection(self) -> ConnectionT:
         """Create connection with instrumentation."""
@@ -317,15 +172,15 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         return None
 
 
+@dataclass
 class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for an async database configurations that do not implement a pool."""
 
-    __slots__ = ()  # All slots defined in parent
+    __slots__ = ()
 
     is_async: "ClassVar[bool]" = field(init=False, default=True)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
     pool_instance: None = None
-    instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
 
     async def create_connection(self) -> ConnectionT:
         """Create connection with instrumentation."""
@@ -364,7 +219,6 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
 
     is_async: "ClassVar[bool]" = field(init=False, default=False)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=True)
-    instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
 
     def create_pool(self) -> PoolT:
         """Create pool with instrumentation.
@@ -372,41 +226,14 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         Returns:
             The created pool.
         """
-        if self.instrumentation.log_pool_operations:
-            logger.info("Creating database connection pool", extra={"adapter": self.__class__.__name__})
-
-        if self._pool_metrics and isinstance(self._pool_metrics.get("pool_operations"), Counter):
-            self._pool_metrics["pool_operations"].labels(adapter=self.__class__.__name__, operation="create").inc()
-
-        pool = self._create_pool()
-
-        if self._pool_metrics and isinstance(self._pool_metrics.get("pool_connections"), Gauge):
-            pool_size = getattr(self, "pool_size", 10)  # Default fallback
-            self._pool_metrics["pool_connections"].labels(adapter=self.__class__.__name__, status="total").set(
-                pool_size
-            )
-
-        if self.instrumentation.log_pool_operations:
-            logger.info("Database connection pool created successfully", extra={"adapter": self.__class__.__name__})
-
-        return pool
+        if self.pool_instance is not None:
+            return self.pool_instance
+        self.pool_instance = self._create_pool()
+        return self.pool_instance
 
     def close_pool(self) -> None:
         """Close pool with instrumentation."""
-        if self.instrumentation.log_pool_operations:
-            logger.info("Closing database connection pool", extra={"adapter": self.__class__.__name__})
-
-        if self._pool_metrics and isinstance(self._pool_metrics.get("pool_operations"), Counter):
-            self._pool_metrics["pool_operations"].labels(adapter=self.__class__.__name__, operation="destroy").inc()
-
-            if isinstance(self._pool_metrics.get("pool_connections"), Gauge):
-                for status in ["total", "active", "idle"]:
-                    self._pool_metrics["pool_connections"].labels(adapter=self.__class__.__name__, status=status).set(0)
-
         self._close_pool()
-
-        if self.instrumentation.log_pool_operations:
-            logger.info("Database connection pool closed successfully", extra={"adapter": self.__class__.__name__})
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
         """Provide pool instance."""
@@ -441,11 +268,10 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
 class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Generic Async Database Configuration."""
 
-    __slots__ = ()  # All slots defined in parent
+    __slots__ = ()
 
     is_async: "ClassVar[bool]" = field(init=False, default=True)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=True)
-    instrumentation: InstrumentationConfig = field(default_factory=InstrumentationConfig)
 
     async def create_pool(self) -> PoolT:
         """Create pool with instrumentation.
@@ -453,44 +279,14 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         Returns:
             The created pool.
         """
-        if self.instrumentation.log_pool_operations:
-            logger.info("Creating async database connection pool", extra={"adapter": self.__class__.__name__})
-
-        if self._pool_metrics and isinstance(self._pool_metrics.get("pool_operations"), Counter):
-            self._pool_metrics["pool_operations"].labels(adapter=self.__class__.__name__, operation="create").inc()
-
-        pool = await self._create_pool()
-
-        if self._pool_metrics and isinstance(self._pool_metrics.get("pool_connections"), Gauge):
-            pool_size = getattr(self, "pool_size", 10)  # Default fallback
-            self._pool_metrics["pool_connections"].labels(adapter=self.__class__.__name__, status="total").set(
-                pool_size
-            )
-
-        if self.instrumentation.log_pool_operations:
-            logger.info(
-                "Async database connection pool created successfully", extra={"adapter": self.__class__.__name__}
-            )
-
-        return pool
+        if self.pool_instance is not None:
+            return self.pool_instance
+        self.pool_instance = await self._create_pool()
+        return self.pool_instance
 
     async def close_pool(self) -> None:
         """Close pool with instrumentation."""
-        if self.instrumentation.log_pool_operations:
-            logger.info("Closing async database connection pool", extra={"adapter": self.__class__.__name__})
-
-        if self._pool_metrics and isinstance(self._pool_metrics.get("pool_operations"), Counter):
-            self._pool_metrics["pool_operations"].labels(adapter=self.__class__.__name__, operation="destroy").inc()
-            if isinstance(self._pool_metrics.get("pool_connections"), Gauge):
-                for status in ["total", "active", "idle"]:
-                    self._pool_metrics["pool_connections"].labels(adapter=self.__class__.__name__, status=status).set(0)
-
         await self._close_pool()
-
-        if self.instrumentation.log_pool_operations:
-            logger.info(
-                "Async database connection pool closed successfully", extra={"adapter": self.__class__.__name__}
-            )
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
         """Provide pool instance."""
