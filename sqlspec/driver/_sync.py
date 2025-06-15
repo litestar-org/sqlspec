@@ -5,13 +5,13 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.statement.builder import DeleteBuilder, InsertBuilder, QueryBuilder, SelectBuilder, UpdateBuilder
+from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
 from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, RowT, SQLParameterType, StatementParameters
 from sqlspec.utils.logging import get_logger
 
 logger = get_logger("sqlspec")
 
-from sqlspec.statement.filters import StatementFilter
 
 if TYPE_CHECKING:
     from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
