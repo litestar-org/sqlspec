@@ -41,8 +41,8 @@ def parse_table_expression(table_input: str, explicit_alias: Optional[str] = Non
             table_expr = from_clause.this
 
             if explicit_alias:
-                return exp.alias_(table_expr, explicit_alias)
-            return table_expr
+                return exp.alias_(table_expr, explicit_alias)  # type:ignore[no-any-return]
+            return table_expr  # type:ignore[no-any-return]
 
     return exp.to_table(table_input, alias=explicit_alias)
 

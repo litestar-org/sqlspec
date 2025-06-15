@@ -1363,9 +1363,11 @@ class SQL:
             A new SQL instance with is_many=True and the provided parameters.
 
         Example:
-            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many(
-            ...     [["John"], ["Jane"], ["Bob"]]
-            ... )
+            >>> stmt = SQL("INSERT INTO users (name) VALUES (?)").as_many([
+            ...     ["John"],
+            ...     ["Jane"],
+            ...     ["Bob"],
+            ... ])
             >>> # This creates a statement ready for executemany with 3 parameter sets
         """
         # Use provided parameters or keep existing ones (use _raw_parameters to avoid validation)
@@ -1654,6 +1656,7 @@ class SQL:
 
         if isinstance(final_merged_parameters, dict):
             # For named parameters, use intelligent naming from TypedParameter if available
+            counter = 0
             for i, param in enumerate(extracted_params):
                 # Check if it's a TypedParameter and has a semantic name
                 if hasattr(param, "semantic_name") and param.semantic_name:

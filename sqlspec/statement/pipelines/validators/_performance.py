@@ -596,7 +596,7 @@ class PerformanceValidator(BaseValidator):
             for opt_type, optimizer, description in optimizations:
                 try:
                     # Apply the optimization
-                    optimized = optimizer(expression.copy(), dialect=context.dialect)
+                    optimized = optimizer(expression.copy(), dialect=context.dialect)  # type: ignore[operator]
 
                     if optimized is None:
                         continue
