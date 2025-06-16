@@ -572,7 +572,7 @@ async def test_asyncmy_to_parquet(asyncmy_session: AsyncmyDriver) -> None:
     await asyncmy_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("pq2", 2))
     statement = SQL("SELECT name, value FROM test_table ORDER BY name")
     with tempfile.NamedTemporaryFile() as tmp:
-        await asyncmy_session.export_to_storage(statement, tmp.name, format="parquet")  # type: ignore[attr-defined]
+        await asyncmy_session.export_to_storage(statement, destination_uri=tmp.name, format="parquet")  # type: ignore[attr-defined]
         table = pq.read_table(tmp.name)
         assert table.num_rows == 2
         assert set(table.column_names) == {"name", "value"}

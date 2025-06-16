@@ -579,7 +579,7 @@ def test_psycopg_to_parquet(psycopg_session: PsycopgSyncDriver) -> None:
     statement = SQL("SELECT name, value FROM test_table ORDER BY name")
     with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
         try:
-            psycopg_session.export_to_storage(statement, tmp.name, format="parquet")
+            psycopg_session.export_to_storage(statement, destination_uri=tmp.name, format="parquet")
             table = pq.read_table(tmp.name)
             assert table.num_rows == 2
             assert set(table.column_names) == {"name", "value"}

@@ -72,7 +72,7 @@ def test_duckdb_to_parquet(duckdb_arrow_session: DuckDBDriver) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir) / "test_output.parquet"
 
-        duckdb_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE is_active = true", str(output_path))
+        duckdb_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE is_active = true", destination_uri=str(output_path))
 
         assert output_path.exists()
 
@@ -167,8 +167,7 @@ def test_duckdb_parquet_export_options(duckdb_arrow_session: DuckDBDriver) -> No
         output_path = Path(tmpdir) / "test_compressed.parquet"
 
         # Export with compression
-        duckdb_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE value <= 300", str(output_path), compression="snappy"
+        duckdb_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE value <= 300", destination_uri=str(output_path), compression="snappy"
         )
 
         assert output_path.exists()
@@ -273,7 +272,7 @@ def test_duckdb_arrow_with_parquet_integration(duckdb_arrow_session: DuckDBDrive
         parquet_path = Path(tmpdir) / "source_data.parquet"
 
         # First export to Parquet
-        duckdb_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE is_active = true", str(parquet_path))
+        duckdb_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE is_active = true", destination_uri=str(parquet_path))
 
         # Then query the Parquet file directly in DuckDB
         result = duckdb_arrow_session.fetch_arrow_table(f"""
@@ -325,9 +324,7 @@ def test_duckdb_enhanced_parquet_export_with_compression(duckdb_arrow_session: D
         output_path = Path(tmpdir) / "compressed_data.parquet"
 
         # Export with compression and row group size options
-        rows_exported = duckdb_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE value <= 300",
-            str(output_path),
+        rows_exported = duckdb_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE value <= 300", destination_uri=str(output_path),
             format="parquet",
             compression="snappy",
             row_group_size=100,
@@ -354,8 +351,7 @@ def test_duckdb_enhanced_parquet_export_with_partitioning(duckdb_arrow_session: 
         output_path = Path(tmpdir) / "partitioned_data"
 
         # Export with partitioning by is_active column
-        rows_exported = duckdb_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow", str(output_path), format="parquet", partition_by="is_active"
+        rows_exported = duckdb_arrow_session.export_to_storage("SELECT * FROM test_arrow", destination_uri=str(output_path), format="parquet", partition_by="is_active"
         )
 
         assert rows_exported == 5  # All products
@@ -394,9 +390,9 @@ def test_duckdb_multiple_parquet_files_reading(duckdb_arrow_session: DuckDBDrive
         file2 = Path(tmpdir) / "data2.parquet"
 
         # Export different subsets to different files
-        duckdb_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE value <= 200", str(file1))
+        duckdb_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE value <= 200", destination_uri=str(file1))
 
-        duckdb_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE value > 200", str(file2))
+        duckdb_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE value > 200", destination_uri=str(file2))
 
         # Test reading with glob pattern
         result = duckdb_arrow_session.fetch_arrow_table(f"""

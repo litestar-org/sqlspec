@@ -71,7 +71,7 @@ def test_sqlite_to_parquet(sqlite_arrow_session: SqliteDriver) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir) / "test_output.parquet"
 
-        sqlite_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE is_active = 1", str(output_path))
+        sqlite_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE is_active = 1", destination_uri=str(output_path))
 
         assert output_path.exists()
 
@@ -128,7 +128,7 @@ def test_sqlite_to_arrow_with_sql_object(sqlite_arrow_session: SqliteDriver) -> 
     """Test to_arrow with SQL object instead of string."""
     from sqlspec.statement.sql import SQL
 
-    sql_obj = SQL("SELECT name, value FROM test_arrow WHERE is_active = ?", parameters=[1])
+    sql_obj = SQL("SELECT name, value FROM test_arrow WHERE is_active = ?", 1)
     result = sqlite_arrow_session.fetch_arrow_table(sql_obj)
 
     assert isinstance(result, ArrowResult)
@@ -163,8 +163,7 @@ def test_sqlite_parquet_export_options(sqlite_arrow_session: SqliteDriver) -> No
         output_path = Path(tmpdir) / "test_compressed.parquet"
 
         # Export with compression
-        sqlite_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE value <= 300", str(output_path), compression="snappy"
+        sqlite_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE value <= 300", destination_uri=str(output_path), compression="snappy"
         )
 
         assert output_path.exists()

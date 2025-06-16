@@ -127,18 +127,18 @@ async def test_asyncmy_driver_fetch_arrow_table_with_parameters(
     asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock
 ) -> None:
     """Test Asyncmy driver fetch_arrow_table method with parameters."""
-    # Setup mock cursor and result data
-    mock_cursor = AsyncMock()
+    # Get the mock cursor from the fixture and configure it
+    mock_cursor = await mock_asyncmy_connection.cursor()
     mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
     mock_cursor.fetchall.return_value = [(42, "Test User")]
-
-    # cursor() in asyncmy is synchronous and returns the cursor directly
-    mock_asyncmy_connection.cursor.return_value = mock_cursor
+    
+    # Reset call count after setup
+    mock_asyncmy_connection.cursor.reset_mock()
 
     # Create SQL statement with parameters
     # Use a SQL that can be parsed by sqlglot - the driver will convert to %s style
     result = await asyncmy_driver.fetch_arrow_table(
-        "SELECT id, name FROM users WHERE id = ?", parameters=[42], config=asyncmy_driver.config
+        "SELECT id, name FROM users WHERE id = ?", 42, _config=asyncmy_driver.config
     )
 
     # Verify result
@@ -242,12 +242,12 @@ async def test_asyncmy_driver_to_parquet(
     mock_arrow_table = pa.table({"id": [1, 2], "name": ["Alice", "Bob"]})
     mock_arrow_result = ArrowResult(statement=statement, data=mock_arrow_table)
 
-    async def mock_fetch_arrow_table(query_str: str) -> ArrowResult:
+    async def mock_fetch_arrow_table(query_str: str, **kwargs: Any) -> ArrowResult:
         return mock_arrow_result
 
     monkeypatch.setattr(asyncmy_driver, "fetch_arrow_table", mock_fetch_arrow_table)
 
     with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
-        await asyncmy_driver.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
+        await asyncmy_driver.export_to_storage(statement, destination_uri=tmp.name)  # type: ignore[attr-defined]
         assert "table" in called
         assert called["path"] == tmp.name

@@ -481,7 +481,7 @@ async def test_psqlpy_to_parquet(psqlpy_config: PsqlpyConfig) -> None:
         await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("pq2",))
         statement = SQL("SELECT name FROM test_table ORDER BY name")
         with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
-            await driver.export_to_storage(statement, tmp.name)
+            await driver.export_to_storage(statement, destination_uri=tmp.name)
             table = pq.read_table(tmp.name)
             assert table.num_rows == 2
             assert set(table.column_names) == {"name"}

@@ -815,7 +815,7 @@ def test_to_parquet(adbc_postgresql_session: AdbcDriver) -> None:
     statement = SQL("SELECT id, name, value FROM test_table ORDER BY id")
 
     with tempfile.NamedTemporaryFile() as tmp:
-        adbc_postgresql_session.export_to_storage(statement, tmp.name)
+        adbc_postgresql_session.export_to_storage(statement, destination_uri=tmp.name)
 
         # Read back the Parquet file
         table = pq.read_table(tmp.name)

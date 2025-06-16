@@ -74,8 +74,7 @@ async def test_aiosqlite_to_parquet(aiosqlite_arrow_session: AiosqliteDriver) ->
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir) / "test_output.parquet"
 
-        await aiosqlite_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE is_active = 1", str(output_path)
+        await aiosqlite_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE is_active = 1", destination_uri=str(output_path)
         )
 
         assert output_path.exists()
@@ -172,8 +171,7 @@ async def test_aiosqlite_parquet_export_options(aiosqlite_arrow_session: Aiosqli
         output_path = Path(tmpdir) / "test_compressed.parquet"
 
         # Export with compression
-        await aiosqlite_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE value <= 300", str(output_path), compression="snappy"
+        await aiosqlite_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE value <= 300", destination_uri=str(output_path), compression="snappy"
         )
 
         assert output_path.exists()

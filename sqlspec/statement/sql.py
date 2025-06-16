@@ -409,6 +409,9 @@ class SQL:
     @property
     def sql(self) -> str:
         """Get SQL string."""
+        # For scripts, always return the raw SQL to preserve multi-statement scripts
+        if self._is_script and self._raw_sql:
+            return self._raw_sql
         # If parsing is disabled, return the raw SQL
         if not self._config.enable_parsing and self._raw_sql:
             return self._raw_sql
@@ -448,6 +451,9 @@ class SQL:
 
     def to_sql(self, placeholder_style: Optional[str] = None) -> str:
         """Convert to SQL string with given placeholder style."""
+        # For scripts, use the sql property which handles raw SQL correctly
+        if self._is_script:
+            return self.sql
         expr, _ = self._build_final_state()
         # TODO: Implement placeholder style conversion
         return expr.sql(dialect=self._dialect, comments=False) if hasattr(expr, "sql") else str(expr)

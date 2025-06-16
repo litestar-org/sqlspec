@@ -147,6 +147,9 @@ class SqliteDriver(
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
             # SQLite expects tuple or dict parameters
+            if parameters is not None and not isinstance(parameters, (tuple, list, dict)):
+                # Convert scalar to tuple
+                parameters = (parameters,)
             cursor.execute(sql, parameters or ())
             if self.returns_rows(statement.expression):
                 fetched_data: list[sqlite3.Row] = cursor.fetchall()
@@ -187,6 +190,7 @@ class SqliteDriver(
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
             cursor.executescript(script)
+        # executescript doesn't auto-commit in some cases
         conn.commit()
         result: ScriptResultDict = {"statements_executed": -1, "status_message": "SCRIPT EXECUTED"}
         return result
@@ -242,7 +246,7 @@ class SqliteDriver(
                 statement=statement,
                 data=[],
                 rows_affected=0,
-                operation_type=statement.expression.key.upper() if statement.expression else "SCRIPT",
+                operation_type="SCRIPT",
                 metadata={
                     "status_message": result.get("status_message", ""),
                     "statements_executed": result.get("statements_executed", -1),

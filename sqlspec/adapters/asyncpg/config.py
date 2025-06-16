@@ -145,6 +145,40 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
     def __init__(self, **kwargs: "Unpack[DriverParameters]") -> None:
         """Initialize AsyncPG configuration."""
+        # Known fields that are part of the config
+        known_fields = {
+            "dsn",
+            "host",
+            "port",
+            "user",
+            "password",
+            "database",
+            "ssl",
+            "passfile",
+            "direct_tls",
+            "connect_timeout",
+            "command_timeout",
+            "statement_cache_size",
+            "max_cached_statement_lifetime",
+            "max_cacheable_statement_size",
+            "server_settings",
+            "min_size",
+            "max_size",
+            "max_queries",
+            "max_inactive_connection_lifetime",
+            "setup",
+            "init",
+            "loop",
+            "connection_class",
+            "record_class",
+            "extras",
+            "statement_config",
+            "default_row_type",
+            "json_serializer",
+            "json_deserializer",
+            "pool_instance",
+        }
+
         self.dsn = kwargs.get("dsn")
         self.host = kwargs.get("host")
         self.port = kwargs.get("port")
@@ -169,16 +203,25 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         self.loop = kwargs.get("loop")
         self.connection_class = kwargs.get("connection_class")
         self.record_class = kwargs.get("record_class")
-        self.extras = kwargs.get("extras", {})
+
+        # Collect unknown parameters into extras
+        provided_extras = kwargs.get("extras", {})
+        unknown_params = {k: v for k, v in kwargs.items() if k not in known_fields}
+        self.extras = {**provided_extras, **unknown_params}
+
         self.statement_config = (
             SQLConfig() if kwargs.get("statement_config") is None else kwargs.get("statement_config")
         )
         self.default_row_type = kwargs.get("default_row_type", dict[str, Any])
         self.json_serializer = kwargs.get("json_serializer", to_json)
         self.json_deserializer = kwargs.get("json_deserializer", from_json)
-        self.pool_instance = kwargs.get("pool_instance")
+        pool_instance_from_kwargs = kwargs.get("pool_instance")
 
         super().__init__()
+        
+        # Set pool_instance after super().__init__() to ensure it's not overridden
+        if pool_instance_from_kwargs is not None:
+            self.pool_instance = pool_instance_from_kwargs
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:

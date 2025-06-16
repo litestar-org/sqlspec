@@ -177,7 +177,7 @@ def test_sqlite_parameter_with_sql_object(sqlite_params_session: SqliteDriver) -
     from sqlspec.statement.sql import SQL
 
     # Test with qmark style
-    sql_obj = SQL("SELECT * FROM test_params WHERE value > ?", parameters=[150])
+    sql_obj = SQL("SELECT * FROM test_params WHERE value > ?", 150)
     result = sqlite_params_session.execute(sql_obj)
 
     assert isinstance(result, SQLResult)
@@ -186,7 +186,7 @@ def test_sqlite_parameter_with_sql_object(sqlite_params_session: SqliteDriver) -
     assert all(row["value"] > 150 for row in result.data)
 
     # Test with named style
-    named_sql = SQL("SELECT * FROM test_params WHERE value < :max_value", parameters={"max_value": 150})
+    named_sql = SQL("SELECT * FROM test_params WHERE value < :max_value", {"max_value": 150})
     named_result = sqlite_params_session.execute(named_sql)
 
     assert isinstance(named_result, SQLResult)

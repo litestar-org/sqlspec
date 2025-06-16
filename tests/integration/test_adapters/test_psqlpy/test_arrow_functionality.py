@@ -93,8 +93,7 @@ async def test_psqlpy_to_parquet(psqlpy_arrow_session: PsqlpyDriver) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir) / "test_output.parquet"
 
-        await psqlpy_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE is_active = true", str(output_path)
+        await psqlpy_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE is_active = true", destination_uri=str(output_path)
         )
 
         assert output_path.exists()
@@ -203,8 +202,7 @@ async def test_psqlpy_parquet_export_options(psqlpy_arrow_session: PsqlpyDriver)
         output_path = Path(tmpdir) / "test_compressed.parquet"
 
         # Export with compression
-        await psqlpy_arrow_session.export_to_storage(
-            "SELECT * FROM test_arrow WHERE value <= 300", str(output_path), compression="snappy"
+        await psqlpy_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE value <= 300", destination_uri=str(output_path), compression="snappy"
         )
 
         assert output_path.exists()

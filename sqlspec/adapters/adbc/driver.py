@@ -56,7 +56,7 @@ class AdbcDriver(
 
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_arrow_export: ClassVar[bool] = True
-    supports_native_parquet_export: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = False  # Not implemented yet
     supports_native_parquet_import: ClassVar[bool] = True
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK,)
     default_parameter_style: ParameterStyle = ParameterStyle.QMARK

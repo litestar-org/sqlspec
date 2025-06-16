@@ -721,7 +721,7 @@ def test_duckdb_to_parquet(duckdb_session: DuckDBDriver) -> None:
     duckdb_session.execute("INSERT INTO test_table (id, name) VALUES (?, ?)", (2, "arrow2"))
     statement = SQL("SELECT id, name FROM test_table ORDER BY id")
     with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
-        duckdb_session.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
+        duckdb_session.export_to_storage(statement, destination_uri=tmp.name)  # type: ignore[attr-defined]
         table = pq.read_table(tmp.name)
         assert table.num_rows == 2
         assert table.column_names == ["id", "name"]

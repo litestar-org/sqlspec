@@ -433,7 +433,7 @@ def test_to_parquet(adbc_sqlite_session: AdbcDriver) -> None:
     statement = SQL("SELECT id, name, value FROM test_table ORDER BY id")
 
     with tempfile.NamedTemporaryFile() as tmp:
-        adbc_sqlite_session.export_to_storage(statement, tmp.name)  # type: ignore[attr-defined]
+        adbc_sqlite_session.export_to_storage(statement, destination_uri=tmp.name)  # type: ignore[attr-defined]
 
         # Read back the Parquet file
         table = pq.read_table(tmp.name)
