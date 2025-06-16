@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 from adbc_driver_manager.dbapi import Connection, Cursor
 
 from sqlspec.driver import SyncDriverAdapterProtocol
-from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin, TypeCoercionMixin
+from sqlspec.driver.mixins import (
+    SQLTranslatorMixin,
+    SyncPipelinedExecutionMixin,
+    SyncStorageMixin,
+    ToSchemaMixin,
+    TypeCoercionMixin,
+)
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -31,6 +37,7 @@ class AdbcDriver(
     SQLTranslatorMixin,
     TypeCoercionMixin,
     SyncStorageMixin,
+    SyncPipelinedExecutionMixin,
     ToSchemaMixin,
 ):
     """ADBC Sync Driver Adapter with modern architecture.

@@ -221,7 +221,7 @@ class SyncStorageMixin(StorageMixinBase):
         Returns:
             ArrowResult with converted data
         """
-        result = self.execute(sql, _connection=connection)
+        result = self.execute(sql, _connection=connection)  # type: ignore[attr-defined]
         return ArrowResult(statement=sql, data=self._rows_to_arrow_table(result.data or [], result.column_names or []))
 
     # ============================================================================
@@ -257,7 +257,7 @@ class SyncStorageMixin(StorageMixinBase):
         """
         sql = SQL(statement, *parameters, config=_config or self.config, dialect=self.dialect, **options)  # pyright: ignore
 
-        return self._export_to_storage(sql, destination_uri, format, connection=_connection, **options)
+        return self._export_to_storage(sql, destination_uri=destination_uri, format=format, _connection=_connection, **options)
 
     def _export_to_storage(
         self,
@@ -434,7 +434,7 @@ class SyncStorageMixin(StorageMixinBase):
     def _write_csv(result: "SQLResult", file: Any, **options: Any) -> None:
         """Write result to CSV file."""
 
-        writer = csv.writer(file, **options)
+        writer = csv.writer(file, **options)  # TODO: anything better?
         if result.column_names:
             writer.writerow(result.column_names)
         if result.data:
@@ -447,9 +447,9 @@ class SyncStorageMixin(StorageMixinBase):
         if result.data and result.column_names:
             # Convert to list of dicts
             rows = [dict(zip(result.column_names, row)) for row in result.data]
-            json.dump(rows, file, **options)
+            json.dump(rows, file, **options)  # TODO: use sqlspec.utils.serializer
         else:
-            json.dump([], file)
+            json.dump([], file)  # TODO: use sqlspec.utils.serializer
 
     def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
         """Database-specific bulk load implementation. Override in drivers."""

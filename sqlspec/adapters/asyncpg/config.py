@@ -89,19 +89,17 @@ CONNECTION_FIELDS = {
     "max_cacheable_statement_size",
     "server_settings",
 }
-POOL_FIELDS = CONNECTION_FIELDS.union(
-    {
-        "min_size",
-        "max_size",
-        "max_queries",
-        "max_inactive_connection_lifetime",
-        "setup",
-        "init",
-        "loop",
-        "connection_class",
-        "record_class",
-    }
-)
+POOL_FIELDS = CONNECTION_FIELDS.union({
+    "min_size",
+    "max_size",
+    "max_queries",
+    "max_inactive_connection_lifetime",
+    "setup",
+    "init",
+    "loop",
+    "connection_class",
+    "record_class",
+})
 
 
 class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", AsyncpgDriver]):
@@ -172,7 +170,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         self.connection_class = kwargs.get("connection_class")
         self.record_class = kwargs.get("record_class")
         self.extras = kwargs.get("extras", {})
-        self.statement_config = kwargs.get("statement_config", SQLConfig())
+        self.statement_config = (
+            SQLConfig() if kwargs.get("statement_config") is None else kwargs.get("statement_config")
+        )
         self.default_row_type = kwargs.get("default_row_type", dict[str, Any])
         self.json_serializer = kwargs.get("json_serializer", to_json)
         self.json_deserializer = kwargs.get("json_deserializer", from_json)

@@ -19,7 +19,13 @@ from google.cloud.bigquery import (
 from google.cloud.bigquery.table import Row as BigQueryRow
 
 from sqlspec.driver import SyncDriverAdapterProtocol
-from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin, TypeCoercionMixin
+from sqlspec.driver.mixins import (
+    SQLTranslatorMixin,
+    SyncPipelinedExecutionMixin,
+    SyncStorageMixin,
+    ToSchemaMixin,
+    TypeCoercionMixin,
+)
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
@@ -48,6 +54,7 @@ class BigQueryDriver(
     SQLTranslatorMixin,
     TypeCoercionMixin,
     SyncStorageMixin,
+    SyncPipelinedExecutionMixin,
     ToSchemaMixin,
 ):
     """Advanced BigQuery Driver with comprehensive Google Cloud capabilities.

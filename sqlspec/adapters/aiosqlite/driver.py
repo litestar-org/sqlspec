@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 import csv
 import logging
 from collections.abc import AsyncGenerator, Sequence
@@ -8,7 +9,13 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast
 import aiosqlite
 
 from sqlspec.driver import AsyncDriverAdapterProtocol
-from sqlspec.driver.mixins import AsyncStorageMixin, SQLTranslatorMixin, ToSchemaMixin, TypeCoercionMixin
+from sqlspec.driver.mixins import (
+    AsyncPipelinedExecutionMixin,
+    AsyncStorageMixin,
+    SQLTranslatorMixin,
+    ToSchemaMixin,
+    TypeCoercionMixin,
+)
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -30,6 +37,7 @@ class AiosqliteDriver(
     SQLTranslatorMixin,
     TypeCoercionMixin,
     AsyncStorageMixin,
+    AsyncPipelinedExecutionMixin,
     ToSchemaMixin,
 ):
     """Aiosqlite SQLite Driver Adapter. Modern protocol implementation."""
@@ -212,7 +220,7 @@ class AiosqliteDriver(
                     await cursor.execute(f"DELETE FROM {table_name}")
 
                 # Using sync file IO here as it's a fallback path and aiofiles is not a dependency
-                with open(file_path, encoding="utf-8") as f:
+                with Path(file_path).open(encoding="utf-8") as f:  # noqa: ASYNC230
                     reader = csv.reader(f, **options)
                     header = next(reader)  # Skip header
                     placeholders = ", ".join("?" for _ in header)

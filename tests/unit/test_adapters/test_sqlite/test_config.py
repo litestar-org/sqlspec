@@ -232,13 +232,6 @@ def test_provide_session_with_custom_config(mock_connect: MagicMock) -> None:
             {"database": ":memory:"},
             {
                 "database": ":memory:",
-                "timeout": None,
-                "detect_types": None,
-                "isolation_level": None,
-                "check_same_thread": None,
-                "factory": None,
-                "cached_statements": None,
-                "uri": None,
             },
         ),
         (
@@ -246,12 +239,8 @@ def test_provide_session_with_custom_config(mock_connect: MagicMock) -> None:
             {
                 "database": "/tmp/test.db",
                 "timeout": 30.0,
-                "detect_types": None,
                 "isolation_level": "DEFERRED",
                 "check_same_thread": False,
-                "factory": None,
-                "cached_statements": None,
-                "uri": None,
             },
         ),
     ],

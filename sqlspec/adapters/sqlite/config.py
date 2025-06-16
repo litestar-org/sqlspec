@@ -104,7 +104,7 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
     @property
     def connection_config_dict(self) -> dict[str, Any]:
         """Return a dictionary of connection parameters for SQLite."""
-        return {
+        config = {
             "database": self.database,
             "timeout": self.timeout,
             "detect_types": self.detect_types,
@@ -114,6 +114,8 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
             "cached_statements": self.cached_statements,
             "uri": self.uri,
         }
+        # Filter out None values since sqlite3.connect doesn't accept them
+        return {k: v for k, v in config.items() if v is not None}
 
     def create_connection(self) -> SqliteConnection:
         """Create and return a SQLite connection."""

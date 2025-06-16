@@ -233,9 +233,11 @@ def test_adbc_driver_execute_statement_select(adbc_driver: AdbcDriver, mock_curs
     mock_connection.cursor = Mock(return_value=mock_cursor)
 
     # Setup mock cursor for ADBC native Arrow support
-    mock_arrow_table = pa.table(
-        {"id": [1, 2], "name": ["John Doe", "Jane Smith"], "email": ["john@example.com", "jane@example.com"]}
-    )
+    mock_arrow_table = pa.table({
+        "id": [1, 2],
+        "name": ["John Doe", "Jane Smith"],
+        "email": ["john@example.com", "jane@example.com"],
+    })
     mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
     result = adbc_driver.fetch_arrow_table("SELECT * FROM users WHERE id = $1", parameters=[123])
@@ -320,9 +322,11 @@ def test_adbc_driver_fetch_arrow_table_list_parameters(adbc_driver: AdbcDriver, 
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
     # Setup mock cursor for ADBC native Arrow support
-    mock_arrow_table = pa.table(
-        {"id": [1, 2], "name": ["User 1", "User 2"], "email": ["user1@example.com", "user2@example.com"]}
-    )
+    mock_arrow_table = pa.table({
+        "id": [1, 2],
+        "name": ["User 1", "User 2"],
+        "email": ["user1@example.com", "user2@example.com"],
+    })
     mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
     # Pass parameters directly as string SQL, since that's the more common pattern
@@ -515,7 +519,7 @@ def test_adbc_driver_to_parquet(adbc_driver: AdbcDriver, mock_cursor: Mock, monk
     statement = SQL("SELECT id, name FROM users")
     with tempfile.NamedTemporaryFile() as tmp:
         # This should use the Arrow table from fetch_arrow_table
-        result = adbc_driver.export_to_storage(statement, tmp.name, format="parquet")  # type: ignore[attr-defined]
+        result = adbc_driver.export_to_storage(statement, destination_uri=tmp.name, format="parquet")  # type: ignore[attr-defined]
         assert isinstance(result, int)  # Should return number of rows
         assert called.get("table") is mock_table
         assert tmp.name in called.get("path", "")  # type: ignore[operator]

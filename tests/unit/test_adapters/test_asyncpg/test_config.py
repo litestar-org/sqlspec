@@ -147,7 +147,7 @@ def test_extras_handling(init_kwargs: dict[str, Any], expected_extras: dict[str,
 )
 def test_statement_config_initialization(statement_config: "SQLConfig | None", expected_type: type[SQLConfig]) -> None:
     """Test statement config initialization."""
-    config = AsyncpgConfig(host="localhost", statement_config=statement_config)
+    config = AsyncpgConfig(host="localhost", statement_config=statement_config)  # type: ignore[arg-type]
     assert isinstance(config.statement_config, expected_type)
 
     if statement_config is not None:
@@ -157,10 +157,10 @@ def test_statement_config_initialization(statement_config: "SQLConfig | None", e
 # Connection Configuration Tests
 @pytest.mark.parametrize(
     "timeout_type,value",
-    [("connect_timeout", 30.0), ("command_timeout", 60.0)],
+    [("connect_timeout", "30"), ("command_timeout", "60")],
     ids=["connect_timeout", "command_timeout"],
 )
-def test_timeout_configuration(timeout_type: str, value: float) -> None:
+def test_timeout_configuration(timeout_type: str, value: str) -> None:
     """Test timeout configuration."""
     config = AsyncpgConfig(host="localhost", **{timeout_type: value})
     assert getattr(config, timeout_type) == value

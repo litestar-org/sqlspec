@@ -14,6 +14,7 @@ __all__ = (
     "NotFoundError",
     "ParameterError",
     "ParameterStyleMismatchError",
+    "PipelineExecutionError",
     "QueryError",
     "RepositoryError",
     "RiskLevel",
@@ -389,3 +390,43 @@ def wrap_exceptions(
             raise
         msg = "An error occurred during the operation."
         raise RepositoryError(detail=msg) from exc
+
+
+class PipelineExecutionError(SQLSpecError):
+    """Rich error information for pipeline execution failures."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        operation_index: "Optional[int]" = None,
+        failed_operation: "Optional[Any]" = None,
+        partial_results: "Optional[list[Any]]" = None,
+        driver_error: "Optional[Exception]" = None,
+    ) -> None:
+        """Initialize the pipeline execution error.
+
+        Args:
+            message: Error message describing the failure
+            operation_index: Index of the operation that failed
+            failed_operation: The PipelineOperation that failed
+            partial_results: Results from operations that succeeded before the failure
+            driver_error: Original exception from the database driver
+        """
+        super().__init__(message)
+        self.operation_index = operation_index
+        self.failed_operation = failed_operation
+        self.partial_results = partial_results or []
+        self.driver_error = driver_error
+
+    def get_failed_sql(self) -> "Optional[str]":
+        """Get the SQL that failed for debugging."""
+        if self.failed_operation and hasattr(self.failed_operation, "sql"):
+            return self.failed_operation.sql.to_sql()
+        return None
+
+    def get_failed_parameters(self) -> "Optional[Any]":
+        """Get the parameters that failed."""
+        if self.failed_operation and hasattr(self.failed_operation, "original_params"):
+            return self.failed_operation.original_params
+        return None

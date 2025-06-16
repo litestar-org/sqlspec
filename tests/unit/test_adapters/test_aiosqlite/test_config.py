@@ -92,15 +92,13 @@ def test_aiosqlite_config_supports_connection_pooling() -> None:
 def test_aiosqlite_config_from_connection_config() -> None:
     """Test Aiosqlite config initialization with various parameters."""
     # Test basic initialization
-    config = AiosqliteConfig(database="test_database", isolation_level="test_isolation_level", cached_statements=100)
+    config = AiosqliteConfig(database="test_database", isolation_level="IMMEDIATE", cached_statements=100)
     assert config.database == "test_database"
-    assert config.isolation_level == "test_isolation_level"
+    assert config.isolation_level == "IMMEDIATE"
     assert config.cached_statements == 100
 
     # Test with extras
     extras_dict = {"unknown_param": "test_value", "another_param": 42}
-    config_extras = AiosqliteConfig(
-        database="test_database", isolation_level="test_isolation_level", extras=extras_dict
-    )
+    config_extras = AiosqliteConfig(database="test_database", isolation_level="IMMEDIATE", extras=extras_dict)
     assert config_extras.extras["unknown_param"] == "test_value"
     assert config_extras.extras["another_param"] == 42

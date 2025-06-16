@@ -7,7 +7,13 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from psqlpy import Connection
 
 from sqlspec.driver import AsyncDriverAdapterProtocol
-from sqlspec.driver.mixins import AsyncStorageMixin, SQLTranslatorMixin, ToSchemaMixin, TypeCoercionMixin
+from sqlspec.driver.mixins import (
+    AsyncPipelinedExecutionMixin,
+    AsyncStorageMixin,
+    SQLTranslatorMixin,
+    ToSchemaMixin,
+    TypeCoercionMixin,
+)
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -27,6 +33,7 @@ class PsqlpyDriver(
     SQLTranslatorMixin,
     TypeCoercionMixin,
     AsyncStorageMixin,
+    AsyncPipelinedExecutionMixin,
     ToSchemaMixin,
 ):
     """Psqlpy Driver Adapter.

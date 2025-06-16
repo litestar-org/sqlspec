@@ -7,7 +7,13 @@ from asyncpg import Record
 from typing_extensions import TypeAlias
 
 from sqlspec.driver import AsyncDriverAdapterProtocol
-from sqlspec.driver.mixins import AsyncStorageMixin, SQLTranslatorMixin, ToSchemaMixin, TypeCoercionMixin
+from sqlspec.driver.mixins import (
+    AsyncPipelinedExecutionMixin,
+    AsyncStorageMixin,
+    SQLTranslatorMixin,
+    ToSchemaMixin,
+    TypeCoercionMixin,
+)
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -42,6 +48,7 @@ class AsyncpgDriver(
     SQLTranslatorMixin,
     TypeCoercionMixin,
     AsyncStorageMixin,
+    AsyncPipelinedExecutionMixin,
     ToSchemaMixin,
 ):
     """AsyncPG PostgreSQL Driver Adapter. Modern protocol implementation."""
@@ -233,3 +240,198 @@ class AsyncpgDriver(
     def _connection(self, connection: Optional[AsyncpgConnection] = None) -> AsyncpgConnection:
         """Get the connection to use for the operation."""
         return connection or self.connection
+
+    async def _execute_pipeline_native(self, operations: "list[Any]", **options: Any) -> "list[SQLResult[RowT]]":
+        """Native pipeline execution using AsyncPG's efficient batch handling.
+
+        Note: AsyncPG doesn't have explicit pipeline support like Psycopg, but we can
+        achieve similar performance benefits through careful batching and transaction
+        management.
+
+        Args:
+            operations: List of PipelineOperation objects
+            **options: Pipeline configuration options
+
+        Returns:
+            List of SQLResult objects from all operations
+        """
+        from sqlspec.exceptions import PipelineExecutionError
+
+        results = []
+        connection = self._connection()
+
+        # Use a single transaction for all operations
+        async with connection.transaction():
+            for i, op in enumerate(operations):
+                try:
+                    # Convert parameters to positional for AsyncPG (requires $1, $2, etc.)
+                    sql_str = op.sql.to_sql(placeholder_style=ParameterStyle.NUMERIC)
+                    params = self._convert_to_positional_params(op.sql.parameters)
+
+                    # Apply operation-specific filters
+                    filtered_sql = self._apply_operation_filters(op.sql, op.filters)
+                    if filtered_sql != op.sql:
+                        sql_str = filtered_sql.to_sql(placeholder_style=ParameterStyle.NUMERIC)
+                        params = self._convert_to_positional_params(filtered_sql.parameters)
+
+                    # Execute based on operation type
+                    if op.operation_type == "execute_many":
+                        # AsyncPG has native executemany support
+                        status = await connection.executemany(sql_str, params)
+                        # Parse row count from status (e.g., "INSERT 0 5")
+                        rows_affected = self._parse_asyncpg_status(status)
+                        result = SQLResult[RowT](
+                            statement=op.sql,
+                            data=cast("list[RowT]", []),
+                            rows_affected=rows_affected,
+                            operation_type="execute_many",
+                            metadata={"status_message": status},
+                        )
+                    elif op.operation_type == "select":
+                        # Use fetch for SELECT statements
+                        rows = await connection.fetch(sql_str, *params)
+                        # Convert AsyncPG Records to dictionaries
+                        data = [dict(record) for record in rows] if rows else []
+                        result = SQLResult[RowT](
+                            statement=op.sql,
+                            data=cast("list[RowT]", data),
+                            rows_affected=len(data),
+                            operation_type="select",
+                            metadata={"column_names": list(rows[0].keys()) if rows else []},
+                        )
+                    elif op.operation_type == "execute_script":
+                        # For scripts, split and execute each statement
+                        script_statements = self._split_script_statements(op.sql.to_sql())
+                        total_affected = 0
+                        last_status = ""
+
+                        for stmt in script_statements:
+                            if stmt.strip():
+                                status = await connection.execute(stmt)
+                                total_affected += self._parse_asyncpg_status(status)
+                                last_status = status
+
+                        result = SQLResult[RowT](
+                            statement=op.sql,
+                            data=cast("list[RowT]", []),
+                            rows_affected=total_affected,
+                            operation_type="execute_script",
+                            metadata={"status_message": last_status, "statements_executed": len(script_statements)},
+                        )
+                    else:
+                        # Regular execute for DML/DDL
+                        status = await connection.execute(sql_str, *params)
+                        rows_affected = self._parse_asyncpg_status(status)
+                        result = SQLResult[RowT](
+                            statement=op.sql,
+                            data=cast("list[RowT]", []),
+                            rows_affected=rows_affected,
+                            operation_type="execute",
+                            metadata={"status_message": status},
+                        )
+
+                    # Add operation context
+                    result.operation_index = i
+                    result.pipeline_sql = op.sql
+                    results.append(result)
+
+                except Exception as e:
+                    if options.get("continue_on_error", False):
+                        # Create error result
+                        error_result = SQLResult[RowT](
+                            statement=op.sql, error=e, operation_index=i, parameters=op.original_params
+                        )
+                        results.append(error_result)
+                    else:
+                        # Transaction will be rolled back automatically
+                        msg = f"AsyncPG pipeline failed at operation {i}: {e}"
+                        raise PipelineExecutionError(
+                            msg, operation_index=i, partial_results=results, failed_operation=op
+                        ) from e
+
+        return results
+
+    def _convert_to_positional_params(self, params: Any) -> "tuple[Any, ...]":
+        """Convert parameters to positional format for AsyncPG.
+
+        AsyncPG requires parameters as positional arguments for $1, $2, etc.
+
+        Args:
+            params: Parameters in various formats
+
+        Returns:
+            Tuple of positional parameters
+        """
+        if params is None:
+            return ()
+        if isinstance(params, dict):
+            if not params:
+                return ()
+            # Convert dict to positional based on $1, $2, etc. order
+            # This assumes the SQL was compiled with NUMERIC style
+            max_param = 0
+            for key in params:
+                if isinstance(key, str) and key.startswith("param_"):
+                    try:
+                        param_num = int(key[6:])  # Extract number from "param_N"
+                        max_param = max(max_param, param_num)
+                    except ValueError:
+                        continue
+
+            if max_param > 0:
+                # Rebuild positional args from param_0, param_1, etc.
+                positional = []
+                for i in range(max_param + 1):
+                    param_key = f"param_{i}"
+                    if param_key in params:
+                        positional.append(params[param_key])
+                return tuple(positional)
+            # Fall back to dict values in arbitrary order
+            return tuple(params.values())
+        if isinstance(params, (list, tuple)):
+            return tuple(params)
+        return (params,)
+
+    def _apply_operation_filters(self, sql: "SQL", filters: "list[Any]") -> "SQL":
+        """Apply filters to a SQL object for pipeline operations."""
+        if not filters:
+            return sql
+
+        result_sql = sql
+        for filter_obj in filters:
+            if hasattr(filter_obj, "apply"):
+                result_sql = filter_obj.apply(result_sql)
+
+        return result_sql
+
+    def _split_script_statements(self, script: str) -> "list[str]":
+        """Split a SQL script into individual statements."""
+        # Simple splitting on semicolon - could be enhanced with proper SQL parsing
+        statements = [stmt.strip() for stmt in script.split(";")]
+        return [stmt for stmt in statements if stmt]
+
+    def _parse_asyncpg_status(self, status: str) -> int:
+        """Parse AsyncPG status string to extract row count.
+
+        Args:
+            status: Status string like "INSERT 0 1", "UPDATE 3", "DELETE 2"
+
+        Returns:
+            Number of affected rows, or 0 if cannot parse
+        """
+        if not status:
+            return 0
+
+        match = ASYNC_PG_STATUS_REGEX.match(status.strip())
+        if match:
+            # For INSERT: "INSERT 0 5" -> groups: (INSERT, 0, 5)
+            # For UPDATE/DELETE: "UPDATE 3" -> groups: (UPDATE, None, 3)
+            groups = match.groups()
+            if len(groups) >= EXPECTED_REGEX_GROUPS:
+                try:
+                    # The last group is always the row count
+                    return int(groups[-1])
+                except (ValueError, IndexError):
+                    pass
+
+        return 0

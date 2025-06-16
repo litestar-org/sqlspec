@@ -8,7 +8,13 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 from duckdb import DuckDBPyConnection
 
 from sqlspec.driver import SyncDriverAdapterProtocol
-from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin, TypeCoercionMixin
+from sqlspec.driver.mixins import (
+    SQLTranslatorMixin,
+    SyncPipelinedExecutionMixin,
+    SyncStorageMixin,
+    ToSchemaMixin,
+    TypeCoercionMixin,
+)
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -32,6 +38,7 @@ class DuckDBDriver(
     SQLTranslatorMixin,
     TypeCoercionMixin,
     SyncStorageMixin,
+    SyncPipelinedExecutionMixin,
     ToSchemaMixin,
 ):
     """DuckDB Sync Driver Adapter with modern architecture.

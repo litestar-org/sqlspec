@@ -123,7 +123,7 @@ def parse_condition_expression(
         try:
             parsed = exp.maybe_parse(condition_input)  # type: ignore[var-annotated]
             if parsed:
-                return parsed
+                return parsed  # type:ignore[no-any-return]
         except Exception:  # noqa: S110
             # SQLGlot condition parsing failed, will use raw condition
             pass

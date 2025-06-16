@@ -8,7 +8,13 @@ from litestar.utils import ensure_async_callable
 from typing_extensions import TypeAlias
 
 from sqlspec.driver import AsyncDriverAdapterProtocol
-from sqlspec.driver.mixins import AsyncStorageMixin, SQLTranslatorMixin, ToSchemaMixin, TypeCoercionMixin
+from sqlspec.driver.mixins import (
+    AsyncPipelinedExecutionMixin,
+    AsyncStorageMixin,
+    SQLTranslatorMixin,
+    ToSchemaMixin,
+    TypeCoercionMixin,
+)
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -29,6 +35,7 @@ class AsyncmyDriver(
     SQLTranslatorMixin,
     TypeCoercionMixin,
     AsyncStorageMixin,
+    AsyncPipelinedExecutionMixin,
     ToSchemaMixin,
 ):
     """Asyncmy MySQL/MariaDB Driver Adapter. Modern protocol implementation."""

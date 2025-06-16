@@ -432,7 +432,7 @@ def test_insert_values_operation(values: list[Any], expected_param_count: int) -
 def test_insert_values_from_dict() -> None:
     """Test INSERT values from dictionary."""
     builder = InsertValuesTestBuilder(exp.Insert())
-    result = builder.values_from_dict({"name": "John", "email": "john@example.com", "active": True})
+    result = builder.values({"name": "John", "email": "john@example.com", "active": True})
     assert result is builder
     assert len(builder._parameters) == 3
 

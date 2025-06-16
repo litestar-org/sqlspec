@@ -10,7 +10,13 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from typing_extensions import TypeAlias
 
 from sqlspec.driver import SyncDriverAdapterProtocol
-from sqlspec.driver.mixins import SQLTranslatorMixin, SyncStorageMixin, ToSchemaMixin, TypeCoercionMixin
+from sqlspec.driver.mixins import (
+    SQLTranslatorMixin,
+    SyncPipelinedExecutionMixin,
+    SyncStorageMixin,
+    ToSchemaMixin,
+    TypeCoercionMixin,
+)
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -33,6 +39,7 @@ class SqliteDriver(
     SQLTranslatorMixin,
     TypeCoercionMixin,
     SyncStorageMixin,
+    SyncPipelinedExecutionMixin,
     ToSchemaMixin,
 ):
     """SQLite Sync Driver Adapter with Arrow/Parquet export support.
@@ -195,7 +202,7 @@ class SqliteDriver(
             if mode == "replace":
                 cursor.execute(f"DELETE FROM {table_name}")
 
-            with open(file_path, encoding="utf-8") as f:
+            with Path(file_path).open(encoding="utf-8") as f:
                 reader = csv.reader(f, **options)
                 header = next(reader)  # Skip header
                 placeholders = ", ".join("?" for _ in header)

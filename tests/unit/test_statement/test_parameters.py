@@ -1,6 +1,6 @@
 """Unit tests for sqlspec.statement.parameters module."""
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from unittest.mock import patch
 
 import pytest
@@ -293,11 +293,11 @@ def test_merge_parameters(
     converter: ParameterConverter,
     parameters: "SQLParameterType",
     args: "SQLParameterType",
-    kwargs: "SQLParameterType",
+    kwargs: "dict[str, Any]",
     expected_result: "SQLParameterType",
 ) -> None:
     """Test parameter merging logic."""
-    result = converter.merge_parameters(parameters, args, kwargs)
+    result = converter.merge_parameters(parameters, [args], kwargs)
     assert result == expected_result
 
 
@@ -330,21 +330,21 @@ def test_convert_parameters(
     sql: str,
     parameters: "SQLParameterType",
     args: "SQLParameterType",
-    kwargs: "SQLParameterType",
+    kwargs: "dict[str, Any]",
     validate: bool,
     should_succeed: bool,
 ) -> None:
     """Test parameter conversion process."""
     if should_succeed:
-        result = converter.convert_parameters(sql, parameters, args, kwargs, validate)
-        transformed_sql, param_info, merged_params, extra_info = result
+        result = converter.convert_parameters(sql, parameters, [args], kwargs, validate)
+        transformed_sql, param_info, _merged_params, extra_info = result
 
         assert isinstance(transformed_sql, str)
         assert isinstance(param_info, list)
         assert isinstance(extra_info, dict)
     else:
         with pytest.raises((ParameterStyleMismatchError, MissingParameterError, ExtraParameterError)):
-            converter.convert_parameters(sql, parameters, args, kwargs, validate)
+            converter.convert_parameters(sql, parameters, [args], kwargs, validate)
 
 
 def test_transform_sql_for_parsing(converter: ParameterConverter) -> None:

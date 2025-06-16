@@ -58,12 +58,9 @@ class QueryBuilder(ABC, Generic[RowT]):
     dialect: DialectType = field(default=None)
     schema: Optional[dict[str, dict[str, str]]] = field(default=None)
     _expression: Optional[exp.Expression] = field(default=None, init=False, repr=False, compare=False, hash=False)
-    # Internally, builders will use a dictionary for named parameters.
     _parameters: dict[str, Any] = field(default_factory=dict, init=False, repr=False, compare=False, hash=False)
     _parameter_counter: int = field(default=0, init=False, repr=False, compare=False, hash=False)
     _with_ctes: dict[str, exp.CTE] = field(default_factory=dict, init=False, repr=False, compare=False, hash=False)
-
-    # Optimization settings
     enable_optimization: bool = field(default=True, init=True)
     optimize_joins: bool = field(default=True, init=True)
     optimize_predicates: bool = field(default=True, init=True)
