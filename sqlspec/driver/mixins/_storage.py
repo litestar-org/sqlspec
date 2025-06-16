@@ -39,6 +39,28 @@ logger = logging.getLogger(__name__)
 WINDOWS_PATH_MIN_LENGTH = 3
 
 
+def _separate_filters_from_parameters(
+    parameters: "tuple[Any, ...]",
+) -> "tuple[list[StatementFilter], Optional[StatementParameters]]":
+    """Separate filters from parameters in positional args."""
+    filters: list[StatementFilter] = []
+    params: list[Any] = []
+
+    for arg in parameters:
+        if isinstance(arg, StatementFilter):
+            filters.append(arg)
+        else:
+            # Everything else is treated as parameters
+            params.append(arg)
+
+    # Convert to appropriate parameter format
+    if len(params) == 0:
+        return filters, None
+    if len(params) == 1:
+        return filters, params[0]
+    return filters, params  # type: ignore[return-value]
+
+
 class StorageMixinBase(ABC):
     """Base class with common storage functionality."""
 
@@ -221,7 +243,7 @@ class SyncStorageMixin(StorageMixinBase):
         Returns:
             ArrowResult with converted data
         """
-        result = self.execute(sql, _connection=connection)  # type: ignore[attr-defined]
+        result = cast("SQLResult", self.execute(sql, _connection=connection))  # type: ignore[attr-defined]
         return ArrowResult(statement=sql, data=self._rows_to_arrow_table(result.data or [], result.column_names or []))
 
     # ============================================================================
@@ -257,7 +279,9 @@ class SyncStorageMixin(StorageMixinBase):
         """
         sql = SQL(statement, *parameters, config=_config or self.config, dialect=self.dialect, **options)  # pyright: ignore
 
-        return self._export_to_storage(sql, destination_uri=destination_uri, format=format, _connection=_connection, **options)
+        return self._export_to_storage(
+            sql, destination_uri=destination_uri, format=format, _connection=_connection, **options
+        )
 
     def _export_to_storage(
         self,
@@ -386,7 +410,7 @@ class SyncStorageMixin(StorageMixinBase):
         """Export via storage backend using temporary file."""
 
         # Execute query and get results
-        result = self.execute(SQL(query))  # type: ignore[attr-defined]
+        result = cast("SQLResult", self.execute(SQL(query)))  # type: ignore[attr-defined]
 
         # For parquet format, convert through Arrow
         if format == "parquet":
@@ -522,20 +546,9 @@ class AsyncStorageMixin(StorageMixinBase):
         """
         self._ensure_pyarrow_installed()
 
-        # Separate parameters from filters
-        param_values: list[StatementParameters] = []
-        filters: list[StatementFilter] = []
-        for param in parameters:
-            if isinstance(param, StatementFilter):
-                filters.append(param)
-            else:
-                param_values.append(param)
-
-        # Use first parameter as the primary parameter value, or None if no parameters
-        primary_params: Optional[StatementParameters] = param_values[0] if param_values else None
-
+        filters, params = _separate_filters_from_parameters(parameters)
         # Convert to SQL object for processing
-        sql = SQL(statement, primary_params, *filters, config=_config or self.config, dialect=self.dialect, **kwargs)
+        sql = SQL(statement, params, *filters, config=_config or self.config, dialect=self.dialect, **kwargs)
 
         # Delegate to protected method that drivers can override
         return await self._fetch_arrow_table(sql, connection=_connection, **kwargs)
@@ -718,7 +731,7 @@ class AsyncStorageMixin(StorageMixinBase):
     ) -> int:
         """Async import via storage backend."""
         # Download from storage backend (async if supported)
-        data = await backend.read_bytes_async(path)  # TODO: put?
+        data = await backend.read_bytes_async(path)
 
         with tempfile.NamedTemporaryFile(mode="wb", suffix=f".{format}", delete=False) as tmp:
             tmp.write(data)

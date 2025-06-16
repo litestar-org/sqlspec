@@ -123,7 +123,7 @@ def test_where_clause_basic(condition: Any, expected_type: type[exp.Expression])
 def test_where_clause_wrong_expression_type() -> None:
     """Test WHERE clause with wrong expression type."""
     builder = WhereTestBuilder(exp.Insert())
-    with pytest.raises(SQLBuilderError, match="WHERE clause is only supported"):
+    with pytest.raises(SQLBuilderError, match="Cannot add WHERE clause to unsupported expression type"):
         builder.where("id = 1")
 
 

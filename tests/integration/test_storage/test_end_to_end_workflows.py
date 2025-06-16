@@ -36,7 +36,7 @@ def analytics_database() -> Generator[SqliteDriver, None, None]:
                 subscription_type TEXT DEFAULT 'free',
                 last_active_date DATE
             );
-            
+
             CREATE TABLE events (
                 event_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
@@ -46,7 +46,7 @@ def analytics_database() -> Generator[SqliteDriver, None, None]:
                 session_id TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
             );
-            
+
             CREATE TABLE revenue (
                 transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
@@ -74,7 +74,13 @@ def analytics_database() -> Generator[SqliteDriver, None, None]:
             (1002, "login", '{"source": "mobile", "device": "android"}', "2024-01-19 14:30:00", "sess_002"),
             (1002, "page_view", '{"page": "/reports", "duration": 45}', "2024-01-19 14:35:00", "sess_002"),
             (1003, "login", '{"source": "web", "device": "tablet"}', "2024-01-21 11:15:00", "sess_003"),
-            (1003, "feature_used", '{"feature": "analytics", "filters": ["country", "date"]}', "2024-01-21 11:20:00", "sess_003"),
+            (
+                1003,
+                "feature_used",
+                '{"feature": "analytics", "filters": ["country", "date"]}',
+                "2024-01-21 11:20:00",
+                "sess_003",
+            ),
             (1004, "api_call", '{"endpoint": "/api/v1/data", "method": "GET"}', "2024-01-22 16:45:00", "sess_004"),
         ]
 
@@ -86,16 +92,14 @@ def analytics_database() -> Generator[SqliteDriver, None, None]:
             (1003, 4.99, "USD", "2024-01-21", "data_export"),
         ]
 
-        driver.execute_many(
-            "INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?)", users_data
-        )
+        driver.execute_many("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?)", users_data)
         driver.execute_many(
             "INSERT INTO events (user_id, event_type, event_data, timestamp, session_id) VALUES (?, ?, ?, ?, ?)",
-            events_data
+            events_data,
         )
         driver.execute_many(
             "INSERT INTO revenue (user_id, amount, currency, transaction_date, product_type) VALUES (?, ?, ?, ?, ?)",
-            revenue_data
+            revenue_data,
         )
 
         yield driver
@@ -110,7 +114,7 @@ def test_daily_analytics_export_workflow(analytics_database: SqliteDriver, temp_
 
     analytics_database.export_to_storage(
         """
-        SELECT 
+        SELECT
             u.user_id,
             u.username,
             u.country,
@@ -120,13 +124,13 @@ def test_daily_analytics_export_workflow(analytics_database: SqliteDriver, temp_
             MIN(e.timestamp) as first_activity,
             MAX(e.timestamp) as last_activity
         FROM users u
-        LEFT JOIN events e ON u.user_id = e.user_id 
+        LEFT JOIN events e ON u.user_id = e.user_id
             AND DATE(e.timestamp) = ?
         GROUP BY u.user_id, u.username, u.country, u.subscription_type
         ORDER BY event_count DESC
         """,
         str(user_activity_file),
-        parameters=[export_date]
+        parameters=[export_date],
     )
 
     # Step 2: Export revenue data for the day
@@ -134,7 +138,7 @@ def test_daily_analytics_export_workflow(analytics_database: SqliteDriver, temp_
 
     analytics_database.export_to_storage(
         """
-        SELECT 
+        SELECT
             r.*,
             u.username,
             u.country,
@@ -145,7 +149,7 @@ def test_daily_analytics_export_workflow(analytics_database: SqliteDriver, temp_
         ORDER BY r.amount DESC
         """,
         str(revenue_file),
-        parameters=[export_date]
+        parameters=[export_date],
     )
 
     # Step 3: Create summary report
@@ -172,10 +176,7 @@ def test_daily_analytics_export_workflow(analytics_database: SqliteDriver, temp_
     # Save summary
     summary_file = temp_directory / f"daily_summary_{export_date.replace('-', '')}.json"
     summary_data["export_date"] = export_date
-    summary_data["files_generated"] = [
-        str(user_activity_file.name),
-        str(revenue_file.name)
-    ]
+    summary_data["files_generated"] = [str(user_activity_file.name), str(revenue_file.name)]
 
     with open(summary_file, "w") as f:
         json.dump(summary_data, f, indent=2)
@@ -200,7 +201,7 @@ def test_user_segmentation_export(analytics_database: SqliteDriver, temp_directo
         "business_users": "SELECT * FROM users WHERE subscription_type = 'business'",
         "free_users": "SELECT * FROM users WHERE subscription_type = 'free'",
         "international_users": "SELECT * FROM users WHERE country != 'USA'",
-        "recent_signups": "SELECT * FROM users WHERE signup_date >= '2024-01-20'"
+        "recent_signups": "SELECT * FROM users WHERE signup_date >= '2024-01-20'",
     }
 
     segment_stats = {}
@@ -217,7 +218,7 @@ def test_user_segmentation_export(analytics_database: SqliteDriver, temp_directo
             segment_stats[segment_name] = {
                 "user_count": table.num_rows,
                 "countries": list(set(table["country"].to_pylist())) if table.num_rows > 0 else [],
-                "file_path": str(segment_file)
+                "file_path": str(segment_file),
             }
 
     # Create comprehensive segment report
@@ -225,7 +226,7 @@ def test_user_segmentation_export(analytics_database: SqliteDriver, temp_directo
         "analysis_date": "2024-01-25",
         "total_segments": len(segments),
         "segment_details": segment_stats,
-        "insights": []
+        "insights": [],
     }
 
     # Add insights based on data
@@ -245,9 +246,7 @@ def test_user_segmentation_export(analytics_database: SqliteDriver, temp_directo
     assert segment_report["total_segments"] == len(segments)
 
     # Verify at least some segments have users
-    total_users_in_segments = sum(
-        stats.get("user_count", 0) for stats in segment_stats.values()
-    )
+    total_users_in_segments = sum(stats.get("user_count", 0) for stats in segment_stats.values())
     assert total_users_in_segments > 0
 
 
@@ -258,7 +257,7 @@ def test_event_analytics_pipeline(analytics_database: SqliteDriver, temp_directo
 
     analytics_database.export_to_storage(
         """
-        SELECT 
+        SELECT
             e.*,
             u.username,
             u.country,
@@ -267,7 +266,7 @@ def test_event_analytics_pipeline(analytics_database: SqliteDriver, temp_directo
         JOIN users u ON e.user_id = u.user_id
         ORDER BY e.timestamp
         """,
-        str(raw_events_file)
+        str(raw_events_file),
     )
 
     # Step 2: Create event type summary
@@ -275,7 +274,7 @@ def test_event_analytics_pipeline(analytics_database: SqliteDriver, temp_directo
 
     analytics_database.export_to_storage(
         """
-        SELECT 
+        SELECT
             event_type,
             COUNT(*) as event_count,
             COUNT(DISTINCT user_id) as unique_users,
@@ -287,7 +286,7 @@ def test_event_analytics_pipeline(analytics_database: SqliteDriver, temp_directo
         ORDER BY event_count DESC
         """,
         str(event_summary_file),
-        format="csv"
+        format="csv",
     )
 
     # Step 3: User journey analysis
@@ -295,7 +294,7 @@ def test_event_analytics_pipeline(analytics_database: SqliteDriver, temp_directo
 
     analytics_database.export_to_storage(
         """
-        SELECT 
+        SELECT
             user_id,
             GROUP_CONCAT(event_type, ' -> ') as event_sequence,
             COUNT(*) as total_events,
@@ -305,7 +304,7 @@ def test_event_analytics_pipeline(analytics_database: SqliteDriver, temp_directo
         ORDER BY total_events DESC
         """,
         str(user_journey_file),
-        format="json"
+        format="json",
     )
 
     # Verify pipeline outputs
@@ -340,7 +339,7 @@ def test_revenue_analytics_workflow(analytics_database: SqliteDriver, temp_direc
 
     analytics_database.export_to_storage(
         """
-        SELECT 
+        SELECT
             SUBSTR(transaction_date, 1, 7) as month,
             product_type,
             COUNT(*) as transaction_count,
@@ -352,7 +351,7 @@ def test_revenue_analytics_workflow(analytics_database: SqliteDriver, temp_direc
         GROUP BY month, product_type
         ORDER BY month, total_revenue DESC
         """,
-        str(monthly_revenue_file)
+        str(monthly_revenue_file),
     )
 
     # User revenue breakdown
@@ -360,7 +359,7 @@ def test_revenue_analytics_workflow(analytics_database: SqliteDriver, temp_direc
 
     analytics_database.export_to_storage(
         """
-        SELECT 
+        SELECT
             u.user_id,
             u.username,
             u.country,
@@ -375,7 +374,7 @@ def test_revenue_analytics_workflow(analytics_database: SqliteDriver, temp_direc
         GROUP BY u.user_id, u.username, u.country, u.subscription_type
         ORDER BY total_spent DESC
         """,
-        str(user_revenue_file)
+        str(user_revenue_file),
     )
 
     # Revenue insights export
@@ -393,10 +392,7 @@ def test_revenue_analytics_workflow(analytics_database: SqliteDriver, temp_direc
         "total_revenue": total_revenue_result.data[0]["total"] if total_revenue_result.data else 0,
         "average_transaction": avg_transaction_result.data[0]["avg"] if avg_transaction_result.data else 0,
         "top_product": top_product_result.data[0] if top_product_result.data else None,
-        "files_generated": [
-            str(monthly_revenue_file.name),
-            str(user_revenue_file.name)
-        ]
+        "files_generated": [str(monthly_revenue_file.name), str(user_revenue_file.name)],
     }
 
     with open(insights_file, "w") as f:
@@ -430,11 +426,7 @@ def test_data_backup_and_archival_workflow(analytics_database: SqliteDriver, tem
 
     # Full data backup
     tables_to_backup = ["users", "events", "revenue"]
-    backup_manifest = {
-        "backup_timestamp": timestamp,
-        "tables": [],
-        "total_records": 0
-    }
+    backup_manifest = {"backup_timestamp": timestamp, "tables": [], "total_records": 0}
 
     for table_name in tables_to_backup:
         backup_file = backup_dir / f"{table_name}_{timestamp}.parquet"
@@ -443,7 +435,7 @@ def test_data_backup_and_archival_workflow(analytics_database: SqliteDriver, tem
         analytics_database.export_to_storage(
             f"SELECT * FROM {table_name}",
             str(backup_file),
-            compression="gzip"  # Use compression for archival
+            compression="gzip",  # Use compression for archival
         )
 
         if backup_file.exists():
@@ -453,7 +445,7 @@ def test_data_backup_and_archival_workflow(analytics_database: SqliteDriver, tem
                 "record_count": table.num_rows,
                 "file_path": str(backup_file.name),
                 "file_size_bytes": backup_file.stat().st_size,
-                "columns": table.column_names
+                "columns": table.column_names,
             }
             backup_manifest["tables"].append(table_info)
             backup_manifest["total_records"] += table.num_rows
@@ -478,7 +470,7 @@ def test_data_backup_and_archival_workflow(analytics_database: SqliteDriver, tem
 def test_multi_format_export_workflow(analytics_database: SqliteDriver, temp_directory: Path) -> None:
     """Test exporting the same data to multiple formats for different use cases."""
     base_query = """
-        SELECT 
+        SELECT
             u.username,
             u.country,
             u.subscription_type,
@@ -496,7 +488,7 @@ def test_multi_format_export_workflow(analytics_database: SqliteDriver, temp_dir
     formats = {
         "parquet": {"use_case": "data_analysis", "compression": "snappy"},
         "csv": {"use_case": "spreadsheet_import", "compression": None},
-        "json": {"use_case": "api_consumption", "compression": None}
+        "json": {"use_case": "api_consumption", "compression": None},
     }
 
     export_results = {}
@@ -508,11 +500,7 @@ def test_multi_format_export_workflow(analytics_database: SqliteDriver, temp_dir
         if config["compression"]:
             export_kwargs["compression"] = config["compression"]
 
-        analytics_database.export_to_storage(
-            base_query,
-            str(output_file),
-            **export_kwargs
-        )
+        analytics_database.export_to_storage(base_query, str(output_file), **export_kwargs)
 
         if output_file.exists():
             file_size = output_file.stat().st_size
@@ -520,7 +508,7 @@ def test_multi_format_export_workflow(analytics_database: SqliteDriver, temp_dir
                 "file_path": str(output_file),
                 "file_size": file_size,
                 "use_case": config["use_case"],
-                "success": True
+                "success": True,
             }
         else:
             export_results[format_name] = {"success": False}
@@ -531,7 +519,7 @@ def test_multi_format_export_workflow(analytics_database: SqliteDriver, temp_dir
         "export_date": "2024-01-25",
         "base_query": base_query.strip(),
         "formats_exported": export_results,
-        "total_formats": len([r for r in export_results.values() if r.get("success")])
+        "total_formats": len([r for r in export_results.values() if r.get("success")]),
     }
 
     with open(summary_file, "w") as f:

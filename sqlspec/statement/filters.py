@@ -47,14 +47,21 @@ class StatementFilter(Protocol):
     @abstractmethod
     def append_to_statement(self, statement: "SQL") -> "SQL":
         """Append the filter to the statement.
-
-        Args:
-            statement: The SQL query object to modify.
-
-        Returns:
-            The modified query object.
+        
+        This method should modify the SQL expression only, not the parameters.
+        Parameters should be provided via extract_parameters().
         """
-        raise NotImplementedError
+        ...
+    
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract parameters that this filter contributes.
+        
+        Returns:
+            Tuple of (positional_params, named_params) where:
+            - positional_params: List of positional parameter values
+            - named_params: Dict of parameter name to value
+        """
+        return [], {}
 
 
 @dataclass
@@ -71,25 +78,42 @@ class BeforeAfterFilter(StatementFilter):
     """Filter results where field earlier than this."""
     after: Optional[datetime] = None
     """Filter results where field later than this."""
+    
+    def __post_init__(self) -> None:
+        """Initialize parameter names."""
+        self._param_name_before: Optional[str] = None
+        self._param_name_after: Optional[str] = None
+        
+        if self.before:
+            self._param_name_before = f"{self.field_name}_before_{id(self)}_{hash(str(self.before))}"
+        if self.after:
+            self._param_name_after = f"{self.field_name}_after_{id(self)}_{hash(str(self.after))}"
+    
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        named_params = {}
+        if self.before and self._param_name_before:
+            named_params[self._param_name_before] = self.before
+        if self.after and self._param_name_after:
+            named_params[self._param_name_after] = self.after
+        return [], named_params
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
+        """Apply filter to SQL expression only."""
         conditions: list[Condition] = []
         col_expr = exp.column(self.field_name)
 
-        if self.before:
-            param_name = statement.get_unique_parameter_name(f"{self.field_name}_before")
-            statement = statement.add_named_parameter(param_name, self.before)
-            conditions.append(exp.LT(this=col_expr, expression=exp.Placeholder(this=param_name)))
-        if self.after:
-            param_name = statement.get_unique_parameter_name(f"{self.field_name}_after")
-            statement = statement.add_named_parameter(param_name, self.after)
-            conditions.append(exp.GT(this=col_expr, expression=exp.Placeholder(this=param_name)))
+        if self.before and self._param_name_before:
+            conditions.append(exp.LT(this=col_expr, expression=exp.Placeholder(this=self._param_name_before)))
+        if self.after and self._param_name_after:
+            conditions.append(exp.GT(this=col_expr, expression=exp.Placeholder(this=self._param_name_after)))
 
         if conditions:
             final_condition = conditions[0]
             for cond in conditions[1:]:
                 final_condition = exp.And(this=final_condition, expression=cond)
-            statement = statement.where(final_condition)
+            # Use the SQL object's where method which handles all cases
+            return statement.where(final_condition)
         return statement
 
 
@@ -103,24 +127,39 @@ class OnBeforeAfterFilter(StatementFilter):
     """Filter results where field is on or earlier than this."""
     on_or_after: Optional[datetime] = None
     """Filter results where field on or later than this."""
+    
+    def __post_init__(self) -> None:
+        """Initialize parameter names."""
+        self._param_name_on_or_before: Optional[str] = None
+        self._param_name_on_or_after: Optional[str] = None
+        
+        if self.on_or_before:
+            self._param_name_on_or_before = f"{self.field_name}_on_or_before_{id(self)}_{hash(str(self.on_or_before))}"
+        if self.on_or_after:
+            self._param_name_on_or_after = f"{self.field_name}_on_or_after_{id(self)}_{hash(str(self.on_or_after))}"
+    
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        named_params = {}
+        if self.on_or_before and self._param_name_on_or_before:
+            named_params[self._param_name_on_or_before] = self.on_or_before
+        if self.on_or_after and self._param_name_on_or_after:
+            named_params[self._param_name_on_or_after] = self.on_or_after
+        return [], named_params
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         conditions: list[Condition] = []
 
-        if self.on_or_before:
-            param_name = statement.get_unique_parameter_name(f"{self.field_name}_on_or_before")
-            statement = statement.add_named_parameter(param_name, self.on_or_before)
-            conditions.append(exp.LTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=param_name)))
-        if self.on_or_after:
-            param_name = statement.get_unique_parameter_name(f"{self.field_name}_on_or_after")
-            statement = statement.add_named_parameter(param_name, self.on_or_after)
-            conditions.append(exp.GTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=param_name)))
+        if self.on_or_before and self._param_name_on_or_before:
+            conditions.append(exp.LTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=self._param_name_on_or_before)))
+        if self.on_or_after and self._param_name_on_or_after:
+            conditions.append(exp.GTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=self._param_name_on_or_after)))
 
         if conditions:
             final_condition = conditions[0]
             for cond in conditions[1:]:
                 final_condition = exp.And(this=final_condition, expression=cond)
-            statement = statement.where(final_condition)
+            return statement.where(final_condition)
         return statement
 
 
@@ -146,6 +185,21 @@ class InCollectionFilter(InAnyFilter[T]):
     """Values for ``IN`` clause.
 
     An empty list will return an empty result set, however, if ``None``, the filter is not applied to the query, and all rows are returned. """
+    
+    def __post_init__(self) -> None:
+        """Initialize parameter names."""
+        self._param_names: list[str] = []
+        if self.values:
+            for i, _ in enumerate(self.values):
+                self._param_names.append(f"{self.field_name}_in_{i}_{id(self)}")
+    
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        named_params = {}
+        if self.values:
+            for i, value in enumerate(self.values):
+                named_params[self._param_names[i]] = value
+        return [], named_params
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         if self.values is None:
@@ -155,11 +209,8 @@ class InCollectionFilter(InAnyFilter[T]):
             return statement.where(exp.false())
 
         placeholder_expressions: list[exp.Placeholder] = []
-
-        for i, value_item in enumerate(self.values):
-            param_key = statement.get_unique_parameter_name(f"{self.field_name}_in_{i}")
-            statement = statement.add_named_parameter(param_key, value_item)
-            placeholder_expressions.append(exp.Placeholder(this=param_key))
+        for param_name in self._param_names:
+            placeholder_expressions.append(exp.Placeholder(this=param_name))
 
         return statement.where(exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
 

@@ -246,94 +246,10 @@ class PsycopgSyncDriver(
         connection = self._connection()
 
         try:
-            # Use Psycopg's native pipeline context manager
             with connection.pipeline():
                 for i, op in enumerate(operations):
-                    try:
-                        # Apply operation-specific filters
-                        filtered_sql = self._apply_operation_filters(op.sql, op.filters)
-                        sql_str = filtered_sql.to_sql(placeholder_style=self.default_parameter_style)
-                        params = self._convert_psycopg_params(filtered_sql.parameters)
-
-                        # Execute based on operation type within the pipeline
-                        if op.operation_type == "execute_many":
-                            # Use executemany for batch operations
-                            with connection.cursor() as cursor:
-                                cursor.executemany(sql_str, params)
-                                rows_affected = cursor.rowcount
-                                result = SQLResult[RowT](
-                                    statement=op.sql,
-                                    data=cast("list[RowT]", []),
-                                    rows_affected=rows_affected,
-                                    operation_type="execute_many",
-                                    metadata={"status_message": "OK"},
-                                )
-                        elif op.operation_type == "select":
-                            # Use fetchall for SELECT statements
-                            with connection.cursor() as cursor:
-                                cursor.execute(sql_str, params)
-                                fetched_data = cursor.fetchall()
-                                column_names = [col.name for col in cursor.description or []]
-                                data = [dict(record) for record in fetched_data] if fetched_data else []
-                                result = SQLResult[RowT](
-                                    statement=op.sql,
-                                    data=cast("list[RowT]", data),
-                                    rows_affected=len(data),
-                                    operation_type="select",
-                                    metadata={"column_names": column_names},
-                                )
-                        elif op.operation_type == "execute_script":
-                            # For scripts, split and execute each statement
-                            script_statements = self._split_script_statements(sql_str)
-                            total_affected = 0
-
-                            with connection.cursor() as cursor:
-                                for stmt in script_statements:
-                                    if stmt.strip():
-                                        cursor.execute(stmt)
-                                        total_affected += cursor.rowcount or 0
-
-                            result = SQLResult[RowT](
-                                statement=op.sql,
-                                data=cast("list[RowT]", []),
-                                rows_affected=total_affected,
-                                operation_type="execute_script",
-                                metadata={
-                                    "status_message": "SCRIPT EXECUTED",
-                                    "statements_executed": len(script_statements),
-                                },
-                            )
-                        else:
-                            # Regular execute for DML/DDL
-                            with connection.cursor() as cursor:
-                                cursor.execute(sql_str, params)
-                                rows_affected = cursor.rowcount or 0
-                                result = SQLResult[RowT](
-                                    statement=op.sql,
-                                    data=cast("list[RowT]", []),
-                                    rows_affected=rows_affected,
-                                    operation_type="execute",
-                                    metadata={"status_message": "OK"},
-                                )
-
-                        # Add operation context
-                        result.operation_index = i
-                        result.pipeline_sql = op.sql
-                        results.append(result)
-
-                    except Exception as e:
-                        if options.get("continue_on_error", False):
-                            # Create error result
-                            error_result = SQLResult[RowT](
-                                statement=op.sql, error=e, operation_index=i, parameters=op.original_params
-                            )
-                            results.append(error_result)
-                        else:
-                            # Pipeline will be automatically rolled back
-                            msg = f"Psycopg pipeline failed at operation {i}: {e}"
-                            raise PipelineExecutionError(
-                                msg, operation_index=i, partial_results=results, failed_operation=op
-                            ) from e
+                    result = self._execute_pipeline_operation(i, op, connection, options)
+                    results.append(result)
 
         except Exception as e:
             if not isinstance(e, PipelineExecutionError):
@@ -342,6 +258,115 @@ class PsycopgSyncDriver(
             raise
 
         return results
+
+    def _execute_pipeline_operation(
+        self, index: int, operation: Any, connection: Any, options: dict
+    ) -> "SQLResult[RowT]":
+        """Execute a single pipeline operation with error handling."""
+        from sqlspec.exceptions import PipelineExecutionError
+
+        try:
+            # Prepare SQL and parameters
+            filtered_sql = self._apply_operation_filters(operation.sql, operation.filters)
+            sql_str = filtered_sql.to_sql(placeholder_style=self.default_parameter_style)
+            params = self._convert_psycopg_params(filtered_sql.parameters)
+
+            # Execute based on operation type
+            result = self._dispatch_pipeline_operation(operation, sql_str, params, connection)
+
+        except Exception as e:
+            if options.get("continue_on_error"):
+                return SQLResult[RowT](
+                    statement=operation.sql,
+                    data=cast("list[RowT]", []),
+                    error=e,
+                    operation_index=index,
+                    parameters=operation.original_params,
+                )
+            msg = f"Psycopg pipeline failed at operation {index}: {e}"
+            raise PipelineExecutionError(
+                msg, operation_index=index, partial_results=[], failed_operation=operation
+            ) from e
+        else:
+            # Add pipeline context
+            result.operation_index = index
+            result.pipeline_sql = operation.sql
+            return result
+
+    def _dispatch_pipeline_operation(
+        self, operation: Any, sql_str: str, params: Any, connection: Any
+    ) -> "SQLResult[RowT]":
+        """Dispatch to appropriate handler based on operation type."""
+        handlers = {
+            "execute_many": self._handle_pipeline_execute_many,
+            "select": self._handle_pipeline_select,
+            "execute_script": self._handle_pipeline_execute_script,
+        }
+
+        handler = handlers.get(operation.operation_type, self._handle_pipeline_execute)
+        return handler(operation.sql, sql_str, params, connection)
+
+    def _handle_pipeline_execute_many(
+        self, sql: "SQL", sql_str: str, params: Any, connection: Any
+    ) -> "SQLResult[RowT]":
+        """Handle execute_many operation in pipeline."""
+        with connection.cursor() as cursor:
+            cursor.executemany(sql_str, params)
+            return SQLResult[RowT](
+                statement=sql,
+                data=cast("list[RowT]", []),
+                rows_affected=cursor.rowcount,
+                operation_type="execute_many",
+                metadata={"status_message": "OK"},
+            )
+
+    def _handle_pipeline_select(self, sql: "SQL", sql_str: str, params: Any, connection: Any) -> "SQLResult[RowT]":
+        """Handle select operation in pipeline."""
+        with connection.cursor() as cursor:
+            cursor.execute(sql_str, params)
+            fetched_data = cursor.fetchall()
+            column_names = [col.name for col in cursor.description or []]
+            data = [dict(record) for record in fetched_data] if fetched_data else []
+            return SQLResult[RowT](
+                statement=sql,
+                data=cast("list[RowT]", data),
+                rows_affected=len(data),
+                operation_type="select",
+                metadata={"column_names": column_names},
+            )
+
+    def _handle_pipeline_execute_script(
+        self, sql: "SQL", sql_str: str, params: Any, connection: Any
+    ) -> "SQLResult[RowT]":
+        """Handle execute_script operation in pipeline."""
+        script_statements = self._split_script_statements(sql_str)
+        total_affected = 0
+
+        with connection.cursor() as cursor:
+            for stmt in script_statements:
+                if stmt.strip():
+                    cursor.execute(stmt)
+                    total_affected += cursor.rowcount or 0
+
+        return SQLResult[RowT](
+            statement=sql,
+            data=cast("list[RowT]", []),
+            rows_affected=total_affected,
+            operation_type="execute_script",
+            metadata={"status_message": "SCRIPT EXECUTED", "statements_executed": len(script_statements)},
+        )
+
+    def _handle_pipeline_execute(self, sql: "SQL", sql_str: str, params: Any, connection: Any) -> "SQLResult[RowT]":
+        """Handle regular execute operation in pipeline."""
+        with connection.cursor() as cursor:
+            cursor.execute(sql_str, params)
+            return SQLResult[RowT](
+                statement=sql,
+                data=cast("list[RowT]", []),
+                rows_affected=cursor.rowcount or 0,
+                operation_type="execute",
+                metadata={"status_message": "OK"},
+            )
 
     def _convert_psycopg_params(self, params: Any) -> Any:
         """Convert parameters to Psycopg-compatible format.
@@ -376,6 +401,13 @@ class PsycopgSyncDriver(
                 result_sql = filter_obj.apply(result_sql)
 
         return result_sql
+
+    def _split_script_statements(self, script: str) -> "list[str]":
+        """Split a SQL script into individual statements."""
+        from sqlspec.statement.splitter import split_sql_script
+
+        # Use the sophisticated splitter with PostgreSQL dialect
+        return split_sql_script(script, dialect="postgresql", strip_trailing_semicolon=False)
 
 
 class PsycopgAsyncDriver(
@@ -587,112 +619,17 @@ class PsycopgAsyncDriver(
         return connection or self.connection
 
     async def _execute_pipeline_native(self, operations: "list[Any]", **options: Any) -> "list[SQLResult[RowT]]":
-        """Native async pipeline execution using Psycopg's pipeline support.
-
-        Psycopg has built-in async pipeline support through the connection.pipeline() context manager.
-        This provides significant performance benefits for batch operations.
-
-        Args:
-            operations: List of PipelineOperation objects
-            **options: Pipeline configuration options
-
-        Returns:
-            List of SQLResult objects from all operations
-        """
+        """Native async pipeline execution using Psycopg's pipeline support."""
         from sqlspec.exceptions import PipelineExecutionError
 
         results = []
         connection = self._connection()
 
         try:
-            # Use Psycopg's native async pipeline context manager
             async with connection.pipeline():
                 for i, op in enumerate(operations):
-                    try:
-                        # Apply operation-specific filters
-                        filtered_sql = self._apply_operation_filters(op.sql, op.filters)
-                        sql_str = filtered_sql.to_sql(placeholder_style=self.default_parameter_style)
-                        params = self._convert_psycopg_params(filtered_sql.parameters)
-
-                        # Execute based on operation type within the pipeline
-                        if op.operation_type == "execute_many":
-                            # Use executemany for batch operations
-                            async with connection.cursor() as cursor:
-                                await cursor.executemany(sql_str, params)
-                                rows_affected = cursor.rowcount
-                                result = SQLResult[RowT](
-                                    statement=op.sql,
-                                    data=cast("list[RowT]", []),
-                                    rows_affected=rows_affected,
-                                    operation_type="execute_many",
-                                    metadata={"status_message": "OK"},
-                                )
-                        elif op.operation_type == "select":
-                            # Use fetchall for SELECT statements
-                            async with connection.cursor() as cursor:
-                                await cursor.execute(sql_str, params)
-                                fetched_data = await cursor.fetchall()
-                                column_names = [col.name for col in cursor.description or []]
-                                data = [dict(record) for record in fetched_data] if fetched_data else []
-                                result = SQLResult[RowT](
-                                    statement=op.sql,
-                                    data=cast("list[RowT]", data),
-                                    rows_affected=len(data),
-                                    operation_type="select",
-                                    metadata={"column_names": column_names},
-                                )
-                        elif op.operation_type == "execute_script":
-                            # For scripts, split and execute each statement
-                            script_statements = self._split_script_statements(sql_str)
-                            total_affected = 0
-
-                            async with connection.cursor() as cursor:
-                                for stmt in script_statements:
-                                    if stmt.strip():
-                                        await cursor.execute(stmt)
-                                        total_affected += cursor.rowcount or 0
-
-                            result = SQLResult[RowT](
-                                statement=op.sql,
-                                data=cast("list[RowT]", []),
-                                rows_affected=total_affected,
-                                operation_type="execute_script",
-                                metadata={
-                                    "status_message": "SCRIPT EXECUTED",
-                                    "statements_executed": len(script_statements),
-                                },
-                            )
-                        else:
-                            # Regular execute for DML/DDL
-                            async with connection.cursor() as cursor:
-                                await cursor.execute(sql_str, params)
-                                rows_affected = cursor.rowcount or 0
-                                result = SQLResult[RowT](
-                                    statement=op.sql,
-                                    data=cast("list[RowT]", []),
-                                    rows_affected=rows_affected,
-                                    operation_type="execute",
-                                    metadata={"status_message": "OK"},
-                                )
-
-                        # Add operation context
-                        result.operation_index = i
-                        result.pipeline_sql = op.sql
-                        results.append(result)
-
-                    except Exception as e:
-                        if options.get("continue_on_error", False):
-                            # Create error result
-                            error_result = SQLResult[RowT](
-                                statement=op.sql, error=e, operation_index=i, parameters=op.original_params
-                            )
-                            results.append(error_result)
-                        else:
-                            # Pipeline will be automatically rolled back
-                            msg = f"Psycopg async pipeline failed at operation {i}: {e}"
-                            raise PipelineExecutionError(
-                                msg, operation_index=i, partial_results=results, failed_operation=op
-                            ) from e
+                    result = await self._execute_pipeline_operation_async(i, op, connection, options)
+                    results.append(result)
 
         except Exception as e:
             if not isinstance(e, PipelineExecutionError):
@@ -701,6 +638,119 @@ class PsycopgAsyncDriver(
             raise
 
         return results
+
+    async def _execute_pipeline_operation_async(
+        self, index: int, operation: Any, connection: Any, options: dict
+    ) -> "SQLResult[RowT]":
+        """Execute a single async pipeline operation with error handling."""
+        from sqlspec.exceptions import PipelineExecutionError
+
+        try:
+            # Prepare SQL and parameters
+            filtered_sql = self._apply_operation_filters(operation.sql, operation.filters)
+            sql_str = filtered_sql.to_sql(placeholder_style=self.default_parameter_style)
+            params = self._convert_psycopg_params(filtered_sql.parameters)
+
+            # Execute based on operation type
+            result = await self._dispatch_pipeline_operation_async(operation, sql_str, params, connection)
+
+        except Exception as e:
+            if options.get("continue_on_error"):
+                return SQLResult[RowT](
+                    statement=operation.sql,
+                    data=cast("list[RowT]", []),
+                    error=e,
+                    operation_index=index,
+                    parameters=operation.original_params,
+                )
+            msg = f"Psycopg async pipeline failed at operation {index}: {e}"
+            raise PipelineExecutionError(
+                msg, operation_index=index, partial_results=[], failed_operation=operation
+            ) from e
+        else:
+            # Add pipeline context
+            result.operation_index = index
+            result.pipeline_sql = operation.sql
+            return result
+
+    async def _dispatch_pipeline_operation_async(
+        self, operation: Any, sql_str: str, params: Any, connection: Any
+    ) -> "SQLResult[RowT]":
+        """Dispatch to appropriate async handler based on operation type."""
+        handlers = {
+            "execute_many": self._handle_pipeline_execute_many_async,
+            "select": self._handle_pipeline_select_async,
+            "execute_script": self._handle_pipeline_execute_script_async,
+        }
+
+        handler = handlers.get(operation.operation_type, self._handle_pipeline_execute_async)
+        return await handler(operation.sql, sql_str, params, connection)
+
+    async def _handle_pipeline_execute_many_async(
+        self, sql: "SQL", sql_str: str, params: Any, connection: Any
+    ) -> "SQLResult[RowT]":
+        """Handle async execute_many operation in pipeline."""
+        async with connection.cursor() as cursor:
+            await cursor.executemany(sql_str, params)
+            return SQLResult[RowT](
+                statement=sql,
+                data=cast("list[RowT]", []),
+                rows_affected=cursor.rowcount,
+                operation_type="execute_many",
+                metadata={"status_message": "OK"},
+            )
+
+    async def _handle_pipeline_select_async(
+        self, sql: "SQL", sql_str: str, params: Any, connection: Any
+    ) -> "SQLResult[RowT]":
+        """Handle async select operation in pipeline."""
+        async with connection.cursor() as cursor:
+            await cursor.execute(sql_str, params)
+            fetched_data = await cursor.fetchall()
+            column_names = [col.name for col in cursor.description or []]
+            data = [dict(record) for record in fetched_data] if fetched_data else []
+            return SQLResult[RowT](
+                statement=sql,
+                data=cast("list[RowT]", data),
+                rows_affected=len(data),
+                operation_type="select",
+                metadata={"column_names": column_names},
+            )
+
+    async def _handle_pipeline_execute_script_async(
+        self, sql: "SQL", sql_str: str, params: Any, connection: Any
+    ) -> "SQLResult[RowT]":
+        """Handle async execute_script operation in pipeline."""
+        script_statements = self._split_script_statements(sql_str)
+        total_affected = 0
+
+        async with connection.cursor() as cursor:
+            for stmt in script_statements:
+                if stmt.strip():
+                    await cursor.execute(stmt)
+                    total_affected += cursor.rowcount or 0
+
+        return SQLResult[RowT](
+            statement=sql,
+            data=cast("list[RowT]", []),
+            rows_affected=total_affected,
+            operation_type="execute_script",
+            metadata={"status_message": "SCRIPT EXECUTED", "statements_executed": len(script_statements)},
+        )
+
+    async def _handle_pipeline_execute_async(
+        self, sql: "SQL", sql_str: str, params: Any, connection: Any
+    ) -> "SQLResult[RowT]":
+        """Handle async regular execute operation in pipeline."""
+        async with connection.cursor() as cursor:
+            await cursor.execute(sql_str, params)
+            return SQLResult[RowT](
+                statement=sql,
+                data=cast("list[RowT]", []),
+                rows_affected=cursor.rowcount or 0,
+                operation_type="execute",
+                metadata={"status_message": "OK"},
+            )
 
     def _convert_psycopg_params(self, params: Any) -> Any:
         """Convert parameters to Psycopg-compatible format.

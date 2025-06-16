@@ -24,11 +24,14 @@ from typing_extensions import Self
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import RowT
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlspec.statement.result import SQLResult
 
 __all__ = ("QueryBuilder", "SafeQuery")
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -211,6 +214,10 @@ class QueryBuilder(ABC, Generic[RowT]):
                 self._raise_sql_builder_error(msg, e)
         elif isinstance(query, exp.Select):
             cte_select_expression = query.copy()
+        else:
+            msg = f"Invalid query type for CTE: {type(query).__name__}"
+            self._raise_sql_builder_error(msg)
+            return self  # This line won't be reached but satisfies type checkers
 
         self._with_ctes[alias] = exp.CTE(this=cte_select_expression, alias=exp.to_table(alias))
         return self
@@ -246,6 +253,7 @@ class QueryBuilder(ABC, Generic[RowT]):
             sql_string = final_expression.sql(dialect=self.dialect_name, pretty=True)
         except Exception as e:
             err_msg = f"Error generating SQL from expression: {e!s}"
+            logger.exception("SQL generation failed")
             self._raise_sql_builder_error(err_msg, e)
 
         return SafeQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=self.dialect)

@@ -1,4 +1,3 @@
-# ruff: noqa: PLR0904
 """SQL statement result classes for handling different types of SQL operations."""
 
 from abc import ABC, abstractmethod
@@ -147,6 +146,11 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
 
     For script execution, this class also tracks multiple statement results and errors.
     """
+
+    error: Optional[Exception] = None
+    operation_index: Optional[int] = None
+    pipeline_sql: Optional["SQL"] = None
+    parameters: Optional[Any] = None
 
     # Attributes primarily for SELECT-like results or results with column structure
     column_names: "list[str]" = field(default_factory=list)
@@ -397,14 +401,14 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
             if not row:
                 msg = "Row has no columns"
                 raise ValueError(msg)
-            first_key = next(iter(row.keys()))
-            return row[first_key]
+            first_key = cast("str", next(iter(row.keys())))
+            return cast("Any", row[first_key])
         if isinstance(row, Sequence) and not isinstance(row, (str, bytes)):
             # For tuple/list-like rows
             if len(row) == 0:
                 msg = "Row has no columns"
                 raise ValueError(msg)
-            return row[0]
+            return cast("Any", row[0])
         # For scalar values returned directly
         return row
 
@@ -419,7 +423,6 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
             return None
 
         if isinstance(row, Mapping):
-            # For dict-like rows, get the first column value
             if not row:
                 return None
             first_key = next(iter(row.keys()))
@@ -428,7 +431,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
             # For tuple/list-like rows
             if len(row) == 0:
                 return None
-            return row[0]
+            return cast("Any", row[0])
         # For scalar values returned directly
         return row
 

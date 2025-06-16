@@ -72,7 +72,7 @@ def complex_sql_files() -> Generator[Path, None, None]:
 -- name: user_engagement_report
 -- Complex analytics query with CTEs and window functions
 WITH user_activity AS (
-    SELECT 
+    SELECT
         u.id,
         u.name,
         COUNT(DISTINCT s.id) as session_count,
@@ -81,33 +81,33 @@ WITH user_activity AS (
         FIRST_VALUE(s.created_at) OVER (PARTITION BY u.id ORDER BY s.created_at) as first_session,
         LAG(s.created_at) OVER (PARTITION BY u.id ORDER BY s.created_at) as prev_session
     FROM users u
-    LEFT JOIN sessions s ON u.id = s.user_id 
+    LEFT JOIN sessions s ON u.id = s.user_id
     LEFT JOIN events e ON s.id = e.session_id
-    WHERE s.created_at >= :start_date 
+    WHERE s.created_at >= :start_date
       AND s.created_at <= :end_date
     GROUP BY u.id, u.name, s.created_at
 ),
 engagement_metrics AS (
-    SELECT 
+    SELECT
         id,
         name,
         SUM(session_count) as total_sessions,
         SUM(event_count) as total_events,
         AVG(avg_session_duration) as overall_avg_duration,
-        CASE 
+        CASE
             WHEN SUM(session_count) >= 10 THEN 'high'
-            WHEN SUM(session_count) >= 5 THEN 'medium' 
+            WHEN SUM(session_count) >= 5 THEN 'medium'
             ELSE 'low'
         END as engagement_level
     FROM user_activity
     GROUP BY id, name
 )
-SELECT * FROM engagement_metrics 
+SELECT * FROM engagement_metrics
 ORDER BY total_sessions DESC, total_events DESC;
 
 -- name: revenue_by_product_category
 -- Complex revenue analysis with nested queries and joins
-SELECT 
+SELECT
     pc.name as category_name,
     p.name as product_name,
     SUM(oi.quantity * oi.price) as total_revenue,
@@ -115,7 +115,7 @@ SELECT
     AVG(oi.quantity * oi.price) as avg_order_value,
     RANK() OVER (PARTITION BY pc.id ORDER BY SUM(oi.quantity * oi.price) DESC) as revenue_rank_in_category,
     LAG(SUM(oi.quantity * oi.price)) OVER (
-        PARTITION BY pc.id 
+        PARTITION BY pc.id
         ORDER BY SUM(oi.quantity * oi.price) DESC
     ) as prev_product_revenue
 FROM product_categories pc
@@ -132,23 +132,23 @@ ORDER BY pc.name, revenue_rank_in_category;
 -- name: customer_cohort_analysis
 -- Advanced cohort analysis for customer retention
 WITH customer_cohorts AS (
-    SELECT 
+    SELECT
         customer_id,
         DATE_TRUNC('month', first_order_date) as cohort_month,
         DATE_TRUNC('month', order_date) as order_month,
         EXTRACT(YEAR FROM AGE(DATE_TRUNC('month', order_date), DATE_TRUNC('month', first_order_date))) * 12 +
         EXTRACT(MONTH FROM AGE(DATE_TRUNC('month', order_date), DATE_TRUNC('month', first_order_date))) as period_number
     FROM (
-        SELECT 
+        SELECT
             customer_id,
             order_date,
             MIN(order_date) OVER (PARTITION BY customer_id) as first_order_date
-        FROM orders 
+        FROM orders
         WHERE status = 'completed'
     ) customer_orders
 ),
 cohort_data AS (
-    SELECT 
+    SELECT
         cohort_month,
         period_number,
         COUNT(DISTINCT customer_id) as customers
@@ -156,14 +156,14 @@ cohort_data AS (
     GROUP BY cohort_month, period_number
 ),
 cohort_sizes AS (
-    SELECT 
+    SELECT
         cohort_month,
         COUNT(DISTINCT customer_id) as total_customers
     FROM customer_cohorts
     WHERE period_number = 0
     GROUP BY cohort_month
 )
-SELECT 
+SELECT
     cd.cohort_month,
     cd.period_number,
     cd.customers,
@@ -182,11 +182,11 @@ ORDER BY cd.cohort_month, cd.period_number;
 -- name: transform_user_data
 -- Complex data transformation with multiple operations
 WITH cleaned_users AS (
-    SELECT 
+    SELECT
         id,
         TRIM(UPPER(name)) as name,
         LOWER(email) as email,
-        CASE 
+        CASE
             WHEN age < 18 THEN 'minor'
             WHEN age BETWEEN 18 AND 34 THEN 'young_adult'
             WHEN age BETWEEN 35 AND 54 THEN 'middle_aged'
@@ -197,17 +197,17 @@ WITH cleaned_users AS (
         EXTRACT(YEAR FROM created_at) as signup_year,
         EXTRACT(QUARTER FROM created_at) as signup_quarter
     FROM raw_users
-    WHERE email IS NOT NULL 
+    WHERE email IS NOT NULL
       AND email ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
       AND (:filter_year IS NULL OR EXTRACT(YEAR FROM created_at) = :filter_year)
 ),
 user_metrics AS (
-    SELECT 
+    SELECT
         u.*,
         COALESCE(order_stats.total_orders, 0) as total_orders,
         COALESCE(order_stats.total_spent, 0) as total_spent,
         COALESCE(order_stats.avg_order_value, 0) as avg_order_value,
-        CASE 
+        CASE
             WHEN order_stats.total_spent >= 1000 THEN 'premium'
             WHEN order_stats.total_spent >= 500 THEN 'regular'
             WHEN order_stats.total_spent > 0 THEN 'occasional'
@@ -215,12 +215,12 @@ user_metrics AS (
         END as customer_tier
     FROM cleaned_users u
     LEFT JOIN (
-        SELECT 
+        SELECT
             customer_id,
             COUNT(*) as total_orders,
             SUM(total_amount) as total_spent,
             AVG(total_amount) as avg_order_value
-        FROM orders 
+        FROM orders
         WHERE status = 'completed'
         GROUP BY customer_id
     ) order_stats ON u.id = order_stats.customer_id
@@ -231,25 +231,25 @@ ORDER BY total_spent DESC, created_at DESC;
 -- name: upsert_product_inventory
 -- Complex upsert operation with conflict resolution
 INSERT INTO product_inventory (
-    product_id, 
-    warehouse_id, 
-    quantity, 
+    product_id,
+    warehouse_id,
+    quantity,
     reserved_quantity,
     last_updated,
     updated_by
 )
-SELECT 
+SELECT
     :product_id,
     :warehouse_id,
     :quantity,
     COALESCE(:reserved_quantity, 0),
     CURRENT_TIMESTAMP,
     :updated_by
-ON CONFLICT (product_id, warehouse_id) 
+ON CONFLICT (product_id, warehouse_id)
 DO UPDATE SET
     quantity = EXCLUDED.quantity + product_inventory.quantity,
     reserved_quantity = GREATEST(
-        EXCLUDED.reserved_quantity, 
+        EXCLUDED.reserved_quantity,
         product_inventory.reserved_quantity
     ),
     last_updated = EXCLUDED.last_updated,
@@ -464,11 +464,7 @@ def test_complex_analytics_queries(complex_sql_files: Path) -> None:
 
     # Test user engagement report with multiple parameters
     sql_obj = loader.get_sql(
-        "user_engagement_report",
-        parameters={
-            "start_date": "2024-01-01",
-            "end_date": "2024-12-31"
-        }
+        "user_engagement_report", parameters={"start_date": "2024-01-01", "end_date": "2024-12-31"}
     )
 
     assert isinstance(sql_obj, SQL)
@@ -489,8 +485,8 @@ def test_complex_analytics_queries(complex_sql_files: Path) -> None:
             "start_period": "2024-01-01",
             "end_period": "2024-03-31",
             "category_filter": "%electronics%",
-            "min_revenue_threshold": 1000
-        }
+            "min_revenue_threshold": 1000,
+        },
     )
 
     assert isinstance(revenue_sql, SQL)
@@ -525,10 +521,7 @@ def test_complex_etl_transformations(complex_sql_files: Path) -> None:
     loader.load_sql(complex_sql_files / "etl.sql")
 
     # Test user data transformation
-    transform_sql = loader.get_sql(
-        "transform_user_data",
-        parameters={"filter_year": 2024}
-    )
+    transform_sql = loader.get_sql("transform_user_data", parameters={"filter_year": 2024})
 
     assert isinstance(transform_sql, SQL)
     query_text = transform_sql.to_sql()
@@ -549,8 +542,8 @@ def test_complex_etl_transformations(complex_sql_files: Path) -> None:
             "warehouse_id": 456,
             "quantity": 100,
             "reserved_quantity": 25,
-            "updated_by": "system"
-        }
+            "updated_by": "system",
+        },
     )
 
     assert isinstance(upsert_sql, SQL)
@@ -574,10 +567,10 @@ def test_sql_loader_with_complex_parameter_types(complex_sql_files: Path) -> Non
         "revenue_by_product_category",
         parameters={
             "start_period": "2024-01-01 00:00:00",  # timestamp
-            "end_period": "2024-03-31 23:59:59",    # timestamp
-            "category_filter": None,                 # NULL value
-            "min_revenue_threshold": 500.00          # decimal
-        }
+            "end_period": "2024-03-31 23:59:59",  # timestamp
+            "category_filter": None,  # NULL value
+            "min_revenue_threshold": 500.00,  # decimal
+        },
     )
 
     assert isinstance(analytics_sql, SQL)
@@ -599,7 +592,7 @@ def test_sql_loader_query_organization(complex_sql_files: Path) -> None:
         "revenue_by_product_category",
         "customer_cohort_analysis",
         "transform_user_data",
-        "upsert_product_inventory"
+        "upsert_product_inventory",
     ]
 
     for query_name in expected_queries:

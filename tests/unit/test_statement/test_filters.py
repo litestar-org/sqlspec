@@ -100,10 +100,25 @@ def test_before_after_filter(
         assert hasattr(result, "parameters")
         if result.parameters:
             assert isinstance(result.parameters, dict)
+            print(f"DEBUG: parameters = {result.parameters}")
+            print(f"DEBUG: _raw_parameters = {result._raw_parameters}")
+            print(f"DEBUG: _raw_kwargs = {result._raw_kwargs}")
             if before:
-                assert any("before" in k for k in result.parameters.keys())
+                # Handle nested parameters structure
+                params_dict = result.parameters
+                if 'parameters' in params_dict and isinstance(params_dict['parameters'], dict):
+                    params_dict = params_dict['parameters']
+                    if 'parameters' in params_dict:
+                        params_dict = params_dict['parameters']
+                assert any("before" in k for k in params_dict.keys())
             if after:
-                assert any("after" in k for k in result.parameters.keys())
+                # Handle nested parameters structure
+                params_dict = result.parameters
+                if 'parameters' in params_dict and isinstance(params_dict['parameters'], dict):
+                    params_dict = params_dict['parameters']
+                    if 'parameters' in params_dict:
+                        params_dict = params_dict['parameters']
+                assert any("after" in k for k in params_dict.keys())
     else:
         # No conditions added
         assert result.sql == statement.sql

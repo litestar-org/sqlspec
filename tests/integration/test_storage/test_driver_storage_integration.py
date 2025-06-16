@@ -46,10 +46,7 @@ def sqlite_with_test_data() -> Generator[SqliteDriver, None, None]:
             ("Desk", "Furniture", 199.99, True),
         ]
 
-        driver.execute_many(
-            "INSERT INTO products (name, category, price, in_stock) VALUES (?, ?, ?, ?)",
-            test_products
-        )
+        driver.execute_many("INSERT INTO products (name, category, price, in_stock) VALUES (?, ?, ?, ?)", test_products)
 
         yield driver
 
@@ -59,10 +56,7 @@ def test_export_to_storage_parquet_basic(sqlite_with_test_data: SqliteDriver, te
     output_file = temp_directory / "products.parquet"
 
     # Export all products
-    sqlite_with_test_data.export_to_storage(
-        "SELECT * FROM products ORDER BY id",
-        destination_uri=str(output_file)
-    )
+    sqlite_with_test_data.export_to_storage("SELECT * FROM products ORDER BY id", destination_uri=str(output_file))
 
     # Verify file was created
     assert output_file.exists()
@@ -88,7 +82,7 @@ def test_export_to_storage_with_filters(sqlite_with_test_data: SqliteDriver, tem
     # Export only electronics
     sqlite_with_test_data.export_to_storage(
         "SELECT name, price FROM products WHERE category = 'Electronics' ORDER BY price DESC",
-        destination_uri=str(output_file)
+        destination_uri=str(output_file),
     )
 
     assert output_file.exists()
@@ -114,9 +108,7 @@ def test_export_to_storage_csv_format(sqlite_with_test_data: SqliteDriver, temp_
 
     # Export to CSV
     sqlite_with_test_data.export_to_storage(
-        "SELECT name, category, price FROM products WHERE in_stock = 1",
-        destination_uri=str(output_file),
-        format="csv"
+        "SELECT name, category, price FROM products WHERE in_stock = 1", destination_uri=str(output_file), format="csv"
     )
 
     assert output_file.exists()
@@ -147,15 +139,14 @@ def test_export_to_storage_json_format(sqlite_with_test_data: SqliteDriver, temp
 
     # Export to JSON
     sqlite_with_test_data.export_to_storage(
-        "SELECT id, name, price FROM products WHERE price > 50",
-        str(output_file),
-        format="json"
+        "SELECT id, name, price FROM products WHERE price > 50", str(output_file), format="json"
     )
 
     assert output_file.exists()
 
     # Read and verify JSON content
     import json
+
     with open(output_file) as f:
         data = json.load(f)
 
@@ -197,10 +188,7 @@ def test_fetch_arrow_table_with_parameters(sqlite_with_test_data: SqliteDriver) 
     """Test fetch_arrow_table with parameterized queries."""
     from sqlspec.statement.sql import SQL
 
-    sql_query = SQL(
-        "SELECT * FROM products WHERE price BETWEEN ? AND ? ORDER BY price",
-        parameters=[50.0, 500.0]
-    )
+    sql_query = SQL("SELECT * FROM products WHERE price BETWEEN ? AND ? ORDER BY price", parameters=[50.0, 500.0])
 
     result = sqlite_with_test_data.fetch_arrow_table(sql_query)
 
@@ -221,19 +209,13 @@ def test_storage_error_handling(sqlite_with_test_data: SqliteDriver, temp_direct
     invalid_path = "/root/nonexistent/invalid.parquet"
 
     with pytest.raises(Exception):  # Could be PermissionError, FileNotFoundError, etc.
-        sqlite_with_test_data.export_to_storage(
-            "SELECT * FROM products",
-            invalid_path
-        )
+        sqlite_with_test_data.export_to_storage("SELECT * FROM products", invalid_path)
 
     # Test export with invalid SQL
     valid_path = temp_directory / "test.parquet"
 
     with pytest.raises(Exception):  # Should be SQL syntax error
-        sqlite_with_test_data.export_to_storage(
-            "SELECT * FROM nonexistent_table",
-            str(valid_path)
-        )
+        sqlite_with_test_data.export_to_storage("SELECT * FROM nonexistent_table", str(valid_path))
 
 
 def test_storage_compression_options(sqlite_with_test_data: SqliteDriver, temp_directory: Path) -> None:
@@ -247,11 +229,7 @@ def test_storage_compression_options(sqlite_with_test_data: SqliteDriver, temp_d
     for compression in compression_types:
         output_file = temp_directory / f"products_{compression}.parquet"
 
-        sqlite_with_test_data.export_to_storage(
-            base_query,
-            str(output_file),
-            compression=compression
-        )
+        sqlite_with_test_data.export_to_storage(base_query, str(output_file), compression=compression)
 
         assert output_file.exists()
         file_sizes[compression] = output_file.stat().st_size
@@ -273,10 +251,7 @@ def test_storage_schema_preservation(sqlite_with_test_data: SqliteDriver, temp_d
     output_file = temp_directory / "schema_test.parquet"
 
     # Export data with various types
-    sqlite_with_test_data.export_to_storage(
-        "SELECT id, name, price, in_stock FROM products",
-        str(output_file)
-    )
+    sqlite_with_test_data.export_to_storage("SELECT id, name, price, in_stock FROM products", str(output_file))
 
     # Read back and verify schema
     table = pq.read_table(output_file)
@@ -297,23 +272,17 @@ def test_storage_schema_preservation(sqlite_with_test_data: SqliteDriver, temp_d
 def test_storage_large_dataset_handling(sqlite_with_test_data: SqliteDriver, temp_directory: Path) -> None:
     """Test storage operations with larger datasets."""
     # Insert more test data
-    large_batch = [
-        (f"Product_{i}", f"Category_{i % 5}", i * 10.0 + 9.99, i % 2 == 0)
-        for i in range(100, 1000)
-    ]
+    large_batch = [(f"Product_{i}", f"Category_{i % 5}", i * 10.0 + 9.99, i % 2 == 0) for i in range(100, 1000)]
 
     sqlite_with_test_data.execute_many(
-        "INSERT INTO products (name, category, price, in_stock) VALUES (?, ?, ?, ?)",
-        large_batch
+        "INSERT INTO products (name, category, price, in_stock) VALUES (?, ?, ?, ?)", large_batch
     )
 
     # Export larger dataset
     output_file = temp_directory / "large_dataset.parquet"
 
     sqlite_with_test_data.export_to_storage(
-        "SELECT * FROM products WHERE price > 100 ORDER BY id",
-        str(output_file),
-        compression="snappy"
+        "SELECT * FROM products WHERE price > 100 ORDER BY id", str(output_file), compression="snappy"
     )
 
     assert output_file.exists()
@@ -334,18 +303,18 @@ def test_export_with_complex_sql(sqlite_with_test_data: SqliteDriver, temp_direc
 
     sqlite_with_test_data.export_to_storage(
         """
-        SELECT 
+        SELECT
             category,
             COUNT(*) as product_count,
             AVG(price) as avg_price,
             MAX(price) as max_price,
             MIN(price) as min_price,
             SUM(CASE WHEN in_stock THEN 1 ELSE 0 END) as in_stock_count
-        FROM products 
-        GROUP BY category 
+        FROM products
+        GROUP BY category
         ORDER BY avg_price DESC
         """,
-        str(output_file)
+        str(output_file),
     )
 
     assert output_file.exists()
@@ -377,8 +346,7 @@ def test_concurrent_storage_operations(sqlite_with_test_data: SqliteDriver, temp
     def export_worker(worker_id: int) -> str:
         output_file = temp_directory / f"concurrent_{worker_id}.parquet"
         sqlite_with_test_data.export_to_storage(
-            f"SELECT * FROM products WHERE id % 5 = {worker_id % 5}",
-            str(output_file)
+            f"SELECT * FROM products WHERE id % 5 = {worker_id % 5}", str(output_file)
         )
         return str(output_file)
 
