@@ -27,7 +27,7 @@ class LimitOffsetClauseMixin:
         """
         builder = cast("BuilderProtocol", self)
         if not isinstance(builder._expression, exp.Select):
-            msg = "Limit can only be applied to a SELECT expression."
+            msg = "LIMIT is only supported for SELECT statements."
             raise SQLBuilderError(msg)
         builder._expression = builder._expression.limit(exp.Literal.number(value), copy=False)
         return builder
@@ -46,7 +46,7 @@ class LimitOffsetClauseMixin:
         """
         builder = cast("BuilderProtocol", self)
         if not isinstance(builder._expression, exp.Select):
-            msg = "Offset can only be applied to a SELECT expression."
+            msg = "OFFSET is only supported for SELECT statements."
             raise SQLBuilderError(msg)
         builder._expression = builder._expression.offset(exp.Literal.number(value), copy=False)
         return builder

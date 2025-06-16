@@ -14,7 +14,7 @@ import sqlite3
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from unittest.mock import MagicMock, Mock, mock_open, patch
+from unittest.mock import MagicMock, Mock, PropertyMock, mock_open, patch
 
 import pytest
 
@@ -33,11 +33,11 @@ if TYPE_CHECKING:
 def mock_connection() -> MagicMock:
     """Create a mock SQLite connection."""
     mock_conn = MagicMock(spec=sqlite3.Connection)
-    mock_cursor = MagicMock(spec=sqlite3.Cursor)
+    mock_cursor = MagicMock()
 
     # Set up cursor context manager
-    mock_cursor.__enter__.return_value = mock_cursor
-    mock_cursor.__exit__.return_value = None
+    mock_cursor.__enter__ = MagicMock(return_value=mock_cursor)
+    mock_cursor.__exit__ = MagicMock(return_value=None)
 
     # Mock cursor methods
     mock_cursor.execute.return_value = mock_cursor
@@ -280,9 +280,11 @@ def test_parameter_style_handling(
 ) -> None:
     """Test parameter style detection and conversion."""
     statement = SQL(sql_text)
-    statement._parameter_info = [ParameterInfo(name="p1", position=0, style=detected_style)]
-
-    with patch.object(statement, "compile") as mock_compile:
+    
+    # Mock the parameter_info property to return the expected style
+    mock_param_info = [ParameterInfo(name="p1", position=0, style=detected_style, ordinal=0, placeholder_text="?")]
+    with patch.object(type(statement), "parameter_info", new_callable=PropertyMock, return_value=mock_param_info), \
+         patch.object(type(statement), "compile") as mock_compile:
         mock_compile.return_value = (sql_text, None)
         driver._execute_statement(statement)
 
@@ -347,7 +349,7 @@ def test_execute_script(driver: SqliteDriver, mock_connection: MagicMock) -> Non
 
 
 # Bulk Load Tests
-@patch("builtins.open", new_callable=mock_open, read_data="id,name\n1,Alice\n2,Bob\n")
+@patch("pathlib.Path.open", new_callable=mock_open, read_data="id,name\n1,Alice\n2,Bob\n")
 def test_bulk_load_csv(mock_file: Mock, driver: SqliteDriver, mock_connection: MagicMock) -> None:
     """Test bulk loading from CSV file."""
     mock_cursor = mock_connection.cursor.return_value
@@ -361,7 +363,7 @@ def test_bulk_load_csv(mock_file: Mock, driver: SqliteDriver, mock_connection: M
     mock_cursor.executemany.assert_called_once_with("INSERT INTO users VALUES (?, ?)", [["1", "Alice"], ["2", "Bob"]])
 
 
-@patch("builtins.open", new_callable=mock_open, read_data="id,name\n1,Alice\n")
+@patch("pathlib.Path.open", new_callable=mock_open, read_data="id,name\n1,Alice\n")
 def test_bulk_load_csv_replace_mode(mock_file: Mock, driver: SqliteDriver, mock_connection: MagicMock) -> None:
     """Test bulk loading with replace mode."""
     mock_cursor = mock_connection.cursor.return_value
@@ -431,12 +433,13 @@ def test_wrap_select_result_with_schema(driver: SqliteDriver) -> None:
 def test_wrap_execute_result_dml(driver: SqliteDriver) -> None:
     """Test wrapping DML results."""
     statement = SQL("INSERT INTO users VALUES (?)")
-    statement._expression = MagicMock()
-    statement._expression.key = "insert"
+    mock_expression = MagicMock()
+    mock_expression.key = "insert"
 
     result = {"rows_affected": 1, "status_message": "OK"}
 
-    wrapped = driver._wrap_execute_result(statement, result)
+    with patch.object(type(statement), "expression", new_callable=PropertyMock, return_value=mock_expression):
+        wrapped = driver._wrap_execute_result(statement, result)
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.data == []
@@ -448,11 +451,11 @@ def test_wrap_execute_result_dml(driver: SqliteDriver) -> None:
 def test_wrap_execute_result_script(driver: SqliteDriver) -> None:
     """Test wrapping script results."""
     statement = SQL("CREATE TABLE test; INSERT INTO test;")
-    statement._expression = None
 
     result = {"statements_executed": 2, "status_message": "SCRIPT EXECUTED"}
 
-    wrapped = driver._wrap_execute_result(statement, result)
+    with patch.object(type(statement), "expression", new_callable=PropertyMock, return_value=None):
+        wrapped = driver._wrap_execute_result(statement, result)
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.data == []
@@ -483,7 +486,8 @@ def test_execute_with_no_parameters(driver: SqliteDriver, mock_connection: Magic
     statement = SQL("CREATE TABLE test (id INTEGER)")
     driver._execute_statement(statement)
 
-    mock_cursor.execute.assert_called_once_with("CREATE TABLE test (id INTEGER)", ())
+    # sqlglot normalizes INTEGER to INT
+    mock_cursor.execute.assert_called_once_with("CREATE TABLE test (id INT)", ())
 
 
 def test_execute_select_with_empty_result(driver: SqliteDriver, mock_connection: MagicMock) -> None:

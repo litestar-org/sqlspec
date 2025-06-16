@@ -279,8 +279,8 @@ def test_sql_multiple_filters() -> None:
     """Test SQL with multiple filters applied."""
     stmt = SQL("SELECT * FROM users")
 
-    stmt2 = stmt.filter(LimitOffsetFilter(limit=10))
-    stmt3 = stmt2.filter(SearchFilter(column="name", value="test"))
+    stmt2 = stmt.filter(LimitOffsetFilter(limit=10, offset=0))
+    stmt3 = stmt2.filter(SearchFilter(field_name="name", value="test"))
 
     sql = stmt3.sql
     assert "LIMIT 10" in sql

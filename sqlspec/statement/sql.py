@@ -90,6 +90,7 @@ class SQL:
         "_named_params",  # dict[str, Any] - named parameters
         "_positional_params",  # list[Any] - positional parameters
         "_processed_state",  # Cached processed state
+        "_raw_sql",  # str - original SQL string for compatibility
         "_statement",  # exp.Expression - the SQL expression
     )
 
@@ -137,11 +138,19 @@ class SQL:
             self._builder_result_type = _builder_result_type or statement._builder_result_type
             self._is_many = statement._is_many
             self._is_script = statement._is_script
+            self._raw_sql: str = statement._raw_sql
             # Copy internal state
             self._positional_params.extend(statement._positional_params)
             self._named_params.update(statement._named_params)
             self._filters.extend(statement._filters)
         else:
+            # Store raw SQL string if provided
+            if isinstance(statement, str):
+                self._raw_sql = statement
+            elif isinstance(statement, exp.Expression):
+                self._raw_sql = statement.sql(dialect=self._dialect)
+            else:
+                self._raw_sql = ""
             # Convert to expression if string
             self._statement = self._to_expression(statement) if isinstance(statement, str) else statement
 
@@ -154,6 +163,8 @@ class SQL:
                 self._is_many = _existing_state["is_many"]
             if "is_script" in _existing_state:
                 self._is_script = _existing_state["is_script"]
+            if "raw_sql" in _existing_state:
+                self._raw_sql = _existing_state["raw_sql"]
 
         # Process parameters from *args
         for param in parameters:
@@ -192,12 +203,21 @@ class SQL:
         if isinstance(statement, exp.Expression):
             return statement
 
+        # Handle empty string
+        if not statement or not statement.strip():
+            return exp.Anonymous(this="")
+
+        # Check if parsing is disabled
+        if not self._config.enable_parsing:
+            # Return an anonymous expression that preserves the raw SQL
+            return exp.Anonymous(this=statement)
+
         try:
             # Parse with sqlglot
             expressions = sqlglot.parse(statement, dialect=self._dialect)
             if not expressions:
                 # Empty statement
-                return exp.Select()
+                return exp.Anonymous(this=statement)
             first_expr = expressions[0]
             if first_expr is None:
                 # Could not parse
@@ -234,6 +254,7 @@ class SQL:
             "filters": list(self._filters),
             "is_many": self._is_many,
             "is_script": self._is_script,
+            "raw_sql": self._raw_sql,
         }
 
         # Create new instance
@@ -302,6 +323,17 @@ class SQL:
             new_statement = exp.Select().from_(self._statement).where(condition_expr)
 
         return self.copy(statement=new_statement)
+    
+    def filter(self, filter_obj: StatementFilter) -> "SQL":
+        """Apply a filter and return a new SQL instance."""
+        # Create a new SQL object with the filter added
+        new_obj = self.copy()
+        new_obj._filters.append(filter_obj)
+        # Extract filter parameters
+        pos_params, named_params = self._extract_filter_parameters(filter_obj)
+        new_obj._positional_params.extend(pos_params)
+        new_obj._named_params.update(named_params)
+        return new_obj
 
     def as_many(self, parameters: "Optional[list[Any]]" = None) -> "SQL":
         """Mark for executemany with optional parameters."""
@@ -377,12 +409,24 @@ class SQL:
     @property
     def sql(self) -> str:
         """Get SQL string."""
+        # If parsing is disabled, return the raw SQL
+        if not self._config.enable_parsing and self._raw_sql:
+            return self._raw_sql
         expr, _ = self._build_final_state()
-        return expr.sql(dialect=self._dialect) if hasattr(expr, "sql") else str(expr)
+        # Handle Anonymous expressions with empty this
+        if isinstance(expr, exp.Anonymous) and expr.this == "":
+            return ""
+        # Remove comments by default
+        if hasattr(expr, "sql"):
+            return expr.sql(dialect=self._dialect, comments=False)
+        return str(expr)
 
     @property
-    def expression(self) -> exp.Expression:
+    def expression(self) -> Optional[exp.Expression]:
         """Get the final expression."""
+        # Return None if parsing is disabled
+        if not self._config.enable_parsing:
+            return None
         expr, _ = self._build_final_state()
         return expr
 
@@ -406,7 +450,7 @@ class SQL:
         """Convert to SQL string with given placeholder style."""
         expr, _ = self._build_final_state()
         # TODO: Implement placeholder style conversion
-        return expr.sql(dialect=self._dialect) if hasattr(expr, "sql") else str(expr)
+        return expr.sql(dialect=self._dialect, comments=False) if hasattr(expr, "sql") else str(expr)
 
     def get_parameters(self, style: Optional[str] = None) -> Any:
         """Get parameters in the requested style."""
@@ -436,6 +480,18 @@ class SQL:
         return not self.has_errors
 
     # Additional compatibility methods
+    def validate(self) -> list[Any]:
+        """Validate the SQL statement and return validation errors."""
+        # TODO: Implement validation logic
+        return self.validation_errors
+    
+    @property
+    def parameter_info(self) -> list[Any]:
+        """Get parameter information from the SQL statement."""
+        # Use the parameter validator to extract parameter info
+        validator = self._config.parameter_validator
+        return validator.extract_parameters(self.sql)
+    
     @property
     def _raw_parameters(self) -> Any:
         """Get raw parameters for compatibility."""
@@ -461,7 +517,7 @@ class SQL:
         return self.sql
 
     @property
-    def _expression(self) -> exp.Expression:
+    def _expression(self) -> Optional[exp.Expression]:
         """Get expression for compatibility."""
         return self.expression
 

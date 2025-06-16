@@ -45,7 +45,14 @@ class InsertValuesMixin:
         ):
             msg = f"Number of values ({len(values)}) does not match the number of specified columns ({len(self._columns)})."  # pyright: ignore
             raise SQLBuilderError(msg)
-        row_exprs = [exp.Literal.string(str(v)) if not isinstance(v, exp.Expression) else v for v in values]
+        row_exprs = []
+        for v in values:
+            if isinstance(v, exp.Expression):
+                row_exprs.append(v)
+            else:
+                # Add as parameter
+                _, param_name = self.add_parameter(v)  # type: ignore[attr-defined]
+                row_exprs.append(exp.var(param_name))
         values_expr = exp.Values(expressions=[row_exprs])
         self._expression.set("expression", values_expr)
         return self

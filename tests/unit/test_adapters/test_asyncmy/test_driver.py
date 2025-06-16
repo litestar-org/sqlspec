@@ -19,8 +19,8 @@ def mock_asyncmy_connection() -> AsyncMock:
     mock_connection = AsyncMock(spec=AsyncmyConnection)
     mock_cursor = AsyncMock()
 
-    # cursor() in asyncmy is synchronous and returns the cursor directly
-    mock_connection.cursor.return_value = mock_cursor
+    # cursor() in asyncmy is async and should be awaitable
+    mock_connection.cursor = AsyncMock(return_value=mock_cursor)
     mock_cursor.close.return_value = None
     mock_cursor.execute.return_value = None
     mock_cursor.executemany.return_value = None
@@ -83,10 +83,8 @@ async def test_asyncmy_config_dialect_property() -> None:
 @pytest.mark.asyncio
 async def test_asyncmy_driver_get_cursor(asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock) -> None:
     """Test Asyncmy driver _get_cursor context manager."""
-    mock_cursor = AsyncMock()
-
-    # cursor() in asyncmy is synchronous and returns the cursor directly
-    mock_asyncmy_connection.cursor.return_value = mock_cursor
+    # Get the mock cursor that the fixture set up
+    mock_cursor = await mock_asyncmy_connection.cursor()
 
     async with asyncmy_driver._get_cursor(mock_asyncmy_connection) as cursor:
         assert cursor is mock_cursor
@@ -101,17 +99,17 @@ async def test_asyncmy_driver_execute_statement_select(
     asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock
 ) -> None:
     """Test Asyncmy driver _execute_statement for SELECT statements."""
-    # Setup mock cursor
-    mock_cursor = AsyncMock()
+    # Get the mock cursor from the fixture and configure it
+    mock_cursor = await mock_asyncmy_connection.cursor()
     mock_cursor.fetchall.return_value = [(1, "test")]
     mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
-
-    # cursor() in asyncmy is synchronous and returns the cursor directly
-    mock_asyncmy_connection.cursor.return_value = mock_cursor
+    
+    # Reset call count after setup
+    mock_asyncmy_connection.cursor.reset_mock()
 
     # Create SQL statement with parameters - use qmark style for unit test
     result = await asyncmy_driver.fetch_arrow_table(
-        "SELECT * FROM users WHERE id = ?", parameters=[1], config=asyncmy_driver.config
+        "SELECT * FROM users WHERE id = ?", [1], _config=asyncmy_driver.config
     )
 
     # Verify result

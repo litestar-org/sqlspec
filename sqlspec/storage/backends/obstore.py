@@ -62,6 +62,13 @@ class ObStoreBackend(ObjectStoreBase):
                 from obstore.store import MemoryStore
 
                 self.store = MemoryStore()
+            elif store_uri.startswith("file://"):
+                # For file:// URIs, use LocalStore with root directory
+                from obstore.store import LocalStore
+
+                # LocalStore works with directory paths, so we use root
+                self.store = LocalStore("/")
+                # The full path will be handled in _resolve_path
             else:
                 # Use obstore's from_url for automatic URI parsing
                 from obstore.store import from_url
@@ -74,6 +81,11 @@ class ObStoreBackend(ObjectStoreBase):
 
     def _resolve_path(self, path: str) -> str:
         """Resolve path relative to base_path."""
+        # For file:// URIs, the path passed in is already absolute
+        if self.store_uri.startswith("file://") and path.startswith("/"):
+            # Remove leading slash for LocalStore (it's relative to its root)
+            return path.lstrip("/")
+
         if self.base_path:
             return f"{self.base_path}/{path.lstrip('/')}"
         return path
@@ -222,7 +234,17 @@ class ObStoreBackend(ObjectStoreBase):
         """Read Arrow table using obstore."""
         try:
             resolved_path = self._resolve_path(path)
-            return self.store.read_arrow(resolved_path, **kwargs)  # type: ignore[attr-defined,no-any-return]  # pyright: ignore[reportAttributeAccessIssue]
+            # Check if the store has native Arrow support
+            if hasattr(self.store, "read_arrow"):
+                return self.store.read_arrow(resolved_path, **kwargs)  # type: ignore[attr-defined,no-any-return]  # pyright: ignore[reportAttributeAccessIssue]
+            # Fall back to reading as Parquet via bytes
+            import io
+
+            import pyarrow.parquet as pq
+
+            data = self.read_bytes(resolved_path)
+            buffer = io.BytesIO(data)
+            return pq.read_table(buffer, **kwargs)
         except Exception as exc:
             msg = f"Failed to read Arrow table from {path}"
             raise StorageOperationFailedError(msg) from exc
@@ -231,7 +253,19 @@ class ObStoreBackend(ObjectStoreBase):
         """Write Arrow table using obstore."""
         try:
             resolved_path = self._resolve_path(path)
-            self.store.write_arrow(resolved_path, table, **kwargs)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+            # Check if the store has native Arrow support
+            if hasattr(self.store, "write_arrow"):
+                self.store.write_arrow(resolved_path, table, **kwargs)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+            else:
+                # Fall back to writing as Parquet via bytes
+                import io
+
+                import pyarrow.parquet as pq
+
+                buffer = io.BytesIO()
+                pq.write_table(table, buffer, **kwargs)
+                buffer.seek(0)
+                self.write_bytes(resolved_path, buffer.read())
         except Exception as exc:
             msg = f"Failed to write Arrow table to {path}"
             raise StorageOperationFailedError(msg) from exc

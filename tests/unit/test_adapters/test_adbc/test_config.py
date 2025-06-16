@@ -46,7 +46,7 @@ def test_adbc_config_basic_creation() -> None:
 
     # Test with all parameters
     config_full = AdbcConfig(
-        driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory", extras={"custom": "value"}
+        driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory", custom="value"
     )
     assert config_full.driver_name == "adbc_driver_sqlite"
     assert config_full.uri == "file::memory:?mode=memory"
@@ -55,11 +55,12 @@ def test_adbc_config_basic_creation() -> None:
 
 def test_adbc_config_extras_handling() -> None:
     """Test ADBC config extras parameter handling."""
-    # Test with explicit extras
+    # Test with kwargs going to extras
     config = AdbcConfig(
         driver_name="adbc_driver_sqlite",
         uri="file::memory:?mode=memory",
-        extras={"custom_param": "value", "debug": True},
+        custom_param="value",
+        debug=True,
     )
     assert config.extras["custom_param"] == "value"
     assert config.extras["debug"] is True
@@ -125,8 +126,7 @@ def test_adbc_config_from_connection_config() -> None:
     assert config.uri == "test_uri"
     assert config.db_kwargs == {"test_key": "test_value"}
 
-    # Test with extras
-    extras_dict = {"unknown_param": "test_value", "another_param": 42}
-    config_extras = AdbcConfig(driver_name="test_driver", uri="test_uri", extras=extras_dict)
+    # Test with extras (passed as kwargs)
+    config_extras = AdbcConfig(driver_name="test_driver", uri="test_uri", unknown_param="test_value", another_param=42)
     assert config_extras.extras["unknown_param"] == "test_value"
     assert config_extras.extras["another_param"] == 42

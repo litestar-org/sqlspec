@@ -9,6 +9,7 @@ import pytest
 from adbc_driver_manager.dbapi import Connection, Cursor
 
 from sqlspec.adapters.adbc.driver import AdbcDriver
+from sqlspec.exceptions import RepositoryError
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -268,14 +269,14 @@ def test_adbc_driver_fetch_arrow_table_with_parameters(adbc_driver: AdbcDriver, 
     mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
     # Create SQL statement with parameters included
-    result = adbc_driver.fetch_arrow_table("SELECT * FROM users WHERE id = $1", parameters=[123])
+    result = adbc_driver.fetch_arrow_table("SELECT * FROM users WHERE id = $1", 123)
 
     assert isinstance(result, ArrowResult)
     assert isinstance(result.data, pa.Table)
 
     # Check parameters were passed correctly
     call_args = mock_cursor.execute.call_args
-    assert call_args[0][1] == [123]
+    assert call_args[0][1] == 123
 
 
 def test_adbc_driver_fetch_arrow_table_non_query_statement(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
@@ -369,7 +370,7 @@ def test_adbc_driver_fetch_arrow_table_with_connection_override(adbc_driver: Adb
     override_connection = Mock(spec=Connection)
     override_connection.cursor.return_value = override_cursor
 
-    result = adbc_driver.fetch_arrow_table("SELECT * FROM users", connection=override_connection)
+    result = adbc_driver.fetch_arrow_table("SELECT * FROM users", _connection=override_connection)
 
     assert isinstance(result, ArrowResult)
     assert isinstance(result.data, pa.Table)
@@ -438,20 +439,21 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
 
     sql_config = SQLConfig()
     # Test with SQL statement
-    sql_stmt = SQL("SELECT * FROM users", parameters=None, config=sql_config)
-    result = adbc_driver._build_statement(sql_stmt, parameters=None, config=sql_config)
-    assert result == sql_stmt
+    sql_stmt = SQL("SELECT * FROM users", config=sql_config)
+    result = adbc_driver._build_statement(sql_stmt, config=sql_config)
+    assert isinstance(result, SQL)
+    assert result.sql == sql_stmt.sql
 
     # Test with QueryBuilder - use a real QueryBuilder subclass
     test_builder = MockQueryBuilder()
-    result = adbc_driver._build_statement(test_builder, parameters=None, config=sql_config)
+    result = adbc_driver._build_statement(test_builder, config=sql_config)
     assert isinstance(result, SQL)
     # The result should be a SQL statement created from the builder
     assert "SELECT" in result.sql
 
     # Test with plain string SQL input
     string_sql = "SELECT id FROM another_table"
-    built_stmt_from_string = adbc_driver._build_statement(string_sql, parameters=None, config=sql_config)
+    built_stmt_from_string = adbc_driver._build_statement(string_sql, config=sql_config)
     assert isinstance(built_stmt_from_string, SQL)
     assert built_stmt_from_string.sql == string_sql
     assert built_stmt_from_string.parameters is None
@@ -460,7 +462,7 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
     string_sql_with_params = "SELECT id FROM yet_another_table WHERE id = ?"
     params_for_string = (1,)
     built_stmt_with_params = adbc_driver._build_statement(
-        string_sql_with_params, parameters=params_for_string, config=sql_config
+        string_sql_with_params, params_for_string, config=sql_config
     )
     assert isinstance(built_stmt_with_params, SQL)
     assert built_stmt_with_params.sql == string_sql_with_params

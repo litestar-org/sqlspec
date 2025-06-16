@@ -30,7 +30,7 @@ class ReturningClauseMixin:
             raise SQLBuilderError(msg)
         valid_types = (exp.Insert, exp.Update, exp.Delete)
         if not isinstance(self._expression, valid_types):
-            msg = f"RETURNING not supported for {type(self._expression).__name__}."
+            msg = "RETURNING is only supported for INSERT, UPDATE, and DELETE statements."
             raise SQLBuilderError(msg)
         returning_exprs = [exp.column(c) if isinstance(c, str) else c for c in columns]
         self._expression.set("returning", exp.Returning(expressions=returning_exprs))

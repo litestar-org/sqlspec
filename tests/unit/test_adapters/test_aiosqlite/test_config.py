@@ -27,15 +27,15 @@ def test_aiosqlite_config_basic_creation() -> None:
     assert config.database == ":memory:"
 
     # Test with all parameters
-    config_full = AiosqliteConfig(database=":memory:", extras={"custom": "value"})
+    config_full = AiosqliteConfig(database=":memory:", custom="value")
     assert config.database == ":memory:"
     assert config_full.extras["custom"] == "value"
 
 
 def test_aiosqlite_config_extras_handling() -> None:
     """Test Aiosqlite config extras parameter handling."""
-    # Test with explicit extras
-    config = AiosqliteConfig(database=":memory:", extras={"custom_param": "value", "debug": True})
+    # Test with kwargs going to extras
+    config = AiosqliteConfig(database=":memory:", custom_param="value", debug=True)
     assert config.extras["custom_param"] == "value"
     assert config.extras["debug"] is True
 
@@ -97,8 +97,7 @@ def test_aiosqlite_config_from_connection_config() -> None:
     assert config.isolation_level == "IMMEDIATE"
     assert config.cached_statements == 100
 
-    # Test with extras
-    extras_dict = {"unknown_param": "test_value", "another_param": 42}
-    config_extras = AiosqliteConfig(database="test_database", isolation_level="IMMEDIATE", extras=extras_dict)
+    # Test with extras (passed as kwargs)
+    config_extras = AiosqliteConfig(database="test_database", isolation_level="IMMEDIATE", unknown_param="test_value", another_param=42)
     assert config_extras.extras["unknown_param"] == "test_value"
     assert config_extras.extras["another_param"] == 42

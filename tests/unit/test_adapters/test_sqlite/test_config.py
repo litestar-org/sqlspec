@@ -137,16 +137,10 @@ def test_create_connection(mock_connect: MagicMock) -> None:
     config = SqliteConfig(database="/tmp/test.db", timeout=30.0)
     connection = config.create_connection()
 
-    # Verify connection creation
+    # Verify connection creation (None values should be filtered out)
     mock_connect.assert_called_once_with(
         database="/tmp/test.db",
         timeout=30.0,
-        detect_types=None,
-        isolation_level=None,
-        check_same_thread=None,
-        factory=None,
-        cached_statements=None,
-        uri=None,
     )
     assert connection is mock_connection
 

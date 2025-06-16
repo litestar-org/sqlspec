@@ -140,8 +140,8 @@ def test_where_clause_wrong_expression_type() -> None:
         ("where_not_like", ("name", "%test%"), ["%test%"]),
         ("where_ilike", ("name", "john%"), ["john%"]),
         ("where_between", ("age", 25, 45), [25, 45]),
-        ("where_in", ("status", ["active", "pending"]), [["active", "pending"]]),
-        ("where_not_in", ("role", ["guest", "banned"]), [["guest", "banned"]]),
+        ("where_in", ("status", ["active", "pending"]), ["active", "pending"]),
+        ("where_not_in", ("role", ["guest", "banned"]), ["guest", "banned"]),
     ],
     ids=["eq", "neq", "lt", "lte", "gt", "gte", "like", "not_like", "ilike", "between", "in", "not_in"],
 )

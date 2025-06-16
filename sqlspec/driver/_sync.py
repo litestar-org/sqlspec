@@ -244,4 +244,5 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
             result.total_statements = 1
             result.successful_statements = 1
             return result
-        return cast("SQLResult[RowT]", script_output)
+        # Wrap the ScriptResultDict using the driver's wrapper
+        return self._wrap_execute_result(sql_statement, cast("ScriptResultDict", script_output), **kwargs)

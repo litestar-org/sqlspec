@@ -32,12 +32,16 @@ class FromClauseMixin:
         if builder._expression is None:
             builder._expression = exp.Select()
         if not isinstance(builder._expression, exp.Select):
-            msg = "Cannot add from to a non-SELECT expression."
+            msg = "FROM clause is only supported for SELECT statements."
             raise SQLBuilderError(msg)
         from_expr: exp.Expression
         if isinstance(table, str):
             from_expr = parse_table_expression(table, alias)
         elif is_expression(table):
+            # Direct sqlglot expression - use as is  
+            from_expr = exp.alias_(table, alias) if alias else table
+        elif hasattr(table, "build"):
+            # Query builder with build() method
             subquery = table.build()  # type: ignore[attr-defined]
             subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(builder, "dialect", None)))
             from_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp

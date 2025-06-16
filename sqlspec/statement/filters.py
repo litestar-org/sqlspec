@@ -225,17 +225,29 @@ class NotInCollectionFilter(InAnyFilter[T]):
     """Values for ``NOT IN`` clause.
 
     An empty list or ``None`` will return all rows."""
+    
+    def __post_init__(self) -> None:
+        """Initialize parameter names."""
+        self._param_names: list[str] = []
+        if self.values:
+            for i, _ in enumerate(self.values):
+                self._param_names.append(f"{self.field_name}_notin_{i}_{id(self)}")
+    
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        named_params = {}
+        if self.values:
+            for i, value in enumerate(self.values):
+                named_params[self._param_names[i]] = value
+        return [], named_params
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         if self.values is None or not self.values:
             return statement
 
         placeholder_expressions: list[exp.Placeholder] = []
-
-        for i, value_item in enumerate(self.values):
-            param_key = statement.get_unique_parameter_name(f"{self.field_name}_notin_{i}")
-            statement = statement.add_named_parameter(param_key, value_item)
-            placeholder_expressions.append(exp.Placeholder(this=param_key))
+        for param_name in self._param_names:
+            placeholder_expressions.append(exp.Placeholder(this=param_name))
 
         return statement.where(
             exp.Not(this=exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
@@ -254,6 +266,21 @@ class AnyCollectionFilter(InAnyFilter[T]):
     An empty list will result in a condition that is always false (no rows returned).
     If ``None``, the filter is not applied to the query, and all rows are returned.
     """
+    
+    def __post_init__(self) -> None:
+        """Initialize parameter names."""
+        self._param_names: list[str] = []
+        if self.values:
+            for i, _ in enumerate(self.values):
+                self._param_names.append(f"{self.field_name}_any_{i}_{id(self)}")
+    
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        named_params = {}
+        if self.values:
+            for i, value in enumerate(self.values):
+                named_params[self._param_names[i]] = value
+        return [], named_params
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         if self.values is None:
@@ -264,11 +291,8 @@ class AnyCollectionFilter(InAnyFilter[T]):
             return statement.where(exp.false())
 
         placeholder_expressions: list[exp.Expression] = []
-
-        for i, value_item in enumerate(self.values):
-            param_key = statement.get_unique_parameter_name(f"{self.field_name}_any_{i}")
-            statement = statement.add_named_parameter(param_key, value_item)
-            placeholder_expressions.append(exp.Placeholder(this=param_key))
+        for param_name in self._param_names:
+            placeholder_expressions.append(exp.Placeholder(this=param_name))
 
         array_expr = exp.Array(expressions=placeholder_expressions)
         # Generates SQL like: self.field_name = ANY(ARRAY[?, ?, ...])
@@ -287,6 +311,21 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
     An empty list will result in a condition that is always true (all rows returned, filter effectively ignored).
     If ``None``, the filter is not applied to the query, and all rows are returned.
     """
+    
+    def __post_init__(self) -> None:
+        """Initialize parameter names."""
+        self._param_names: list[str] = []
+        if self.values:
+            for i, _ in enumerate(self.values):
+                self._param_names.append(f"{self.field_name}_notany_{i}_{id(self)}")
+    
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        named_params = {}
+        if self.values:
+            for i, value in enumerate(self.values):
+                named_params[self._param_names[i]] = value
+        return [], named_params
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         if self.values is None or not self.values:
@@ -295,11 +334,8 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
             return statement
 
         placeholder_expressions: list[exp.Expression] = []
-
-        for i, value_item in enumerate(self.values):
-            param_key = statement.get_unique_parameter_name(f"{self.field_name}_notany_{i}")
-            statement = statement.add_named_parameter(param_key, value_item)
-            placeholder_expressions.append(exp.Placeholder(this=param_key))
+        for param_name in self._param_names:
+            placeholder_expressions.append(exp.Placeholder(this=param_name))
 
         array_expr = exp.Array(expressions=placeholder_expressions)
         # Generates SQL like: NOT (self.field_name = ANY(ARRAY[?, ?, ...]))
@@ -323,6 +359,12 @@ class LimitOffsetFilter(PaginationFilter):
     """Value for ``LIMIT`` clause of query."""
     offset: int
     """Value for ``OFFSET`` clause of query."""
+    
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        # For now, limit and offset are not parameterized
+        # They are directly embedded in the SQL expression
+        return [], {}
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         return statement.limit(self.limit, use_parameter=True).offset(self.offset, use_parameter=True)
@@ -336,6 +378,11 @@ class OrderByFilter(StatementFilter):
     """Name of the model attribute to sort on."""
     sort_order: Literal["asc", "desc"] = "asc"
     """Sort ascending or descending"""
+    
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        # ORDER BY doesn't use parameters, only column names and sort direction
+        return [], {}
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         normalized_sort_order = self.sort_order.lower()
@@ -360,16 +407,26 @@ class SearchFilter(StatementFilter):
     """Search value."""
     ignore_case: Optional[bool] = False
     """Should the search be case insensitive."""
+    
+    def __post_init__(self) -> None:
+        """Initialize parameter names."""
+        self._param_name: Optional[str] = None
+        if self.value:
+            self._param_name = f"search_val_{id(self)}_{hash(self.value)}"
+    
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        named_params = {}
+        if self.value and self._param_name:
+            search_value_with_wildcards = f"%{self.value}%"
+            named_params[self._param_name] = search_value_with_wildcards
+        return [], named_params
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
-        if not self.value:
+        if not self.value or not self._param_name:
             return statement
 
-        search_value_with_wildcards = f"%{self.value}%"
-        search_val_param_name = statement.get_unique_parameter_name("search_val")
-        statement = statement.add_named_parameter(search_val_param_name, search_value_with_wildcards)
-
-        pattern_expr = exp.Placeholder(this=search_val_param_name)
+        pattern_expr = exp.Placeholder(this=self._param_name)
         like_op = exp.ILike if self.ignore_case else exp.Like
 
         if isinstance(self.field_name, str):
@@ -393,16 +450,26 @@ class SearchFilter(StatementFilter):
 @dataclass
 class NotInSearchFilter(SearchFilter):
     """Data required to construct a ``WHERE field_name NOT LIKE '%' || :value || '%'`` clause."""
+    
+    def __post_init__(self) -> None:
+        """Initialize parameter names."""
+        self._param_name: Optional[str] = None
+        if self.value:
+            self._param_name = f"not_search_val_{id(self)}_{hash(self.value)}"
+    
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        named_params = {}
+        if self.value and self._param_name:
+            search_value_with_wildcards = f"%{self.value}%"
+            named_params[self._param_name] = search_value_with_wildcards
+        return [], named_params
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
-        if not self.value:
+        if not self.value or not self._param_name:
             return statement
 
-        search_value_with_wildcards = f"%{self.value}%"
-        search_val_param_name = statement.get_unique_parameter_name("not_search_val")
-        statement = statement.add_named_parameter(search_val_param_name, search_value_with_wildcards)
-
-        pattern_expr = exp.Placeholder(this=search_val_param_name)
+        pattern_expr = exp.Placeholder(this=self._param_name)
         like_op = exp.ILike if self.ignore_case else exp.Like
 
         if isinstance(self.field_name, str):

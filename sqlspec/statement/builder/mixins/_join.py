@@ -25,7 +25,7 @@ class JoinClauseMixin:
         if builder._expression is None:
             builder._expression = exp.Select()
         if not isinstance(builder._expression, exp.Select):
-            msg = "Cannot add join to a non-SELECT expression."
+            msg = "JOIN clause is only supported for SELECT statements."
             raise SQLBuilderError(msg)
         table_expr: exp.Expression
         if isinstance(table, str):
