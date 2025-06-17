@@ -442,13 +442,26 @@ class SecurityValidator(ProcessorProtocol):
         """Check for tautology conditions that are always true."""
         issues: list[SecurityIssue] = []
 
+        # Check for boolean literals in WHERE conditions
+        if isinstance(node, exp.Boolean) and node.this is True:
+            issues.append(
+                SecurityIssue(
+                    issue_type=SecurityIssueType.TAUTOLOGY,
+                    risk_level=self.config.tautology_risk_level,
+                    description="Tautology: always-true literal condition detected",
+                    location=node.sql(),
+                    pattern_matched="always-true",
+                    recommendation="Remove always-true conditions from WHERE clause",
+                )
+            )
+
         # Check for tautological conditions
         if isinstance(node, (exp.EQ, exp.NEQ, exp.GT, exp.LT, exp.GTE, exp.LTE)) and self._is_tautology(node):
             issues.append(
                 SecurityIssue(
                     issue_type=SecurityIssueType.TAUTOLOGY,
                     risk_level=self.config.tautology_risk_level,
-                    description="Tautological condition detected",
+                    description="Tautology: always-true condition detected",
                     location=node.sql(),
                     pattern_matched="tautology_condition",
                     recommendation="Review WHERE conditions for always-true statements",
@@ -553,6 +566,24 @@ class SecurityValidator(ProcessorProtocol):
                         pattern_matched="suspicious_function",
                         recommendation=f"Review usage of {func_name} function",
                         metadata={"function": func_name},
+                    )
+                )
+
+        # Special handling for Command nodes (e.g., EXECUTE statements)
+        if isinstance(node, exp.Command):
+            # Commands are often used for dynamic SQL execution
+            command_text = str(node)
+            if any(
+                keyword in command_text.lower() for keyword in ["execute", "exec", "sp_executesql", "grant", "revoke"]
+            ):
+                issues.append(
+                    SecurityIssue(
+                        issue_type=SecurityIssueType.SUSPICIOUS_KEYWORD,
+                        risk_level=RiskLevel.HIGH,
+                        description=f"Dynamic SQL execution command detected: {command_text.split()[0].lower()}",
+                        location=command_text[:100],
+                        pattern_matched="exec_command",
+                        recommendation="Avoid dynamic SQL execution",
                     )
                 )
 

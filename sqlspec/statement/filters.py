@@ -47,15 +47,15 @@ class StatementFilter(Protocol):
     @abstractmethod
     def append_to_statement(self, statement: "SQL") -> "SQL":
         """Append the filter to the statement.
-        
+
         This method should modify the SQL expression only, not the parameters.
         Parameters should be provided via extract_parameters().
         """
         ...
-    
+
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract parameters that this filter contributes.
-        
+
         Returns:
             Tuple of (positional_params, named_params) where:
             - positional_params: List of positional parameter values
@@ -78,17 +78,17 @@ class BeforeAfterFilter(StatementFilter):
     """Filter results where field earlier than this."""
     after: Optional[datetime] = None
     """Filter results where field later than this."""
-    
+
     def __post_init__(self) -> None:
         """Initialize parameter names."""
         self._param_name_before: Optional[str] = None
         self._param_name_after: Optional[str] = None
-        
+
         if self.before:
             self._param_name_before = f"{self.field_name}_before_{id(self)}_{hash(str(self.before))}"
         if self.after:
             self._param_name_after = f"{self.field_name}_after_{id(self)}_{hash(str(self.after))}"
-    
+
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         named_params = {}
@@ -127,17 +127,17 @@ class OnBeforeAfterFilter(StatementFilter):
     """Filter results where field is on or earlier than this."""
     on_or_after: Optional[datetime] = None
     """Filter results where field on or later than this."""
-    
+
     def __post_init__(self) -> None:
         """Initialize parameter names."""
         self._param_name_on_or_before: Optional[str] = None
         self._param_name_on_or_after: Optional[str] = None
-        
+
         if self.on_or_before:
             self._param_name_on_or_before = f"{self.field_name}_on_or_before_{id(self)}_{hash(str(self.on_or_before))}"
         if self.on_or_after:
             self._param_name_on_or_after = f"{self.field_name}_on_or_after_{id(self)}_{hash(str(self.on_or_after))}"
-    
+
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         named_params = {}
@@ -151,9 +151,15 @@ class OnBeforeAfterFilter(StatementFilter):
         conditions: list[Condition] = []
 
         if self.on_or_before and self._param_name_on_or_before:
-            conditions.append(exp.LTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=self._param_name_on_or_before)))
+            conditions.append(
+                exp.LTE(
+                    this=exp.column(self.field_name), expression=exp.Placeholder(this=self._param_name_on_or_before)
+                )
+            )
         if self.on_or_after and self._param_name_on_or_after:
-            conditions.append(exp.GTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=self._param_name_on_or_after)))
+            conditions.append(
+                exp.GTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=self._param_name_on_or_after))
+            )
 
         if conditions:
             final_condition = conditions[0]
@@ -185,14 +191,14 @@ class InCollectionFilter(InAnyFilter[T]):
     """Values for ``IN`` clause.
 
     An empty list will return an empty result set, however, if ``None``, the filter is not applied to the query, and all rows are returned. """
-    
+
     def __post_init__(self) -> None:
         """Initialize parameter names."""
         self._param_names: list[str] = []
         if self.values:
             for i, _ in enumerate(self.values):
                 self._param_names.append(f"{self.field_name}_in_{i}_{id(self)}")
-    
+
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         named_params = {}
@@ -225,14 +231,14 @@ class NotInCollectionFilter(InAnyFilter[T]):
     """Values for ``NOT IN`` clause.
 
     An empty list or ``None`` will return all rows."""
-    
+
     def __post_init__(self) -> None:
         """Initialize parameter names."""
         self._param_names: list[str] = []
         if self.values:
             for i, _ in enumerate(self.values):
                 self._param_names.append(f"{self.field_name}_notin_{i}_{id(self)}")
-    
+
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         named_params = {}
@@ -266,14 +272,14 @@ class AnyCollectionFilter(InAnyFilter[T]):
     An empty list will result in a condition that is always false (no rows returned).
     If ``None``, the filter is not applied to the query, and all rows are returned.
     """
-    
+
     def __post_init__(self) -> None:
         """Initialize parameter names."""
         self._param_names: list[str] = []
         if self.values:
             for i, _ in enumerate(self.values):
                 self._param_names.append(f"{self.field_name}_any_{i}_{id(self)}")
-    
+
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         named_params = {}
@@ -311,14 +317,14 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
     An empty list will result in a condition that is always true (all rows returned, filter effectively ignored).
     If ``None``, the filter is not applied to the query, and all rows are returned.
     """
-    
+
     def __post_init__(self) -> None:
         """Initialize parameter names."""
         self._param_names: list[str] = []
         if self.values:
             for i, _ in enumerate(self.values):
                 self._param_names.append(f"{self.field_name}_notany_{i}_{id(self)}")
-    
+
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         named_params = {}
@@ -359,7 +365,7 @@ class LimitOffsetFilter(PaginationFilter):
     """Value for ``LIMIT`` clause of query."""
     offset: int
     """Value for ``OFFSET`` clause of query."""
-    
+
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         # For now, limit and offset are not parameterized
@@ -378,7 +384,7 @@ class OrderByFilter(StatementFilter):
     """Name of the model attribute to sort on."""
     sort_order: Literal["asc", "desc"] = "asc"
     """Sort ascending or descending"""
-    
+
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         # ORDER BY doesn't use parameters, only column names and sort direction
@@ -407,13 +413,13 @@ class SearchFilter(StatementFilter):
     """Search value."""
     ignore_case: Optional[bool] = False
     """Should the search be case insensitive."""
-    
+
     def __post_init__(self) -> None:
         """Initialize parameter names."""
         self._param_name: Optional[str] = None
         if self.value:
             self._param_name = f"search_val_{id(self)}_{hash(self.value)}"
-    
+
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         named_params = {}
@@ -450,13 +456,13 @@ class SearchFilter(StatementFilter):
 @dataclass
 class NotInSearchFilter(SearchFilter):
     """Data required to construct a ``WHERE field_name NOT LIKE '%' || :value || '%'`` clause."""
-    
+
     def __post_init__(self) -> None:
         """Initialize parameter names."""
         self._param_name: Optional[str] = None
         if self.value:
             self._param_name = f"not_search_val_{id(self)}_{hash(self.value)}"
-    
+
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
         named_params = {}

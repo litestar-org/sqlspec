@@ -93,12 +93,7 @@ def test_pipeline_operation_dataclass():
     """Test PipelineOperation dataclass creation."""
     sql_obj = SQL("SELECT 1")
     filters = []
-    operation = PipelineOperation(
-        sql=sql_obj,
-        operation_type="execute",
-        filters=filters,
-        original_params=None
-    )
+    operation = PipelineOperation(sql=sql_obj, operation_type="execute", filters=filters, original_params=None)
 
     assert operation.sql == sql_obj
     assert operation.operation_type == "execute"
@@ -113,7 +108,7 @@ def test_pipeline_initialization(mock_driver):
         isolation_level="READ_COMMITTED",
         continue_on_error=True,
         max_operations=500,
-        options={"test": "value"}
+        options={"test": "value"},
     )
 
     assert pipeline.driver == mock_driver
@@ -356,10 +351,7 @@ def test_pipeline_operations_property(mock_driver):
 async def test_async_pipeline_initialization(mock_async_driver):
     """Test AsyncPipeline initialization."""
     pipeline = AsyncPipeline(
-        driver=mock_async_driver,
-        isolation_level="SERIALIZABLE",
-        continue_on_error=False,
-        max_operations=1000
+        driver=mock_async_driver, isolation_level="SERIALIZABLE", continue_on_error=False, max_operations=1000
     )
 
     assert pipeline.driver == mock_async_driver
@@ -421,6 +413,7 @@ async def test_async_pipeline_auto_flush(mock_async_driver):
     # Mock the process method to avoid actual execution
     async def mock_process(*args, **kwargs):
         return []
+
     pipeline.process = mock_process
 
     # Track if process was called
@@ -454,6 +447,7 @@ async def test_async_pipeline_process_empty():
 @pytest.mark.asyncio
 async def test_async_pipeline_native_execution_check(mock_async_driver):
     """Test async pipeline uses native execution when available."""
+
     # Add native async method to driver
     async def mock_native_execution(*args, **kwargs):
         return []

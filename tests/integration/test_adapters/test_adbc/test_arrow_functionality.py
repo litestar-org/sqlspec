@@ -163,7 +163,9 @@ def test_sqlite_to_parquet(adbc_sqlite_arrow_session: AdbcDriver) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir) / "test_output.parquet"
 
-        adbc_sqlite_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE is_active = 1", destination_uri=str(output_path))
+        adbc_sqlite_arrow_session.export_to_storage(
+            "SELECT * FROM test_arrow WHERE is_active = 1", destination_uri=str(output_path)
+        )
 
         assert output_path.exists()
 

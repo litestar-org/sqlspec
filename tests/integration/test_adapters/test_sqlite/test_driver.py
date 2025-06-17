@@ -442,7 +442,9 @@ def test_sqlite_to_parquet(sqlite_session: SqliteDriver) -> None:
     SQL("SELECT name, value FROM test_table ORDER BY name")
     with tempfile.NamedTemporaryFile(suffix=".parquet") as tmpfile:
         # export_to_storage expects query string and destination_uri
-        sqlite_session.export_to_storage("SELECT name, value FROM test_table ORDER BY name", destination_uri=tmpfile.name)
+        sqlite_session.export_to_storage(
+            "SELECT name, value FROM test_table ORDER BY name", destination_uri=tmpfile.name
+        )
         table = pq.read_table(tmpfile.name)
         assert table.num_rows == 2
         assert table.column_names == ["name", "value"]

@@ -75,6 +75,9 @@ class ObStoreBackend(ObjectStoreBase):
 
                 self.store = from_url(store_uri, **store_options)  # type: ignore[assignment]  # pyright: ignore[reportAttributeAccessIssue]
 
+            # Log successful initialization
+            logger.debug("ObStore backend initialized for %s", store_uri)
+
         except Exception as exc:
             msg = f"Failed to initialize obstore backend for {store_uri}"
             raise StorageOperationFailedError(msg) from exc
@@ -87,7 +90,10 @@ class ObStoreBackend(ObjectStoreBase):
             return path.lstrip("/")
 
         if self.base_path:
-            return f"{self.base_path}/{path.lstrip('/')}"
+            # Ensure no double slashes by stripping trailing slash from base_path
+            clean_base = self.base_path.rstrip("/")
+            clean_path = path.lstrip("/")
+            return f"{clean_base}/{clean_path}"
         return path
 
     @property
@@ -185,29 +191,58 @@ class ObStoreBackend(ObjectStoreBase):
         lists all objects and filters them client-side, which may be inefficient
         for large buckets.
         """
+        from pathlib import PurePosixPath
+
         # List all objects and filter by pattern
-        return [
-            obj
-            for obj in self.list_objects(recursive=True, **kwargs)
-            if fnmatch.fnmatch(obj, self._resolve_path(pattern))
-        ]
+        resolved_pattern = self._resolve_path(pattern)
+        all_objects = self.list_objects(recursive=True, **kwargs)
+
+        # For complex patterns with **, use PurePosixPath
+        if "**" in pattern:
+            matching_objects = []
+
+            # Special case: **/*.ext should also match *.ext in root
+            if pattern.startswith("**/"):
+                # Get the suffix pattern
+                suffix_pattern = pattern[3:]  # Remove **/
+
+                for obj in all_objects:
+                    # Check if object ends with the suffix pattern
+                    obj_path = PurePosixPath(obj)
+                    # Try both the full pattern and just the suffix
+                    if obj_path.match(resolved_pattern) or obj_path.match(suffix_pattern):
+                        matching_objects.append(obj)
+            else:
+                # Standard ** pattern matching
+                for obj in all_objects:
+                    obj_path = PurePosixPath(obj)
+                    if obj_path.match(resolved_pattern):
+                        matching_objects.append(obj)
+
+            return matching_objects
+        # Use standard fnmatch for simple patterns
+        return [obj for obj in all_objects if fnmatch.fnmatch(obj, resolved_pattern)]
 
     def get_metadata(self, path: str, **kwargs: Any) -> dict[str, Any]:  # pyright: ignore[reportUnusedParameter]
         """Get object metadata using obstore."""
         resolved_path = self._resolve_path(path)
-        metadata = self.store.head(resolved_path)
-        result = {"path": resolved_path, "exists": True}
-        for attr in ("size", "last_modified", "e_tag", "version"):
-            if hasattr(metadata, attr):
-                result[attr] = getattr(metadata, attr)
+        try:
+            metadata = self.store.head(resolved_path)
+            result = {"path": resolved_path, "exists": True}
+            for attr in ("size", "last_modified", "e_tag", "version"):
+                if hasattr(metadata, attr):
+                    result[attr] = getattr(metadata, attr)
 
-        # Include custom metadata if available
-        if hasattr(metadata, "metadata"):
-            custom_metadata = getattr(metadata, "metadata", None)
-            if custom_metadata:
-                result["custom_metadata"] = custom_metadata
+            # Include custom metadata if available
+            if hasattr(metadata, "metadata"):
+                custom_metadata = getattr(metadata, "metadata", None)
+                if custom_metadata:
+                    result["custom_metadata"] = custom_metadata
 
-        return result
+            return result
+        except Exception:
+            # Object doesn't exist
+            return {"path": resolved_path, "exists": False}
 
     def is_object(self, path: str) -> bool:
         """Check if path is an object using obstore."""
@@ -290,7 +325,7 @@ class ObStoreBackend(ObjectStoreBase):
         """Private async read bytes using native obstore async if available."""
         resolved_path = self._resolve_path(path)
         result = await self.store.get_async(resolved_path)
-        return result.bytes().to_bytes()
+        return result.bytes()  # type: ignore[return-value]  # pyright: ignore[reportReturnType]
 
     async def write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Private async write bytes using native obstore async."""
@@ -301,7 +336,8 @@ class ObStoreBackend(ObjectStoreBase):
         """Private async list objects using native obstore async if available."""
         resolved_prefix = self._resolve_path(prefix) if prefix else self.base_path or ""
 
-        objects = [str(item.path) async for item in await self.store.list_async(resolved_prefix)]  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+        # Note: store.list_async returns an async iterator
+        objects = [str(item.path) async for item in self.store.list_async(resolved_prefix)]  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
 
         # Manual filtering for non-recursive if needed as obstore lacks an
         # async version of list_with_delimiter.

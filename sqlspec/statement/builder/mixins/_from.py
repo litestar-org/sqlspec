@@ -38,7 +38,7 @@ class FromClauseMixin:
         if isinstance(table, str):
             from_expr = parse_table_expression(table, alias)
         elif is_expression(table):
-            # Direct sqlglot expression - use as is  
+            # Direct sqlglot expression - use as is
             from_expr = exp.alias_(table, alias) if alias else table
         elif hasattr(table, "build"):
             # Query builder with build() method

@@ -86,8 +86,9 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
         """
         # Validate required parameters
         if database is None:
-            raise TypeError("database parameter cannot be None")
-        
+            msg = "database parameter cannot be None"
+            raise TypeError(msg)
+
         # Store connection parameters as instance attributes
         self.database = database
         self.timeout = timeout

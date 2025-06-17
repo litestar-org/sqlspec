@@ -85,7 +85,8 @@ async def test_asyncmy_to_parquet(asyncmy_arrow_session: AsyncmyDriver) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir) / "test_output.parquet"
 
-        await asyncmy_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE is_active = true", destination_uri=str(output_path)
+        await asyncmy_arrow_session.export_to_storage(
+            "SELECT * FROM test_arrow WHERE is_active = true", destination_uri=str(output_path)
         )
 
         assert output_path.exists()
@@ -195,7 +196,8 @@ async def test_asyncmy_parquet_export_options(asyncmy_arrow_session: AsyncmyDriv
         output_path = Path(tmpdir) / "test_compressed.parquet"
 
         # Export with compression
-        await asyncmy_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE value <= 300", destination_uri=str(output_path), compression="snappy"
+        await asyncmy_arrow_session.export_to_storage(
+            "SELECT * FROM test_arrow WHERE value <= 300", destination_uri=str(output_path), compression="snappy"
         )
 
         assert output_path.exists()

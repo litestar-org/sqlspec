@@ -80,7 +80,10 @@ class FSSpecBackend(ObjectStoreBase):
     def _resolve_path(self, path: str) -> str:
         """Resolve path relative to base_path."""
         if self.base_path:
-            return f"{self.base_path}/{path.lstrip('/')}"
+            # Ensure no double slashes
+            clean_base = self.base_path.rstrip("/")
+            clean_path = path.lstrip("/")
+            return f"{clean_base}/{clean_path}"
         return path
 
     @property

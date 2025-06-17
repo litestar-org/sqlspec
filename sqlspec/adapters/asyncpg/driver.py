@@ -84,7 +84,10 @@ class AsyncpgDriver(
 
     def _coerce_array(self, value: Any) -> Any:
         """AsyncPG/PostgreSQL has native array support."""
-        # Keep arrays as-is, AsyncPG handles them natively
+        # Convert tuples to lists for consistency
+        if isinstance(value, tuple):
+            return list(value)
+        # Keep other arrays as-is, AsyncPG handles them natively
         return value
 
     async def _execute_statement(

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from sqlspec.exceptions import PipelineExecutionError
-from sqlspec.statement.filters import StatementFilter, apply_filter
+from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL
 from sqlspec.utils.logging import get_logger
@@ -131,7 +131,9 @@ class Pipeline:
             Self for fluent API
         """
         self._operations.append(
-            PipelineOperation(sql=SQL(statement, *parameters, config=self.driver.config, **kwargs), operation_type="execute")
+            PipelineOperation(
+                sql=SQL(statement, *parameters, config=self.driver.config, **kwargs), operation_type="execute"
+            )
         )
 
         # Check for auto-flush
@@ -172,9 +174,7 @@ class Pipeline:
         # Create SQL object and mark as many, passing remaining args as filters
         sql_obj = SQL(statement, *parameters[1:], **kwargs).as_many(batch_params)
 
-        self._operations.append(
-            PipelineOperation(sql=sql_obj, operation_type="execute_many")
-        )
+        self._operations.append(PipelineOperation(sql=sql_obj, operation_type="execute_many"))
         return self
 
     def add_execute_script(self, script: "Union[str, SQL]", *filters: StatementFilter, **kwargs: Any) -> "Pipeline":
@@ -184,9 +184,7 @@ class Pipeline:
         else:
             sql_obj = SQL(script, *filters, config=self.driver.config, **kwargs).as_script()
 
-        self._operations.append(
-            PipelineOperation(sql=sql_obj, operation_type="execute_script")
-        )
+        self._operations.append(PipelineOperation(sql=sql_obj, operation_type="execute_script"))
         return self
 
     def process(self, filters: "Optional[list[StatementFilter]]" = None) -> "list[SQLResult]":
@@ -326,7 +324,9 @@ class AsyncPipeline:
     ) -> "AsyncPipeline":
         """Add an execute operation to the async pipeline."""
         self._operations.append(
-            PipelineOperation(sql=SQL(statement, *parameters, config=self.driver.config, **kwargs), operation_type="execute")
+            PipelineOperation(
+                sql=SQL(statement, *parameters, config=self.driver.config, **kwargs), operation_type="execute"
+            )
         )
 
         # Check for auto-flush
@@ -341,7 +341,9 @@ class AsyncPipeline:
     ) -> "AsyncPipeline":
         """Add a select operation to the async pipeline."""
         self._operations.append(
-            PipelineOperation(sql=SQL(statement, *parameters, config=self.driver.config, **kwargs), operation_type="select")
+            PipelineOperation(
+                sql=SQL(statement, *parameters, config=self.driver.config, **kwargs), operation_type="select"
+            )
         )
         return self
 
@@ -358,9 +360,7 @@ class AsyncPipeline:
         # Create SQL object and mark as many, passing remaining args as filters
         sql_obj = SQL(statement, *parameters[1:], **kwargs).as_many(batch_params)
 
-        self._operations.append(
-            PipelineOperation(sql=sql_obj, operation_type="execute_many")
-        )
+        self._operations.append(PipelineOperation(sql=sql_obj, operation_type="execute_many"))
         return self
 
     async def add_execute_script(
@@ -372,9 +372,7 @@ class AsyncPipeline:
         else:
             sql_obj = SQL(script, *filters, config=self.driver.config, **kwargs).as_script()
 
-        self._operations.append(
-            PipelineOperation(sql=sql_obj, operation_type="execute_script")
-        )
+        self._operations.append(PipelineOperation(sql=sql_obj, operation_type="execute_script"))
         return self
 
     async def process(self, filters: "Optional[list[StatementFilter]]" = None) -> "list[SQLResult]":
@@ -391,7 +389,6 @@ class AsyncPipeline:
         self._results = results
         self._operations.clear()
         return results
-
 
     async def _execute_pipeline_simulated(self) -> "list[SQLResult]":
         """Async version of simulated pipeline execution."""
@@ -461,7 +458,6 @@ class AsyncPipeline:
                 raise PipelineExecutionError(
                     msg, operation_index=i, partial_results=results, failed_operation=op
                 ) from e
-
 
     def _has_native_support(self) -> bool:
         """Check if driver has native pipeline support."""

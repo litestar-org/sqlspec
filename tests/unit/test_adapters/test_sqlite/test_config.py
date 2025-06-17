@@ -138,10 +138,7 @@ def test_create_connection(mock_connect: MagicMock) -> None:
     connection = config.create_connection()
 
     # Verify connection creation (None values should be filtered out)
-    mock_connect.assert_called_once_with(
-        database="/tmp/test.db",
-        timeout=30.0,
-    )
+    mock_connect.assert_called_once_with(database="/tmp/test.db", timeout=30.0)
     assert connection is mock_connection
 
     # Verify row factory was set
@@ -222,20 +219,10 @@ def test_provide_session_with_custom_config(mock_connect: MagicMock) -> None:
 @pytest.mark.parametrize(
     "init_kwargs,expected_dict",
     [
-        (
-            {"database": ":memory:"},
-            {
-                "database": ":memory:",
-            },
-        ),
+        ({"database": ":memory:"}, {"database": ":memory:"}),
         (
             {"database": "/tmp/test.db", "timeout": 30.0, "check_same_thread": False, "isolation_level": "DEFERRED"},
-            {
-                "database": "/tmp/test.db",
-                "timeout": 30.0,
-                "isolation_level": "DEFERRED",
-                "check_same_thread": False,
-            },
+            {"database": "/tmp/test.db", "timeout": 30.0, "isolation_level": "DEFERRED", "check_same_thread": False},
         ),
     ],
     ids=["minimal", "partial"],

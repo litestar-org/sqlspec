@@ -215,7 +215,15 @@ def test_execute_statement_routing(
     expected_method: str,
 ) -> None:
     """Test that _execute_statement routes to correct method."""
-    statement = SQL(sql_text)
+    from sqlspec.statement.sql import SQLConfig
+
+    # Create config that allows DDL
+    config = SQLConfig(
+        enable_validation=False  # Disable validation to allow DDL
+    )
+    statement = SQL(sql_text, config=config)
+
+    # Set the internal flags
     statement._is_script = is_script
     statement._is_many = is_many
 
@@ -280,11 +288,13 @@ def test_parameter_style_handling(
 ) -> None:
     """Test parameter style detection and conversion."""
     statement = SQL(sql_text)
-    
+
     # Mock the parameter_info property to return the expected style
     mock_param_info = [ParameterInfo(name="p1", position=0, style=detected_style, ordinal=0, placeholder_text="?")]
-    with patch.object(type(statement), "parameter_info", new_callable=PropertyMock, return_value=mock_param_info), \
-         patch.object(type(statement), "compile") as mock_compile:
+    with (
+        patch.object(type(statement), "parameter_info", new_callable=PropertyMock, return_value=mock_param_info),
+        patch.object(type(statement), "compile") as mock_compile,
+    ):
         mock_compile.return_value = (sql_text, None)
         driver._execute_statement(statement)
 
@@ -483,7 +493,10 @@ def test_execute_with_no_parameters(driver: SqliteDriver, mock_connection: Magic
     mock_cursor = mock_connection.cursor.return_value
     mock_cursor.rowcount = 0
 
-    statement = SQL("CREATE TABLE test (id INTEGER)")
+    from sqlspec.statement.sql import SQLConfig
+
+    config = SQLConfig(enable_validation=False)  # Allow DDL
+    statement = SQL("CREATE TABLE test (id INTEGER)", config=config)
     driver._execute_statement(statement)
 
     # sqlglot normalizes INTEGER to INT

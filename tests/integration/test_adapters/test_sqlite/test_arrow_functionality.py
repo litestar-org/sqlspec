@@ -71,7 +71,9 @@ def test_sqlite_to_parquet(sqlite_arrow_session: SqliteDriver) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir) / "test_output.parquet"
 
-        sqlite_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE is_active = 1", destination_uri=str(output_path))
+        sqlite_arrow_session.export_to_storage(
+            "SELECT * FROM test_arrow WHERE is_active = 1", destination_uri=str(output_path)
+        )
 
         assert output_path.exists()
 
@@ -163,7 +165,8 @@ def test_sqlite_parquet_export_options(sqlite_arrow_session: SqliteDriver) -> No
         output_path = Path(tmpdir) / "test_compressed.parquet"
 
         # Export with compression
-        sqlite_arrow_session.export_to_storage("SELECT * FROM test_arrow WHERE value <= 300", destination_uri=str(output_path), compression="snappy"
+        sqlite_arrow_session.export_to_storage(
+            "SELECT * FROM test_arrow WHERE value <= 300", destination_uri=str(output_path), compression="snappy"
         )
 
         assert output_path.exists()

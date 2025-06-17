@@ -44,6 +44,11 @@ class WhereClauseMixin:
             msg = f"Cannot add WHERE clause to unsupported expression type: {type(builder._expression).__name__}."
             raise SQLBuilderError(msg)
 
+        # Check if table is set for DELETE queries
+        if isinstance(builder._expression, exp.Delete) and not builder._expression.args.get("this"):
+            msg = "WHERE clause requires a table to be set. Use from_() to set the table first."
+            raise SQLBuilderError(msg)
+
         # Normalize the condition using enhanced parsing
         if isinstance(condition, tuple):
             # Handle tuple format with proper parameter binding
@@ -69,31 +74,31 @@ class WhereClauseMixin:
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.eq(exp.var(param_name))
         return cast("Self", self.where(condition))
-    
+
     def where_neq(self, column: "Union[str, exp.Column]", value: Any) -> "Self":
         _, param_name = self.add_parameter(value)  # type: ignore[attr-defined]
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.neq(exp.var(param_name))
         return cast("Self", self.where(condition))
-    
+
     def where_lt(self, column: "Union[str, exp.Column]", value: Any) -> "Self":
         _, param_name = self.add_parameter(value)  # type: ignore[attr-defined]
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = exp.LT(this=col_expr, expression=exp.var(param_name))
         return cast("Self", self.where(condition))
-    
+
     def where_lte(self, column: "Union[str, exp.Column]", value: Any) -> "Self":
         _, param_name = self.add_parameter(value)  # type: ignore[attr-defined]
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = exp.LTE(this=col_expr, expression=exp.var(param_name))
         return cast("Self", self.where(condition))
-    
+
     def where_gt(self, column: "Union[str, exp.Column]", value: Any) -> "Self":
         _, param_name = self.add_parameter(value)  # type: ignore[attr-defined]
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = exp.GT(this=col_expr, expression=exp.var(param_name))
         return cast("Self", self.where(condition))
-    
+
     def where_gte(self, column: "Union[str, exp.Column]", value: Any) -> "Self":
         _, param_name = self.add_parameter(value)  # type: ignore[attr-defined]
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -122,7 +127,7 @@ class WhereClauseMixin:
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.like(exp.var(param_name)).not_()
         return cast("Self", self.where(condition))
-    
+
     def where_ilike(self, column: "Union[str, exp.Column]", pattern: str) -> "Self":
         _, param_name = self.add_parameter(pattern)  # type: ignore[attr-defined]
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -150,11 +155,11 @@ class WhereClauseMixin:
             sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=getattr(self, "dialect_name", None))
         else:
             sub_expr = exp.maybe_parse(str(subquery), dialect=getattr(self, "dialect_name", None))
-        
+
         if sub_expr is None:
             msg = "Could not parse subquery for EXISTS"
             raise SQLBuilderError(msg)
-        
+
         exists_expr = exp.Exists(this=sub_expr)
         return cast("Self", self.where(exists_expr))
 
@@ -169,11 +174,11 @@ class WhereClauseMixin:
             sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=getattr(self, "dialect_name", None))
         else:
             sub_expr = exp.maybe_parse(str(subquery), dialect=getattr(self, "dialect_name", None))
-        
+
         if sub_expr is None:
             msg = "Could not parse subquery for NOT EXISTS"
             raise SQLBuilderError(msg)
-        
+
         not_exists_expr = exp.Not(this=exp.Exists(this=sub_expr))
         return cast("Self", self.where(not_exists_expr))
 

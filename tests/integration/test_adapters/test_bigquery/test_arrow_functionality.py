@@ -91,7 +91,9 @@ def test_bigquery_to_parquet(bigquery_arrow_session: BigQueryDriver, bigquery_se
         output_path = Path(tmpdir) / "test_output.parquet"
 
         table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_arrow`"
-        bigquery_arrow_session.export_to_storage(f"SELECT * FROM {table_name} WHERE is_active = true", destination_uri=str(output_path))
+        bigquery_arrow_session.export_to_storage(
+            f"SELECT * FROM {table_name} WHERE is_active = true", destination_uri=str(output_path)
+        )
 
         assert output_path.exists()
 
@@ -336,7 +338,9 @@ def test_bigquery_parquet_export_with_partitioning(
             config=SQLConfig(strict_mode=False),
         )
 
-        bigquery_arrow_session.export_to_storage(query, destination_uri=str(output_path), format="parquet", compression="snappy")
+        bigquery_arrow_session.export_to_storage(
+            query, destination_uri=str(output_path), format="parquet", compression="snappy"
+        )
 
         assert output_path.exists()
 

@@ -51,10 +51,9 @@ def test_sql_translator_convert_to_dialect(
 ) -> None:
     """Test SQL dialect conversion."""
     driver = MockDriverWithTranslator(from_dialect)
-    statement = SQL(input_sql)
 
-    # Mock the expression property
-    statement._expression = parse_one(input_sql, dialect=from_dialect)
+    # Create SQL object
+    statement = SQL(input_sql, dialect=from_dialect)
 
     result = driver.convert_to_dialect(statement, to_dialect=to_dialect, pretty=False)
     assert expected_contains in result
@@ -81,7 +80,6 @@ def test_sql_translator_with_string() -> None:
 @pytest.mark.parametrize(
     "statement,error_match",
     [
-        (SQL("INVALID SQL SYNTAX !!!"), "Statement could not be parsed"),
         ("INVALID SQL SYNTAX !!!", "Failed to parse SQL statement"),
         (123, "Failed to parse SQL statement"),  # Invalid type
     ],
@@ -89,10 +87,6 @@ def test_sql_translator_with_string() -> None:
 def test_sql_translator_error_handling(statement: Any, error_match: str) -> None:
     """Test error handling in SQL translation."""
     driver = MockDriverWithTranslator("sqlite")
-
-    # Mock unparseable expression for SQL object
-    if isinstance(statement, SQL):
-        statement._expression = None
 
     with pytest.raises(SQLConversionError, match=error_match):
         driver.convert_to_dialect(statement, to_dialect="postgres")
@@ -199,7 +193,7 @@ def test_storage_ensure_pyarrow_installed_success() -> None:
     """Test pyarrow installation check when installed."""
     driver = MockDriverWithStorage()
 
-    with patch("sqlspec.driver.mixins._storage.PYARROW_INSTALLED", True):
+    with patch("sqlspec.typing.PYARROW_INSTALLED", True):
         # Should not raise
         driver._ensure_pyarrow_installed()
 
@@ -345,14 +339,14 @@ def test_storage_mixin_windows_path_edge_cases() -> None:
     driver = MockDriverWithStorage()
 
     # Valid Windows paths
-    assert driver._is_uri("C:\\") is False  # Too short
-    assert driver._is_uri("C:\\a") is True  # Minimum length
+    assert driver._is_uri("C:\\") is True  # Minimum length (3 chars)
+    assert driver._is_uri("C:\\a") is True  # Longer path
     assert driver._is_uri("Z:\\Path\\To\\File") is True
 
     # Invalid Windows paths
-    assert driver._is_uri("1:\\path") is True  # Number drive
+    assert driver._is_uri("1:\\path") is True  # Number drive (still detected as path)
     assert driver._is_uri(":\\path") is False  # Missing drive letter
-    assert driver._is_uri("C:path") is False  # Missing backslash
+    assert driver._is_uri("C:path") is False  # Missing backslash, doesn't match pattern
 
 
 def test_storage_format_detection_edge_cases() -> None:

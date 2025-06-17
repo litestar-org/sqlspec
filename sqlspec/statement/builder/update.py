@@ -171,4 +171,9 @@ class UpdateBuilder(
             msg = "No table specified for UPDATE statement."
             raise SQLBuilderError(msg)
 
+        # Check that at least one SET expression exists
+        if not self._expression.args.get("expressions"):
+            msg = "At least one SET clause must be specified for UPDATE statement."
+            raise SQLBuilderError(msg)
+
         return super().build()

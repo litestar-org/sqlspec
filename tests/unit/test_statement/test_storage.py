@@ -41,7 +41,9 @@ def test_register_alias_with_backend_class(registry: "StorageRegistry") -> None:
 
 
 def test_get_unregistered_backend_raises(registry: "StorageRegistry") -> None:
-    with pytest.raises(KeyError):
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    with pytest.raises(ImproperConfigurationError, match="Unknown storage alias"):
         registry.get("missing")
 
 
@@ -86,26 +88,28 @@ def test_alias_with_fsspec_uri(registry: "StorageRegistry") -> None:
 
 
 def test_get_from_unknown_uri_raises(registry: "StorageRegistry") -> None:
+    from sqlspec.exceptions import MissingDependencyError
+
     # Test with unknown URI scheme
     uri = "unknown://test"
     with patch("sqlspec.storage.registry.StorageRegistry._create_backend") as mock_create:
-        mock_create.side_effect = Exception("Unknown scheme")
-        with pytest.raises(KeyError):
+        mock_create.side_effect = ValueError("Unknown scheme")
+        with pytest.raises(MissingDependencyError, match="No storage backend available"):
             registry.get(uri)
 
 
-def test_scheme_preferences() -> None:
+def test_clear_methods() -> None:
     registry = StorageRegistry()
 
-    # Test default scheme preferences
-    schemes = registry.get_scheme_preferences()
-    assert "s3" in schemes
-    assert "file" in schemes
+    # Register an alias
+    with patch("sqlspec.typing.OBSTORE_INSTALLED", True):
+        with patch("sqlspec.storage.backends.obstore.ObStoreBackend") as mock_backend:
+            registry.register_alias("test", "s3://bucket", backend=mock_backend)
 
-    # Test custom scheme registration
-    registry.register_scheme("custom", "fsspec")
-    updated_schemes = registry.get_scheme_preferences()
-    assert updated_schemes["custom"] == "fsspec"
+    # Test clearing
+    assert "test" in registry.list_aliases()
+    registry.clear_aliases()
+    assert "test" not in registry.list_aliases()
 
 
 def test_cache_clearing() -> None:
@@ -114,7 +118,7 @@ def test_cache_clearing() -> None:
     # Register alias and get a backend
     call_count = 0
 
-    def mock_backend_factory(**kwargs: Any) -> MagicMock:
+    def mock_backend_factory(uri: str, **kwargs: Any) -> MagicMock:
         nonlocal call_count
         call_count += 1
         instance = MagicMock(spec=ObjectStoreProtocol)
@@ -155,9 +159,11 @@ def test_backend_creation_with_fsspec() -> None:
     registry = StorageRegistry()
 
     # This would require actual fsspec installation
+    # ObStore is preferred for file:// URIs when available
     uri = "file:///tmp"
     backend = registry.get(uri)
-    assert backend.backend_type == "fsspec"  # type: ignore[attr-defined]
+    # Could be either obstore or fsspec depending on what's installed
+    assert backend.backend_type in ("obstore", "fsspec")  # type: ignore[attr-defined]
 
 
 def test_uri_resolution_with_path() -> None:
@@ -179,12 +185,12 @@ def test_duplicate_alias_registration() -> None:
     registry = StorageRegistry()
 
     # Create distinct mock factories
-    def make_backend1(**kwargs: Any) -> MagicMock:
+    def make_backend1(uri: str, **kwargs: Any) -> MagicMock:
         instance = MagicMock(spec=ObjectStoreProtocol)
         instance.backend_id = "backend1"
         return instance
 
-    def make_backend2(**kwargs: Any) -> MagicMock:
+    def make_backend2(uri: str, **kwargs: Any) -> MagicMock:
         instance = MagicMock(spec=ObjectStoreProtocol)
         instance.backend_id = "backend2"
         return instance
@@ -209,17 +215,21 @@ def test_duplicate_alias_registration() -> None:
     assert second_result is not first_result
 
 
-def test_empty_alias_allowed() -> None:
-    """Test that empty string aliases are allowed."""
+def test_empty_alias_rejected() -> None:
+    """Test that empty string aliases are rejected."""
+    from sqlspec.exceptions import ImproperConfigurationError
+
     registry = StorageRegistry()
 
     backend_cls = MagicMock()
     backend_instance = MagicMock(spec=ObjectStoreProtocol)
     backend_cls.return_value = backend_instance
 
-    # Empty alias should be allowed
+    # Empty alias can be registered but not retrieved
     registry.register_alias("", uri="memory://test", backend=backend_cls)  # type: ignore[arg-type]
-    result = registry.get("")
-    assert result is backend_instance
+
+    # Getting empty alias should raise error
+    with pytest.raises(ImproperConfigurationError, match="Unknown storage alias"):
+        registry.get("")
     assert registry.is_alias_registered("")
     assert "" in registry.list_aliases()

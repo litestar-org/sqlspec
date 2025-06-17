@@ -19,7 +19,6 @@ import pytest
 
 from sqlspec.adapters.asyncpg import CONNECTION_FIELDS, POOL_FIELDS, AsyncpgConfig, AsyncpgDriver
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow
 
 if TYPE_CHECKING:
     pass
@@ -247,7 +246,9 @@ async def test_create_connection() -> None:
     mock_pool = AsyncMock()
     mock_pool.acquire.return_value = mock_connection
 
-    with patch("sqlspec.adapters.asyncpg.config.asyncpg_create_pool", new_callable=AsyncMock, return_value=mock_pool) as mock_create_pool:
+    with patch(
+        "sqlspec.adapters.asyncpg.config.asyncpg_create_pool", new_callable=AsyncMock, return_value=mock_pool
+    ) as mock_create_pool:
         config = AsyncpgConfig(
             host="localhost",
             port=5432,
@@ -267,7 +268,7 @@ async def test_create_connection() -> None:
         assert call_kwargs["password"] == "test_password"
         assert call_kwargs["database"] == "test_db"
         assert call_kwargs["connect_timeout"] == 30.0
-        
+
         mock_pool.acquire.assert_called_once()
         assert connection is mock_connection
 
@@ -279,7 +280,9 @@ async def test_create_connection_with_dsn() -> None:
     mock_pool = AsyncMock()
     mock_pool.acquire.return_value = mock_connection
 
-    with patch("sqlspec.adapters.asyncpg.config.asyncpg_create_pool", new_callable=AsyncMock, return_value=mock_pool) as mock_create_pool:
+    with patch(
+        "sqlspec.adapters.asyncpg.config.asyncpg_create_pool", new_callable=AsyncMock, return_value=mock_pool
+    ) as mock_create_pool:
         dsn = "postgresql://test_user:test_password@localhost:5432/test_db"
         config = AsyncpgConfig(dsn=dsn)
 
@@ -288,7 +291,7 @@ async def test_create_connection_with_dsn() -> None:
         mock_create_pool.assert_called_once()
         call_kwargs = mock_create_pool.call_args[1]
         assert call_kwargs["dsn"] == dsn
-        
+
         mock_pool.acquire.assert_called_once()
         assert connection is mock_connection
 
@@ -299,7 +302,9 @@ async def test_create_pool() -> None:
     """Test pool creation."""
     mock_pool = AsyncMock()
 
-    with patch("sqlspec.adapters.asyncpg.config.asyncpg_create_pool", new_callable=AsyncMock, return_value=mock_pool) as mock_create_pool:
+    with patch(
+        "sqlspec.adapters.asyncpg.config.asyncpg_create_pool", new_callable=AsyncMock, return_value=mock_pool
+    ) as mock_create_pool:
         config = AsyncpgConfig(
             host="localhost",
             port=5432,

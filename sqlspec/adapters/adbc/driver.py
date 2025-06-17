@@ -302,15 +302,14 @@ class AdbcDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
 
-        with wrap_exceptions():
-            with self._get_cursor(conn) as cursor:
-                # Execute the query
-                cursor.execute(  # type: ignore[no-untyped-call]
-                    sql.to_sql(placeholder_style=self.default_parameter_style),
-                    sql.get_parameters(style=self.default_parameter_style) or [],
-                )
-                arrow_table = cursor.fetch_arrow_table()  # type: ignore[no-untyped-call]
-                return ArrowResult(statement=sql, data=arrow_table)
+        with wrap_exceptions(), self._get_cursor(conn) as cursor:
+            # Execute the query
+            cursor.execute(  # type: ignore[no-untyped-call]
+                sql.to_sql(placeholder_style=self.default_parameter_style),
+                sql.get_parameters(style=self.default_parameter_style) or [],
+            )
+            arrow_table = cursor.fetch_arrow_table()  # type: ignore[no-untyped-call]
+            return ArrowResult(statement=sql, data=arrow_table)
 
     def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
         """ADBC-optimized Arrow table ingestion using native bulk insert.

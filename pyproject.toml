@@ -365,7 +365,7 @@ ignore = [
   "TD003",   # Ruff - Missing issue link for TODO
   "TD002",   # Ruff - Missing author for TODO
   "PYI036",  # pyright - Missing type annotation for `__aexit__`
-  "A002",    # ruff - functiona argument is shadowing a python builtin
+  "A002",    # ruff - function argument is shadowing a python builtin
   "DOC202",  # pydocstyle - Code should not have a return section in the docstring
   "SLF001",  # ruff - access of private method outside of class
   "S608",    # ruff - Possible sql injection

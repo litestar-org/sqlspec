@@ -10,7 +10,7 @@ from typing import Optional
 
 from sqlglot import exp
 
-from sqlspec.statement.builder.base import QueryBuilder
+from sqlspec.statement.builder.base import QueryBuilder, SafeQuery
 from sqlspec.statement.builder.mixins import DeleteFromClauseMixin, ReturningClauseMixin, WhereClauseMixin
 from sqlspec.statement.result import SQLResult
 from sqlspec.typing import RowT
@@ -61,3 +61,21 @@ class DeleteBuilder(QueryBuilder[RowT], WhereClauseMixin, ReturningClauseMixin, 
             A new sqlglot Delete expression.
         """
         return exp.Delete()
+
+    def build(self) -> "SafeQuery":
+        """Build the DELETE query with validation.
+
+        Returns:
+            SafeQuery: The built query with SQL and parameters.
+
+        Raises:
+            SQLBuilderError: If the table is not specified.
+        """
+
+        if not self._table:
+            from sqlspec.exceptions import SQLBuilderError
+
+            msg = "DELETE requires a table to be specified. Use from_() to set the table."
+            raise SQLBuilderError(msg)
+
+        return super().build()

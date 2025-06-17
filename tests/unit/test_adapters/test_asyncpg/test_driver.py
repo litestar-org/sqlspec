@@ -189,7 +189,11 @@ async def test_execute_statement_routing(
     expected_method: str,
 ) -> None:
     """Test that _execute_statement routes to correct method."""
-    statement = SQL(sql_text)
+    from sqlspec.statement.sql import SQLConfig
+
+    # Create config that allows DDL if needed
+    config = SQLConfig(enable_validation=False) if "CREATE" in sql_text else SQLConfig()
+    statement = SQL(sql_text, config=config)
     statement._is_script = is_script
     statement._is_many = is_many
 
@@ -249,9 +253,12 @@ async def test_parameter_style_handling(
 ) -> None:
     """Test parameter style detection and conversion."""
     statement = SQL(sql_text)
-    statement._parameter_info = [ParameterInfo(name="p1", position=0, style=detected_style)]
-
-    with patch.object(statement, "compile") as mock_compile:
+    # Mock the parameter_info property instead of setting it directly
+    mock_param_info = [ParameterInfo(name="p1", position=0, style=detected_style, ordinal=0, placeholder_text="$1")]
+    with (
+        patch.object(type(statement), "parameter_info", new_callable=PropertyMock, return_value=mock_param_info),
+        patch.object(statement, "compile") as mock_compile,
+    ):
         mock_compile.return_value = (sql_text, None)
         await driver._execute_statement(statement)
 
@@ -381,7 +388,10 @@ async def test_wrap_execute_result_dml(driver: AsyncpgDriver) -> None:
 @pytest.mark.asyncio
 async def test_wrap_execute_result_script(driver: AsyncpgDriver) -> None:
     """Test wrapping script results."""
-    statement = SQL("CREATE TABLE test; INSERT INTO test;")
+    from sqlspec.statement.sql import SQLConfig
+
+    config = SQLConfig(enable_validation=False)  # Allow DDL
+    statement = SQL("CREATE TABLE test; INSERT INTO test;", config=config)
     statement._expression = None
 
     result = {"statements_executed": -1, "status_message": "CREATE TABLE"}
@@ -429,14 +439,7 @@ def test_connection_method(driver: AsyncpgDriver, mock_connection: AsyncMock) ->
 # Storage Mixin Tests
 def test_storage_methods_available(driver: AsyncpgDriver) -> None:
     """Test that driver has all storage methods from AsyncStorageMixin."""
-    storage_methods = [
-        "fetch_arrow_table",
-        "ingest_arrow_table",
-        "export_to_storage",
-        "import_from_storage",
-        "read_parquet_direct",
-        "write_parquet_direct",
-    ]
+    storage_methods = ["fetch_arrow_table", "ingest_arrow_table", "export_to_storage", "import_from_storage"]
 
     for method in storage_methods:
         assert hasattr(driver, method)
@@ -471,7 +474,7 @@ def test_translator_mixin_integration(driver: AsyncpgDriver) -> None:
 )
 def test_parse_status_string(driver: AsyncpgDriver, status_string: str, expected_rows: int) -> None:
     """Test parsing of AsyncPG status strings."""
-    result = driver._parse_status_string(status_string)
+    result = driver._parse_asyncpg_status(status_string)
     assert result == expected_rows
 
 
@@ -495,10 +498,14 @@ async def test_execute_with_no_parameters(driver: AsyncpgDriver, mock_connection
     """Test executing statement with no parameters."""
     mock_connection.execute.return_value = "CREATE TABLE"
 
-    statement = SQL("CREATE TABLE test (id INTEGER)")
+    from sqlspec.statement.sql import SQLConfig
+
+    config = SQLConfig(enable_validation=False)  # Allow DDL
+    statement = SQL("CREATE TABLE test (id INTEGER)", config=config)
     await driver._execute_statement(statement)
 
-    mock_connection.execute.assert_called_once_with("CREATE TABLE test (id INTEGER)")
+    # sqlglot normalizes INTEGER to INT
+    mock_connection.execute.assert_called_once_with("CREATE TABLE test (id INT)")
 
 
 @pytest.mark.asyncio

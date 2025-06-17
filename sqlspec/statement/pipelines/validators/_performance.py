@@ -373,7 +373,7 @@ class PerformanceValidator(BaseValidator):
             issues.append(
                 PerformanceIssue(
                     issue_type="select_star",
-                    severity="warning",
+                    severity="info",  # Changed to info level
                     description=f"Query uses SELECT * ({analysis.select_star_count} occurrences)",
                     impact="Fetches unnecessary columns, breaks with schema changes",
                     recommendation="Explicitly list required columns",

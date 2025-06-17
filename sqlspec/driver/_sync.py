@@ -178,11 +178,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
 
         # Use first parameter as the sequence for execute_many
         param_sequence = param_sequences[0] if param_sequences else None
-
-        # For execute_many, don't pass the parameter sequence to _build_statement
-        # to avoid individual parameter validation. Parse once without parameters.
         sql_statement = self._build_statement(statement, config=_config or self.config, **kwargs)
-        # Mark the statement for batch execution with the parameter sequence
         sql_statement = sql_statement.as_many(param_sequence)
         result = self._execute_statement(
             statement=sql_statement,

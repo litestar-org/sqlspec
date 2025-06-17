@@ -45,17 +45,47 @@ class UpdateSetClauseMixin:
         # (column, value) signature
         if len(args) == MIN_SET_ARGS and not kwargs:
             col, val = args
-            param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
             col_expr = col if isinstance(col, exp.Column) else exp.column(col)
-            assignments.append(exp.EQ(this=col_expr, expression=exp.Placeholder(this=param_name)))
+            # If value is an expression, use it directly
+            if isinstance(val, exp.Expression):
+                value_expr = val
+            elif hasattr(val, "_expression") and hasattr(val, "build"):
+                # It's a builder (like SelectBuilder), convert to subquery
+                subquery = val.build()
+                # Parse the SQL and use as expression
+                value_expr = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect", None)))
+                # Merge parameters from subquery
+                if hasattr(val, "_parameters"):
+                    for p_name, p_value in val._parameters.items():
+                        self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
+            else:
+                param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
+                value_expr = exp.Placeholder(this=param_name)
+            assignments.append(exp.EQ(this=col_expr, expression=value_expr))
         # mapping and/or kwargs
         elif (len(args) == 1 and isinstance(args[0], Mapping)) or kwargs:
             all_values = dict(args[0] if args else {}, **kwargs)
             for col, val in all_values.items():
-                param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
-                assignments.append(exp.EQ(this=exp.column(col), expression=exp.Placeholder(this=param_name)))
+                # If value is an expression, use it directly
+                if isinstance(val, exp.Expression):
+                    value_expr = val
+                elif hasattr(val, "_expression") and hasattr(val, "build"):
+                    # It's a builder (like SelectBuilder), convert to subquery
+                    subquery = val.build()
+                    # Parse the SQL and use as expression
+                    value_expr = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect", None)))
+                    # Merge parameters from subquery
+                    if hasattr(val, "_parameters"):
+                        for p_name, p_value in val._parameters.items():
+                            self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
+                else:
+                    param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
+                    value_expr = exp.Placeholder(this=param_name)
+                assignments.append(exp.EQ(this=exp.column(col), expression=value_expr))
         else:
             msg = "Invalid arguments for set(): use (column, value), mapping, or kwargs."
             raise SQLBuilderError(msg)
-        self._expression.set("expressions", assignments)
+        # Append to existing expressions instead of replacing
+        existing = self._expression.args.get("expressions", [])
+        self._expression.set("expressions", existing + assignments)
         return self

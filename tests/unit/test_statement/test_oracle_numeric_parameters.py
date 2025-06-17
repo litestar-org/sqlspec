@@ -47,7 +47,7 @@ def test_oracle_numeric_parameter_detection(sql: str, expected_style: ParameterS
         # Out of order parameters
         ("SELECT * FROM users WHERE id = :2 AND name = :1", ["john", 42], 2),
         # Repeated parameters
-        ("SELECT * FROM users WHERE id = :1 OR parent_id = :1", [42], 1),
+        ("SELECT * FROM users WHERE id = :1 OR parent_id = :1", [42], 2),  # Each occurrence is counted
     ],
     ids=["insert", "select", "update", "out_of_order", "repeated"],
 )

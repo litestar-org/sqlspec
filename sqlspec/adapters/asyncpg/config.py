@@ -89,17 +89,19 @@ CONNECTION_FIELDS = {
     "max_cacheable_statement_size",
     "server_settings",
 }
-POOL_FIELDS = CONNECTION_FIELDS.union({
-    "min_size",
-    "max_size",
-    "max_queries",
-    "max_inactive_connection_lifetime",
-    "setup",
-    "init",
-    "loop",
-    "connection_class",
-    "record_class",
-})
+POOL_FIELDS = CONNECTION_FIELDS.union(
+    {
+        "min_size",
+        "max_size",
+        "max_queries",
+        "max_inactive_connection_lifetime",
+        "setup",
+        "init",
+        "loop",
+        "connection_class",
+        "record_class",
+    }
+)
 
 
 class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", AsyncpgDriver]):
@@ -218,7 +220,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         pool_instance_from_kwargs = kwargs.get("pool_instance")
 
         super().__init__()
-        
+
         # Set pool_instance after super().__init__() to ensure it's not overridden
         if pool_instance_from_kwargs is not None:
             self.pool_instance = pool_instance_from_kwargs

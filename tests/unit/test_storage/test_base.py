@@ -125,6 +125,26 @@ class ConcreteStore(ObjectStoreBase):
         """Async stream arrow implementation."""
         yield MagicMock()
 
+    async def copy_async(self, source: str, destination: str, **kwargs: Any) -> None:
+        """Async copy implementation."""
+        pass
+
+    async def move_async(self, source: str, destination: str, **kwargs: Any) -> None:
+        """Async move implementation."""
+        pass
+
+    async def get_metadata_async(self, path: str, **kwargs: Any) -> dict[str, Any]:
+        """Async get metadata implementation."""
+        return {"size": 1024, "modified": "2024-01-01"}
+
+    async def read_arrow_async(self, path: str, **kwargs: Any) -> "ArrowTable":
+        """Async read arrow implementation."""
+        return MagicMock()
+
+    async def write_arrow_async(self, path: str, table: "ArrowTable", **kwargs: Any) -> None:
+        """Async write arrow implementation."""
+        pass
+
 
 # Abstract Method Tests
 def test_abstract_base_cannot_be_instantiated() -> None:
@@ -294,13 +314,14 @@ def test_type_annotations_present() -> None:
 
     # Check a few key methods
     read_bytes_sig = inspect.signature(ObjectStoreBase.read_bytes)
-    assert read_bytes_sig.return_annotation is bytes
+    # With __future__ annotations, these become strings
+    assert read_bytes_sig.return_annotation == "bytes"
 
     exists_sig = inspect.signature(ObjectStoreBase.exists)
-    assert exists_sig.return_annotation is bool
+    assert exists_sig.return_annotation == "bool"
 
     list_objects_sig = inspect.signature(ObjectStoreBase.list_objects)
-    assert list_objects_sig.return_annotation == list[str]
+    assert list_objects_sig.return_annotation == "list[str]"
 
 
 # Edge Cases
@@ -327,6 +348,77 @@ def test_empty_implementation_with_notimplemented() -> None:
 
         def exists(self, path: str, **kwargs: Any) -> bool:
             raise NotImplementedError("exists not implemented")
+
+        def delete(self, path: str, **kwargs: Any) -> None:
+            raise NotImplementedError("delete not implemented")
+
+        def copy(self, source: str, destination: str, **kwargs: Any) -> None:
+            raise NotImplementedError("copy not implemented")
+
+        def move(self, source: str, destination: str, **kwargs: Any) -> None:
+            raise NotImplementedError("move not implemented")
+
+        def glob(self, pattern: str, **kwargs: Any) -> list[str]:
+            raise NotImplementedError("glob not implemented")
+
+        def is_object(self, path: str, **kwargs: Any) -> bool:
+            raise NotImplementedError("is_object not implemented")
+
+        def is_path(self, path: str, **kwargs: Any) -> bool:
+            raise NotImplementedError("is_path not implemented")
+
+        def get_metadata(self, path: str, **kwargs: Any) -> dict[str, Any]:
+            raise NotImplementedError("get_metadata not implemented")
+
+        # Async methods
+        async def read_bytes_async(self, path: str, **kwargs: Any) -> bytes:
+            raise NotImplementedError("read_bytes_async not implemented")
+
+        async def write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:
+            raise NotImplementedError("write_bytes_async not implemented")
+
+        async def read_text_async(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
+            raise NotImplementedError("read_text_async not implemented")
+
+        async def write_text_async(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+            raise NotImplementedError("write_text_async not implemented")
+
+        async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
+            raise NotImplementedError("list_objects_async not implemented")
+
+        async def exists_async(self, path: str, **kwargs: Any) -> bool:
+            raise NotImplementedError("exists_async not implemented")
+
+        async def delete_async(self, path: str, **kwargs: Any) -> None:
+            raise NotImplementedError("delete_async not implemented")
+
+        async def copy_async(self, source: str, destination: str, **kwargs: Any) -> None:
+            raise NotImplementedError("copy_async not implemented")
+
+        async def move_async(self, source: str, destination: str, **kwargs: Any) -> None:
+            raise NotImplementedError("move_async not implemented")
+
+        async def get_metadata_async(self, path: str, **kwargs: Any) -> dict[str, Any]:
+            raise NotImplementedError("get_metadata_async not implemented")
+
+        # Arrow methods
+        def read_arrow(self, path: str, **kwargs: Any) -> "ArrowTable":
+            raise NotImplementedError("read_arrow not implemented")
+
+        def write_arrow(self, path: str, table: "ArrowTable", **kwargs: Any) -> None:
+            raise NotImplementedError("write_arrow not implemented")
+
+        def stream_arrow(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
+            raise NotImplementedError("stream_arrow not implemented")
+
+        async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
+            raise NotImplementedError("stream_arrow_async not implemented")
+
+        async def read_arrow_async(self, path: str, **kwargs: Any) -> "ArrowTable":
+            raise NotImplementedError("read_arrow_async not implemented")
+
+        async def write_arrow_async(self, path: str, table: "ArrowTable", **kwargs: Any) -> None:
+            raise NotImplementedError("write_arrow_async not implemented")
 
     store = NotImplementedStore()  # type: ignore[abstract]
 

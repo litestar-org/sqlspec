@@ -234,11 +234,9 @@ def test_adbc_driver_execute_statement_select(adbc_driver: AdbcDriver, mock_curs
     mock_connection.cursor = Mock(return_value=mock_cursor)
 
     # Setup mock cursor for ADBC native Arrow support
-    mock_arrow_table = pa.table({
-        "id": [1, 2],
-        "name": ["John Doe", "Jane Smith"],
-        "email": ["john@example.com", "jane@example.com"],
-    })
+    mock_arrow_table = pa.table(
+        {"id": [1, 2], "name": ["John Doe", "Jane Smith"], "email": ["john@example.com", "jane@example.com"]}
+    )
     mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
     result = adbc_driver.fetch_arrow_table("SELECT * FROM users WHERE id = $1", parameters=[123])
@@ -300,7 +298,6 @@ def test_adbc_driver_fetch_arrow_table_non_query_statement(adbc_driver: AdbcDriv
 
 def test_adbc_driver_fetch_arrow_table_fetch_error(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
     """Test AdbcDriver.fetch_arrow_table handles execution errors."""
-    from sqlspec.exceptions import RepositoryError
 
     mock_connection = adbc_driver.connection
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
@@ -323,11 +320,9 @@ def test_adbc_driver_fetch_arrow_table_list_parameters(adbc_driver: AdbcDriver, 
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
     # Setup mock cursor for ADBC native Arrow support
-    mock_arrow_table = pa.table({
-        "id": [1, 2],
-        "name": ["User 1", "User 2"],
-        "email": ["user1@example.com", "user2@example.com"],
-    })
+    mock_arrow_table = pa.table(
+        {"id": [1, 2], "name": ["User 1", "User 2"], "email": ["user1@example.com", "user2@example.com"]}
+    )
     mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
     # Pass parameters directly as string SQL, since that's the more common pattern
@@ -461,9 +456,7 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
     # Test with plain string SQL and parameters
     string_sql_with_params = "SELECT id FROM yet_another_table WHERE id = ?"
     params_for_string = (1,)
-    built_stmt_with_params = adbc_driver._build_statement(
-        string_sql_with_params, params_for_string, config=sql_config
-    )
+    built_stmt_with_params = adbc_driver._build_statement(string_sql_with_params, params_for_string, config=sql_config)
     assert isinstance(built_stmt_with_params, SQL)
     assert built_stmt_with_params.sql == string_sql_with_params
     assert built_stmt_with_params.parameters == params_for_string

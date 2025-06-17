@@ -45,9 +45,7 @@ def test_adbc_config_basic_creation() -> None:
     assert config.uri == "file::memory:?mode=memory"
 
     # Test with all parameters
-    config_full = AdbcConfig(
-        driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory", custom="value"
-    )
+    config_full = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory", custom="value")
     assert config_full.driver_name == "adbc_driver_sqlite"
     assert config_full.uri == "file::memory:?mode=memory"
     assert config_full.extras["custom"] == "value"
@@ -57,10 +55,7 @@ def test_adbc_config_extras_handling() -> None:
     """Test ADBC config extras parameter handling."""
     # Test with kwargs going to extras
     config = AdbcConfig(
-        driver_name="adbc_driver_sqlite",
-        uri="file::memory:?mode=memory",
-        custom_param="value",
-        debug=True,
+        driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory", custom_param="value", debug=True
     )
     assert config.extras["custom_param"] == "value"
     assert config.extras["debug"] is True

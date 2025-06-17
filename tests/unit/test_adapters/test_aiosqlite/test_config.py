@@ -98,6 +98,8 @@ def test_aiosqlite_config_from_connection_config() -> None:
     assert config.cached_statements == 100
 
     # Test with extras (passed as kwargs)
-    config_extras = AiosqliteConfig(database="test_database", isolation_level="IMMEDIATE", unknown_param="test_value", another_param=42)
+    config_extras = AiosqliteConfig(
+        database="test_database", isolation_level="IMMEDIATE", unknown_param="test_value", another_param=42
+    )
     assert config_extras.extras["unknown_param"] == "test_value"
     assert config_extras.extras["another_param"] == 42

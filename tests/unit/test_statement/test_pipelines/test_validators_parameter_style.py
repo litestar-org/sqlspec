@@ -78,7 +78,7 @@ def test_parameter_style_validation(
     context.current_expression = parse_one(sql)
     context.parameter_info = param_validator.extract_parameters(sql)
 
-    validator.validate(context.current_expression, context)
+    validator.process(context.current_expression, context)
 
     if should_pass:
         assert len(context.validation_errors) == 0
@@ -122,7 +122,7 @@ def test_mixed_parameter_styles(
     context.current_expression = parse_one(sql)
     context.parameter_info = param_validator.extract_parameters(sql)
 
-    validator.validate(context.current_expression, context)
+    validator.process(context.current_expression, context)
 
     if should_pass:
         assert len(context.validation_errors) == 0
@@ -157,7 +157,7 @@ def test_specific_parameter_styles(
     context.current_expression = parse_one(sql)
     context.parameter_info = param_validator.extract_parameters(sql)
 
-    validator.validate(context.current_expression, context)
+    validator.process(context.current_expression, context)
 
     assert len(context.validation_errors) == 0
 
@@ -174,7 +174,7 @@ def test_pyformat_positional_style(context: SQLProcessingContext, param_validato
     context.current_expression = parse_one("SELECT * FROM users WHERE id = ? AND name = ?")
     context.parameter_info = param_validator.extract_parameters(sql)
 
-    validator.validate(context.current_expression, context)
+    validator.process(context.current_expression, context)
 
     assert len(context.validation_errors) == 0
 
@@ -191,7 +191,7 @@ def test_pyformat_named_style(context: SQLProcessingContext, param_validator: Pa
     context.current_expression = parse_one("SELECT * FROM users WHERE id = ? AND name = ?")
     context.parameter_info = param_validator.extract_parameters(sql)
 
-    validator.validate(context.current_expression, context)
+    validator.process(context.current_expression, context)
 
     assert len(context.validation_errors) == 0
 
@@ -207,7 +207,7 @@ def test_no_parameters_in_sql(context: SQLProcessingContext, param_validator: Pa
     context.current_expression = parse_one(sql)
     context.parameter_info = param_validator.extract_parameters(sql)
 
-    validator.validate(context.current_expression, context)
+    validator.process(context.current_expression, context)
 
     assert len(context.validation_errors) == 0
 
@@ -235,7 +235,7 @@ def test_configuration_edge_cases(
     context.current_expression = parse_one(sql)
     context.parameter_info = param_validator.extract_parameters(sql)
 
-    validator.validate(context.current_expression, context)
+    validator.process(context.current_expression, context)
 
     if should_validate:
         # Empty tuple should reject all parameter styles
@@ -260,7 +260,7 @@ def test_multiple_style_violations(context: SQLProcessingContext, param_validato
     context.current_expression = parse_one("SELECT * FROM users WHERE id = ? AND name = ? AND email = ?")
     context.parameter_info = param_validator.extract_parameters(sql)
 
-    validator.validate(context.current_expression, context)
+    validator.process(context.current_expression, context)
 
     # Should detect both mixed styles and disallowed styles
     assert len(context.validation_errors) >= 2
@@ -293,7 +293,7 @@ def test_complex_query_parameter_detection(context: SQLProcessingContext, param_
     context.current_expression = parse_one(sql)
     context.parameter_info = param_validator.extract_parameters(sql)
 
-    validator.validate(context.current_expression, context)
+    validator.process(context.current_expression, context)
 
     # Should detect mixed styles since allow_mixed_parameter_styles is False
     assert len(context.validation_errors) >= 1
@@ -327,7 +327,7 @@ def test_complex_query_mixed_allowed(context: SQLProcessingContext, param_valida
     context.current_expression = parse_one(sql)
     context.parameter_info = param_validator.extract_parameters(sql)
 
-    validator.validate(context.current_expression, context)
+    validator.process(context.current_expression, context)
 
     # Should pass since mixed styles are allowed
     assert len(context.validation_errors) == 0
@@ -346,7 +346,7 @@ def test_target_style_suggestion(context: SQLProcessingContext, param_validator:
     context.current_expression = parse_one(sql)
     context.parameter_info = param_validator.extract_parameters(sql)
 
-    validator.validate(context.current_expression, context)
+    validator.process(context.current_expression, context)
 
     # Should pass since qmark is allowed (target style is just a preference)
     assert len(context.validation_errors) == 0
@@ -393,7 +393,7 @@ def test_comprehensive_parameter_style_validation(
     context.current_expression = parse_one(sql)
     context.parameter_info = param_validator.extract_parameters(sql)
 
-    validator.validate(context.current_expression, context)
+    validator.process(context.current_expression, context)
 
     assert len(context.validation_errors) == expected_errors
 
@@ -401,6 +401,8 @@ def test_comprehensive_parameter_style_validation(
 # Fail on Violation Tests
 def test_fail_on_violation_enabled(context: SQLProcessingContext, param_validator: ParameterValidator) -> None:
     """Test that fail_on_violation=True affects validation behavior."""
+    from sqlspec.statement.pipelines.validators._parameter_style import UnsupportedParameterStyleError
+
     validator = create_validator(fail_on_violation=True)
     context.config.allowed_parameter_styles = ("qmark",)
 
@@ -410,11 +412,9 @@ def test_fail_on_violation_enabled(context: SQLProcessingContext, param_validato
     context.current_expression = parse_one(sql)
     context.parameter_info = param_validator.extract_parameters(sql)
 
-    validator.validate(context.current_expression, context)
-
-    # Should still create validation errors (fail_on_violation affects internal behavior)
-    assert len(context.validation_errors) >= 1
-    assert context.validation_errors[0].risk_level == RiskLevel.HIGH
+    # Should raise an exception when fail_on_violation=True
+    with pytest.raises(UnsupportedParameterStyleError, match="not supported"):
+        validator.process(context.current_expression, context)
 
 
 def test_validator_handles_parsing_errors(context: SQLProcessingContext, param_validator: ParameterValidator) -> None:
@@ -428,7 +428,7 @@ def test_validator_handles_parsing_errors(context: SQLProcessingContext, param_v
     context.current_expression = parse_one(sql)
     context.parameter_info = param_validator.extract_parameters(sql)
 
-    validator.validate(context.current_expression, context)
+    validator.process(context.current_expression, context)
 
     # Should handle the query and detect the parameter correctly
     # (The '?' in the LIKE string should not be counted as a parameter)
