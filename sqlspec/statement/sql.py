@@ -675,6 +675,12 @@ class SQL:
                     elif target_style == ParameterStyle.POSITIONAL_COLON:
                         # Keep the original numeric placeholder
                         new_placeholder = p.placeholder_text
+                    elif target_style == ParameterStyle.POSITIONAL_PYFORMAT:
+                        # Use %s for positional pyformat
+                        new_placeholder = "%s"
+                    elif target_style == ParameterStyle.NAMED_PYFORMAT:
+                        # Use %(name)s for named pyformat
+                        new_placeholder = f"%({p.name or f'param_{p.ordinal}'})s"
                     else:
                         # Keep original for unknown styles
                         new_placeholder = p.placeholder_text
@@ -707,8 +713,20 @@ class SQL:
                         # Single value - map to first parameter name
                         if param_info:
                             params = {param_info[0].name: params}
-                elif target_style in {ParameterStyle.QMARK, ParameterStyle.NUMERIC} and isinstance(params, dict):
+                elif target_style in {
+                    ParameterStyle.QMARK,
+                    ParameterStyle.NUMERIC,
+                    ParameterStyle.POSITIONAL_PYFORMAT,
+                } and isinstance(params, dict):
                     params = [params.get(p.name, None) for p in param_info if p.name in params]
+                elif target_style == ParameterStyle.NAMED_PYFORMAT and isinstance(params, (list, tuple)):
+                    # Convert list to dict with generated names
+                    result_dict = {}
+                    for i, p in enumerate(param_info):
+                        if i < len(params):
+                            param_name = p.name or f"param_{i}"
+                            result_dict[param_name] = params[i]
+                    params = result_dict
 
         return sql, params
 
@@ -719,6 +737,7 @@ class SQL:
         if not self._config.enable_validation:
             return []
         self._ensure_processed()
+        assert self._processed_state
         return self._processed_state.validation_errors
 
     @property

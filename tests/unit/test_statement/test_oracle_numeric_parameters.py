@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     ],
     ids=["insert", "select", "update", "delete", "double_digit", "many_params"],
 )
-def test_oracle_numeric_parameter_detection(sql: str, expected_style: ParameterStyle) -> None:
+def test_positional_colon_parameter_detection(sql: str, expected_style: ParameterStyle) -> None:
     """Test that :1, :2 style parameters are detected as POSITIONAL_COLON."""
     validator = ParameterValidator()
     params = validator.extract_parameters(sql)
@@ -51,7 +51,7 @@ def test_oracle_numeric_parameter_detection(sql: str, expected_style: ParameterS
     ],
     ids=["insert", "select", "update", "out_of_order", "repeated"],
 )
-def test_oracle_numeric_parameter_extraction(sql: str, parameters: list[Any], expected_param_count: int) -> None:
+def test_positional_colon_parameter_extraction(sql: str, parameters: list[Any], expected_param_count: int) -> None:
     """Test extraction of Oracle numeric parameters."""
     stmt = SQL(sql, parameters=parameters)
     assert len(stmt.parameter_info) == expected_param_count
@@ -86,7 +86,10 @@ def test_mixed_parameter_styles(
 ) -> None:
     """Test handling of mixed parameter styles."""
     # Enable parameter validation by setting allowed_parameter_styles
-    config = SQLConfig(allowed_parameter_styles=("positional_colon", "qmark", "named_colon"))
+    config = SQLConfig(
+        allowed_parameter_styles=("positional_colon", "qmark", "named_colon"),
+        allow_mixed_parameter_styles=True,  # Allow mixed styles for these tests
+    )
     if error_type:
         stmt = SQL(sql, parameters=parameters, _config=config)
         # In strict mode, validation errors are wrapped in SQLValidationError
@@ -119,7 +122,7 @@ def test_mixed_parameter_styles(
     ],
     ids=["list_to_oracle", "oracle_to_list", "out_of_order", "with_gaps"],
 )
-def test_oracle_numeric_parameter_conversion(
+def test_positional_colon_parameter_conversion(
     sql: str,
     input_params: Union[list[Any], dict[str, Any]],
     target_style: ParameterStyle,
@@ -146,7 +149,7 @@ def test_oracle_numeric_parameter_conversion(
     ],
     ids=["preserve_oracle", "to_qmark", "to_named", "to_numeric_dollar"],
 )
-def test_oracle_numeric_to_sql_conversion(
+def test_positional_colon_to_sql_conversion(
     sql: str, parameters: list[Any], placeholder_style: ParameterStyle, expected_sql_contains: list[str]
 ) -> None:
     """Test SQL generation with different placeholder styles."""
@@ -157,7 +160,7 @@ def test_oracle_numeric_to_sql_conversion(
 
 
 # Test edge cases
-def test_oracle_numeric_vs_named_colon() -> None:
+def test_positional_colon_vs_named_colon() -> None:
     """Test that :1 is treated differently from :name."""
     # Numeric style
     sql1 = "SELECT * FROM users WHERE id = :1"
@@ -172,7 +175,7 @@ def test_oracle_numeric_vs_named_colon() -> None:
     assert stmt2.parameter_info[0].name == "id"
 
 
-def test_oracle_numeric_with_execute_many() -> None:
+def test_positional_colon_with_execute_many() -> None:
     """Test Oracle numeric parameters with execute_many."""
     sql = "INSERT INTO users VALUES (:1, :2)"
     params = [[1, "john"], [2, "jane"], [3, "bob"]]
@@ -203,7 +206,7 @@ def test_oracle_numeric_with_execute_many() -> None:
     ],
     ids=["basic_order", "out_of_order", "with_gaps", "mixed_named", "double_digits"],
 )
-def test_oracle_numeric_parameter_order(sql: str, expected_order: list[str]) -> None:
+def test_positional_colon_parameter_order(sql: str, expected_order: list[str]) -> None:
     """Test that parameter order is preserved correctly."""
     validator = ParameterValidator()
     params = validator.extract_parameters(sql)
@@ -211,7 +214,7 @@ def test_oracle_numeric_parameter_order(sql: str, expected_order: list[str]) -> 
     assert param_names == expected_order
 
 
-def test_oracle_numeric_regex_precedence() -> None:
+def test_positional_colon_regex_precedence() -> None:
     """Test that :1 is matched before :name in regex to avoid :1name being parsed as :1."""
     sql = "SELECT :1, :2something, :name, :3 FROM dual"
     # When we have :2something, it should be treated as :2 followed by "something"
@@ -256,12 +259,12 @@ def test_oracle_numeric_regex_precedence() -> None:
         "empty_dict",
     ],
 )
-def test_oracle_numeric_parameter_validation(
+def test_positional_colon_parameter_validation(
     sql: str, parameters: Union[list[Any], dict[str, Any]], should_fail: bool
 ) -> None:
     """Test parameter validation for Oracle numeric style."""
     # Enable parameter validation by setting allowed_parameter_styles
-    config = SQLConfig(allowed_parameter_styles=("oracle_numeric", "positional_colon"))
+    config = SQLConfig(allowed_parameter_styles=("positional_colon", "positional_colon"))
     stmt = SQL(sql, parameters=parameters, _config=config)
 
     if should_fail:
@@ -275,7 +278,7 @@ def test_oracle_numeric_parameter_validation(
 
 
 # Test special cases
-def test_oracle_numeric_in_strings_and_comments() -> None:
+def test_positional_colon_in_strings_and_comments() -> None:
     """Test that :1 in strings and comments is not treated as a parameter."""
     sql = """
     SELECT
@@ -297,7 +300,7 @@ def test_oracle_numeric_in_strings_and_comments() -> None:
     assert stmt.parameter_info[0].name == "5"
 
 
-def test_oracle_numeric_with_zero() -> None:
+def test_positional_colon_with_zero() -> None:
     """Test that :0 is handled correctly (some databases start at 0)."""
     sql = "SELECT * FROM users WHERE id = :0"
     stmt = SQL(sql, parameters=[42])
@@ -310,7 +313,7 @@ def test_oracle_numeric_with_zero() -> None:
     assert params == {"0": 42}
 
 
-def test_oracle_numeric_large_numbers() -> None:
+def test_positional_colon_large_numbers() -> None:
     """Test handling of large parameter numbers."""
     # Create SQL with parameters :1 through :100
     placeholders = ", ".join(f":{i}" for i in range(1, 101))

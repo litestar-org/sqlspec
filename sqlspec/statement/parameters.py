@@ -51,7 +51,7 @@ _PARAMETER_REGEX: Final = re.compile(
     (?P<pyformat_named>%\((?P<pyformat_name>\w+)\)s) |          # Group 10: %(name)s (pyformat_name is Group 11)
     (?P<pyformat_pos>%s) |                                      # Group 12: %s
     # Oracle numeric parameters MUST come before named_colon to match :1, :2, etc.
-    (?P<oracle_numeric>:(?P<oracle_num>\d+)) |                  # Group 13: :1, :2 (oracle_num is Group 14)
+    (?P<positional_colon>:(?P<colon_num>\d+)) |                  # Group 13: :1, :2 (colon_num is Group 14)
     (?P<named_colon>:(?P<colon_name>\w+)) |                     # Group 15: :name (colon_name is Group 16)
     (?P<named_at>@(?P<at_name>\w+)) |                           # Group 17: @name (at_name is Group 18)
     # Group 17: $name or $1 (dollar_param_name is Group 18)
@@ -71,7 +71,7 @@ class ParameterStyle(str, Enum):
     QMARK = "qmark"
     NUMERIC = "numeric"
     NAMED_COLON = "named_colon"
-    POSITIONAL_COLON = "oracle_numeric"  # For :1, :2, :3 style
+    POSITIONAL_COLON = "positional_colon"  # For :1, :2, :3 style
     NAMED_AT = "named_at"
     NAMED_DOLLAR = "named_dollar"
     NAMED_PYFORMAT = "pyformat_named"
@@ -177,8 +177,8 @@ class ParameterValidator:
             style = ParameterStyle.NAMED_PYFORMAT
         elif match.group("pyformat_pos"):
             style = ParameterStyle.POSITIONAL_PYFORMAT
-        elif match.group("oracle_numeric"):
-            name = match.group("oracle_num")  # Store the number as the name
+        elif match.group("positional_colon"):
+            name = match.group("colon_num")  # Store the number as the name
             style = ParameterStyle.POSITIONAL_COLON
         elif match.group("named_colon"):
             name = match.group("colon_name")

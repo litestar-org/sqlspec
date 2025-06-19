@@ -44,15 +44,19 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> "SQL":
+        # Check if we need to return the original SQL object as-is
+        if isinstance(statement, SQL) and not parameters and not kwargs and _config is None:
+            return statement
+
+        # Use driver's config if none provided
+        _config = _config or self.config
+
         if isinstance(statement, QueryBuilder):
-            return statement.to_statement(config=config or self.config)
-        # If it's already a SQL object and no additional parameters/config, return as-is
+            return statement.to_statement(config=_config)
+        # If it's already a SQL object, create new one with merged parameters
         if isinstance(statement, SQL):
-            if not parameters and not kwargs and _config is None:
-                return statement
-            # Create new SQL object with merged parameters
-            return SQL(statement._sql, *parameters, dialect=self.dialect, config=_config or self.config, **kwargs)
-        return SQL(statement, *parameters, dialect=self.dialect, config=_config or self.config, **kwargs)
+            return SQL(statement._sql, *parameters, _dialect=self.dialect, _config=_config, **kwargs)
+        return SQL(statement, *parameters, _dialect=self.dialect, _config=_config, **kwargs)
 
     @abstractmethod
     async def _execute_statement(
@@ -151,7 +155,9 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
         **kwargs: Any,
     ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
         sql_statement = self._build_statement(statement, *parameters, _config=_config or self.config, **kwargs)
-        result = self._execute_statement(statement=sql_statement, connection=self._connection(_connection), **kwargs)
+        result = await self._execute_statement(
+            statement=sql_statement, connection=self._connection(_connection), **kwargs
+        )
 
         if self.returns_rows(sql_statement.expression):
             return await self._wrap_select_result(

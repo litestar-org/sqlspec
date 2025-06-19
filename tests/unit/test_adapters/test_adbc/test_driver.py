@@ -449,20 +449,20 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
     sql_config = SQLConfig()
     # Test with SQL statement
     sql_stmt = SQL("SELECT * FROM users", _config=sql_config)
-    result = adbc_driver._build_statement(sql_stmt, config=sql_config)
+    result = adbc_driver._build_statement(sql_stmt, _config=sql_config)
     assert isinstance(result, SQL)
     assert result.sql == sql_stmt.sql
 
     # Test with QueryBuilder - use a real QueryBuilder subclass
     test_builder = MockQueryBuilder()
-    result = adbc_driver._build_statement(test_builder, config=sql_config)
+    result = adbc_driver._build_statement(test_builder, _config=sql_config)
     assert isinstance(result, SQL)
     # The result should be a SQL statement created from the builder
     assert "SELECT" in result.sql
 
     # Test with plain string SQL input
     string_sql = "SELECT id FROM another_table"
-    built_stmt_from_string = adbc_driver._build_statement(string_sql, config=sql_config)
+    built_stmt_from_string = adbc_driver._build_statement(string_sql, _config=sql_config)
     assert isinstance(built_stmt_from_string, SQL)
     assert built_stmt_from_string.sql == string_sql
     assert built_stmt_from_string.parameters is None
@@ -470,7 +470,7 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
     # Test with plain string SQL and parameters
     string_sql_with_params = "SELECT id FROM yet_another_table WHERE id = ?"
     params_for_string = (1,)
-    built_stmt_with_params = adbc_driver._build_statement(string_sql_with_params, params_for_string, config=sql_config)
+    built_stmt_with_params = adbc_driver._build_statement(string_sql_with_params, params_for_string, _config=sql_config)
     assert isinstance(built_stmt_with_params, SQL)
     assert built_stmt_with_params.sql == string_sql_with_params
     assert built_stmt_with_params.parameters == params_for_string

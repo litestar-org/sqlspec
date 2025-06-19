@@ -21,7 +21,7 @@ if TYPE_CHECKING:
         (ParameterStyle.QMARK, "qmark"),
         (ParameterStyle.NUMERIC, "numeric"),
         (ParameterStyle.NAMED_COLON, "named_colon"),
-        (ParameterStyle.POSITIONAL_COLON, "oracle_numeric"),
+        (ParameterStyle.POSITIONAL_COLON, "positional_colon"),
         (ParameterStyle.NAMED_AT, "named_at"),
         (ParameterStyle.NAMED_DOLLAR, "named_dollar"),
         (ParameterStyle.NAMED_PYFORMAT, "pyformat_named"),
@@ -110,7 +110,7 @@ def validator() -> ParameterValidator:
         "named_at",
         "numeric",
         "named_dollar",
-        "oracle_numeric",
+        "positional_colon",
     ],
 )
 def test_extract_parameters(
@@ -467,7 +467,7 @@ def test_parameter_position_tracking(validator: ParameterValidator) -> None:
     assert sql[named_param.position : named_param.position + len(":name")] == ":name"
 
 
-def test_oracle_numeric_parameters(validator: ParameterValidator) -> None:
+def test_positional_colon_parameters(validator: ParameterValidator) -> None:
     """Test Oracle-style numeric parameters (:1, :2, etc.)."""
     sql = "SELECT * FROM users WHERE id = :1 AND name = :2 AND active = :3"
     params = validator.extract_parameters(sql)

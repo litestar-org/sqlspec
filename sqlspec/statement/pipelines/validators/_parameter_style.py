@@ -5,9 +5,10 @@ from typing import TYPE_CHECKING
 
 from sqlglot import exp
 
-from sqlspec.exceptions import RiskLevel, SQLValidationError
+from sqlspec.exceptions import MissingParameterError, RiskLevel, SQLValidationError
 from sqlspec.statement.pipelines.base import ProcessorProtocol
 from sqlspec.statement.pipelines.result_types import ValidationError
+from sqlspec.typing import is_dict
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -67,46 +68,56 @@ class ParameterStyleValidator(ProcessorProtocol):
 
         try:
             config = context.config
-
-            if config.allowed_parameter_styles is None:
-                return
-
             param_info = context.parameter_info
-            if not param_info:
-                return
 
-            unique_styles = {p.style for p in param_info}
-            if len(unique_styles) > 1 and not config.allow_mixed_parameter_styles:
-                detected_styles = ", ".join(sorted(str(s) for s in unique_styles))
-                msg = f"Mixed parameter styles detected ({detected_styles}) but not allowed."
-                if self.fail_on_violation:
-                    self._raise_mixed_style_error(msg)
-                error = ValidationError(
-                    message=msg,
-                    code="mixed-parameter-styles",
-                    risk_level=self.risk_level,
-                    processor="ParameterStyleValidator",
-                    expression=expression,
-                )
-                context.validation_errors.append(error)
+            # First check parameter styles if configured
+            has_style_errors = False
+            if config.allowed_parameter_styles is not None and param_info:
+                unique_styles = {p.style for p in param_info}
 
-            disallowed_styles = {str(s) for s in unique_styles if not config.validate_parameter_style(s)}
-            if disallowed_styles:
-                disallowed_str = ", ".join(sorted(disallowed_styles))
-                allowed_str = ", ".join(config.allowed_parameter_styles)
-                msg = f"Parameter style(s) {disallowed_str} not supported. Allowed: {allowed_str}"
-                if self.fail_on_violation:
-                    self._raise_unsupported_style_error(msg)
-                error = ValidationError(
-                    message=msg,
-                    code="unsupported-parameter-style",
-                    risk_level=self.risk_level,
-                    processor="ParameterStyleValidator",
-                    expression=expression,
-                )
-                context.validation_errors.append(error)
+                # Check for mixed styles first (before checking individual styles)
+                if len(unique_styles) > 1 and not config.allow_mixed_parameter_styles:
+                    detected_styles = ", ".join(sorted(str(s) for s in unique_styles))
+                    msg = f"Mixed parameter styles detected ({detected_styles}) but not allowed."
+                    if self.fail_on_violation:
+                        self._raise_mixed_style_error(msg)
+                    error = ValidationError(
+                        message=msg,
+                        code="mixed-parameter-styles",
+                        risk_level=self.risk_level,
+                        processor="ParameterStyleValidator",
+                        expression=expression,
+                    )
+                    context.validation_errors.append(error)
+                    has_style_errors = True
 
-        except (UnsupportedParameterStyleError, MixedParameterStyleError):
+                # Check for disallowed styles
+                disallowed_styles = {str(s) for s in unique_styles if not config.validate_parameter_style(s)}
+                if disallowed_styles:
+                    disallowed_str = ", ".join(sorted(disallowed_styles))
+                    allowed_str = ", ".join(config.allowed_parameter_styles)
+                    msg = f"Parameter style(s) {disallowed_str} not supported. Allowed: {allowed_str}"
+                    if self.fail_on_violation:
+                        self._raise_unsupported_style_error(msg)
+                    error = ValidationError(
+                        message=msg,
+                        code="unsupported-parameter-style",
+                        risk_level=self.risk_level,
+                        processor="ParameterStyleValidator",
+                        expression=expression,
+                    )
+                    context.validation_errors.append(error)
+                    has_style_errors = True
+
+            # Check for missing parameters if:
+            # 1. We have parameter info
+            # 2. Style validation is enabled (allowed_parameter_styles is not None)
+            # 3. No style errors were found
+            if param_info and config.allowed_parameter_styles is not None and not has_style_errors:
+                # Check for missing parameters
+                self._validate_missing_parameters(context, expression)
+
+        except (UnsupportedParameterStyleError, MixedParameterStyleError, MissingParameterError):
             raise
         except Exception as e:
             logger.warning("Parameter style validation failed: %s", e)
@@ -128,3 +139,159 @@ class ParameterStyleValidator(ProcessorProtocol):
     def _raise_unsupported_style_error(msg: "str") -> "None":
         """Raise UnsupportedParameterStyleError with the given message."""
         raise UnsupportedParameterStyleError(msg)
+
+    def _validate_missing_parameters(self, context: "SQLProcessingContext", expression: exp.Expression) -> None:
+        """Validate that all required parameters have values provided.
+
+        Args:
+            context: SQL processing context
+            expression: The SQL expression being validated
+        """
+        # Get parameter info from SQL
+        param_info = context.parameter_info
+        if not param_info:
+            return
+
+        # Get merged parameters
+        merged_params = context.merged_parameters
+
+        # Special handling for Oracle numeric parameters with single values
+        # When we have Oracle numeric params and a single positional value,
+        # it gets unwrapped from [value] to value, but we need to treat it as a list
+        has_positional_colon = any(p.style.value == "positional_colon" for p in param_info)
+        if has_positional_colon and not isinstance(merged_params, (list, tuple, dict)) and merged_params is not None:
+            # Single value with Oracle numeric params - treat as single-element list
+            merged_params = [merged_params]
+
+        # Handle different parameter formats
+        if merged_params is None:
+            # No parameters provided at all
+            if param_info:
+                missing = [p.name for p in param_info]
+                msg = f"Missing required parameters: {', '.join(missing)}"
+                if self.fail_on_violation:
+                    raise MissingParameterError(msg)
+                error = ValidationError(
+                    message=msg,
+                    code="missing-parameters",
+                    risk_level=self.risk_level,
+                    processor="ParameterStyleValidator",
+                    expression=expression,
+                )
+                context.validation_errors.append(error)
+        elif isinstance(merged_params, (list, tuple)):
+            # Positional parameters - check count
+            required_count = len(param_info)
+            provided_count = len(merged_params)
+
+            # Check for mixed parameter styles (e.g., Oracle numeric + named)
+            has_named = any(p.style.value in {"named_colon", "named_at"} for p in param_info)
+            if has_named:
+                # We have named parameters but only positional values provided
+                missing_named = [p.name for p in param_info if p.style.value in {"named_colon", "named_at"}]
+                if missing_named:
+                    msg = f"Missing required parameters: {', '.join(missing_named)}"
+                    if self.fail_on_violation:
+                        raise MissingParameterError(msg)
+                    error = ValidationError(
+                        message=msg,
+                        code="missing-parameters",
+                        risk_level=self.risk_level,
+                        processor="ParameterStyleValidator",
+                        expression=expression,
+                    )
+                    context.validation_errors.append(error)
+                    return  # Don't continue checking positional params
+
+            # Check for Oracle numeric parameters
+            if has_positional_colon:
+                # For Oracle numeric, we need to check if all required indices have values
+                missing_indices = []
+                for p in param_info:
+                    # Skip non-Oracle numeric parameters
+                    if p.style.value != "positional_colon" or p.name is None:
+                        continue
+                    try:
+                        # Oracle numeric parameter names are the indices
+                        idx = int(p.name)
+                        # Check if this index has a value in the list
+                        # For 0-based: :0, :1 maps to list indices 0, 1
+                        # For 1-based: :1, :2 maps to list indices 0, 1 (subtract 1)
+                        # We'll check both interpretations
+                        if idx < provided_count:
+                            # 0-based interpretation - direct index
+                            continue
+                        if idx > 0 and (idx - 1) < provided_count:
+                            # 1-based interpretation - subtract 1
+                            continue
+                        # Missing this parameter
+                        missing_indices.append(p.name)
+                    except (ValueError, TypeError):
+                        # Not a numeric parameter name
+                        pass
+
+                if missing_indices:
+                    msg = f"Missing required parameters: :{', :'.join(missing_indices)}"
+                    if self.fail_on_violation:
+                        raise MissingParameterError(msg)
+                    error = ValidationError(
+                        message=msg,
+                        code="missing-parameters",
+                        risk_level=self.risk_level,
+                        processor="ParameterStyleValidator",
+                        expression=expression,
+                    )
+                    context.validation_errors.append(error)
+            elif provided_count < required_count:
+                # Regular positional parameters - simple count check
+                msg = f"Expected {required_count} parameters but got {provided_count}"
+                if self.fail_on_violation:
+                    raise MissingParameterError(msg)
+                error = ValidationError(
+                    message=msg,
+                    code="missing-parameters",
+                    risk_level=self.risk_level,
+                    processor="ParameterStyleValidator",
+                    expression=expression,
+                )
+                context.validation_errors.append(error)
+        elif is_dict(merged_params):
+            # Named parameters - check keys
+            missing = []
+            for p in param_info:
+                param_name = p.name
+                # Check if this parameter exists in merged_params
+                if param_name not in merged_params:
+                    # Also check for _arg_ style names for positional params
+                    if not any(key.startswith(("_arg_", "param_")) for key in merged_params):
+                        missing.append(param_name)
+                    elif p.style.value not in {"qmark", "numeric"}:
+                        # For named parameters, we need the exact name
+                        missing.append(param_name)
+
+            if missing:
+                msg = f"Missing required parameters: {', '.join(missing)}"
+                if self.fail_on_violation:
+                    raise MissingParameterError(msg)
+                error = ValidationError(
+                    message=msg,
+                    code="missing-parameters",
+                    risk_level=self.risk_level,
+                    processor="ParameterStyleValidator",
+                    expression=expression,
+                )
+                context.validation_errors.append(error)
+        # Single value - only valid if we have exactly one parameter
+        elif len(param_info) > 1:
+            missing = [p.name for p in param_info[1:]]
+            msg = f"Missing required parameters: {', '.join(missing)}"
+            if self.fail_on_violation:
+                raise MissingParameterError(msg)
+            error = ValidationError(
+                message=msg,
+                code="missing-parameters",
+                risk_level=self.risk_level,
+                processor="ParameterStyleValidator",
+                expression=expression,
+            )
+            context.validation_errors.append(error)

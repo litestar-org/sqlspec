@@ -398,9 +398,8 @@ class LimitOffsetFilter(PaginationFilter):
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
-        # For now, limit and offset are not parameterized
-        # They are directly embedded in the SQL expression
-        return [], {}
+        # Return the limit and offset values as named parameters
+        return [], {"limit": self.limit, "offset": self.offset}
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         return statement.limit(self.limit, use_parameter=True).offset(self.offset, use_parameter=True)

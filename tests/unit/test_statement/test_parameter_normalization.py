@@ -110,7 +110,7 @@ class TestParameterNormalization:
         # Check values are in correct order
         assert merged_params == params
 
-    def test_oracle_numeric_normalized(self) -> None:
+    def test_positional_colon_normalized(self) -> None:
         """Test that Oracle numeric style is normalized for SQLGlot."""
         sql = "INSERT INTO users (id, name) VALUES (:1, :2)"
         params = [42, "john"]

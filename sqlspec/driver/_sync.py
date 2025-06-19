@@ -46,18 +46,22 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
         self,
         statement: "Union[Statement, QueryBuilder[Any]]",
         *parameters: "Union[StatementParameters, StatementFilter]",
-        config: "Optional[SQLConfig]" = None,
+        _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> "SQL":
+        # Check if we need to return the original SQL object as-is
+        if isinstance(statement, SQL) and not parameters and not kwargs and _config is None:
+            return statement
+
+        # Use driver's config if none provided
+        _config = _config or self.config
+
         if isinstance(statement, QueryBuilder):
-            return statement.to_statement(config=config or self.config)
-        # If it's already a SQL object and no additional parameters/config, return as-is
+            return statement.to_statement(config=_config)
+        # If it's already a SQL object, create new one with merged parameters
         if isinstance(statement, SQL):
-            if not parameters and not kwargs and config is None:
-                return statement
-            # Create new SQL object with merged parameters
-            return SQL(statement._sql, *parameters, dialect=self.dialect, config=config or self.config, **kwargs)
-        return SQL(statement, *parameters, dialect=self.dialect, config=config or self.config, **kwargs)
+            return SQL(statement._sql, *parameters, _dialect=self.dialect, _config=_config, **kwargs)
+        return SQL(statement, *parameters, _dialect=self.dialect, _config=_config, **kwargs)
 
     @abstractmethod
     def _execute_statement(
@@ -185,8 +189,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
 
         # Use first parameter as the sequence for execute_many
         param_sequence = param_sequences[0] if param_sequences else None
-        sql_statement = self._build_statement(statement, _config=_config or self.config, **kwargs)
-        sql_statement = sql_statement.as_many(param_sequence)
+        sql_statement = self._build_statement(statement, _config=_config or self.config, **kwargs).as_many(
+            param_sequence
+        )
+
         result = self._execute_statement(
             statement=sql_statement,
             connection=self._connection(_connection),
