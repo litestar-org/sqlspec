@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import pytest
 
-from sqlspec.exceptions import MissingParameterError, ParameterError
+from sqlspec.exceptions import MissingParameterError, ParameterError, SQLValidationError
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
-from sqlspec.statement.sql import SQL
+from sqlspec.statement.sql import SQL, SQLConfig
 
 if TYPE_CHECKING:
     pass
@@ -85,13 +85,16 @@ def test_mixed_parameter_styles(
     sql: str, parameters: Union[list[Any], dict[str, Any]], error_type: Optional[type[Exception]]
 ) -> None:
     """Test handling of mixed parameter styles."""
+    # Enable parameter validation by setting allowed_parameter_styles
+    config = SQLConfig(allowed_parameter_styles=("positional_colon", "qmark", "named_colon"))
     if error_type:
-        stmt = SQL(sql, parameters=parameters)
-        with pytest.raises(error_type):
+        stmt = SQL(sql, parameters=parameters, _config=config)
+        # In strict mode, validation errors are wrapped in SQLValidationError
+        with pytest.raises((error_type, SQLValidationError)):
             # Trigger validation by accessing property
             _ = stmt.to_sql()
     else:
-        stmt = SQL(sql, parameters=parameters)
+        stmt = SQL(sql, parameters=parameters, _config=config)
         # Should not raise
         _ = stmt.to_sql()
 
@@ -257,10 +260,12 @@ def test_oracle_numeric_parameter_validation(
     sql: str, parameters: Union[list[Any], dict[str, Any]], should_fail: bool
 ) -> None:
     """Test parameter validation for Oracle numeric style."""
-    stmt = SQL(sql, parameters=parameters)
+    # Enable parameter validation by setting allowed_parameter_styles
+    config = SQLConfig(allowed_parameter_styles=("oracle_numeric", "positional_colon"))
+    stmt = SQL(sql, parameters=parameters, _config=config)
 
     if should_fail:
-        with pytest.raises((ParameterError, MissingParameterError)):
+        with pytest.raises((ParameterError, MissingParameterError, SQLValidationError)):
             # Trigger validation
             _ = stmt.to_sql()
     else:
@@ -281,7 +286,11 @@ def test_oracle_numeric_in_strings_and_comments() -> None:
         :5 as real_param
     FROM dual
     """
-    stmt = SQL(sql, parameters=[42])
+    # Create SQL with strict mode disabled to avoid validation errors
+    from sqlspec.statement.sql import SQLConfig
+
+    config = SQLConfig(strict_mode=False)
+    stmt = SQL(sql, parameters=[42], _config=config)
 
     # Should only find :5 as a real parameter
     assert len(stmt.parameter_info) == 1

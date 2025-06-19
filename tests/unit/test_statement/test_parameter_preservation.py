@@ -23,7 +23,7 @@ def test_ctas_preserves_parameter_names() -> None:
     safe_query = ctas_builder.build()
     # Disable validation for DDL operations
     config = SQLConfig(enable_validation=False, strict_mode=False)
-    sql_statement = SQL(safe_query.sql, parameters=safe_query.parameters, config=config)
+    sql_statement = SQL(safe_query.sql, parameters=safe_query.parameters, _config=config)
 
     # Parameters should preserve original names
     assert "active" in safe_query.parameters

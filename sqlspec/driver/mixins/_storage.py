@@ -224,7 +224,7 @@ class SyncStorageMixin(StorageMixinBase):
         self._ensure_pyarrow_installed()
 
         return self._fetch_arrow_table(
-            SQL(statement, *parameters, config=_config or self.config, dialect=self.dialect, **kwargs),  # type: ignore[arg-type]
+            SQL(statement, *parameters, _config=_config or self.config, _dialect=self.dialect, **kwargs),  # type: ignore[arg-type]
             connection=_connection,
             **kwargs,
         )
@@ -277,7 +277,7 @@ class SyncStorageMixin(StorageMixinBase):
         Returns:
             Number of rows exported
         """
-        sql = SQL(statement, *parameters, config=_config or self.config, dialect=self.dialect, **options)  # pyright: ignore
+        sql = SQL(statement, *parameters, _config=_config or self.config, _dialect=self.dialect, **options)  # pyright: ignore
 
         return self._export_to_storage(
             sql, destination_uri=destination_uri, format=format, _connection=_connection, **options
@@ -548,7 +548,7 @@ class AsyncStorageMixin(StorageMixinBase):
 
         filters, params = _separate_filters_from_parameters(parameters)
         # Convert to SQL object for processing
-        sql = SQL(statement, params, *filters, config=_config or self.config, dialect=self.dialect, **kwargs)
+        sql = SQL(statement, params, *filters, _config=_config or self.config, _dialect=self.dialect, **kwargs)
 
         # Delegate to protected method that drivers can override
         return await self._fetch_arrow_table(sql, connection=_connection, **kwargs)
@@ -591,7 +591,7 @@ class AsyncStorageMixin(StorageMixinBase):
         **options: Any,
     ) -> int:
         return await self._export_to_storage(
-            SQL(statement, *parameters, config=_config or self.config, dialect=self.dialect, **options),
+            SQL(statement, *parameters, _config=_config or self.config, _dialect=self.dialect, **options),
             destination_uri,
             format,
             connection=_connection,

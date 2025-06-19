@@ -143,7 +143,7 @@ def test_sql_initialization_with_expression() -> None:
 def test_sql_initialization_with_custom_config() -> None:
     """Test SQL initialization with custom config."""
     config = SQLConfig(enable_validation=False, strict_mode=False)
-    stmt = SQL("SELECT * FROM users", config=config)
+    stmt = SQL("SELECT * FROM users", _config=config)
 
     assert stmt._config == config
     assert stmt._config.enable_validation is False
@@ -199,7 +199,7 @@ def test_sql_lazy_processing() -> None:
 )
 def test_sql_property(sql_input: "str | exp.Expression", expected_sql: str) -> None:
     """Test SQL.sql property returns processed SQL string."""
-    stmt = SQL(sql_input, config=TEST_CONFIG)
+    stmt = SQL(sql_input, _config=TEST_CONFIG)
     assert stmt.sql == expected_sql
 
 
@@ -231,7 +231,7 @@ def test_sql_expression_property() -> None:
 def test_sql_expression_with_parsing_disabled() -> None:
     """Test SQL.expression returns None when parsing disabled."""
     config = SQLConfig(enable_parsing=False)
-    stmt = SQL("SELECT * FROM users", config=config)
+    stmt = SQL("SELECT * FROM users", _config=config)
 
     assert stmt.expression is None
 
@@ -241,14 +241,14 @@ def test_sql_validate_method() -> None:
     """Test SQL.validate() returns validation errors."""
     # Valid SQL - disable validation for this specific test
     config = SQLConfig(enable_validation=False)
-    stmt1 = SQL("SELECT id, name FROM users", config=config)
+    stmt1 = SQL("SELECT id, name FROM users", _config=config)
     errors1 = stmt1.validate()
     assert isinstance(errors1, list)
     assert len(errors1) == 0
 
     # SQL with validation issues
     config2 = SQLConfig(strict_mode=False)  # Use non-strict mode to get errors without exception
-    stmt2 = SQL("UPDATE users SET name = 'test'", config=config2)  # No WHERE clause
+    stmt2 = SQL("UPDATE users SET name = 'test'", _config=config2)  # No WHERE clause
     errors2 = stmt2.validate()
     assert isinstance(errors2, list)
     assert len(errors2) > 0
@@ -258,7 +258,7 @@ def test_sql_validate_method() -> None:
 def test_sql_validation_disabled() -> None:
     """Test SQL validation can be disabled."""
     config = SQLConfig(enable_validation=False)
-    stmt = SQL("UPDATE users SET name = 'test'", config=config)
+    stmt = SQL("UPDATE users SET name = 'test'", _config=config)
 
     errors = stmt.validate()
     assert isinstance(errors, list)
@@ -270,7 +270,7 @@ def test_sql_strict_mode_raises_on_errors() -> None:
     config = SQLConfig(strict_mode=True)
 
     with pytest.raises(SQLValidationError) as exc_info:
-        stmt = SQL("UPDATE users SET name = 'test'", config=config)
+        stmt = SQL("UPDATE users SET name = 'test'", _config=config)
         _ = stmt.sql  # Trigger processing
 
     assert "WHERE" in str(exc_info.value)
@@ -289,8 +289,9 @@ def test_sql_filter_method() -> None:
     assert stmt2._filters == [filter_obj]
     assert stmt1._filters == []
 
-    # Filter is applied
-    assert "LIMIT 10" in stmt2.sql
+    # Filter is applied - limit is parameterized
+    assert "LIMIT :limit" in stmt2.sql
+    assert stmt2.parameters["limit"] == 10
 
 
 def test_sql_multiple_filters() -> None:
@@ -301,7 +302,7 @@ def test_sql_multiple_filters() -> None:
     stmt3 = stmt2.filter(SearchFilter(field_name="name", value="test"))
 
     sql = stmt3.sql
-    assert "LIMIT 10" in sql
+    assert "LIMIT :limit" in sql
     assert "WHERE" in sql
     assert "name" in sql
 
@@ -313,7 +314,7 @@ def test_sql_with_missing_parameters() -> None:
     config = SQLConfig(strict_mode=True)
 
     with pytest.raises(MissingParameterError):
-        stmt = SQL("SELECT * FROM users WHERE id = ?", config=config)
+        stmt = SQL("SELECT * FROM users WHERE id = ?", _config=config)
         _ = stmt.sql  # Trigger processing
 
 
@@ -328,7 +329,7 @@ def test_sql_with_extra_parameters() -> None:
 def test_sql_with_literal_parameterization() -> None:
     """Test SQL literal parameterization when enabled."""
     config = SQLConfig(enable_transformations=True)
-    stmt = SQL("SELECT * FROM users WHERE id = 1", config=config)
+    stmt = SQL("SELECT * FROM users WHERE id = 1", _config=config)
 
     # Should parameterize the literal
     sql = stmt.sql
@@ -381,7 +382,7 @@ def test_sql_parsing_error() -> None:
 
     # SQLGlot is very permissive and wraps invalid SQL in Anonymous expressions
     # rather than raising parsing errors
-    stmt = SQL("INVALID SQL SYNTAX !", config=config)
+    stmt = SQL("INVALID SQL SYNTAX !", _config=config)
     sql = stmt.sql
 
     # The invalid SQL is preserved (sqlglot wraps it)
@@ -398,7 +399,7 @@ def test_sql_transformation_error() -> None:
 
     # In the new pipeline system, transformer errors are caught and reported as validation errors
     with pytest.raises(SQLValidationError) as exc_info:
-        stmt = SQL("SELECT * FROM users", config=config)
+        stmt = SQL("SELECT * FROM users", _config=config)
         _ = stmt.sql  # Trigger processing
 
     assert "Transform error" in str(exc_info.value)
@@ -423,7 +424,7 @@ def test_sql_whitespace_only() -> None:
 def test_sql_expression_caching() -> None:
     """Test SQL expression caching when enabled."""
     config = SQLConfig(cache_parsed_expression=True)
-    stmt = SQL("SELECT * FROM users", config=config)
+    stmt = SQL("SELECT * FROM users", _config=config)
 
     # First access
     expr1 = stmt.expression
@@ -436,7 +437,7 @@ def test_sql_expression_caching() -> None:
 def test_sql_no_expression_caching() -> None:
     """Test SQL expression not cached when disabled."""
     config = SQLConfig(cache_parsed_expression=False)
-    stmt = SQL("SELECT * FROM users", config=config)
+    stmt = SQL("SELECT * FROM users", _config=config)
 
     # Access expression multiple times
     expr1 = stmt.expression
@@ -474,7 +475,7 @@ def test_sql_copy() -> None:
 
     # Create new instance with different config
     new_config = SQLConfig(enable_validation=False)
-    stmt2 = SQL(stmt1, config=new_config)
+    stmt2 = SQL(stmt1, _config=new_config)
 
     assert stmt2._raw_sql == stmt1._raw_sql
     assert stmt2._raw_parameters == stmt1._raw_parameters

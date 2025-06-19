@@ -1,5 +1,6 @@
 """SQL statement handling with centralized parameter management."""
 
+import operator
 from dataclasses import dataclass, field
 from typing import Any, Optional, Union
 
@@ -157,8 +158,8 @@ class SQL:
         self,
         statement: Union[str, exp.Expression, "SQL"],
         *parameters: Union[Any, StatementFilter, list[Union[Any, StatementFilter]]],
-        dialect: Optional[DialectType] = None,
-        config: Optional[SQLConfig] = None,
+        _dialect: Optional[DialectType] = None,
+        _config: Optional[SQLConfig] = None,
         _builder_result_type: Optional[type] = None,
         _existing_state: Optional[dict[str, Any]] = None,
         **kwargs: Any,
@@ -175,8 +176,8 @@ class SQL:
             **kwargs: Named parameters
         """
         # Initialize config
-        self._config = config or SQLConfig()
-        self._dialect = dialect
+        self._config = _config or SQLConfig()
+        self._dialect = _dialect
         self._builder_result_type = _builder_result_type
         self._is_many = False
         self._is_script = False
@@ -192,8 +193,8 @@ class SQL:
         if isinstance(statement, SQL):
             # Copy from existing SQL object
             self._statement = statement._statement
-            self._dialect = dialect or statement._dialect
-            self._config = config or statement._config
+            self._dialect = _dialect or statement._dialect
+            self._config = _config or statement._config
             self._builder_result_type = _builder_result_type or statement._builder_result_type
             self._is_many = statement._is_many
             self._is_script = statement._is_script
@@ -255,7 +256,24 @@ class SQL:
                 self._positional_params.append(param)
 
         # Process **kwargs - highest precedence
-        self._named_params.update(kwargs)
+        # Special handling for 'parameters' keyword
+        if "parameters" in kwargs:
+            param_value = kwargs.pop("parameters")
+            if isinstance(param_value, (list, tuple)):
+                # Add as positional parameters
+                self._positional_params.extend(param_value)
+            elif isinstance(param_value, dict):
+                # Merge as named parameters
+                self._named_params.update(param_value)
+            else:
+                # Single value
+                self._positional_params.append(param_value)
+
+        # Add remaining kwargs as named parameters
+        # Skip internal parameters that start with underscore
+        for key, value in kwargs.items():
+            if not key.startswith("_"):
+                self._named_params[key] = value
 
     def _ensure_processed(self) -> None:
         """Ensure the SQL has been processed through the pipeline (lazy initialization).
@@ -280,6 +298,10 @@ class SQL:
             input_sql_had_placeholders=self._config.input_sql_had_placeholders,
         )
 
+        # Extract parameter info from the SQL
+        validator = self._config.parameter_validator
+        context.parameter_info = validator.extract_parameters(context.initial_sql_string)
+
         # Run the pipeline
         pipeline = self._config.get_statement_pipeline()
         result = pipeline.execute_pipeline(context)
@@ -293,7 +315,7 @@ class SQL:
         if result.context.extracted_parameters_from_pipeline:
             if isinstance(merged_params, dict):
                 for i, param in enumerate(result.context.extracted_parameters_from_pipeline):
-                    param_name = f"param_{i}"
+                    param_name = f"_arg_{i}"
                     merged_params[param_name] = param
             elif isinstance(merged_params, list):
                 merged_params.extend(result.context.extracted_parameters_from_pipeline)
@@ -351,11 +373,12 @@ class SQL:
             if first_expr is None:
                 # Could not parse
                 return exp.Anonymous(this=statement)
-            return first_expr
+
         except ParseError as e:
             # If parsing fails, wrap in a RawString expression
             logger.debug("Failed to parse SQL: %s", e)
             return exp.Anonymous(this=statement)
+        return first_expr
 
     def _extract_filter_parameters(self, filter_obj: StatementFilter) -> tuple[list[Any], dict[str, Any]]:
         """Extract parameters from a filter object."""
@@ -422,21 +445,39 @@ class SQL:
         new_obj._named_params[name] = value
         return new_obj
 
-    def get_unique_parameter_name(self, base_name: str) -> str:
-        """Generate a unique parameter name."""
+    def get_unique_parameter_name(
+        self, base_name: str, namespace: Optional[str] = None, preserve_original: bool = False
+    ) -> str:
+        """Generate a unique parameter name.
+
+        Args:
+            base_name: The base parameter name
+            namespace: Optional namespace prefix (e.g., 'cte', 'subquery')
+            preserve_original: If True, try to preserve the original name
+
+        Returns:
+            A unique parameter name
+        """
         # Check both positional and named params
         all_param_names = set(self._named_params.keys())
 
-        # If base_name is unique, use it
-        if base_name not in all_param_names:
-            return base_name
+        # Build the candidate name
+        candidate = f"{namespace}_{base_name}" if namespace else base_name
 
-        # Generate unique name
-        counter = 0
+        # If preserve_original and the name is unique, use it
+        if preserve_original and candidate not in all_param_names:
+            return candidate
+
+        # If not preserving or name exists, generate unique name
+        if candidate not in all_param_names:
+            return candidate
+
+        # Generate unique name with counter
+        counter = 1
         while True:
-            candidate = f"{base_name}_{counter}"
-            if candidate not in all_param_names:
-                return candidate
+            new_candidate = f"{candidate}_{counter}"
+            if new_candidate not in all_param_names:
+                return new_candidate
             counter += 1
 
     def where(self, condition: "Union[str, exp.Expression, exp.Condition]") -> "SQL":
@@ -524,9 +565,9 @@ class SQL:
             final_params = dict(self._named_params)
             # Add positional params with generated names
             for i, param in enumerate(self._positional_params):
-                param_name = f"param_{i}"
+                param_name = f"_arg_{i}"
                 while param_name in final_params:
-                    param_name = f"param_{i}_{id(param)}"
+                    param_name = f"_arg_{i}_{id(param)}"
                 final_params[param_name] = param
         else:
             # No parameters
@@ -580,11 +621,8 @@ class SQL:
 
     def to_sql(self, placeholder_style: Optional[str] = None) -> str:
         """Convert to SQL string with given placeholder style."""
-        # For scripts, use the sql property which handles raw SQL correctly
         if self._is_script:
             return self.sql
-
-        # Get compiled SQL with placeholder style
         sql, _ = self.compile(placeholder_style=placeholder_style)
         return sql
 
@@ -621,18 +659,56 @@ class SQL:
                 target_style = (
                     ParameterStyle(placeholder_style) if isinstance(placeholder_style, str) else placeholder_style
                 )
-                sql = converter._denormalize_sql(sql, param_info, target_style)
+                # Replace placeholders with target style
+                # Sort by position in reverse to avoid position shifts
+                sorted_params = sorted(param_info, key=lambda p: p.position, reverse=True)
+                for p in sorted_params:
+                    # Generate new placeholder based on target style
+                    if target_style == ParameterStyle.QMARK:
+                        new_placeholder = "?"
+                    elif target_style == ParameterStyle.NUMERIC:
+                        # Use 1-based numbering for numeric style
+                        new_placeholder = f"${p.ordinal + 1}"
+                    elif target_style == ParameterStyle.NAMED_COLON:
+                        # Use generated parameter names
+                        new_placeholder = f":param_{p.ordinal}"
+                    elif target_style == ParameterStyle.POSITIONAL_COLON:
+                        # Keep the original numeric placeholder
+                        new_placeholder = p.placeholder_text
+                    else:
+                        # Keep original for unknown styles
+                        new_placeholder = p.placeholder_text
+
+                    # Replace the placeholder in SQL
+                    start = p.position
+                    end = start + len(p.placeholder_text)
+                    sql = sql[:start] + new_placeholder + sql[end:]
 
                 # Convert parameters to appropriate format for target style
                 if target_style == ParameterStyle.POSITIONAL_COLON:
                     # Convert to dict format for Oracle numeric style
                     if isinstance(params, (list, tuple)):
-                        params = {str(i + 1): v for i, v in enumerate(params)}
-                elif target_style in (ParameterStyle.QMARK, ParameterStyle.NUMERIC):
-                    # Convert to list format for positional styles
-                    if isinstance(params, dict):
-                        # Extract in order based on parameter info
-                        params = [params.get(p.name, None) for p in param_info if p.name in params]
+                        # For Oracle numeric parameters, map based on numeric order
+                        # First, extract only Oracle numeric parameters and sort by numeric value
+                        oracle_params = [
+                            (int(p.name), p)
+                            for p in param_info
+                            if p.style == ParameterStyle.POSITIONAL_COLON and p.name and p.name.isdigit()
+                        ]
+                        oracle_params.sort(key=operator.itemgetter(0))  # Sort by numeric value
+
+                        # Map list items to parameters based on numeric order
+                        result_dict = {}
+                        for i, (_, p) in enumerate(oracle_params):
+                            if i < len(params):
+                                result_dict[p.name] = params[i]
+                        params = result_dict
+                    elif not isinstance(params, dict):
+                        # Single value - map to first parameter name
+                        if param_info:
+                            params = {param_info[0].name: params}
+                elif target_style in {ParameterStyle.QMARK, ParameterStyle.NUMERIC} and isinstance(params, dict):
+                    params = [params.get(p.name, None) for p in param_info if p.name in params]
 
         return sql, params
 
@@ -672,6 +748,9 @@ class SQL:
         """Get raw parameters for compatibility."""
         # Return raw parameters without processing
         _, params = self._build_final_state()
+        # For backward compatibility, return None instead of empty list
+        if isinstance(params, list) and len(params) == 0:
+            return None
         return params
 
     @property
@@ -691,6 +770,18 @@ class SQL:
 
     def limit(self, count: int, use_parameter: bool = False) -> "SQL":
         """Add LIMIT clause."""
+        if use_parameter:
+            # Create a unique parameter name
+            param_name = self.get_unique_parameter_name("limit")
+            # Add parameter to the SQL object
+            result = self
+            result = result.add_named_parameter(param_name, count)
+            # Use placeholder in the expression
+            if hasattr(result._statement, "limit"):
+                new_statement = result._statement.limit(exp.Placeholder(this=param_name))
+            else:
+                new_statement = exp.Select().from_(result._statement).limit(exp.Placeholder(this=param_name))
+            return result.copy(statement=new_statement)
         if hasattr(self._statement, "limit"):
             new_statement = self._statement.limit(count)
         else:
@@ -699,6 +790,18 @@ class SQL:
 
     def offset(self, count: int, use_parameter: bool = False) -> "SQL":
         """Add OFFSET clause."""
+        if use_parameter:
+            # Create a unique parameter name
+            param_name = self.get_unique_parameter_name("offset")
+            # Add parameter to the SQL object
+            result = self
+            result = result.add_named_parameter(param_name, count)
+            # Use placeholder in the expression
+            if hasattr(result._statement, "offset"):
+                new_statement = result._statement.offset(exp.Placeholder(this=param_name))
+            else:
+                new_statement = exp.Select().from_(result._statement).offset(exp.Placeholder(this=param_name))
+            return result.copy(statement=new_statement)
         if hasattr(self._statement, "offset"):
             new_statement = self._statement.offset(count)
         else:

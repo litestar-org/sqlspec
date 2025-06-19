@@ -20,7 +20,7 @@ import pytest
 
 from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.statement.parameters import ParameterInfo, ParameterStyle
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -221,7 +221,7 @@ def test_execute_statement_routing(
     config = SQLConfig(
         enable_validation=False  # Disable validation to allow DDL
     )
-    statement = SQL(sql_text, config=config)
+    statement = SQL(sql_text, _config=config)
 
     # Set the internal flags
     statement._is_script = is_script
@@ -400,7 +400,7 @@ def test_bulk_load_unsupported_format(driver: SqliteDriver) -> None:
 def test_wrap_select_result(driver: SqliteDriver) -> None:
     """Test wrapping SELECT results."""
     statement = SQL("SELECT * FROM users")
-    result = {
+    result: SelectResultDict = {
         "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
         "column_names": ["id", "name"],
         "rows_affected": 2,
@@ -426,7 +426,7 @@ def test_wrap_select_result_with_schema(driver: SqliteDriver) -> None:
         name: str
 
     statement = SQL("SELECT * FROM users")
-    result = {
+    result: SelectResultDict = {
         "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
         "column_names": ["id", "name"],
         "rows_affected": 2,
@@ -496,7 +496,7 @@ def test_execute_with_no_parameters(driver: SqliteDriver, mock_connection: Magic
     from sqlspec.statement.sql import SQLConfig
 
     config = SQLConfig(enable_validation=False)  # Allow DDL
-    statement = SQL("CREATE TABLE test (id INTEGER)", config=config)
+    statement = SQL("CREATE TABLE test (id INTEGER)", _config=config)
     driver._execute_statement(statement)
 
     # sqlglot normalizes INTEGER to INT

@@ -310,8 +310,8 @@ class QueryBuilder(ABC, Generic[RowT]):
         return SQL(
             statement=safe_query.sql,
             parameters=safe_query.parameters,
-            dialect=safe_query.dialect,
-            config=config,
+            _dialect=safe_query.dialect,
+            _config=config,
             _builder_result_type=self._expected_result_type,
         )
 

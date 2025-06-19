@@ -279,20 +279,20 @@ def test_sync_driver_build_statement_with_filters() -> None:
 
     # Mock filter - needs both methods
     mock_filter = Mock()
-    
+
     def mock_append(stmt):
         # Return a new SQL object with modified query
         return SQL("SELECT * FROM users WHERE active = true")
-    
+
     mock_filter.append_to_statement = Mock(side_effect=mock_append)
     mock_filter.extract_parameters = Mock(return_value=([], {}))
 
     sql_string = "SELECT * FROM users"
     statement = driver._build_statement(sql_string, mock_filter)
-    
+
     # Access a property to trigger processing
     _ = statement.to_sql()
-    
+
     mock_filter.append_to_statement.assert_called_once()
 
 
@@ -347,9 +347,7 @@ def test_sync_driver_execute_many() -> None:
 
             # Use a non-strict config to avoid validation issues
             config = SQLConfig(strict_mode=False)
-            result = driver.execute_many(
-                "INSERT INTO users (name) VALUES (:name)", parameters=parameters, config=config
-            )
+            result = driver.execute_many("INSERT INTO users (name) VALUES (:name)", parameters, _config=config)
 
             mock_execute.assert_called_once()
             _, kwargs = mock_execute.call_args
@@ -369,7 +367,7 @@ def test_sync_driver_execute_script() -> None:
 
         # Use a non-strict config to avoid DDL validation issues
         config = SQLConfig(strict_mode=False, enable_validation=False)
-        result = driver.execute_script(script, config=config)
+        result = driver.execute_script(script, _config=config)
 
         mock_execute.assert_called_once()
         # Check that the statement passed to _execute_statement has is_script=True
@@ -396,7 +394,7 @@ def test_sync_driver_execute_with_parameters() -> None:
 
             # Use a non-strict config to avoid validation issues
             config = SQLConfig(strict_mode=False)
-            driver.execute("SELECT * FROM users WHERE id = :id", parameters=parameters, config=config)
+            driver.execute("SELECT * FROM users WHERE id = :id", parameters, _config=config)
 
             mock_execute.assert_called_once()
             # Check that the statement passed to _execute_statement contains the parameters
@@ -469,7 +467,7 @@ async def test_async_driver_execute_many() -> None:
 
             # Use a non-strict config to avoid validation issues
             config = SQLConfig(strict_mode=False)
-            await driver.execute_many("INSERT INTO users (name) VALUES (:name)", parameters=parameters, config=config)
+            await driver.execute_many("INSERT INTO users (name) VALUES (:name)", parameters, _config=config)
 
             mock_execute.assert_called_once()
             _, kwargs = mock_execute.call_args
@@ -489,7 +487,7 @@ async def test_async_driver_execute_script() -> None:
 
         # Use a non-strict config to avoid DDL validation issues
         config = SQLConfig(strict_mode=False, enable_validation=False)
-        result = await driver.execute_script(script, config=config)
+        result = await driver.execute_script(script, _config=config)
 
         mock_execute.assert_called_once()
         # Check that the statement passed to _execute_statement has is_script=True
@@ -580,7 +578,7 @@ def test_driver_connection_method() -> None:
     [
         ("SELECT * FROM users", True),
         ("INSERT INTO users (name) VALUES ('test')", False),
-        ("UPDATE users SET name = 'updated'", False),
+        ("UPDATE users SET name = 'updated' WHERE id = 1", False),
         ("DELETE FROM users WHERE id = 1", False),
         ("CREATE TABLE test (id INT)", False),
         ("DROP TABLE test", False),
@@ -601,7 +599,7 @@ def test_driver_returns_rows_detection(statement_type: str, expected_returns_row
 
                 # Use a non-strict config to avoid DDL validation issues
                 config = SQLConfig(strict_mode=False, enable_validation=False)
-                driver.execute(statement_type, config=config)
+                driver.execute(statement_type, _config=config)
 
                 if expected_returns_rows:
                     mock_wrap_select.assert_called_once()

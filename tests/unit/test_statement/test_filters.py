@@ -364,7 +364,7 @@ def test_search_filter_wildcard_wrapping() -> None:
 
     if result.parameters:
         assert isinstance(result.parameters, dict)
-        search_params = [v for k, v in result.parameters.items() if "search_val" in k]
+        search_params = [v for k, v in result.parameters.items() if "search" in k and "_not_" not in k]
         assert len(search_params) == 1
         assert search_params[0] == "%john%"
 

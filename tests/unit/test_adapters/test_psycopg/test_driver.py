@@ -257,7 +257,7 @@ def test_sync_execute_statement_routing(
     from sqlspec.statement.sql import SQLConfig
 
     config = SQLConfig(enable_validation=False) if is_script else SQLConfig()
-    statement = SQL(sql_text, config=config)
+    statement = SQL(sql_text, _config=config)
     statement._is_script = is_script
     statement._is_many = is_many
 
@@ -334,7 +334,7 @@ async def test_async_execute_statement_routing(
     from sqlspec.statement.sql import SQLConfig
 
     config = SQLConfig(enable_validation=False) if is_script else SQLConfig()
-    statement = SQL(sql_text, config=config)
+    statement = SQL(sql_text, _config=config)
     statement._is_script = is_script
     statement._is_many = is_many
 
@@ -694,7 +694,7 @@ def test_sync_execute_with_no_parameters(sync_driver: PsycopgSyncDriver, mock_sy
 
     # Disable validation for DDL
     config = SQLConfig(enable_validation=False)
-    statement = SQL("CREATE TABLE test (id INTEGER)", config=config)
+    statement = SQL("CREATE TABLE test (id INTEGER)", _config=config)
     sync_driver._execute_statement(statement)
 
     # SQLGlot normalizes INTEGER to INT
@@ -711,7 +711,7 @@ async def test_async_execute_with_no_parameters(
 
     # Disable validation for DDL
     config = SQLConfig(enable_validation=False)
-    statement = SQL("CREATE TABLE test (id INTEGER)", config=config)
+    statement = SQL("CREATE TABLE test (id INTEGER)", _config=config)
     await async_driver._execute_statement(statement)
 
     # SQLGlot normalizes INTEGER to INT

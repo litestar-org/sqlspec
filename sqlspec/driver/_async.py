@@ -6,11 +6,12 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.statement.builder import DeleteBuilder, InsertBuilder, QueryBuilder, SelectBuilder, UpdateBuilder
 from sqlspec.statement.filters import StatementFilter
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
-from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, RowT, SQLParameterType, StatementParameters
+from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, RowT, StatementParameters
 
 if TYPE_CHECKING:
-    from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+    from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict
 
 __all__ = ("AsyncDriverAdapterProtocol",)
 
@@ -38,27 +39,20 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
 
     def _build_statement(
         self,
-        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
-        parameters: "Optional[SQLParameterType]" = None,
-        filters: "Optional[list[StatementFilter]]" = None,
-        config: "Optional[SQLConfig]" = None,
+        statement: "Union[Statement, QueryBuilder[Any]]",
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> "SQL":
-        if isinstance(statement, SQL):
-            # If parameters or kwargs are provided, create a new SQL object with those parameters
-            if parameters is not None or kwargs:
-                return SQL(
-                    statement.sql,
-                    parameters,
-                    *filters or [],
-                    dialect=self.dialect,
-                    config=config or statement._config,
-                    **kwargs,
-                )
-            return statement
         if isinstance(statement, QueryBuilder):
             return statement.to_statement(config=config or self.config)
-        return SQL(statement, parameters, *filters or [], dialect=self.dialect, config=config or self.config, **kwargs)
+        # If it's already a SQL object and no additional parameters/config, return as-is
+        if isinstance(statement, SQL):
+            if not parameters and not kwargs and _config is None:
+                return statement
+            # Create new SQL object with merged parameters
+            return SQL(statement._sql, *parameters, dialect=self.dialect, config=_config or self.config, **kwargs)
+        return SQL(statement, *parameters, dialect=self.dialect, config=_config or self.config, **kwargs)
 
     @abstractmethod
     async def _execute_statement(
@@ -156,32 +150,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
-        # Separate parameters from filters
-        param_values = []
-        filters = []
-        for param in parameters:
-            if isinstance(param, StatementFilter):
-                filters.append(param)
-            else:
-                param_values.append(param)
+        sql_statement = self._build_statement(statement, *parameters, _config=_config or self.config, **kwargs)
+        result = self._execute_statement(statement=sql_statement, connection=self._connection(_connection), **kwargs)
 
-        # Use first parameter as the primary parameter value, or None if no parameters
-        primary_params = param_values[0] if param_values else None
-
-        sql_statement = self._build_statement(
-            statement, parameters=primary_params, filters=filters, config=_config or self.config, **kwargs
-        )
-        result = await self._execute_statement(
-            statement=sql_statement, connection=self._connection(_connection), **kwargs
-        )
-        is_select = self.returns_rows(sql_statement.expression)
-        # TODO: improve this.  why can't use just use parameter parsing?
-        # If expression is None (parsing disabled or failed), check SQL string
-        if not is_select and sql_statement.expression is None:
-            sql_upper = sql_statement.sql.strip().upper()
-            is_select = any(sql_upper.startswith(prefix) for prefix in ["SELECT", "WITH", "VALUES", "TABLE"])
-        if is_select:
-            # Type assertion: for SELECT queries, result must be SelectResultDict
+        if self.returns_rows(sql_statement.expression):
             return await self._wrap_select_result(
                 sql_statement, cast("SelectResultDict", result), schema_type=schema_type, **kwargs
             )
@@ -209,10 +181,8 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
 
         # Use first parameter as the sequence for execute_many
         param_sequence = param_sequences[0] if param_sequences else None
-
-        sql_statement = self._build_statement(
-            statement, parameters=None, filters=filters, config=_config or self.config, **kwargs
-        ).as_many(param_sequence)
+        sql_statement = self._build_statement(statement, _config=_config or self.config, **kwargs)
+        sql_statement = sql_statement.as_many(param_sequence)
         result = await self._execute_statement(
             statement=sql_statement,
             connection=self._connection(_connection),
@@ -256,17 +226,19 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
                 parameter_converter=script_config.parameter_converter,
                 parameter_validator=script_config.parameter_validator,
                 analysis_cache_size=script_config.analysis_cache_size,
+                allowed_parameter_styles=script_config.allowed_parameter_styles,
+                target_parameter_style=script_config.target_parameter_style,
+                allow_mixed_parameter_styles=script_config.allow_mixed_parameter_styles,
             )
-        sql_statement = SQL(statement, primary_params, *filters, dialect=self.dialect, config=script_config, **kwargs)
+        sql_statement = SQL(statement, primary_params, *filters, _dialect=self.dialect, _config=script_config, **kwargs)
         sql_statement = sql_statement.as_script()
         script_output = await self._execute_statement(
             statement=sql_statement, connection=self._connection(_connection), is_script=True, **kwargs
         )
         if isinstance(script_output, str):
-            from sqlspec.statement.result import SQLResult
-
             result = SQLResult[RowT](statement=sql_statement, data=[], operation_type="SCRIPT")
             result.total_statements = 1
             result.successful_statements = 1
             return result
-        return cast("SQLResult[RowT]", script_output)
+        # Wrap the ScriptResultDict using the driver's wrapper
+        return await self._wrap_execute_result(sql_statement, cast("ScriptResultDict", script_output), **kwargs)

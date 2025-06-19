@@ -269,7 +269,7 @@ def test_execute_statement_routing(
 
     # Create config that allows DDL if needed
     config = SQLConfig(enable_validation=False) if "CREATE" in sql_text else SQLConfig()
-    statement = SQL(sql_text, config=config)
+    statement = SQL(sql_text, _config=config)
     statement._is_script = is_script
     statement._is_many = is_many
 
@@ -455,7 +455,7 @@ def test_wrap_execute_result_script(driver: BigQueryDriver) -> None:
     from sqlspec.statement.sql import SQLConfig
 
     config = SQLConfig(enable_validation=False)  # Allow DDL
-    statement = SQL("CREATE TABLE test; INSERT INTO test;", config=config)
+    statement = SQL("CREATE TABLE test; INSERT INTO test;", _config=config)
 
     result = {"statements_executed": 2, "status_message": "SCRIPT EXECUTED"}
 
@@ -583,7 +583,7 @@ def test_execute_with_no_parameters(driver: BigQueryDriver, mock_connection: Mag
     from sqlspec.statement.sql import SQLConfig
 
     config = SQLConfig(enable_validation=False)  # Allow DDL
-    statement = SQL("CREATE TABLE test (id INTEGER)", config=config)
+    statement = SQL("CREATE TABLE test (id INTEGER)", _config=config)
     driver._execute_statement(statement)
 
     mock_connection.query.assert_called_once()

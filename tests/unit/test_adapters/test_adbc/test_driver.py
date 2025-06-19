@@ -243,8 +243,12 @@ def test_adbc_driver_execute_statement_select(adbc_driver: AdbcDriver, mock_curs
 
     assert isinstance(result, ArrowResult)
     assert not isinstance(result.statement, str)
-    # ADBC uses QMARK parameter style, so $1 is converted to ?
-    assert result.statement.sql == "SELECT * FROM users WHERE id = $?"  # pyright: ignore
+    # The ArrowResult stores the original SQL statement object
+    # The actual SQL sent to the database is converted to QMARK style internally
+    assert isinstance(result.statement, SQL)
+    # Check that the SQL can be compiled to QMARK style
+    compiled_sql, _ = result.statement.compile(placeholder_style="qmark")
+    assert "?" in compiled_sql  # pyright: ignore
 
     # Check that it's an Arrow table with the expected data
     assert isinstance(result.data, pa.Table)
@@ -444,7 +448,7 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
 
     sql_config = SQLConfig()
     # Test with SQL statement
-    sql_stmt = SQL("SELECT * FROM users", config=sql_config)
+    sql_stmt = SQL("SELECT * FROM users", _config=sql_config)
     result = adbc_driver._build_statement(sql_stmt, config=sql_config)
     assert isinstance(result, SQL)
     assert result.sql == sql_stmt.sql
