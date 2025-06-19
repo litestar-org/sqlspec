@@ -1,7 +1,7 @@
 from collections.abc import Generator
 from contextlib import contextmanager
 from enum import Enum
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, cast
 
 __all__ = (
     "ExtraParameterError",
@@ -422,7 +422,7 @@ class PipelineExecutionError(SQLSpecError):
     def get_failed_sql(self) -> "Optional[str]":
         """Get the SQL that failed for debugging."""
         if self.failed_operation and hasattr(self.failed_operation, "sql"):
-            return self.failed_operation.sql.to_sql()
+            return cast("str", self.failed_operation.sql.to_sql())
         return None
 
     def get_failed_parameters(self) -> "Optional[Any]":

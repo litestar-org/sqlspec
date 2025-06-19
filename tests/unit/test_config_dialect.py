@@ -4,11 +4,12 @@ from typing import Any, ClassVar, Optional
 from unittest.mock import Mock, patch
 
 import pytest
+from sqlglot.dialects.dialect import Dialect
 
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
 from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
 
@@ -351,15 +352,12 @@ class TestDialectValidation:
 
     def test_invalid_dialect_type(self) -> None:
         """Test that invalid dialect types are handled."""
-        from sqlglot.dialects.dialect import Dialect
-
-        from sqlspec.statement.sql import SQL
 
         # Test with various dialect types
         dialects = ["sqlite", Dialect.get_or_raise("postgres"), None]
 
         for dialect in dialects:
-            sql = SQL("SELECT 1", dialect=dialect)  # type: ignore[arg-type]
+            sql = SQL("SELECT 1", _dialect=dialect)  # type: ignore[arg-type]
             # Should not raise during initialization
             assert sql._dialect == dialect
 

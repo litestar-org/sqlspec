@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 """Safe SQL query builder with validation and parameter binding.
 
 This module provides a fluent interface for building SQL queries safely,

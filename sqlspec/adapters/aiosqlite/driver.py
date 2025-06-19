@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 import csv
 import logging
 from collections.abc import AsyncGenerator, Sequence
@@ -162,13 +161,10 @@ class AiosqliteDriver(
                 result: SelectResultDict = {
                     "data": data_list,
                     "column_names": column_names,
-                    "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
+                    "rows_affected": len(data_list),
                 }
                 return result
-            dml_result: DMLResultDict = {
-                "rows_affected": cursor.rowcount if cursor.rowcount is not None else -1,
-                "status_message": "OK",
-            }
+            dml_result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
             return dml_result
 
     async def _execute_many(
@@ -183,16 +179,15 @@ class AiosqliteDriver(
         params_list: list[tuple[Any, ...]] = []
         if param_list and isinstance(param_list, Sequence):
             for param_set in param_list:
+                param_set = cast("Any", param_set)
                 if isinstance(param_set, (list, tuple)):
                     params_list.append(tuple(param_set))
                 elif param_set is None:
                     params_list.append(())
-                else:
-                    params_list.append((param_set,))
 
         async with self._get_cursor(conn) as cursor:
             await cursor.executemany(sql, params_list)
-            result: DMLResultDict = {"rows_affected": len(params_list) if params_list else 0, "status_message": "OK"}
+            result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
             return result
 
     async def _execute_script(
@@ -227,11 +222,11 @@ class AiosqliteDriver(
                     sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
                     data_iter = list(reader)
                     await cursor.executemany(sql, data_iter)
-                    rowcount = cursor.rowcount if cursor.rowcount is not None else -1
-                await conn.commit()
+                    rowcount = cursor.rowcount
+                await conn.commit()  # type: ignore[attr-defined]
                 return rowcount
         finally:
-            await conn.close()
+            await conn.close()  # type: ignore[attr-defined]
 
     async def _wrap_select_result(
         self, statement: SQL, result: SelectResultDict, schema_type: "Optional[type[ModelDTOT]]" = None, **kwargs: Any
@@ -267,12 +262,14 @@ class AiosqliteDriver(
             operation_type = str(statement.expression.key).upper()
 
         if "statements_executed" in result:
+            script_result = cast("ScriptResultDict", result)
             return SQLResult[RowT](
                 statement=statement,
                 data=[],
                 rows_affected=0,
-                operation_type=operation_type or "SCRIPT",
-                metadata={"status_message": result["status_message"]},
+                operation_type="SCRIPT",
+                total_statements=script_result.get("statements_executed", -1),
+                metadata={"status_message": script_result.get("status_message", "")},
             )
 
         if "rows_affected" in result:

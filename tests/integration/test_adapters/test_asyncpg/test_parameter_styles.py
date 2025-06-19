@@ -20,7 +20,7 @@ async def asyncpg_params_session(postgres_service: PostgresService) -> "AsyncGen
         user=postgres_service.user,
         password=postgres_service.password,
         database=postgres_service.database,
-        statement_config=SQLConfig(strict_mode=False),
+        statement_config=SQLConfig(strict_mode=False, enable_transformations=False),
     )
 
     async with config.provide_session() as session:

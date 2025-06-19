@@ -7,9 +7,11 @@ from unittest.mock import Mock
 import pyarrow as pa
 import pytest
 from adbc_driver_manager.dbapi import Connection, Cursor
+from sqlglot import exp
 
 from sqlspec.adapters.adbc.driver import AdbcDriver
 from sqlspec.exceptions import RepositoryError
+from sqlspec.statement.builder import QueryBuilder
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -279,10 +281,10 @@ def test_adbc_driver_fetch_arrow_table_with_parameters(adbc_driver: AdbcDriver, 
 
     # Check parameters were passed correctly
     call_args = mock_cursor.execute.call_args
-    # Parameters are passed as a list with TypedParameter objects
+    # The driver should convert single parameters to a list for ADBC
     params = call_args[0][1]
     assert isinstance(params, list)
-    assert len(params) >= 1
+    assert len(params) == 1
     # The first parameter should be 123 (either directly or as TypedParameter)
     first_param = params[0]
     if hasattr(first_param, "value"):
@@ -432,10 +434,6 @@ def test_adbc_driver_returns_rows_check(adbc_driver: AdbcDriver) -> None:
 
 def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
     """Test AdbcDriver._build_statement method."""
-    from sqlglot import exp
-
-    from sqlspec.statement.builder import QueryBuilder
-    from sqlspec.statement.result import SQLResult
 
     # Create a simple test QueryBuilder subclass
     class MockQueryBuilder(QueryBuilder[SQLResult[DictRow]]):

@@ -430,6 +430,7 @@ def test_sqlite_fetch_arrow_table(sqlite_session: SqliteDriver) -> None:
     assert isinstance(result, ArrowResult)
     assert result.num_rows == 2
     assert result.column_names == ["name", "value"]
+    assert result.data is not None
     assert result.data.column("name").to_pylist() == ["arrow1", "arrow2"]
     assert result.data.column("value").to_pylist() == [111, 222]
 

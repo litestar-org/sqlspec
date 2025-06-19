@@ -415,7 +415,19 @@ class ObStoreBackend(ObjectStoreBase):
     async def write_arrow_async(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
         """Async write Arrow table using native obstore async."""
         resolved_path = self._resolve_path(path)
-        await self.store.write_arrow_async(resolved_path, table, **kwargs)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+        # Check if the store has native async Arrow support
+        if hasattr(self.store, "write_arrow_async"):
+            await self.store.write_arrow_async(resolved_path, table, **kwargs)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+        else:
+            # Fall back to writing as Parquet via bytes
+            import io
+
+            import pyarrow.parquet as pq
+
+            buffer = io.BytesIO()
+            pq.write_table(table, buffer, **kwargs)
+            buffer.seek(0)
+            await self.write_bytes_async(resolved_path, buffer.read())
 
     async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
         resolved_pattern = self._resolve_path(pattern)

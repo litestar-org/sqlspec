@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 import contextlib
 import csv
 import sqlite3
@@ -117,13 +116,16 @@ class SqliteDriver(
         if unsupported_styles:
             # Convert to default style if we have unsupported styles
             target_style = self.default_parameter_style
+        elif len(detected_styles) > 1:
+            # Mixed styles detected - use default style for consistency
+            target_style = self.default_parameter_style
         elif detected_styles:
-            # Use the first detected style if all are supported
-            # Prefer the first supported style found
-            for style in detected_styles:
-                if style in self.supported_parameter_styles:
-                    target_style = style
-                    break
+            # Single style detected - use it if supported
+            single_style = next(iter(detected_styles))
+            if single_style in self.supported_parameter_styles:
+                target_style = single_style
+            else:
+                target_style = self.default_parameter_style
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)
@@ -156,7 +158,7 @@ class SqliteDriver(
                 return {
                     "data": fetched_data,
                     "column_names": [col[0] for col in cursor.description or []],
-                    "rows_affected": cursor.rowcount,
+                    "rows_affected": len(fetched_data),
                 }
             return {"rows_affected": cursor.rowcount, "status_message": "OK"}
 

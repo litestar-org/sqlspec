@@ -1,4 +1,3 @@
-# ruff: noqa: RUF043
 """Unit tests for InsertBuilder functionality.
 
 This module tests all InsertBuilder functionality including:

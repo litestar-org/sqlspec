@@ -1,4 +1,3 @@
-# ruff: noqa: PLR0904, PLR6301
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:

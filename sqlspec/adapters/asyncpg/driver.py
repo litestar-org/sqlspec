@@ -110,20 +110,26 @@ class AsyncpgDriver(
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)
-            params = self._process_parameters(params)
             return await self._execute_many(sql, params, connection=connection, **kwargs)
 
         sql, params = statement.compile(placeholder_style=target_style)
-        params = self._process_parameters(params)
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
-        # Parameters are already in the correct format from compile()
+        # Process parameters to handle TypedParameter objects
+        parameters = self._process_parameters(parameters)
+
+        # Check if this is actually a many operation that was misrouted
+        if statement.is_many:
+            # This should have gone to _execute_many, redirect it
+            return await self._execute_many(sql, parameters, connection=connection, **kwargs)
+
         # AsyncPG expects parameters as *args, not a single list
         args_for_driver: list[Any] = []
+
         if parameters is not None:
             if isinstance(parameters, (list, tuple)):
                 args_for_driver.extend(parameters)
@@ -132,9 +138,11 @@ class AsyncpgDriver(
 
         if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
             records = await conn.fetch(sql, *args_for_driver)
+            # Convert asyncpg Records to dicts
+            data = [dict(record) for record in records]
             # Get column names from first record or empty list
             column_names = list(records[0].keys()) if records else []
-            result: SelectResultDict = {"data": records, "column_names": column_names, "rows_affected": len(records)}
+            result: SelectResultDict = {"data": data, "column_names": column_names, "rows_affected": len(records)}
             return result
 
         status = await conn.execute(sql, *args_for_driver)
@@ -152,6 +160,9 @@ class AsyncpgDriver(
         self, sql: str, param_list: Any, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
         conn = self._connection(connection)
+        # Process parameters to handle TypedParameter objects
+        param_list = self._process_parameters(param_list)
+
         params_list: list[tuple[Any, ...]] = []
         rows_affected = 0
         if param_list and isinstance(param_list, Sequence):
@@ -163,7 +174,10 @@ class AsyncpgDriver(
                 else:
                     params_list.append((param_set,))
 
-            await conn.executemany(sql, params_list)
+            _status = await conn.executemany(sql, params_list)
+            # AsyncPG's executemany returns None, not a status string
+            # We need to use the number of parameter sets as the row count
+            rows_affected = len(params_list)
 
         dml_result: DMLResultDict = {"rows_affected": rows_affected, "status_message": "OK"}
         return dml_result
@@ -322,7 +336,6 @@ class AsyncpgDriver(
                             metadata={"status_message": last_status, "statements_executed": len(script_statements)},
                         )
                     else:
-                        # Regular execute for DML/DDL
                         status = await connection.execute(sql_str, *params)
                         rows_affected = self._parse_asyncpg_status(status)
                         result = SQLResult[RowT](
@@ -339,10 +352,10 @@ class AsyncpgDriver(
                     results.append(result)
 
                 except Exception as e:
-                    if options.get("continue_on_error", False):
+                    if options.get("continue_on_error"):
                         # Create error result
                         error_result = SQLResult[RowT](
-                            statement=op.sql, error=e, operation_index=i, parameters=op.original_params
+                            statement=op.sql, error=e, operation_index=i, parameters=op.original_params, data=[]
                         )
                         results.append(error_result)
                     else:

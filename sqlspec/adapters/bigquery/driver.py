@@ -1,5 +1,3 @@
-# ruff: noqa: PLR6301
-import contextlib
 import datetime
 import io
 import logging
@@ -142,24 +140,26 @@ class BigQueryDriver(
         Raises:
             SQLSpecError: If value type is not supported.
         """
-        if isinstance(value, bool):
-            return "BOOL", None
-        if isinstance(value, int):
-            return "INT64", None
-        if isinstance(value, float):
-            return "FLOAT64", None
-        if isinstance(value, Decimal):
-            return "BIGNUMERIC", None
-        if isinstance(value, str):
-            return "STRING", None
-        if isinstance(value, bytes):
-            return "BYTES", None
-        if isinstance(value, datetime.datetime):
-            return "TIMESTAMP" if value.tzinfo else "DATETIME", None
-        if isinstance(value, datetime.date):
-            return "DATE", None
-        if isinstance(value, datetime.time):
-            return "TIME", None
+        type_map = {
+            bool: ("BOOL", None),
+            int: ("INT64", None),
+            float: ("FLOAT64", None),
+            Decimal: ("BIGNUMERIC", None),
+            str: ("STRING", None),
+            bytes: ("BYTES", None),
+            datetime.datetime: ("TIMESTAMP" if value.tzinfo else "DATETIME", None),
+            datetime.date: ("DATE", None),
+            datetime.time: ("TIME", None),
+            dict: ("JSON", None),
+        }
+
+        value_type = type(value)
+
+        # Direct mapping for simple types
+        if value_type in type_map:
+            return type_map[value_type]
+
+        # Handle lists/tuples for ARRAY type
         if isinstance(value, (list, tuple)):
             if not value:
                 msg = "Cannot determine BigQuery ARRAY type for empty sequence. Provide typed empty array or ensure context implies type."
@@ -169,8 +169,8 @@ class BigQueryDriver(
                 msg = f"Unsupported element type in ARRAY: {type(value[0])}"
                 raise SQLSpecError(msg)
             return "ARRAY", element_type
-        if isinstance(value, dict):
-            return "JSON", None
+
+        # Fallback for unhandled types
         return None, None
 
     def _prepare_bq_query_parameters(
@@ -288,6 +288,30 @@ class BigQueryDriver(
         """
         return [dict(row) for row in rows_iterator]  # type: ignore[misc]
 
+    def _handle_select_job(self, query_job: QueryJob) -> SelectResultDict:
+        """Handle a query job that is expected to return rows."""
+        job_result = query_job.result()
+        rows_list = self._rows_to_results(iter(job_result))
+        column_names = [field.name for field in query_job.schema] if query_job.schema else []
+
+        return {"data": rows_list, "column_names": column_names, "rows_affected": len(rows_list)}
+
+    def _handle_dml_job(self, query_job: QueryJob) -> DMLResultDict:
+        """Handle a DML job."""
+        query_job.result()  # Wait for the job to complete
+        num_affected = query_job.num_dml_affected_rows
+
+        # BigQuery emulator workaround: if num_dml_affected_rows is None or 0 for DML, assume success
+        if (
+            (num_affected is None or num_affected == 0)
+            and query_job.statement_type in {"INSERT", "UPDATE", "DELETE", "MERGE"}
+            and query_job.state == "DONE"
+            and not query_job.errors
+        ):
+            num_affected = 1  # Assume at least one row was affected
+
+        return {"rows_affected": num_affected or 0, "status_message": f"OK - job_id: {query_job.job_id}"}
+
     def _execute_statement(
         self, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
@@ -321,104 +345,35 @@ class BigQueryDriver(
     ) -> Union[SelectResultDict, DMLResultDict]:
         # SQL should already be in correct format from compile()
         converted_sql = sql
-
         # Parameters are already in the correct format from compile()
         converted_params = parameters
 
         # Prepare BigQuery parameters
         # Convert various parameter formats to dict format for BigQuery
+        param_dict: dict[str, Any]
         if converted_params is None:
-            bq_params = []
+            param_dict = {}
         elif isinstance(converted_params, dict):
-            bq_params = self._prepare_bq_query_parameters(converted_params)
-        elif isinstance(converted_params, list):
+            param_dict = converted_params
+        elif isinstance(converted_params, (list, tuple)):
             # Convert positional parameters to named parameters for BigQuery
             param_dict = {f"param_{i}": val for i, val in enumerate(converted_params)}
-            bq_params = self._prepare_bq_query_parameters(param_dict) if param_dict else []
         else:
             # Single scalar parameter
             param_dict = {"param_0": converted_params}
-            bq_params = self._prepare_bq_query_parameters(param_dict)
+
+        bq_params = self._prepare_bq_query_parameters(param_dict)
         query_job = self._run_query_job(converted_sql, bq_params, connection=connection)
+
         try:
-            job_result = query_job.result(timeout=kwargs.get("bq_job_timeout"))
-            schema = None
-            if hasattr(job_result, "schema") and job_result.schema:
-                schema = job_result.schema
-            elif query_job.schema:
-                schema = query_job.schema
-            sql_upper = converted_sql.upper().strip()
-            is_dml = any(sql_upper.startswith(kw) for kw in ["INSERT", "UPDATE", "DELETE", "MERGE"])
-
-            # For SELECT statements, we should always return data format
-            if not is_dml and (query_job.statement_type and query_job.statement_type.upper() == "SELECT"):
-                # Query returned data - fetch it
-                try:
-                    rows_list = self._rows_to_results(iter(job_result))
-                except (TypeError, AttributeError):
-                    # Handle Mock objects in unit tests
-                    rows_list = []
-
-                column_names = []
-                if schema:
-                    try:
-                        column_names = [field.name for field in schema]
-                    except (TypeError, AttributeError):
-                        # Handle Mock objects in unit tests
-                        column_names = []
-                logger.debug("Returning SELECT result with %d rows", len(rows_list))
-                result: SelectResultDict = {
-                    "data": rows_list,
-                    "column_names": column_names,
-                    "rows_affected": len(rows_list),
-                }
-                return result
-
-            # Check both schema exists and has fields for other query types that might return data
-            try:
-                has_schema_fields = schema is not None and len(schema) > 0
-            except (TypeError, AttributeError):
-                # Handle Mock objects in unit tests that don't have len()
-                has_schema_fields = schema is not None
-
-            if has_schema_fields:
-                # Query returned data - fetch it
-                try:
-                    rows_list = self._rows_to_results(iter(job_result))
-                except (TypeError, AttributeError):
-                    # Handle Mock objects in unit tests
-                    rows_list = []
-
-                column_names = []
-                if schema is not None:
-                    with contextlib.suppress(TypeError, AttributeError):
-                        # Handle Mock objects in unit tests
-                        column_names = [field.name for field in schema]
-                logger.debug("Returning data result with %d rows", len(rows_list))
-                data_result: SelectResultDict = {
-                    "data": rows_list,
-                    "column_names": column_names,
-                    "rows_affected": len(rows_list),
-                }
-                return data_result
-            # For DML/DDL queries that don't return data
-            # BigQuery emulator may not properly report num_dml_affected_rows
-            num_affected = query_job.num_dml_affected_rows
-
-            # BigQuery emulator workaround: if num_dml_affected_rows is None or 0 for DML, assume success
-            if (
-                (num_affected is None or num_affected == 0)
-                and is_dml
-                and query_job.state == "DONE"
-                and not query_job.errors
+            if query_job.statement_type == "SELECT" or (
+                hasattr(query_job, "schema") and query_job.schema and len(query_job.schema) > 0
             ):
-                num_affected = 1
-
+                return self._handle_select_job(query_job)
+            return self._handle_dml_job(query_job)
         except Exception:
             logger.exception("BigQuery job failed")
             raise
-
-        return {"rows_affected": num_affected or 0, "status_message": f"OK - job_id: {query_job.job_id}"}
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[BigQueryConnection] = None, **kwargs: Any

@@ -14,6 +14,9 @@ from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.parameters import ParameterConverter, ParameterStyle, ParameterValidator
 from sqlspec.statement.pipelines.base import StatementPipeline
 from sqlspec.statement.pipelines.context import SQLProcessingContext
+from sqlspec.statement.pipelines.transformers import CommentRemover, ExpressionSimplifier, ParameterizeLiterals
+from sqlspec.statement.pipelines.validators import DMLSafetyValidator, ParameterStyleValidator
+from sqlspec.typing import is_dict
 from sqlspec.utils.logging import get_logger
 
 __all__ = ("SQL", "SQLConfig", "Statement")
@@ -90,8 +93,6 @@ class SQLConfig:
             StatementPipeline configured with transformers, validators, and analyzers
         """
         # Import here to avoid circular dependencies
-        from sqlspec.statement.pipelines.transformers import CommentRemover, ExpressionSimplifier, ParameterizeLiterals
-        from sqlspec.statement.pipelines.validators import DMLSafetyValidator, ParameterStyleValidator
 
         # Create transformers based on config
         transformers = []
@@ -100,7 +101,13 @@ class SQLConfig:
             transformers = list(self.transformers)
         # Use default transformers
         elif self.enable_transformations:
-            transformers = [CommentRemover(), ParameterizeLiterals(), ExpressionSimplifier()]
+            # Use target_parameter_style if available, otherwise default to "?"
+            placeholder_style = self.target_parameter_style or "?"
+            transformers = [
+                CommentRemover(),
+                ParameterizeLiterals(placeholder_style=placeholder_style),
+                ExpressionSimplifier(),
+            ]
 
         # Create validators based on config
         validators = []
@@ -109,11 +116,7 @@ class SQLConfig:
             validators = list(self.validators)
         # Use default validators
         elif self.enable_validation:
-            validators = [
-                ParameterStyleValidator(),
-                DMLSafetyValidator(),
-                # PerformanceValidator(),  # Commented out to allow SELECT * in tests
-            ]
+            validators = [ParameterStyleValidator(), DMLSafetyValidator()]
 
         # Create analyzers based on config
         analyzers = []
@@ -207,6 +210,15 @@ class SQL:
             # Store raw SQL string if provided
             if isinstance(statement, str):
                 self._raw_sql = statement
+                # Check if the SQL already has placeholders
+                if self._raw_sql and not self._config.input_sql_had_placeholders:
+                    # Use parameter validator to check for existing placeholders
+                    param_info = self._config.parameter_validator.extract_parameters(self._raw_sql)
+                    if param_info:
+                        # SQL already has placeholders, update config
+                        from dataclasses import replace
+
+                        self._config = replace(self._config, input_sql_had_placeholders=True)
             elif isinstance(statement, exp.Expression):
                 self._raw_sql = statement.sql(dialect=self._dialect)
             else:
@@ -312,7 +324,9 @@ class SQL:
 
         # Merge parameters from pipeline
         merged_params = final_params
-        if result.context.extracted_parameters_from_pipeline:
+        # Only merge extracted parameters if the original SQL didn't have placeholders
+        # If it already had placeholders, the parameters should already be provided
+        if result.context.extracted_parameters_from_pipeline and not context.input_sql_had_placeholders:
             if isinstance(merged_params, dict):
                 for i, param in enumerate(result.context.extracted_parameters_from_pipeline):
                     param_name = f"_arg_{i}"
@@ -380,7 +394,8 @@ class SQL:
             return exp.Anonymous(this=statement)
         return first_expr
 
-    def _extract_filter_parameters(self, filter_obj: StatementFilter) -> tuple[list[Any], dict[str, Any]]:
+    @staticmethod
+    def _extract_filter_parameters(filter_obj: StatementFilter) -> tuple[list[Any], dict[str, Any]]:
         """Extract parameters from a filter object."""
         if hasattr(filter_obj, "extract_parameters"):
             return filter_obj.extract_parameters()
@@ -423,8 +438,8 @@ class SQL:
             return SQL(
                 new_statement,
                 parameters,
-                dialect=new_dialect,
-                config=new_config,
+                _dialect=new_dialect,
+                _config=new_config,
                 _builder_result_type=self._builder_result_type,
                 _existing_state=None,  # Don't use existing state
                 **kwargs,
@@ -432,8 +447,8 @@ class SQL:
 
         return SQL(
             new_statement,
-            dialect=new_dialect,
-            config=new_config,
+            _dialect=new_dialect,
+            _config=new_config,
             _builder_result_type=self._builder_result_type,
             _existing_state=existing_state,
             **kwargs,
@@ -592,6 +607,7 @@ class SQL:
 
         # Ensure processed
         self._ensure_processed()
+        assert self._processed_state is not None
         return self._processed_state.processed_sql
 
     @property
@@ -601,12 +617,14 @@ class SQL:
         if not self._config.enable_parsing:
             return None
         self._ensure_processed()
+        assert self._processed_state is not None
         return self._processed_state.processed_expression
 
     @property
     def parameters(self) -> Any:
         """Get merged parameters."""
         self._ensure_processed()
+        assert self._processed_state is not None
         return self._processed_state.merged_parameters
 
     @property
@@ -634,10 +652,19 @@ class SQL:
 
     def compile(self, placeholder_style: Optional[str] = None) -> tuple[str, Any]:
         """Compile to SQL and parameters."""
+        # For scripts, return raw SQL directly without processing
+        if self._is_script:
+            return self.sql, None
+
+        # If parsing is disabled, return raw SQL without transformation
+        if not self._config.enable_parsing and self._raw_sql:
+            return self._raw_sql, self._raw_parameters
+
         # Ensure processed
         self._ensure_processed()
 
         # Get processed SQL and parameters
+        assert self._processed_state is not None
         sql = self._processed_state.processed_sql
         params = self._processed_state.merged_parameters
 
@@ -672,6 +699,9 @@ class SQL:
                     elif target_style == ParameterStyle.NAMED_COLON:
                         # Use generated parameter names
                         new_placeholder = f":param_{p.ordinal}"
+                    elif target_style == ParameterStyle.NAMED_AT:
+                        # Use @ prefix for BigQuery style
+                        new_placeholder = f"@{p.name or f'param_{p.ordinal}'}"
                     elif target_style == ParameterStyle.POSITIONAL_COLON:
                         # Keep the original numeric placeholder
                         new_placeholder = p.placeholder_text
@@ -709,7 +739,7 @@ class SQL:
                             if i < len(params):
                                 result_dict[p.name] = params[i]
                         params = result_dict
-                    elif not isinstance(params, dict):
+                    elif not is_dict(params):
                         # Single value - map to first parameter name
                         if param_info:
                             params = {param_info[0].name: params}
@@ -717,8 +747,38 @@ class SQL:
                     ParameterStyle.QMARK,
                     ParameterStyle.NUMERIC,
                     ParameterStyle.POSITIONAL_PYFORMAT,
-                } and isinstance(params, dict):
-                    params = [params.get(p.name, None) for p in param_info if p.name in params]
+                } and is_dict(params):
+                    # Convert dict to list, preserving order from param_info
+                    result_list = []
+                    for p in param_info:
+                        if p.name and p.name in params:
+                            # Named parameter - get from dict
+                            result_list.append(params[p.name])
+                        elif p.name is None:
+                            # Unnamed parameter (qmark style) - look for _arg_N
+                            arg_key = f"_arg_{p.ordinal}"
+                            if arg_key in params:
+                                # Extract value from TypedParameter if needed
+                                val = params[arg_key]
+                                if hasattr(val, "value"):
+                                    result_list.append(val.value)
+                                else:
+                                    result_list.append(val)
+                            else:
+                                result_list.append(None)
+                        else:
+                            # Named parameter not in dict
+                            result_list.append(None)
+                    params = result_list
+                elif target_style == ParameterStyle.NAMED_COLON and is_dict(params):
+                    # Remap dict keys to match the generated parameter names
+                    result_dict = {}
+                    for p in param_info:
+                        if p.name and p.name in params:
+                            # Map from original name to generated name
+                            new_name = f"param_{p.ordinal}"
+                            result_dict[new_name] = params[p.name]
+                    params = result_dict
                 elif target_style == ParameterStyle.NAMED_PYFORMAT and isinstance(params, (list, tuple)):
                     # Convert list to dict with generated names
                     result_dict = {}
@@ -760,7 +820,14 @@ class SQL:
         """Get parameter information from the SQL statement."""
         # Use the parameter validator to extract parameter info
         validator = self._config.parameter_validator
-        return validator.extract_parameters(self.sql)
+        # For parameter validation, use the SQL formatted for the target dialect
+        # This ensures we validate the actual placeholders that would be sent to the database
+        if self._config.enable_parsing and self._processed_state:
+            # Get the SQL formatted for the dialect
+            sql_for_validation = self.expression.sql(dialect=self._dialect) if self.expression else self.sql
+        else:
+            sql_for_validation = self.sql
+        return validator.extract_parameters(sql_for_validation)
 
     @property
     def _raw_parameters(self) -> Any:

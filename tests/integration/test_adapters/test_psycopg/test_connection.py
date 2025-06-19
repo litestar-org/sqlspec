@@ -18,6 +18,7 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
         async with conn.cursor() as cur:
             await cur.execute("SELECT 1 AS id")
             result = await cur.fetchone()
+            # The config should set DictRow as the row factory
             assert result == {"id": 1}
     await async_config.close_pool()
     # Test connection pool

@@ -451,9 +451,11 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
     # Use a config with strict_mode disabled, parsing and validation disabled for statements that SQLGlot can't parse
     non_strict_config = SQLConfig(strict_mode=False, enable_parsing=False, enable_validation=False)
 
-    await aiosqlite_session.execute("ATTACH DATABASE ':memory:' AS temp_db", config=non_strict_config)
-    await aiosqlite_session.execute("CREATE TABLE temp_db.temp_table (id INTEGER, name TEXT)", config=non_strict_config)
-    await aiosqlite_session.execute("INSERT INTO temp_db.temp_table VALUES (1, 'temp')", config=non_strict_config)
+    await aiosqlite_session.execute("ATTACH DATABASE ':memory:' AS temp_db", _config=non_strict_config)
+    await aiosqlite_session.execute(
+        "CREATE TABLE temp_db.temp_table (id INTEGER, name TEXT)", _config=non_strict_config
+    )
+    await aiosqlite_session.execute("INSERT INTO temp_db.temp_table VALUES (1, 'temp')", _config=non_strict_config)
 
     temp_result = await aiosqlite_session.execute("SELECT * FROM temp_db.temp_table")
     assert isinstance(temp_result, SQLResult)
@@ -462,7 +464,7 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
     assert temp_result.data[0]["name"] == "temp"
 
     try:
-        await aiosqlite_session.execute("DETACH DATABASE temp_db", config=non_strict_config)
+        await aiosqlite_session.execute("DETACH DATABASE temp_db", _config=non_strict_config)
     except Exception:
         # Database might be locked, which is fine for this test
         pass
@@ -478,6 +480,7 @@ async def test_aiosqlite_fetch_arrow_table(aiosqlite_session: AiosqliteDriver) -
     assert isinstance(result, ArrowResult)
     assert result.num_rows == 2
     assert set(result.column_names) == {"name", "value"}
+    assert result.data is not None
     table = result.data
     names = table["name"].to_pylist()
     assert "arrow1" in names and "arrow2" in names

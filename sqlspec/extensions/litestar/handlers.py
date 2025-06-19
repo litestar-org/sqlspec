@@ -1,4 +1,3 @@
-# ruff: noqa: PLC2801
 import contextlib
 import inspect
 from collections.abc import AsyncGenerator

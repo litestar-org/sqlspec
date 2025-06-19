@@ -223,11 +223,21 @@ class SyncStorageMixin(StorageMixinBase):
         """
         self._ensure_pyarrow_installed()
 
-        return self._fetch_arrow_table(
-            SQL(statement, *parameters, _config=_config or self.config, _dialect=self.dialect, **kwargs),  # type: ignore[arg-type]
-            connection=_connection,
-            **kwargs,
-        )
+        filters, params = _separate_filters_from_parameters(parameters)
+        # Convert to SQL object for processing
+        # Use a custom config if transformations will add parameters
+        if _config is None:
+            _config = self.config
+            # If no parameters provided but we have transformations enabled,
+            # disable strict mode to allow transformer-added parameters
+            if params is None and _config and _config.enable_transformations:
+                from dataclasses import replace
+
+                logger.debug("Disabling strict mode for fetch_arrow_table with transformations")
+                _config = replace(_config, strict_mode=False)
+        sql = SQL(statement, params, *filters, _config=_config, _dialect=self.dialect, **kwargs)
+
+        return self._fetch_arrow_table(sql, connection=_connection, **kwargs)
 
     def _fetch_arrow_table(self, sql: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any) -> "ArrowResult":
         """Generic fallback for Arrow table fetching.
@@ -548,7 +558,17 @@ class AsyncStorageMixin(StorageMixinBase):
 
         filters, params = _separate_filters_from_parameters(parameters)
         # Convert to SQL object for processing
-        sql = SQL(statement, params, *filters, _config=_config or self.config, _dialect=self.dialect, **kwargs)
+        # Use a custom config if transformations will add parameters
+        if _config is None:
+            _config = self.config
+            # If no parameters provided but we have transformations enabled,
+            # disable strict mode to allow transformer-added parameters
+            if params is None and _config and _config.enable_transformations:
+                from dataclasses import replace
+
+                logger.debug("Disabling strict mode for fetch_arrow_table with transformations")
+                _config = replace(_config, strict_mode=False)
+        sql = SQL(statement, params, *filters, _config=_config, _dialect=self.dialect, **kwargs)
 
         # Delegate to protected method that drivers can override
         return await self._fetch_arrow_table(sql, connection=_connection, **kwargs)

@@ -7,6 +7,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 
 from psycopg.rows import DictRow as PsycopgDictRow
+from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
 from sqlspec.adapters.psycopg.driver import (
@@ -238,7 +239,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             config.update(self.kwargs)
 
         # Set DictRow as the row factory
-        config["row_factory"] = PsycopgDictRow
+        config["row_factory"] = dict_row
 
         return config
 
@@ -261,7 +262,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             config.update(self.kwargs)
 
         # Set DictRow as the row factory
-        config["row_factory"] = PsycopgDictRow
+        config["row_factory"] = dict_row
 
         return config
 
@@ -284,8 +285,14 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 "max_idle": all_config.pop("max_idle", 600.0),
                 "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
                 "num_workers": all_config.pop("num_workers", 3),
-                "configure": all_config.pop("configure", None),
             }
+            
+            # Create a configure callback to set row_factory
+            def configure_connection(conn: "PsycopgSyncConnection") -> None:
+                # Set DictRow as the row factory
+                conn.row_factory = dict_row
+                
+            pool_params["configure"] = all_config.pop("configure", configure_connection)
 
             # Remove None values from pool_params
             pool_params = {k: v for k, v in pool_params.items() if v is not None}
@@ -294,9 +301,15 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             conninfo = all_config.pop("conninfo", None)
             if conninfo:
                 # If conninfo is provided, use it directly
-                pool = ConnectionPool(conninfo, kwargs=all_config, **pool_params)
+                # Don't pass kwargs when using conninfo string
+                pool = ConnectionPool(conninfo, **pool_params)
             else:
                 # Otherwise, pass connection parameters via kwargs
+                # Remove any non-connection parameters
+                # row_factory is already popped out earlier
+                all_config.pop("row_factory", None)
+                # Remove pool-specific settings that may have been left
+                all_config.pop("kwargs", None)
                 pool = ConnectionPool("", kwargs=all_config, **pool_params)
 
             logger.info("Psycopg connection pool created successfully", extra={"adapter": "psycopg"})
@@ -560,7 +573,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             config.update(self.kwargs)
 
         # Set DictRow as the row factory
-        config["row_factory"] = PsycopgDictRow
+        config["row_factory"] = dict_row
 
         return config
 
@@ -583,7 +596,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             config.update(self.kwargs)
 
         # Set DictRow as the row factory
-        config["row_factory"] = PsycopgDictRow
+        config["row_factory"] = dict_row
 
         return config
 
@@ -606,8 +619,14 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
                 "max_idle": all_config.pop("max_idle", 600.0),
                 "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
                 "num_workers": all_config.pop("num_workers", 3),
-                "configure": all_config.pop("configure", None),
             }
+            
+            # Create a configure callback to set row_factory
+            async def configure_connection(conn: "PsycopgAsyncConnection") -> None:
+                # Set DictRow as the row factory
+                conn.row_factory = dict_row
+                
+            pool_params["configure"] = all_config.pop("configure", configure_connection)
 
             # Remove None values from pool_params
             pool_params = {k: v for k, v in pool_params.items() if v is not None}
@@ -616,9 +635,15 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             conninfo = all_config.pop("conninfo", None)
             if conninfo:
                 # If conninfo is provided, use it directly
-                pool = AsyncConnectionPool(conninfo, kwargs=all_config, **pool_params)
+                # Don't pass kwargs when using conninfo string
+                pool = AsyncConnectionPool(conninfo, **pool_params)
             else:
                 # Otherwise, pass connection parameters via kwargs
+                # Remove any non-connection parameters
+                # row_factory is already popped out earlier
+                all_config.pop("row_factory", None)
+                # Remove pool-specific settings that may have been left
+                all_config.pop("kwargs", None)
                 pool = AsyncConnectionPool("", kwargs=all_config, **pool_params)
 
             await pool.open()

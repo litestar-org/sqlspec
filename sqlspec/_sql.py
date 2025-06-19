@@ -1,4 +1,3 @@
-# ruff: noqa: PLR0904
 """Unified SQL factory for creating SQL builders and column expressions with a clean API.
 
 This module provides the `sql` factory object for easy SQL construction:

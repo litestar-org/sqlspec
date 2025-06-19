@@ -86,7 +86,7 @@ class StatementResult(ABC, Generic[RowT]):
     """The original SQL statement that was executed."""
     data: "Any"
     """The result data from the operation."""
-    rows_affected: Optional[int] = None
+    rows_affected: int = 0
     """Number of rows affected by the operation."""
     last_inserted_id: Optional[Union[int, str]] = None
     """Last inserted ID from the operation."""
@@ -450,10 +450,10 @@ class ArrowResult(StatementResult[ArrowTable]):
         schema: Optional Arrow schema information.
     """
 
-    data: "Optional[ArrowTable]" = None
-    """The result data from the operation."""
     schema: Optional["dict[str, Any]"] = None
     """Optional Arrow schema information."""
+    data: "ArrowTable"
+    """The result data from the operation."""
 
     def is_success(self) -> bool:
         """Check if the Arrow operation was successful.
@@ -461,7 +461,7 @@ class ArrowResult(StatementResult[ArrowTable]):
         Returns:
             True if the operation completed successfully and has valid Arrow data.
         """
-        return self.data is not None
+        return bool(self.data)
 
     def get_data(self) -> "ArrowTable":
         """Get the Apache Arrow Table from the result.

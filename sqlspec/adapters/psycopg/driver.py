@@ -89,7 +89,10 @@ class PsycopgSyncDriver(
             params = self._process_parameters(params)
             return self._execute_many(sql, params, connection=connection, **kwargs)
 
+        # Debug the compilation
+        logger.debug(f"Original SQL: {statement._sql}")
         sql, params = statement.compile(placeholder_style=target_style)
+        logger.debug(f"Compiled SQL: {sql}")
         params = self._process_parameters(params)
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
@@ -102,22 +105,16 @@ class PsycopgSyncDriver(
         **kwargs: Any,
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
-        with self._get_cursor(conn) as cursor:
+        with conn.cursor() as cursor:
+            # Debug: log the SQL being executed
+            logger.debug(f"Executing SQL: {sql}")
+            logger.debug(f"With parameters: {parameters}")
             cursor.execute(sql, parameters)
-            if cursor.description is not None:
+            if self.returns_rows(statement.expression):
                 fetched_data = cursor.fetchall()
-                column_names = [col.name for col in cursor.description]
-                result: SelectResultDict = {
-                    "data": fetched_data,
-                    "column_names": column_names,
-                    "rows_affected": cursor.rowcount,
-                }
-                return result
-            dml_result: DMLResultDict = {
-                "rows_affected": cursor.rowcount,
-                "status_message": cursor.statusmessage or "OK",
-            }
-            return dml_result
+                column_names = [col.name for col in cursor.description or []]
+                return {"data": fetched_data, "column_names": column_names, "rows_affected": len(fetched_data)}
+            return {"rows_affected": cursor.rowcount, "status_message": cursor.statusmessage or "OK"}
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[PsycopgSyncConnection] = None, **kwargs: Any
@@ -206,17 +203,17 @@ class PsycopgSyncDriver(
                 statement=statement,
                 data=[],
                 rows_affected=0,
-                operation_type=operation_type or "SCRIPT",
-                metadata={"status_message": result["status_message"]},
+                operation_type="SCRIPT",
+                metadata={"status_message": result.get("status_message", "")},
             )
 
         if is_dict_with_field(result, "rows_affected"):
             return SQLResult[RowT](
                 statement=statement,
                 data=[],
-                rows_affected=result["rows_affected"],
+                rows_affected=cast("int", result.get("rows_affected", -1)),
                 operation_type=operation_type,
-                metadata={"status_message": result["status_message"]},
+                metadata={"status_message": result.get("status_message", "")},
             )
 
         # This shouldn't happen with TypedDict approach
@@ -288,7 +285,6 @@ class PsycopgSyncDriver(
                 msg, operation_index=index, partial_results=[], failed_operation=operation
             ) from e
         else:
-            # Add pipeline context
             result.operation_index = index
             result.pipeline_sql = operation.sql
             return result
@@ -479,25 +475,20 @@ class PsycopgAsyncDriver(
         **kwargs: Any,
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
-        psycopg_params = parameters
-        async with self._get_cursor(conn) as cursor:
-            # Psycopg accepts tuple, list, dict or None for parameters
-            await cursor.execute(sql, psycopg_params)
+        async with conn.cursor() as cursor:
+            await cursor.execute(sql, parameters)
 
-            # Check if the query returned data by examining cursor.description
-            # This handles SELECT, INSERT...RETURNING, UPDATE...RETURNING, etc.
-            if cursor.description is not None:
-                # Query returned data - fetch it
+            if self.returns_rows(statement.expression):
+                # For SELECT statements, extract data while cursor is open
                 fetched_data = await cursor.fetchall()
-                column_names = [col.name for col in cursor.description]
+                column_names = [col.name for col in cursor.description or []]
                 result: SelectResultDict = {
                     "data": fetched_data,
                     "column_names": column_names,
-                    "rows_affected": cursor.rowcount,
+                    "rows_affected": len(fetched_data),
                 }
                 return result
-
-            # For DML/DDL queries that don't return data
+            # For DML statements
             dml_result: DMLResultDict = {
                 "rows_affected": cursor.rowcount,
                 "status_message": cursor.statusmessage or "OK",
@@ -508,8 +499,7 @@ class PsycopgAsyncDriver(
         self, sql: str, param_list: Any, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
         conn = self._connection(connection)
-        async with self._get_cursor(conn) as cursor:
-            # Psycopg expects a list of parameter dicts for executemany
+        async with conn.cursor() as cursor:
             await cursor.executemany(sql, param_list or [])
             result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": cursor.statusmessage or "OK"}
             return result
@@ -518,7 +508,7 @@ class PsycopgAsyncDriver(
         self, script: str, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
     ) -> ScriptResultDict:
         conn = self._connection(connection)
-        async with self._get_cursor(conn) as cursor:
+        async with conn.cursor() as cursor:
             await cursor.execute(script)
             # For scripts, return script result format
             result: ScriptResultDict = {
@@ -531,7 +521,7 @@ class PsycopgAsyncDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
 
-        async with self._get_cursor(conn) as cursor:
+        async with conn.cursor() as cursor:
             await cursor.execute(
                 sql.to_sql(placeholder_style=self.default_parameter_style),
                 sql.get_parameters(style=self.default_parameter_style) or [],
@@ -544,7 +534,7 @@ class PsycopgAsyncDriver(
         import pyarrow.csv as pacsv
 
         conn = self._connection(None)
-        async with self._get_cursor(conn) as cursor:
+        async with conn.cursor() as cursor:
             if mode == "replace":
                 await cursor.execute(f"TRUNCATE TABLE {table_name}")
             elif mode == "create":
@@ -597,19 +587,18 @@ class PsycopgAsyncDriver(
                 statement=statement,
                 data=[],
                 rows_affected=0,
-                operation_type=operation_type or "SCRIPT",
-                metadata={"status_message": result["status_message"]},
+                operation_type="SCRIPT",
+                metadata={"status_message": result.get("status_message", "")},
             )
 
         if is_dict_with_field(result, "rows_affected"):
             return SQLResult[RowT](
                 statement=statement,
                 data=[],
-                rows_affected=result["rows_affected"],
+                rows_affected=cast("int", result.get("rows_affected", -1)),
                 operation_type=operation_type,
-                metadata={"status_message": result["status_message"]},
+                metadata={"status_message": result.get("status_message", "")},
             )
-
         # This shouldn't happen with TypedDict approach
         msg = f"Unexpected result type: {type(result)}"
         raise ValueError(msg)

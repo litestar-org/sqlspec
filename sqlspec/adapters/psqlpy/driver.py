@@ -102,18 +102,16 @@ class PsqlpyDriver(
                 dict_rows = [dict(row) for row in query_result if hasattr(row, "__iter__")]  # pyright: ignore
             column_names = list(dict_rows[0].keys()) if dict_rows else []
             return {"data": dict_rows, "column_names": column_names, "rows_affected": len(dict_rows)}
-        rows_affected = await conn.execute(sql, parameters=parameters)
-        # Cast to int - psqlpy execute returns a QueryResult that may need conversion
-        affected_count = getattr(rows_affected, "rows_affected", -1) if rows_affected is not None else -1
+        query_result = await conn.execute(sql, parameters=parameters)
+        affected_count = query_result.rows_affected() if query_result is not None else -1
         return {"rows_affected": affected_count, "status_message": "OK"}
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
         conn = self._connection(connection)
-        rows_affected = await conn.execute_many(sql, param_list or [])
-        # Cast to int - psqlpy execute_many returns a QueryResult that may need conversion
-        affected_count = getattr(rows_affected, "rows_affected", -1) if rows_affected is not None else -1
+        query_result = await conn.execute_many(sql, param_list or [])
+        affected_count = query_result.rows_affected() if query_result is not None else -1
         return {"rows_affected": affected_count, "status_message": "OK"}
 
     async def _execute_script(

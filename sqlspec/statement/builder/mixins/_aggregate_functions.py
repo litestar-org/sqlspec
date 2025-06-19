@@ -11,7 +11,7 @@ __all__ = ("AggregateFunctionsMixin",)
 class AggregateFunctionsMixin:
     """Mixin providing aggregate function methods for SQL builders."""
 
-    def count_(self, column: Union[str, exp.Expression] = "*", alias: Optional[str] = None) -> Any:
+    def count_(self, column: "Union[str, exp.Expression]" = "*", alias: Optional[str] = None) -> Any:
         """Add COUNT function to SELECT clause.
 
         Args:

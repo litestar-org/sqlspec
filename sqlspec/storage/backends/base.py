@@ -1,4 +1,3 @@
-# ruff: noqa: PLR0904
 """Base class for storage backends."""
 
 from __future__ import annotations

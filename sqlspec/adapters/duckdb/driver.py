@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 import contextlib
 import uuid
 from collections.abc import Generator
@@ -99,16 +98,16 @@ class DuckDBDriver(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
     ) -> "Union[SelectResultDict, DMLResultDict]":
         conn = self._connection(connection)
-        result = conn.execute(sql, parameters or [])
 
         if self.returns_rows(statement.expression):
+            result = conn.execute(sql, parameters or [])
             fetched_data = result.fetchall()
             column_names = [col[0] for col in result.description or []]
             return {"data": fetched_data, "column_names": column_names, "rows_affected": len(fetched_data)}
 
-        row = result.fetchone()
-        rows_affected = row[0] if row else 0
-        return {"rows_affected": rows_affected}
+        with self._get_cursor(conn) as cursor:
+            cursor.execute(sql, parameters or [])
+            return {"rows_affected": cursor.rowcount}
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional["DuckDBConnection"] = None, **kwargs: Any

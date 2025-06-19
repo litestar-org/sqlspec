@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 import contextlib
 import logging
 from collections.abc import Iterator
@@ -69,7 +68,7 @@ class AdbcDriver(
         default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
         super().__init__(connection=connection, config=config, default_row_type=default_row_type)
-        self.dialect: DialectType = self._get_dialect(connection)  # type: ignore[assignment]
+        self.dialect: DialectType = self._get_dialect(connection)
         self.default_parameter_style = self._get_parameter_style_for_dialect(self.dialect)
 
     def _coerce_boolean(self, value: Any) -> Any:
@@ -181,27 +180,22 @@ class AdbcDriver(
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
-            cursor.execute(sql, parameters or [])  # type: ignore[no-untyped-call]
+            # ADBC expects parameters as a list
+            if parameters is not None and not isinstance(parameters, list):
+                parameters = [parameters]
+            cursor.execute(sql, parameters or [])
 
-            is_select = self.returns_rows(statement.expression)
-            if not is_select and statement.expression is None:
-                sql_upper = sql.strip().upper()
-                is_select = any(sql_upper.startswith(prefix) for prefix in ["SELECT", "WITH", "VALUES", "TABLE"])
-
-            if is_select:
-                fetched_data = cursor.fetchall()  # type: ignore[no-untyped-call]
-                column_names = [col[0] for col in cursor.description or []]  # type: ignore[attr-defined]
+            if self.returns_rows(statement.expression):
+                fetched_data = cursor.fetchall()
+                column_names = [col[0] for col in cursor.description or []]
                 result: SelectResultDict = {
                     "data": fetched_data,
                     "column_names": column_names,
-                    "rows_affected": cursor.rowcount,  # type: ignore[attr-defined]
+                    "rows_affected": len(fetched_data),
                 }
                 return result
 
-            dml_result: DMLResultDict = {
-                "rows_affected": cursor.rowcount,  # type: ignore[attr-defined]
-                "status_message": "OK",
-            }
+            dml_result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
             return dml_result
 
     def _execute_many(
@@ -209,12 +203,9 @@ class AdbcDriver(
     ) -> DMLResultDict:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
-            cursor.executemany(sql, param_list or [])  # type: ignore[no-untyped-call]
+            cursor.executemany(sql, param_list or [])
 
-            result: DMLResultDict = {
-                "rows_affected": cursor.rowcount,  # type: ignore[attr-defined]
-                "status_message": "OK",
-            }
+            result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
             return result
 
     def _execute_script(
@@ -304,11 +295,12 @@ class AdbcDriver(
 
         with wrap_exceptions(), self._get_cursor(conn) as cursor:
             # Execute the query
-            cursor.execute(  # type: ignore[no-untyped-call]
-                sql.to_sql(placeholder_style=self.default_parameter_style),
-                sql.get_parameters(style=self.default_parameter_style) or [],
-            )
-            arrow_table = cursor.fetch_arrow_table()  # type: ignore[no-untyped-call]
+            params = sql.get_parameters(style=self.default_parameter_style)
+            # ADBC expects parameters as a list
+            if params is not None and not isinstance(params, list):
+                params = [params]
+            cursor.execute(sql.to_sql(placeholder_style=self.default_parameter_style), params or [])
+            arrow_table = cursor.fetch_arrow_table()
             return ArrowResult(statement=sql, data=arrow_table)
 
     def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
@@ -332,8 +324,8 @@ class AdbcDriver(
         with self._get_cursor(conn) as cursor:
             # Handle different modes
             if mode == "replace":
-                cursor.execute(SQL(f"TRUNCATE TABLE {table_name}").to_sql(dialect=self.dialect))  # type: ignore[no-untyped-call]
+                cursor.execute(SQL(f"TRUNCATE TABLE {table_name}").to_sql(placeholder_style=ParameterStyle.STATIC))
             elif mode == "create":
                 msg = "'create' mode is not supported for ADBC ingestion"
                 raise NotImplementedError(msg)
-            return cursor.adbc_ingest(table_name, table, mode=mode, **options)  # type: ignore[no-any-return]
+            return cursor.adbc_ingest(table_name, table, mode=mode, **options)  # type: ignore[arg-type]

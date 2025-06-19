@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 """Correlation ID tracking for distributed tracing.
 
 This module provides utilities for tracking correlation IDs across

@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 """Unified Storage Registry for ObjectStore backends.
 
 This module provides a flexible, lazy-loading storage registry that supports:
@@ -23,6 +22,8 @@ __all__ = ("StorageRegistry", "storage_registry")
 logger = logging.getLogger(__name__)
 
 BackendT = TypeVar("BackendT", bound=ObjectStoreProtocol)
+
+FSSPEC_ONLY_SCHEMES = {"http", "https", "ftp", "sftp", "ssh"}
 
 
 class StorageRegistry:
@@ -173,7 +174,6 @@ class StorageRegistry:
             MissingDependencyError: If no suitable backend can be created
         """
         # Schemes that ObStore doesn't support
-        FSSPEC_ONLY_SCHEMES = {"http", "https", "ftp", "sftp", "ssh"}
 
         # Extract scheme
         scheme = self._get_scheme(uri)
@@ -271,13 +271,7 @@ class StorageRegistry:
             return "file"
 
         # Extract scheme from URI
-        scheme = uri.split("://", maxsplit=1)[0].lower()
-
-        # Handle Azure blob storage aliases
-        if scheme == "az":
-            return "az"
-
-        return scheme
+        return uri.split("://", maxsplit=1)[0].lower()
 
     # Utility methods
     def is_alias_registered(self, alias: str) -> bool:

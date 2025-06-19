@@ -363,18 +363,18 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         except ImproperConfigurationError:
             return None
 
-        if "postgres" in driver_path:
-            return "postgres"
-        if "sqlite" in driver_path:
-            return "sqlite"
-        if "duckdb" in driver_path:
-            return "duckdb"
-        if "bigquery" in driver_path:
-            return "bigquery"
-        if "snowflake" in driver_path:
-            return "snowflake"
-        if "flightsql" in driver_path or "grpc" in driver_path:
-            return "sqlite"
+        dialect_map = {
+            "postgres": "postgres",
+            "sqlite": "sqlite",
+            "duckdb": "duckdb",
+            "bigquery": "bigquery",
+            "snowflake": "snowflake",
+            "flightsql": "sqlite",
+            "grpc": "sqlite",
+        }
+        for keyword, dialect in dialect_map.items():
+            if keyword in driver_path:
+                return dialect
         return None
 
     def _get_parameter_styles(self) -> tuple[tuple[str, ...], str]:

@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 """Aiosqlite database configuration with direct field-based configuration."""
 
 import logging

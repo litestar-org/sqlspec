@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 """Logging utilities for SQLSpec.
 
 This module provides utilities for structured logging with correlation IDs.

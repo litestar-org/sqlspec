@@ -77,7 +77,13 @@ class ParameterStyleValidator(ProcessorProtocol):
 
                 # Check for mixed styles first (before checking individual styles)
                 if len(unique_styles) > 1 and not config.allow_mixed_parameter_styles:
-                    detected_styles = ", ".join(sorted(str(s) for s in unique_styles))
+                    # Defensive handling for detected styles
+                    detected_style_strs = []
+                    for s in unique_styles:
+                        str_val = str(s)
+                        if str_val is not None:  # Defensive check
+                            detected_style_strs.append(str_val)
+                    detected_styles = ", ".join(sorted(detected_style_strs))
                     msg = f"Mixed parameter styles detected ({detected_styles}) but not allowed."
                     if self.fail_on_violation:
                         self._raise_mixed_style_error(msg)
@@ -95,7 +101,14 @@ class ParameterStyleValidator(ProcessorProtocol):
                 disallowed_styles = {str(s) for s in unique_styles if not config.validate_parameter_style(s)}
                 if disallowed_styles:
                     disallowed_str = ", ".join(sorted(disallowed_styles))
-                    allowed_str = ", ".join(config.allowed_parameter_styles)
+                    # Defensive handling to avoid "expected str instance, NoneType found"
+                    allowed_styles_strs = []
+                    for s in config.allowed_parameter_styles:
+                        if s is not None:
+                            str_val = str(s)
+                            if str_val is not None:  # Extra defensive check
+                                allowed_styles_strs.append(str_val)
+                    allowed_str = ", ".join(allowed_styles_strs)
                     msg = f"Parameter style(s) {disallowed_str} not supported. Allowed: {allowed_str}"
                     if self.fail_on_violation:
                         self._raise_unsupported_style_error(msg)
@@ -113,8 +126,22 @@ class ParameterStyleValidator(ProcessorProtocol):
             # 1. We have parameter info
             # 2. Style validation is enabled (allowed_parameter_styles is not None)
             # 3. No style errors were found
-            if param_info and config.allowed_parameter_styles is not None and not has_style_errors:
-                # Check for missing parameters
+            # 4. We have merged parameters OR the original SQL had placeholders
+            logger.debug(
+                "Checking missing parameters: param_info=%s, extracted=%s, had_placeholders=%s, merged=%s",
+                len(param_info) if param_info else 0,
+                len(context.extracted_parameters_from_pipeline) if context.extracted_parameters_from_pipeline else 0,
+                context.input_sql_had_placeholders,
+                context.merged_parameters is not None,
+            )
+            # Skip validation if we have no merged parameters and the SQL didn't originally have placeholders
+            # This handles the case where literals were parameterized by transformers
+            if (
+                param_info
+                and config.allowed_parameter_styles is not None
+                and not has_style_errors
+                and (context.merged_parameters is not None or context.input_sql_had_placeholders)
+            ):
                 self._validate_missing_parameters(context, expression)
 
         except (UnsupportedParameterStyleError, MixedParameterStyleError, MissingParameterError):
@@ -165,10 +192,14 @@ class ParameterStyleValidator(ProcessorProtocol):
 
         # Handle different parameter formats
         if merged_params is None:
+            # Check if parameters were extracted by transformers
+            if context.extracted_parameters_from_pipeline:
+                # Parameters will be merged after validation, don't check now
+                return
             # No parameters provided at all
             if param_info:
-                missing = [p.name for p in param_info]
-                msg = f"Missing required parameters: {', '.join(missing)}"
+                missing = [p.name or p.placeholder_text or f"param_{p.ordinal}" for p in param_info]
+                msg = f"Missing required parameters: {', '.join(str(m) for m in missing)}"
                 if self.fail_on_violation:
                     raise MissingParameterError(msg)
                 error = ValidationError(
@@ -188,9 +219,11 @@ class ParameterStyleValidator(ProcessorProtocol):
             has_named = any(p.style.value in {"named_colon", "named_at"} for p in param_info)
             if has_named:
                 # We have named parameters but only positional values provided
-                missing_named = [p.name for p in param_info if p.style.value in {"named_colon", "named_at"}]
+                missing_named = [
+                    p.name or p.placeholder_text for p in param_info if p.style.value in {"named_colon", "named_at"}
+                ]
                 if missing_named:
-                    msg = f"Missing required parameters: {', '.join(missing_named)}"
+                    msg = f"Missing required parameters: {', '.join(str(m) for m in missing_named if m)}"
                     if self.fail_on_violation:
                         raise MissingParameterError(msg)
                     error = ValidationError(
@@ -283,8 +316,8 @@ class ParameterStyleValidator(ProcessorProtocol):
                 context.validation_errors.append(error)
         # Single value - only valid if we have exactly one parameter
         elif len(param_info) > 1:
-            missing = [p.name for p in param_info[1:]]
-            msg = f"Missing required parameters: {', '.join(missing)}"
+            missing = [p.name or p.placeholder_text or f"param_{p.ordinal}" for p in param_info[1:]]
+            msg = f"Missing required parameters: {', '.join(str(m) for m in missing)}"
             if self.fail_on_violation:
                 raise MissingParameterError(msg)
             error = ValidationError(

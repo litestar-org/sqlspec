@@ -132,7 +132,7 @@ class Pipeline:
         """
         self._operations.append(
             PipelineOperation(
-                sql=SQL(statement, *parameters, config=self.driver.config, **kwargs), operation_type="execute"
+                sql=SQL(statement, *parameters, _config=self.driver.config, **kwargs), operation_type="execute"
             )
         )
 
@@ -149,7 +149,7 @@ class Pipeline:
         """Add a select operation to the pipeline."""
         self._operations.append(
             PipelineOperation(
-                sql=SQL(statement, *parameters, config=self.driver.config, **kwargs), operation_type="select"
+                sql=SQL(statement, *parameters, _config=self.driver.config, **kwargs), operation_type="select"
             )
         )
         return self
@@ -182,7 +182,7 @@ class Pipeline:
         if isinstance(script, SQL):
             sql_obj = script.as_script()
         else:
-            sql_obj = SQL(script, *filters, config=self.driver.config, **kwargs).as_script()
+            sql_obj = SQL(script, *filters, _config=self.driver.config, **kwargs).as_script()
 
         self._operations.append(PipelineOperation(sql=sql_obj, operation_type="execute_script"))
         return self
@@ -211,7 +211,7 @@ class Pipeline:
 
         self._results = results
         self._operations.clear()
-        return results
+        return cast("list[SQLResult]", results)
 
     def _execute_pipeline_simulated(self) -> "list[SQLResult]":
         """Enhanced simulation with transaction support and error handling."""
@@ -367,7 +367,7 @@ class AsyncPipeline:
         """Add an execute operation to the async pipeline."""
         self._operations.append(
             PipelineOperation(
-                sql=SQL(statement, *parameters, config=self.driver.config, **kwargs), operation_type="execute"
+                sql=SQL(statement, *parameters, _config=self.driver.config, **kwargs), operation_type="execute"
             )
         )
 
@@ -384,7 +384,7 @@ class AsyncPipeline:
         """Add a select operation to the async pipeline."""
         self._operations.append(
             PipelineOperation(
-                sql=SQL(statement, *parameters, config=self.driver.config, **kwargs), operation_type="select"
+                sql=SQL(statement, *parameters, _config=self.driver.config, **kwargs), operation_type="select"
             )
         )
         return self
@@ -412,7 +412,7 @@ class AsyncPipeline:
         if isinstance(script, SQL):
             sql_obj = script.as_script()
         else:
-            sql_obj = SQL(script, *filters, config=self.driver.config, **kwargs).as_script()
+            sql_obj = SQL(script, *filters, _config=self.driver.config, **kwargs).as_script()
 
         self._operations.append(PipelineOperation(sql=sql_obj, operation_type="execute_script"))
         return self
@@ -430,7 +430,7 @@ class AsyncPipeline:
 
         self._results = results
         self._operations.clear()
-        return results
+        return cast("list[SQLResult]", results)
 
     async def _execute_pipeline_simulated(self) -> "list[SQLResult]":
         """Async version of simulated pipeline execution."""

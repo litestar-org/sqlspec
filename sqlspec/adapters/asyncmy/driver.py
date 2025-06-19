@@ -4,7 +4,6 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
 from asyncmy import Connection
-from litestar.utils import ensure_async_callable
 from typing_extensions import TypeAlias
 
 from sqlspec.driver import AsyncDriverAdapterProtocol
@@ -56,14 +55,15 @@ class AsyncmyDriver(
         super().__init__(connection=connection, config=config, default_row_type=default_row_type)
 
     @asynccontextmanager
-    async def _get_cursor(self, connection: "Optional[AsyncmyConnection]" = None) -> "AsyncGenerator[Any, None]":
-        conn_to_use = connection or self.connection
-        cursor = await conn_to_use.cursor()  # type: ignore[no-untyped-call]
+    async def _get_cursor(
+        self, connection: "Optional[AsyncmyConnection]" = None
+    ) -> "AsyncGenerator[Union[Cursor, DictCursor], None]":
+        conn = self._connection(connection)
+        cursor = await conn.cursor()
         try:
             yield cursor
         finally:
-            if callable(getattr(cursor, "close", None)):
-                await ensure_async_callable(cursor.close)()  # type: ignore[no-untyped-call]
+            await cursor.close()
 
     async def _execute_statement(
         self, statement: SQL, connection: "Optional[AsyncmyConnection]" = None, **kwargs: Any
@@ -89,19 +89,13 @@ class AsyncmyDriver(
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
         # AsyncMy doesn't like empty lists/tuples, convert to None
-        if parameters in ([], ()):
+        if not parameters:
             parameters = None
         async with self._get_cursor(conn) as cursor:
             # AsyncMy expects list/tuple parameters or dict for named params
             await cursor.execute(sql, parameters)  # type: ignore[no-untyped-call]
 
-            # For SELECT queries, return cursor so _wrap_select_result can fetch from it
-            is_select = self.returns_rows(statement.expression)
-            if not is_select and statement.expression is None:
-                sql_upper = sql.strip().upper()
-                is_select = any(sql_upper.startswith(prefix) for prefix in ["SELECT", "WITH", "VALUES", "TABLE"])
-
-            if is_select:
+            if self.returns_rows(statement.expression):
                 # For SELECT queries, fetch data and return SelectResultDict
                 data = await cursor.fetchall()  # type: ignore[no-untyped-call]
                 column_names = [desc[0] for desc in cursor.description or []]  # type: ignore[attr-defined]
@@ -244,6 +238,6 @@ class AsyncmyDriver(
             metadata={"status_message": status_message},
         )
 
-    def _connection(self, connection: Optional[AsyncmyConnection] = None) -> AsyncmyConnection:
+    def _connection(self, connection: Optional["AsyncmyConnection"] = None) -> "AsyncmyConnection":
         """Get the connection to use for the operation."""
         return connection or self.connection

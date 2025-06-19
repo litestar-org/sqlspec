@@ -1,4 +1,3 @@
-# ruff: noqa: FURB118
 """Tests for sqlspec.utils.deprecation module."""
 
 from __future__ import annotations

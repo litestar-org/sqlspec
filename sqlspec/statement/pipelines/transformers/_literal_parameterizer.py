@@ -436,18 +436,30 @@ class ParameterizeLiterals(ProcessorProtocol):
         """Create a placeholder expression with optional type hint."""
         self._parameter_counter += 1
 
-        if self.placeholder_style == "?":
+        # Import ParameterStyle for proper comparison
+        from sqlspec.statement.parameters import ParameterStyle
+
+        # Handle both style names and actual placeholder prefixes
+        style = self.placeholder_style
+        if style in ("?", ParameterStyle.QMARK, "qmark"):
             placeholder = exp.Placeholder()
-        elif self.placeholder_style == ":name":
+        elif style == ":name":
             # Use hint in parameter name if available
             param_name = f"{hint}_{self._parameter_counter}" if hint else f"param_{self._parameter_counter}"
             placeholder = exp.Placeholder(this=param_name)
-        elif self.placeholder_style.startswith(":"):
+        elif style in (ParameterStyle.NAMED_COLON, "named_colon") or style.startswith(":"):
             param_name = f"param_{self._parameter_counter}"
             placeholder = exp.Placeholder(this=param_name)
-        elif self.placeholder_style.startswith("$"):
-            # PostgreSQL style numbered parameters
-            placeholder = exp.Placeholder(this=f"${self._parameter_counter}")
+        elif style in (ParameterStyle.NUMERIC, "numeric") or style.startswith("$"):
+            # PostgreSQL style numbered parameters - use Parameter node, not Placeholder
+            placeholder = exp.Parameter(this=str(self._parameter_counter))
+        elif style in (ParameterStyle.NAMED_AT, "named_at"):
+            # BigQuery style @param
+            param_name = f"param_{self._parameter_counter}"
+            placeholder = exp.Placeholder(this=f"@{param_name}")
+        elif style in (ParameterStyle.POSITIONAL_PYFORMAT, "pyformat"):
+            # Use %s for pyformat
+            placeholder = exp.Anonymous(this="%s")
         else:
             # Default to question mark
             placeholder = exp.Placeholder()

@@ -16,7 +16,7 @@ async def asyncpg_arrow_session(postgres_service: PostgresService) -> "AsyncGene
         user=postgres_service.user,
         password=postgres_service.password,
         database=postgres_service.database,
-        statement_config=SQLConfig(strict_mode=False),
+        statement_config=SQLConfig(enable_transformations=False),
     )
 
     async with config.provide_session() as session:

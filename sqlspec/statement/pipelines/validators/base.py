@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 # Base class for validators
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
