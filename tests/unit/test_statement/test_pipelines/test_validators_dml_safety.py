@@ -49,7 +49,10 @@ def context() -> SQLProcessingContext:
         ("INSERT INTO users VALUES (1, 'John')", StatementCategory.DML),
         ("UPDATE users SET name = 'Jane' WHERE id = 1", StatementCategory.DML),
         ("DELETE FROM users WHERE id = 1", StatementCategory.DML),
-        ("MERGE INTO users USING temp_users ON users.id = temp_users.id", StatementCategory.DML),
+        (
+            "MERGE INTO users USING temp_users ON users.id = temp_users.id WHEN MATCHED THEN UPDATE SET name = temp_users.name",
+            StatementCategory.DML,
+        ),
         # DQL statements
         ("SELECT * FROM users", StatementCategory.DQL),
         ("SELECT COUNT(*) FROM users", StatementCategory.DQL),

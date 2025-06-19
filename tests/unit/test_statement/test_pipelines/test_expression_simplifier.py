@@ -46,7 +46,7 @@ def create_context_with_sql(sql: str, config: Optional[SQLConfig] = None) -> SQL
         ("SELECT 1 + 1 AS sum FROM users", ["2"]),
         ("SELECT 10 * 2 AS product FROM users", ["20"]),
         ("SELECT (5 + 3) * 2 AS calc FROM users", ["16"]),
-        ("SELECT 10 / 2 + 1 AS division FROM users", ["6"]),
+        ("SELECT 10.0 / 2.0 + 1.0 AS division FROM users", ["6.0"]),
         ("SELECT 2 * 2 * 2 AS power FROM users", ["8"]),
     ],
     ids=["simple_addition", "multiplication", "parentheses", "division_addition", "multiple_operations"],
@@ -69,7 +69,7 @@ def test_complex_arithmetic_simplification() -> None:
     sql = """
     SELECT
         (5 + 3) * 2 AS calc1,
-        10 / 2 + 1 AS calc2,
+        10.0 / 2.0 + 1.0 AS calc2,
         2 * 2 * 2 AS calc3,
         100 - 50 + 25 AS calc4
     FROM users
@@ -83,7 +83,7 @@ def test_complex_arithmetic_simplification() -> None:
 
     # Complex expressions should be simplified
     assert "16" in result_sql  # (5 + 3) * 2 = 16
-    assert "6" in result_sql  # 10 / 2 + 1 = 6
+    assert "6.0" in result_sql  # 10.0 / 2.0 + 1.0 = 6.0
     assert "8" in result_sql  # 2 * 2 * 2 = 8
     assert "75" in result_sql  # 100 - 50 + 25 = 75
 

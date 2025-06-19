@@ -58,10 +58,10 @@ class MockProcessor(ProcessorProtocol):
     "statement,dialect,expected_type",
     [
         ("SELECT * FROM users WHERE id = 1", "mysql", exp.Select),
-        ("INSERT INTO users (name) VALUES ('John')", "postgresql", exp.Insert),
+        ("INSERT INTO users (name) VALUES ('John')", "postgres", exp.Insert),
         ("UPDATE users SET name = 'Jane'", "sqlite", exp.Update),
         ("DELETE FROM users WHERE id = 1", "mysql", exp.Delete),
-        ("CREATE TABLE test (id INT)", "postgresql", exp.Create),
+        ("CREATE TABLE test (id INT)", "postgres", exp.Create),
     ],
     ids=["select", "insert", "update", "delete", "create"],
 )
@@ -336,7 +336,7 @@ def test_sql_validator_error_handling() -> None:
     "sql_statement,dialect,expected_error_count",
     [
         ("SELECT * FROM users", "mysql", 1),  # With validation error
-        ("INSERT INTO users VALUES (1)", "postgresql", 1),  # With validation error
+        ("INSERT INTO users VALUES (1)", "postgres", 1),  # With validation error
         ("UPDATE users SET name = 'test'", "sqlite", 1),  # With validation error
     ],
     ids=["select_query", "insert_query", "update_query"],

@@ -268,7 +268,7 @@ def test_sync_driver_build_statement_with_sql_object() -> None:
     driver = MockSyncDriver(connection)
 
     sql_obj = SQL("SELECT * FROM users WHERE id = :id", parameters={"id": 1})
-    statement = driver._build_statement(sql_obj, None, None)
+    statement = driver._build_statement(sql_obj)
     assert statement is sql_obj
 
 
@@ -277,13 +277,22 @@ def test_sync_driver_build_statement_with_filters() -> None:
     connection = MockConnection()
     driver = MockSyncDriver(connection)
 
-    # Mock filter
+    # Mock filter - needs both methods
     mock_filter = Mock()
-    mock_filter.append_to_statement.return_value = SQL("SELECT * FROM users WHERE active = true")
+    
+    def mock_append(stmt):
+        # Return a new SQL object with modified query
+        return SQL("SELECT * FROM users WHERE active = true")
+    
+    mock_filter.append_to_statement = Mock(side_effect=mock_append)
+    mock_filter.extract_parameters = Mock(return_value=([], {}))
 
     sql_string = "SELECT * FROM users"
-    driver._build_statement(sql_string, filters=[mock_filter])
-
+    statement = driver._build_statement(sql_string, mock_filter)
+    
+    # Access a property to trigger processing
+    _ = statement.to_sql()
+    
     mock_filter.append_to_statement.assert_called_once()
 
 
@@ -631,14 +640,14 @@ def test_sync_driver_multiple_connections() -> None:
     # Execute with default connection
     with patch.object(driver, "_execute_statement") as mock_execute:
         mock_execute.return_value = []
-        driver.execute("SELECT 1", connection=None)
+        driver.execute("SELECT 1", _connection=None)
         _, kwargs = mock_execute.call_args
         assert kwargs["connection"] is connection1
 
     # Execute with override connection
     with patch.object(driver, "_execute_statement") as mock_execute:
         mock_execute.return_value = []
-        driver.execute("SELECT 2", connection=connection2)
+        driver.execute("SELECT 2", _connection=connection2)
         _, kwargs = mock_execute.call_args
         assert kwargs["connection"] is connection2
 
@@ -654,7 +663,7 @@ def test_driver_full_execution_flow() -> None:
 
     # Mock the full execution flow
     with patch.object(connection, "execute", return_value=[{"id": 1, "name": "test"}]) as mock_conn_execute:
-        result = driver.execute("SELECT * FROM users WHERE id = :id", parameters={"id": 1})
+        result = driver.execute("SELECT * FROM users WHERE id = :id", {"id": 1})
 
         # Verify connection was called
         mock_conn_execute.assert_called_once()
@@ -673,7 +682,7 @@ async def test_async_driver_full_execution_flow() -> None:
 
     # Mock the full async execution flow
     with patch.object(connection, "execute", return_value=[{"id": 1, "name": "test"}]) as mock_conn_execute:
-        result = await driver.execute("SELECT * FROM users WHERE id = :id", parameters={"id": 1})
+        result = await driver.execute("SELECT * FROM users WHERE id = :id", {"id": 1})
 
         # Verify connection was called
         mock_conn_execute.assert_called_once()

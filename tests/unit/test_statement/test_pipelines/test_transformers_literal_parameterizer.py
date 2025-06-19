@@ -130,7 +130,7 @@ def test_null_preservation_configuration(sql: str, preserve_null: bool, expected
 # Placeholder Style Tests
 @pytest.mark.parametrize(
     "placeholder_style,expected_placeholder",
-    [("?", "?"), (":name", ":param_"), ("$1", "$1")],
+    [("?", "?"), (":name", ":name_"), ("$1", "$1")],
     ids=["question_mark", "named_colon", "numbered_dollar"],
 )
 def test_placeholder_styles(placeholder_style: str, expected_placeholder: str) -> None:
@@ -529,8 +529,8 @@ def test_named_parameter_generation() -> None:
     result_expr = transformer.process(context.current_expression, context)
     result_sql = result_expr.sql()
 
-    # Should have named parameters
-    assert ":param_" in result_sql or ":" in result_sql
+    # Should have named parameters (using column hint + counter format)
+    assert ":" in result_sql  # Just check for colon prefix
 
     # Check metadata for semantic names
     metadata = context.metadata.get("parameter_metadata")

@@ -270,7 +270,10 @@ class BigQueryDriver(
 
         query_job = conn.query(sql_str, job_config=final_job_config, job_id=job_id)
         if self.on_job_complete:
-            self.on_job_complete(job_id, query_job)
+            try:
+                self.on_job_complete(job_id, query_job)
+            except Exception as e:
+                logger.warning("Job complete callback failed: %s", str(e), extra={"adapter": "bigquery"})
 
         return query_job
 
@@ -323,7 +326,19 @@ class BigQueryDriver(
         converted_params = parameters
 
         # Prepare BigQuery parameters
-        bq_params = self._prepare_bq_query_parameters(converted_params or {}) if converted_params else []
+        # Convert various parameter formats to dict format for BigQuery
+        if converted_params is None:
+            bq_params = []
+        elif isinstance(converted_params, dict):
+            bq_params = self._prepare_bq_query_parameters(converted_params)
+        elif isinstance(converted_params, list):
+            # Convert positional parameters to named parameters for BigQuery
+            param_dict = {f"param_{i}": val for i, val in enumerate(converted_params)}
+            bq_params = self._prepare_bq_query_parameters(param_dict) if param_dict else []
+        else:
+            # Single scalar parameter
+            param_dict = {"param_0": converted_params}
+            bq_params = self._prepare_bq_query_parameters(param_dict)
         query_job = self._run_query_job(converted_sql, bq_params, connection=connection)
         try:
             job_result = query_job.result(timeout=kwargs.get("bq_job_timeout"))
@@ -489,8 +504,11 @@ class BigQueryDriver(
                 statement=statement,
                 data=[],
                 rows_affected=0,
-                operation_type=operation_type or "SCRIPT",
-                metadata={"status_message": result["status_message"]},
+                operation_type="SCRIPT",
+                metadata={
+                    "status_message": result.get("status_message", ""),
+                    "statements_executed": result.get("statements_executed", -1),
+                },
             )
         if "rows_affected" in result:
             dml_result = cast("DMLResultDict", result)

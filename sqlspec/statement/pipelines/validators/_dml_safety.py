@@ -257,8 +257,15 @@ class DMLSafetyValidator(BaseValidator):
             isinstance(expression, (exp.Create, exp.Drop, exp.Alter))
             and hasattr(expression, "this")
             and expression.this
-            and isinstance(expression.this, (exp.Table, exp.Identifier))
         ):
-            tables.append(expression.this.name)
+            # For CREATE TABLE, the table is in expression.this.this
+            if isinstance(expression, exp.Create) and isinstance(expression.this, exp.Schema):
+                if hasattr(expression.this, "this") and expression.this.this:
+                    table_expr = expression.this.this
+                    if isinstance(table_expr, exp.Table):
+                        tables.append(table_expr.name)
+            # For DROP/ALTER, table is directly in expression.this
+            elif isinstance(expression.this, (exp.Table, exp.Identifier)):
+                tables.append(expression.this.name)
 
         return tables

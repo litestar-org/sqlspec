@@ -67,6 +67,7 @@ class SQLSpec:
                     logger.warning("Failed to clean up pool for config %s: %s", config_type.__name__, e)
 
         self._configs.clear()
+        logger.info("Pool cleanup completed. Cleaned %d pools.", cleaned_count)
 
     @overload
     def add_config(self, config: "SyncConfigT") -> "type[SyncConfigT]":  # pyright: ignore[reportInvalidTypeVarUse]

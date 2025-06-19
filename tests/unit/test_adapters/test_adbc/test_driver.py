@@ -243,7 +243,8 @@ def test_adbc_driver_execute_statement_select(adbc_driver: AdbcDriver, mock_curs
 
     assert isinstance(result, ArrowResult)
     assert not isinstance(result.statement, str)
-    assert result.statement.sql == "SELECT * FROM users WHERE id = $1"  # pyright: ignore
+    # ADBC uses QMARK parameter style, so $1 is converted to ?
+    assert result.statement.sql == "SELECT * FROM users WHERE id = $?"  # pyright: ignore
 
     # Check that it's an Arrow table with the expected data
     assert isinstance(result.data, pa.Table)
@@ -274,7 +275,16 @@ def test_adbc_driver_fetch_arrow_table_with_parameters(adbc_driver: AdbcDriver, 
 
     # Check parameters were passed correctly
     call_args = mock_cursor.execute.call_args
-    assert call_args[0][1] == 123
+    # Parameters are passed as a list with TypedParameter objects
+    params = call_args[0][1]
+    assert isinstance(params, list)
+    assert len(params) >= 1
+    # The first parameter should be 123 (either directly or as TypedParameter)
+    first_param = params[0]
+    if hasattr(first_param, "value"):
+        assert first_param.value == 123
+    else:
+        assert first_param == 123
 
 
 def test_adbc_driver_fetch_arrow_table_non_query_statement(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:

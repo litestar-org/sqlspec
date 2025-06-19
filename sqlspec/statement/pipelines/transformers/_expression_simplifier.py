@@ -54,7 +54,9 @@ class ExpressionSimplifier(ProcessorProtocol):
         original_sql = expression.sql(dialect=context.dialect)
 
         try:
-            simplified = simplify.simplify(expression.copy())
+            simplified = simplify.simplify(
+                expression.copy(), constant_propagation=self.config.enable_literal_folding, dialect=context.dialect
+            )
         except Exception as e:
             # Add warning to context
             error = ValidationError(

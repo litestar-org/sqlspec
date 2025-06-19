@@ -61,22 +61,19 @@ def test_oracledb_config_basic_creation() -> None:
 
     # Test with all parameters
     config_full = OracleSyncConfig(
-        dsn="localhost:1521/freepdb1", user="test_user", password="test_password", extras={"custom": "value"}
+        dsn="localhost:1521/freepdb1", user="test_user", password="test_password", custom="value"
     )
-    assert config.dsn == "localhost:1521/freepdb1"
-    assert config.user == "test_user"
-    assert config.password == "test_password"
+    assert config_full.dsn == "localhost:1521/freepdb1"
+    assert config_full.user == "test_user"
+    assert config_full.password == "test_password"
     assert config_full.extras["custom"] == "value"
 
 
 def test_oracledb_config_extras_handling() -> None:
     """Test OracleDB config extras parameter handling."""
-    # Test with explicit extras
+    # Test with kwargs going to extras
     config = OracleSyncConfig(
-        dsn="localhost:1521/freepdb1",
-        user="test_user",
-        password="test_password",
-        extras={"custom_param": "value", "debug": True},
+        dsn="localhost:1521/freepdb1", user="test_user", password="test_password", custom_param="value", debug=True
     )
     assert config.extras["custom_param"] == "value"
     assert config.extras["debug"] is True
@@ -113,10 +110,12 @@ def test_oracledb_config_provide_session() -> None:
     """Test OracleDB config provide_session context manager."""
     config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
 
-    # Mock the connection creation to avoid real database connection
-    with patch.object(config, "create_connection") as mock_create_conn:
+    # Mock the pool creation to avoid real database connection
+    with patch.object(config, "create_pool") as mock_create_pool:
+        mock_pool = MagicMock()
         mock_connection = MagicMock()
-        mock_create_conn.return_value = mock_connection
+        mock_pool.acquire.return_value = mock_connection
+        mock_create_pool.return_value = mock_pool
 
         # Test session context manager behavior
         with config.provide_session() as session:

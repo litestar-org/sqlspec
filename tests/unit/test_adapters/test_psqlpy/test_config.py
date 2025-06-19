@@ -67,19 +67,16 @@ def test_psqlpy_config_basic_creation() -> None:
     assert config.dsn == "postgresql://test_user:test_password@localhost:5432/test_db"
 
     # Test with all parameters
-    config_full = PsqlpyConfig(
-        dsn="postgresql://test_user:test_password@localhost:5432/test_db", extras={"custom": "value"}
-    )
-    assert config.dsn == "postgresql://test_user:test_password@localhost:5432/test_db"
+    config_full = PsqlpyConfig(dsn="postgresql://test_user:test_password@localhost:5432/test_db", custom="value")
+    assert config_full.dsn == "postgresql://test_user:test_password@localhost:5432/test_db"
     assert config_full.extras["custom"] == "value"
 
 
 def test_psqlpy_config_extras_handling() -> None:
     """Test Psqlpy config extras parameter handling."""
-    # Test with explicit extras
+    # Test with kwargs going to extras
     config = PsqlpyConfig(
-        dsn="postgresql://test_user:test_password@localhost:5432/test_db",
-        extras={"custom_param": "value", "debug": True},
+        dsn="postgresql://test_user:test_password@localhost:5432/test_db", custom_param="value", debug=True
     )
     assert config.extras["custom_param"] == "value"
     assert config.extras["debug"] is True

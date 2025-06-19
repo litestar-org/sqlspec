@@ -293,6 +293,48 @@ class Pipeline:
                     msg, operation_index=i, partial_results=results, failed_operation=op
                 ) from e
 
+    def _apply_global_filters(self, filters: "list[StatementFilter]") -> None:
+        """Apply global filters to all operations."""
+        for operation in self._operations:
+            # Add filters to each operation
+            if operation.filters is None:
+                operation.filters = []
+            operation.filters.extend(filters)
+
+    def _apply_operation_filters(self, sql: SQL, filters: "list[StatementFilter]") -> SQL:
+        """Apply filters to a SQL object."""
+        result = sql
+        for filter_obj in filters:
+            if hasattr(filter_obj, "apply"):
+                result = filter_obj.apply(result)
+        return result
+
+    def _has_native_support(self) -> bool:
+        """Check if driver has native pipeline support."""
+        return hasattr(self.driver, "_execute_pipeline_native")
+
+    def _process_parameters(self, params: tuple[Any, ...]) -> tuple["list[StatementFilter]", "Optional[Any]"]:
+        """Extract filters and parameters from mixed args.
+
+        Returns:
+            Tuple of (filters, parameters)
+        """
+        filters: list[StatementFilter] = []
+        parameters: list[Any] = []
+
+        for param in params:
+            if isinstance(param, StatementFilter):
+                filters.append(param)
+            else:
+                parameters.append(param)
+
+        # Return parameters based on count
+        if not parameters:
+            return filters, None
+        if len(parameters) == 1:
+            return filters, parameters[0]
+        return filters, parameters
+
     @property
     def operations(self) -> "list[PipelineOperation]":
         """Get the current list of queued operations."""

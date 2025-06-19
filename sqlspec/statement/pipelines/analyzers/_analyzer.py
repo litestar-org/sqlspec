@@ -188,6 +188,31 @@ class StatementAnalyzer(ProcessorProtocol):
                 expr = exp.maybe_parse(sql_string, dialect=dialect)
                 if expr is None:
                     expr = parse_one(sql_string, dialect=dialect)
+
+                # Check if the parsed expression is a valid SQL statement type
+                # Simple expressions like Alias or Identifier are not valid SQL statements
+                valid_statement_types = (
+                    exp.Select,
+                    exp.Insert,
+                    exp.Update,
+                    exp.Delete,
+                    exp.Create,
+                    exp.Drop,
+                    exp.Alter,
+                    exp.Merge,
+                    exp.Command,
+                    exp.Set,
+                    exp.Show,
+                    exp.Describe,
+                    exp.Use,
+                    exp.Union,
+                    exp.Intersect,
+                    exp.Except,
+                )
+                if not isinstance(expr, valid_statement_types):
+                    logger.warning("Parsed expression is not a valid SQL statement: %s", type(expr).__name__)
+                    return StatementAnalysis(statement_type="Unknown", expression=exp.Anonymous(this="UNKNOWN"))
+
                 if len(self._parse_cache) < self.cache_size:
                     self._parse_cache[parse_cache_key] = expr
             except (SQLGlotParseError, Exception) as e:
@@ -220,13 +245,24 @@ class StatementAnalyzer(ProcessorProtocol):
             join_count=self._count_joins(expression),
             aggregate_functions=self._extract_aggregate_functions(expression),
         )
+        # Calculate subquery_count and cte_count before complexity analysis
+        analysis.subquery_count = len(list(expression.find_all(exp.Subquery)))
+        # Also need to account for IN/EXISTS subqueries that aren't wrapped in Subquery nodes
+        for in_clause in expression.find_all(exp.In):
+            if in_clause.args.get("query") and isinstance(in_clause.args.get("query"), exp.Select):
+                analysis.subquery_count += 1
+        for exists_clause in expression.find_all(exp.Exists):
+            if exists_clause.this and isinstance(exists_clause.this, exp.Select):
+                analysis.subquery_count += 1
+
+        # Calculate CTE count before complexity score
+        analysis.cte_count = len(list(expression.find_all(exp.CTE)))
+
         self._analyze_complexity(expression, analysis)
         analysis.complexity_score = self._calculate_comprehensive_complexity_score(analysis)
-        analysis.subquery_count = len(list(expression.find_all(exp.Subquery)))
         analysis.operations = self._extract_operations(expression)
         analysis.has_aggregation = len(analysis.aggregate_functions) > 0
         analysis.has_window_functions = self._has_window_functions(expression)
-        analysis.cte_count = len(list(expression.find_all(exp.CTE)))
 
         if len(self._analysis_cache) < self.cache_size:
             self._analysis_cache[cache_key] = analysis
@@ -275,13 +311,21 @@ class StatementAnalyzer(ProcessorProtocol):
                 f"Potential Cartesian product detected ({cartesian_products} instances from multiple FROM tables without JOIN)"
             )
 
-        # Check explicit cross joins
+        # Check explicit cross joins and implicit joins (comma syntax)
         for join_node in join_nodes:
             if join_node.kind and join_node.kind.upper() == "CROSS":
                 issues.append("Explicit CROSS JOIN found, potential Cartesian product.")
                 cartesian_products += 1  # or a different counter for explicit cross joins
-            elif not join_node.on and not join_node.using:  # type: ignore[truthy-function]
-                issues.append(f"JOIN without ON/USING clause found ({join_node.sql()}), potential Cartesian product.")
+            elif not join_node.args.get("on") and not join_node.args.get("using"):
+                # Check if it's a comma join (no kind) or a join without ON/USING
+                if not join_node.kind:  # Comma syntax creates empty kind
+                    issues.append(
+                        "Implicit join (comma syntax) without ON/USING clause found, potential Cartesian product."
+                    )
+                else:
+                    issues.append(
+                        f"JOIN without ON/USING clause found ({join_node.sql()}), potential Cartesian product."
+                    )
                 cartesian_products += 1
 
         if join_count > self.max_join_count:
@@ -319,23 +363,57 @@ class StatementAnalyzer(ProcessorProtocol):
         max_depth = 0
         correlated_count = 0
 
-        # Calculate maximum nesting depth
-        def calculate_depth(expr: exp.Expression, current_depth: int = 0) -> int:
-            max_found = current_depth
-            for subquery in expr.find_all(exp.Subquery):
-                if subquery.parent == expr:  # Direct child
-                    depth = calculate_depth(subquery, current_depth + 1)
-                    max_found = max(max_found, depth)
-            return max_found
+        # Calculate maximum nesting depth - simpler approach
+        def calculate_depth(expr: exp.Expression) -> int:
+            """Calculate the maximum depth of nested SELECT statements."""
+            max_depth = 0
+
+            # Find all SELECT statements
+            select_statements = list(expr.find_all(exp.Select))
+
+            for select in select_statements:
+                # Count how many parent SELECTs this one has
+                depth = 0
+                current = select.parent
+                while current:
+                    # Check if parent is a SELECT or if it's inside a SELECT via Subquery/IN/EXISTS
+                    if isinstance(current, exp.Select):
+                        depth += 1
+                    elif isinstance(current, (exp.Subquery, exp.In, exp.Exists)):
+                        # These nodes can contain SELECTs, check their parent
+                        parent = current.parent
+                        while parent and not isinstance(parent, exp.Select):
+                            parent = parent.parent
+                        if parent:
+                            current = parent
+                            continue
+                    current = current.parent if current else None
+
+                max_depth = max(max_depth, depth)
+
+            return max_depth
 
         max_depth = calculate_depth(expression)
 
-        # Check for correlated subqueries (more expensive)
-        for subquery in subqueries:
-            # Heuristic for correlated subquery detection - checks for EXISTS pattern
-            subquery_sql = subquery.sql().lower()
-            if any(keyword in subquery_sql for keyword in ["exists", "not exists"]):
+        # Check for correlated subqueries
+        # EXISTS clauses are typically correlated
+        for exists_clause in expression.find_all(exp.Exists):
+            if exists_clause.this and isinstance(exists_clause.this, exp.Select):
                 correlated_count += 1
+
+        # Also check subqueries that reference outer table aliases
+        # This is a more complex check but necessary for proper correlation detection
+        outer_tables = set()
+        for table in expression.find_all(exp.Table):
+            if table.alias:
+                outer_tables.add(table.alias)
+
+        for subquery in subqueries:
+            # Check if subquery references any outer table aliases
+            for col in subquery.find_all(exp.Column):
+                if col.table and col.table in outer_tables:
+                    correlated_count += 1
+                    break
 
         warnings = []
         issues = []
@@ -425,9 +503,12 @@ class StatementAnalyzer(ProcessorProtocol):
         score += analysis.potential_cartesian_products * 20
 
         # Subquery complexity
-        score += len([sq for sq in analysis.tables if "subquery" in sq.lower()]) * 5
+        score += analysis.subquery_count * 5  # Use actual subquery count
         score += analysis.max_subquery_depth * 10
         score += analysis.correlated_subquery_count * 8
+
+        # CTE complexity (CTEs are complex, especially recursive ones)
+        score += analysis.cte_count * 7
 
         # WHERE clause complexity
         score += analysis.where_condition_count * 2
@@ -504,6 +585,7 @@ class StatementAnalyzer(ProcessorProtocol):
 
         Note: Due to sqlglot parser inconsistency, subqueries in IN clauses
         are not wrapped in Subquery nodes, so we need additional detection.
+        CTEs are not considered subqueries.
         """
         # Standard subquery detection
         if expr.find(exp.Subquery):
@@ -521,7 +603,20 @@ class StatementAnalyzer(ProcessorProtocol):
                 return True
 
         # Check for multiple SELECT statements (indicates subqueries)
-        select_statements = list(expr.find_all(exp.Select))
+        # but exclude those within CTEs
+        select_statements = []
+        for select in expr.find_all(exp.Select):
+            # Check if this SELECT is inside a CTE
+            parent = select.parent
+            is_in_cte = False
+            while parent:
+                if isinstance(parent, exp.CTE):
+                    is_in_cte = True
+                    break
+                parent = parent.parent
+            if not is_in_cte:
+                select_statements.append(select)
+
         return len(select_statements) > 1
 
     @staticmethod

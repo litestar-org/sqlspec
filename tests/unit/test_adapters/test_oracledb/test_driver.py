@@ -90,13 +90,13 @@ def test_oracle_async_driver_supports_arrow(oracle_async_driver: OracleAsyncDriv
 def test_oracle_sync_driver_placeholder_style(oracle_sync_driver: OracleSyncDriver) -> None:
     """Test Oracle sync driver placeholder style detection."""
     placeholder_style = oracle_sync_driver.default_parameter_style
-    assert placeholder_style == ParameterStyle.POSITIONAL_COLON
+    assert placeholder_style == ParameterStyle.NAMED_COLON
 
 
 def test_oracle_async_driver_placeholder_style(oracle_async_driver: OracleAsyncDriver) -> None:
     """Test Oracle async driver placeholder style detection."""
     placeholder_style = oracle_async_driver.default_parameter_style
-    assert placeholder_style == ParameterStyle.POSITIONAL_COLON
+    assert placeholder_style == ParameterStyle.NAMED_COLON
 
 
 def test_oracle_sync_driver_get_cursor(oracle_sync_driver: OracleSyncDriver, mock_oracle_sync_connection: Mock) -> None:

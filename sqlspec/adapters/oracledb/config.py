@@ -228,7 +228,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         self.ping_interval = ping_interval
 
         self.extras = kwargs or {}
-        self.extras.update(kwargs)
 
         # Store other config
         self.statement_config = statement_config or SQLConfig()

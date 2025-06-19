@@ -289,103 +289,128 @@ def test_pool_callbacks() -> None:
 
 
 # Sync Connection Creation Tests
-@patch("sqlspec.adapters.psycopg.config.connect")
-def test_sync_create_connection(mock_connect: MagicMock) -> None:
-    """Test sync connection creation."""
-    mock_connection = MagicMock()
-    mock_connect.return_value = mock_connection
-
+def test_sync_create_connection() -> None:
+    """Test sync connection creation gets connection from pool."""
     config = PsycopgSyncConfig(
         host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db", connect_timeout=30.0
     )
 
-    connection = config.create_connection()
-
-    mock_connect.assert_called_once()
-    call_kwargs = mock_connect.call_args[1]
-    assert call_kwargs["host"] == "localhost"
-    assert call_kwargs["port"] == 5432
-    assert call_kwargs["connect_timeout"] == 30.0
-    assert connection is mock_connection
-
-
-@patch("sqlspec.adapters.psycopg.config.connect")
-def test_sync_create_connection_with_conninfo(mock_connect: MagicMock) -> None:
-    """Test sync connection creation with conninfo."""
+    # Mock the pool
+    mock_pool = MagicMock()
     mock_connection = MagicMock()
-    mock_connect.return_value = mock_connection
+    mock_pool.getconn.return_value = mock_connection
 
+    with patch.object(config, "create_pool", return_value=mock_pool):
+        connection = config.create_connection()
+
+        # Verify pool was created
+        config.create_pool.assert_called_once()
+
+        # Verify connection was obtained from pool
+        mock_pool.getconn.assert_called_once()
+        assert connection is mock_connection
+
+
+def test_sync_create_connection_with_conninfo() -> None:
+    """Test sync connection creation with conninfo."""
     conninfo = "postgresql://user:pass@localhost:5432/testdb"
     config = PsycopgSyncConfig(conninfo=conninfo)
 
-    connection = config.create_connection()
+    # Mock the pool
+    mock_pool = MagicMock()
+    mock_connection = MagicMock()
+    mock_pool.getconn.return_value = mock_connection
 
-    mock_connect.assert_called_once_with(conninfo=conninfo, row_factory=MagicMock)
-    assert connection is mock_connection
+    with patch.object(config, "create_pool", return_value=mock_pool):
+        connection = config.create_connection()
+
+        # Verify pool was created with conninfo
+        assert config.pool_config_dict["conninfo"] == conninfo
+
+        # Verify connection was obtained from pool
+        mock_pool.getconn.assert_called_once()
+        assert connection is mock_connection
 
 
 # Async Connection Creation Tests
-@patch("sqlspec.adapters.psycopg.config.AsyncConnection.connect")
 @pytest.mark.asyncio
-async def test_async_create_connection(mock_connect: MagicMock) -> None:
-    """Test async connection creation."""
-    mock_connection = AsyncMock()
-    mock_connect.return_value = mock_connection
-
+async def test_async_create_connection() -> None:
+    """Test async connection creation gets connection from pool."""
     config = PsycopgAsyncConfig(
         host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db", connect_timeout=30.0
     )
 
-    connection = await config.create_connection()
+    # Mock the async pool
+    mock_pool = AsyncMock()
+    mock_connection = AsyncMock()
+    mock_pool.getconn.return_value = mock_connection
 
-    mock_connect.assert_called_once()
-    call_kwargs = mock_connect.call_args[1]
-    assert call_kwargs["host"] == "localhost"
-    assert call_kwargs["port"] == 5432
-    assert call_kwargs["connect_timeout"] == 30.0
-    assert connection is mock_connection
+    with patch.object(config, "create_pool", return_value=mock_pool):
+        connection = await config.create_connection()
+
+        # Verify pool was created
+        config.create_pool.assert_called_once()
+
+        # Verify connection was obtained from pool
+        mock_pool.getconn.assert_called_once()
+        assert connection is mock_connection
 
 
 # Sync Context Manager Tests
-@patch("sqlspec.adapters.psycopg.config.connect")
-def test_sync_provide_connection_success(mock_connect: MagicMock) -> None:
-    """Test sync provide_connection context manager normal flow."""
-    mock_connection = MagicMock()
-    mock_connect.return_value = mock_connection
-
+def test_sync_provide_connection_success() -> None:
+    """Test sync provide_connection context manager with pool."""
     config = PsycopgSyncConfig(host="localhost")
+
+    # Mock pool with connection context manager
+    mock_pool = MagicMock()
+    mock_connection = MagicMock()
+    mock_pool.connection.return_value.__enter__.return_value = mock_connection
+    mock_pool.connection.return_value.__exit__.return_value = None
+
+    # Set the pool instance
+    config.pool_instance = mock_pool
 
     with config.provide_connection() as conn:
         assert conn is mock_connection
-        mock_connection.close.assert_not_called()
 
-    mock_connection.close.assert_called_once()
+    # Verify pool's connection context manager was used
+    mock_pool.connection.assert_called_once()
 
 
-@patch("sqlspec.adapters.psycopg.config.connect")
-def test_sync_provide_connection_error_handling(mock_connect: MagicMock) -> None:
+def test_sync_provide_connection_error_handling() -> None:
     """Test sync provide_connection context manager error handling."""
-    mock_connection = MagicMock()
-    mock_connect.return_value = mock_connection
-
     config = PsycopgSyncConfig(host="localhost")
+
+    # Mock pool with connection context manager
+    mock_pool = MagicMock()
+    mock_connection = MagicMock()
+    mock_pool.connection.return_value.__enter__.return_value = mock_connection
+    mock_pool.connection.return_value.__exit__.return_value = None
+
+    # Set the pool instance
+    config.pool_instance = mock_pool
 
     with pytest.raises(ValueError, match="Test error"):
         with config.provide_connection() as conn:
             assert conn is mock_connection
             raise ValueError("Test error")
 
-    # Connection should still be closed on error
-    mock_connection.close.assert_called_once()
+    # Verify pool's connection context manager was used even with error
+    mock_pool.connection.assert_called_once()
 
 
-@patch("sqlspec.adapters.psycopg.config.connect")
-def test_sync_provide_session(mock_connect: MagicMock) -> None:
+def test_sync_provide_session() -> None:
     """Test sync provide_session context manager."""
-    mock_connection = MagicMock()
-    mock_connect.return_value = mock_connection
-
     config = PsycopgSyncConfig(host="localhost", dbname="test_db")
+
+    # Mock pool with connection context manager
+    mock_pool = MagicMock()
+    mock_connection = MagicMock()
+    mock_pool.connection.return_value.__enter__.return_value = mock_connection
+    mock_pool.connection.return_value.__exit__.return_value = None
+
+    # Set the pool instance
+    config.pool_instance = mock_pool
 
     with config.provide_session() as session:
         assert isinstance(session, PsycopgSyncDriver)
@@ -395,54 +420,80 @@ def test_sync_provide_session(mock_connect: MagicMock) -> None:
         assert session.config.allowed_parameter_styles == ("pyformat_positional", "pyformat_named")
         assert session.config.target_parameter_style == "pyformat_positional"
 
-        mock_connection.close.assert_not_called()
-
-    mock_connection.close.assert_called_once()
+    # Verify pool's connection context manager was used
+    mock_pool.connection.assert_called_once()
 
 
 # Async Context Manager Tests
-@patch("sqlspec.adapters.psycopg.config.AsyncConnection.connect")
 @pytest.mark.asyncio
-async def test_async_provide_connection_success(mock_connect: MagicMock) -> None:
-    """Test async provide_connection context manager normal flow."""
-    mock_connection = AsyncMock()
-    mock_connect.return_value = mock_connection
-
+async def test_async_provide_connection_success() -> None:
+    """Test async provide_connection context manager with pool."""
     config = PsycopgAsyncConfig(host="localhost")
+
+    # Mock async pool with connection context manager
+    mock_pool = MagicMock()  # Use MagicMock for the pool itself
+    mock_connection = AsyncMock()
+
+    # Create async context manager mock
+    async_cm = AsyncMock()
+    async_cm.__aenter__.return_value = mock_connection
+    async_cm.__aexit__.return_value = None
+    mock_pool.connection.return_value = async_cm  # Return the async context manager directly
+
+    # Set the pool instance
+    config.pool_instance = mock_pool
 
     async with config.provide_connection() as conn:
         assert conn is mock_connection
-        mock_connection.close.assert_not_called()
 
-    mock_connection.close.assert_called_once()
+    # Verify pool's connection context manager was used
+    mock_pool.connection.assert_called_once()
 
 
-@patch("sqlspec.adapters.psycopg.config.AsyncConnection.connect")
 @pytest.mark.asyncio
-async def test_async_provide_connection_error_handling(mock_connect: MagicMock) -> None:
+async def test_async_provide_connection_error_handling() -> None:
     """Test async provide_connection context manager error handling."""
-    mock_connection = AsyncMock()
-    mock_connect.return_value = mock_connection
-
     config = PsycopgAsyncConfig(host="localhost")
+
+    # Mock async pool with connection context manager
+    mock_pool = MagicMock()  # Use MagicMock for the pool itself
+    mock_connection = AsyncMock()
+
+    # Create async context manager mock
+    async_cm = AsyncMock()
+    async_cm.__aenter__.return_value = mock_connection
+    async_cm.__aexit__.return_value = None
+    mock_pool.connection.return_value = async_cm  # Return the async context manager directly
+
+    # Set the pool instance
+    config.pool_instance = mock_pool
 
     with pytest.raises(ValueError, match="Test error"):
         async with config.provide_connection() as conn:
             assert conn is mock_connection
             raise ValueError("Test error")
 
-    # Connection should still be closed on error
-    mock_connection.close.assert_called_once()
+    # Verify pool's connection context manager was used even with error
+    mock_pool.connection.assert_called_once()
 
 
-@patch("sqlspec.adapters.psycopg.config.AsyncConnection.connect")
 @pytest.mark.asyncio
-async def test_async_provide_session(mock_connect: MagicMock) -> None:
+async def test_async_provide_session() -> None:
     """Test async provide_session context manager."""
-    mock_connection = AsyncMock()
-    mock_connect.return_value = mock_connection
-
     config = PsycopgAsyncConfig(host="localhost", dbname="test_db")
+
+    # Mock async pool with connection context manager
+    mock_pool = MagicMock()  # Use MagicMock for the pool itself
+    mock_connection = AsyncMock()
+
+    # Create async context manager mock
+    async_cm = AsyncMock()
+    async_cm.__aenter__.return_value = mock_connection
+    async_cm.__aexit__.return_value = None
+    mock_pool.connection.return_value = async_cm  # Return the async context manager directly
+
+    # Set the pool instance
+    config.pool_instance = mock_pool
 
     async with config.provide_session() as session:
         assert isinstance(session, PsycopgAsyncDriver)
@@ -452,9 +503,8 @@ async def test_async_provide_session(mock_connect: MagicMock) -> None:
         assert session.config.allowed_parameter_styles == ("pyformat_positional", "pyformat_named")
         assert session.config.target_parameter_style == "pyformat_positional"
 
-        mock_connection.close.assert_not_called()
-
-    mock_connection.close.assert_called_once()
+    # Verify pool's connection context manager was used
+    mock_pool.connection.assert_called_once()
 
 
 # Pool Creation Tests
@@ -462,6 +512,7 @@ async def test_async_provide_session(mock_connect: MagicMock) -> None:
 def test_sync_create_pool(mock_pool_class: MagicMock) -> None:
     """Test sync pool creation."""
     mock_pool = MagicMock()
+    # Make the mock return the pool instance
     mock_pool_class.return_value = mock_pool
 
     config = PsycopgSyncConfig(
@@ -476,6 +527,7 @@ def test_sync_create_pool(mock_pool_class: MagicMock) -> None:
 
     pool = config._create_pool()
 
+    # Verify the pool was created
     mock_pool_class.assert_called_once()
     assert pool is mock_pool
 
@@ -485,6 +537,7 @@ def test_sync_create_pool(mock_pool_class: MagicMock) -> None:
 async def test_async_create_pool(mock_pool_class: MagicMock) -> None:
     """Test async pool creation."""
     mock_pool = AsyncMock()
+    # Make the mock return the pool instance
     mock_pool_class.return_value = mock_pool
 
     config = PsycopgAsyncConfig(
@@ -499,6 +552,7 @@ async def test_async_create_pool(mock_pool_class: MagicMock) -> None:
 
     pool = await config._create_pool()
 
+    # Verify the pool was created
     mock_pool_class.assert_called_once()
     assert pool is mock_pool
 
@@ -565,18 +619,18 @@ def test_async_driver_type() -> None:
 
 def test_sync_connection_type() -> None:
     """Test sync connection_type class attribute."""
-    from psycopg import Connection
+    from sqlspec.adapters.psycopg.driver import PsycopgSyncConnection
 
     config = PsycopgSyncConfig(host="localhost")
-    assert config.connection_type is Connection
+    assert config.connection_type is PsycopgSyncConnection
 
 
 def test_async_connection_type() -> None:
     """Test async connection_type class attribute."""
-    from psycopg import AsyncConnection
+    from sqlspec.adapters.psycopg.driver import PsycopgAsyncConnection
 
     config = PsycopgAsyncConfig(host="localhost")
-    assert config.connection_type is AsyncConnection
+    assert config.connection_type is PsycopgAsyncConnection
 
 
 def test_sync_is_async() -> None:
@@ -704,9 +758,15 @@ def test_config_minimal_conninfo() -> None:
 
 
 def test_config_with_pool_instance() -> None:
-    """Test config with existing pool instance."""
+    """Test config can have pool instance set after creation."""
     mock_pool = MagicMock()
-    config = PsycopgSyncConfig(host="localhost", pool_instance=mock_pool)
+    config = PsycopgSyncConfig(host="localhost")
+
+    # Pool instance starts as None
+    assert config.pool_instance is None
+
+    # Set pool instance
+    config.pool_instance = mock_pool
     assert config.pool_instance is mock_pool
 
 

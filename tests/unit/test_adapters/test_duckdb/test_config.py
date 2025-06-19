@@ -243,11 +243,12 @@ def test_create_connection(mock_connect: MagicMock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
 
-    config = DuckDBConfig(database="/tmp/test.db", read_only=False, config={"threads": 4})
+    config = DuckDBConfig(database="/tmp/test.db", read_only=False, threads=4)
 
     connection = config.create_connection()
 
     # Verify connection creation
+    # Note: threads is passed as a separate parameter and gets included in the config dict
     mock_connect.assert_called_once_with(database="/tmp/test.db", read_only=False, config={"threads": 4})
     assert connection is mock_connection
 
@@ -373,7 +374,9 @@ def test_preferred_parameter_style() -> None:
 def test_database_paths(database: str, description: str) -> None:
     """Test various database path configurations."""
     config = DuckDBConfig(database=database)
-    assert config.database == database
+    # Empty string defaults to :memory:
+    expected_database = ":memory:" if database == "" else database
+    assert config.database == expected_database
 
 
 # Logging Configuration Tests
@@ -495,9 +498,9 @@ def test_config_with_dict_config() -> None:
 
 
 def test_config_with_empty_database() -> None:
-    """Test config with empty database string (uses temp file)."""
+    """Test config with empty database string (defaults to :memory:)."""
     config = DuckDBConfig(database="")
-    assert config.database == ""  # DuckDB will create a temp file
+    assert config.database == ":memory:"  # Empty string defaults to :memory:
 
 
 def test_config_readonly_memory() -> None:

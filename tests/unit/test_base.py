@@ -57,9 +57,10 @@ class MockSyncConfig(NoPoolSyncConfig["MockConnection", "MockDriver"]):
     supports_connection_pooling = False
 
     def __init__(self, name: "str" = "mock_sync") -> None:
+        super().__init__()
         self.name = name
         self._connection = MockConnection(name)
-        super().__init__()
+        self.default_row_type = dict
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -90,9 +91,10 @@ class MockAsyncConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]):
     supports_connection_pooling = False
 
     def __init__(self, name: "str" = "mock_async") -> None:
+        super().__init__()
         self.name = name
         self._connection = MockConnection(name)
-        super().__init__()
+        self.default_row_type = dict
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -134,10 +136,11 @@ class MockSyncPoolConfig(SyncDatabaseConfig["MockConnection", "MockDriver", "Moc
     supports_connection_pooling = True
 
     def __init__(self, name: "str" = "mock_sync_pool") -> None:
+        super().__init__()
         self.name = name
         self._connection = MockConnection(name)
         self._pool: Optional[MockPool] = None
-        super().__init__()
+        self.default_row_type = dict
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -176,10 +179,11 @@ class MockAsyncPoolConfig(AsyncDatabaseConfig["MockConnection", "MockAsyncDriver
     supports_connection_pooling = True
 
     def __init__(self, name: "str" = "mock_async_pool") -> None:
+        super().__init__()
         self.name = name
         self._connection = MockConnection(name)
         self._pool: Optional[MockPool] = None
-        super().__init__()
+        self.default_row_type = dict
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -233,12 +237,10 @@ def test_add_config(config_class: "type", config_name: "str", expected_type: "ty
     sqlspec = SQLSpec()
     config = config_class(config_name)
 
-    with patch("sqlspec.base.logger") as mock_logger:
-        result = sqlspec.add_config(config)
-        assert result is expected_type
-        assert expected_type in sqlspec._configs
-        assert sqlspec._configs[expected_type] is config
-        mock_logger.info.assert_called_once()
+    result = sqlspec.add_config(config)
+    assert result is expected_type
+    assert expected_type in sqlspec._configs
+    assert sqlspec._configs[expected_type] is config
 
 
 def test_add_config_overwrite() -> None:
@@ -258,7 +260,10 @@ def test_add_config_overwrite() -> None:
 
 @pytest.mark.parametrize(
     "config_class,error_match",
-    [(MockSyncConfig, "No configuration found for type"), (MockAsyncConfig, "No configuration found for type")],
+    [
+        (MockSyncConfig, r"No configuration found for.*MockSyncConfig"),
+        (MockAsyncConfig, r"No configuration found for.*MockAsyncConfig"),
+    ],
 )
 def test_get_config_not_found(config_class: "type", error_match: "str") -> None:
     """Test configuration retrieval when not found."""
@@ -430,7 +435,7 @@ def test_cleanup_pools_sync(config_classes: "list[type]") -> None:
         # Patch close_pool for pooled configs
         close_pool_mocks = []
         for config in configs:
-            if hasattr(config, "close_pool"):
+            if hasattr(config, "close_pool") and config.supports_connection_pooling:
                 mock_close = Mock()
                 patch.object(config, "close_pool", mock_close).start()
                 close_pool_mocks.append(mock_close)

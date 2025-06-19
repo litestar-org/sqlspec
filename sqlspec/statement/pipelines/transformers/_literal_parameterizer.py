@@ -118,6 +118,9 @@ class ParameterizeLiterals(ProcessorProtocol):
         # Process the node
         if isinstance(node, Literal):
             result = self._process_literal_with_context(node, context)
+        elif isinstance(node, (Boolean, Null)):
+            # Boolean and Null are not Literal subclasses, handle them separately
+            result = self._process_literal_with_context(node, context)
         elif isinstance(node, Array) and self.parameterize_arrays:
             result = self._process_array(node, context)
         elif isinstance(node, exp.In) and self.parameterize_in_lists:
@@ -176,7 +179,9 @@ class ParameterizeLiterals(ProcessorProtocol):
             elif isinstance(node, exp.In):
                 context.in_in_clause = False
 
-    def _process_literal_with_context(self, literal: exp.Literal, context: ParameterizationContext) -> exp.Expression:
+    def _process_literal_with_context(
+        self, literal: exp.Expression, context: ParameterizationContext
+    ) -> exp.Expression:
         """Process a literal with awareness of its AST context."""
         # Check if this literal should be preserved based on context
         if self._should_preserve_literal_in_context(literal, context):
@@ -210,7 +215,7 @@ class ParameterizeLiterals(ProcessorProtocol):
         # Create appropriate placeholder
         return self._create_placeholder(hint=semantic_name)
 
-    def _should_preserve_literal_in_context(self, literal: exp.Literal, context: ParameterizationContext) -> bool:
+    def _should_preserve_literal_in_context(self, literal: exp.Expression, context: ParameterizationContext) -> bool:
         """Context-aware decision on literal preservation."""
         # Check for NULL values
         if self.preserve_null and isinstance(literal, Null):
@@ -251,7 +256,7 @@ class ParameterizeLiterals(ProcessorProtocol):
 
         return False
 
-    def _extract_literal_value_and_type(self, literal: exp.Literal) -> tuple[Any, str]:
+    def _extract_literal_value_and_type(self, literal: exp.Expression) -> tuple[Any, str]:
         """Extract the Python value and type info from a SQLGlot literal."""
         if isinstance(literal, Null) or literal.this is None:
             return None, "null"
@@ -302,7 +307,7 @@ class ParameterizeLiterals(ProcessorProtocol):
         return str(literal.this), "unknown"
 
     def _extract_literal_value_and_type_optimized(
-        self, literal: exp.Literal, context: ParameterizationContext
+        self, literal: exp.Expression, context: ParameterizationContext
     ) -> "tuple[Any, str, Optional[exp.DataType], Optional[str]]":
         """Single-pass extraction of value, type hint, SQLGlot type, and semantic name.
 
@@ -368,7 +373,7 @@ class ParameterizeLiterals(ProcessorProtocol):
         return exp.DataType.build(type_name)
 
     def _generate_semantic_name_from_context(
-        self, literal: exp.Literal, context: ParameterizationContext
+        self, literal: exp.Expression, context: ParameterizationContext
     ) -> "Optional[str]":
         """Generate semantic name from AST context using existing parent stack.
 
