@@ -324,11 +324,13 @@ class StatementAnalyzer(ProcessorProtocol):
             for in_clause in expression.find_all(exp.In)
             if (query := in_clause.args.get("query")) and isinstance(query, exp.Select)
         )
-        subqueries.extend([
-            exists_clause.this
-            for exists_clause in expression.find_all(exp.Exists)
-            if exists_clause.this and isinstance(exists_clause.this, exp.Select)
-        ])
+        subqueries.extend(
+            [
+                exists_clause.this
+                for exists_clause in expression.find_all(exp.Exists)
+                if exists_clause.this and isinstance(exists_clause.this, exp.Select)
+            ]
+        )
 
         analysis.subquery_count = len(subqueries)
         max_depth = 0

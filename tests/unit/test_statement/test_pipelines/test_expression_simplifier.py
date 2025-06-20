@@ -56,7 +56,7 @@ def test_literal_folding(sql: str, expected_simplifications: list[str]) -> None:
     transformer = ExpressionSimplifier()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
     result_sql = result_expr.sql()
 
     # Check that arithmetic is simplified
@@ -78,7 +78,7 @@ def test_complex_arithmetic_simplification() -> None:
     transformer = ExpressionSimplifier()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
     result_sql = result_expr.sql()
 
     # Complex expressions should be simplified
@@ -106,7 +106,7 @@ def test_boolean_optimization(
     transformer = ExpressionSimplifier()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
     result_sql = result_expr.sql()
 
     # Check expected patterns
@@ -124,7 +124,7 @@ def test_connector_optimization() -> None:
     transformer = ExpressionSimplifier()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
     result_sql = result_expr.sql()
 
     # Should potentially optimize to: a = 1 AND (b = 2 OR c = 3)
@@ -139,7 +139,7 @@ def test_equality_normalization() -> None:
     transformer = ExpressionSimplifier()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
     result_sql = result_expr.sql()
 
     # Equality normalization might reorder expressions
@@ -155,7 +155,7 @@ def test_disabled_simplifier() -> None:
     transformer = ExpressionSimplifier(enabled=False)
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
     result_sql = result_expr.sql()
 
     # Should be unchanged
@@ -179,7 +179,7 @@ def test_custom_simplification_config() -> None:
     transformer = ExpressionSimplifier(config=config)
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
     result_sql = result_expr.sql()
 
     # Literal folding should work
@@ -202,7 +202,7 @@ def test_all_optimizations_disabled() -> None:
     transformer = ExpressionSimplifier(config=config)
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
 
     # Should still run but might not simplify much
     assert result_expr is not None
@@ -253,7 +253,7 @@ def test_complex_query_simplification(sql: str, description: str) -> None:
     transformer = ExpressionSimplifier()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
     result_sql = result_expr.sql()
 
     # Should preserve query structure
@@ -276,7 +276,7 @@ def test_preserves_parameters() -> None:
     transformer = ExpressionSimplifier()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
     result_sql = result_expr.sql()
 
     # Parameters should be preserved
@@ -293,7 +293,7 @@ def test_no_optimization_needed() -> None:
     transformer = ExpressionSimplifier()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
     result_sql = result_expr.sql()
 
     # Should be essentially unchanged
@@ -315,7 +315,7 @@ def test_simplification_error_handling() -> None:
     context = create_context_with_sql(sql)
 
     # Should not raise an exception even if internal error occurs
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
     assert result_expr is not None
 
 
@@ -327,7 +327,7 @@ def test_transformation_logging() -> None:
     transformer = ExpressionSimplifier()
     context = create_context_with_sql(sql)
 
-    transformer.process(context.current_expression, context)
+    transformer.process(context.current_expression, context)  # pyright: ignore
 
     # Check transformation logs
     assert len(context.transformations) > 0
@@ -346,7 +346,7 @@ def test_metadata_tracking() -> None:
     transformer = ExpressionSimplifier()
     context = create_context_with_sql(sql)
 
-    transformer.process(context.current_expression, context)
+    transformer.process(context.current_expression, context)  # pyright: ignore
 
     # Check metadata
     metadata = context.metadata.get("ExpressionSimplifier")
@@ -376,7 +376,7 @@ def test_configuration_metadata() -> None:
     transformer = ExpressionSimplifier(config=config)
     context = create_context_with_sql(sql)
 
-    transformer.process(context.current_expression, context)
+    transformer.process(context.current_expression, context)  # pyright: ignore
 
     metadata = context.metadata.get("ExpressionSimplifier")
     assert metadata is not None
@@ -405,7 +405,7 @@ def test_comprehensive_simplification_scenarios(sql: str, expected_simplificatio
     transformer = ExpressionSimplifier()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
     result_sql = result_expr.sql()
 
     # Check for expected simplification (may vary by SQLGlot version)
@@ -420,9 +420,9 @@ def test_chars_saved_calculation() -> None:
 
     transformer = ExpressionSimplifier()
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     original_length = len(context.current_expression.sql())
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
     simplified_length = len(result_expr.sql())
 
     metadata = context.metadata.get("ExpressionSimplifier")
@@ -454,6 +454,7 @@ def test_transformer_handles_complex_ast() -> None:
     context = create_context_with_sql(sql)
 
     # Should not crash on complex query
+    assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
 
     # Should preserve essential structure
