@@ -62,7 +62,7 @@ def test_basic_literal_parameterization(sql: str, expected_param_count: int, exp
     """Test basic literal parameterization."""
     transformer = ParameterizeLiterals()
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
 
     # Check parameter extraction
@@ -99,7 +99,7 @@ def test_boolean_preservation_configuration(sql: str, preserve_boolean: bool, ex
     """Test boolean preservation configuration."""
     transformer = ParameterizeLiterals(preserve_boolean=preserve_boolean)
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     transformer.process(context.current_expression, context)
 
     parameters = context.extracted_parameters_from_pipeline or []
@@ -120,7 +120,7 @@ def test_null_preservation_configuration(sql: str, preserve_null: bool, expected
     """Test NULL preservation configuration."""
     transformer = ParameterizeLiterals(preserve_null=preserve_null)
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     transformer.process(context.current_expression, context)
 
     parameters = context.extracted_parameters_from_pipeline or []
@@ -138,7 +138,7 @@ def test_placeholder_styles(placeholder_style: str, expected_placeholder: str) -
     sql = "SELECT * FROM users WHERE name = 'John'"
     transformer = ParameterizeLiterals(placeholder_style=placeholder_style)
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
     result_sql = result_expr.sql()
 
@@ -171,7 +171,7 @@ def test_limit_clause_preservation(sql: str, preserve_numbers_in_limit: bool, sh
     """Test number preservation in LIMIT clauses."""
     transformer = ParameterizeLiterals(preserve_numbers_in_limit=preserve_numbers_in_limit)
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
     result_sql = result_expr.sql()
 
@@ -190,7 +190,7 @@ def test_max_string_length_preservation() -> None:
 
     transformer = ParameterizeLiterals(max_string_length=1000)
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
     result_sql = result_expr.sql()
 
@@ -209,7 +209,7 @@ def test_preserve_in_functions() -> None:
 
     transformer = ParameterizeLiterals(preserve_in_functions=["COALESCE", "IFNULL"])
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
     result_sql = result_expr.sql()
 
@@ -239,7 +239,7 @@ def test_complex_query_parameterization() -> None:
 
     transformer = ParameterizeLiterals()
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     transformer.process(context.current_expression, context)
 
     # Should extract multiple parameters from different parts of the query
@@ -261,7 +261,7 @@ def test_mixed_literal_types() -> None:
 
     transformer = ParameterizeLiterals(preserve_null=True, preserve_boolean=False)
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
     result_sql = result_expr.sql()
 
@@ -293,7 +293,7 @@ def test_in_clause_parameterization(sql: str, parameterize_in_lists: bool, expec
     """Test IN clause parameterization."""
     transformer = ParameterizeLiterals(parameterize_in_lists=parameterize_in_lists)
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     transformer.process(context.current_expression, context)
 
     parameters = context.extracted_parameters_from_pipeline or []
@@ -310,7 +310,7 @@ def test_in_clause_size_limit() -> None:
     small_sql = "SELECT * FROM users WHERE id IN (1, 2, 3)"
     transformer = ParameterizeLiterals(max_in_list_size=5)
     context = create_context_with_sql(small_sql)
-
+    assert context.current_expression is not None
     transformer.process(context.current_expression, context)
     parameters = context.extracted_parameters_from_pipeline or []
     assert len(parameters) >= 3
@@ -321,7 +321,7 @@ def test_in_clause_size_limit() -> None:
 
     transformer_large = ParameterizeLiterals(max_in_list_size=50)
     context_large = create_context_with_sql(large_sql)
-
+    assert context_large.current_expression is not None
     transformer_large.process(context_large.current_expression, context_large)
     parameters_large = context_large.extracted_parameters_from_pipeline or []
     # Should not parameterize due to size limit
@@ -335,7 +335,7 @@ def test_parameter_metadata_generation() -> None:
 
     transformer = ParameterizeLiterals()
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     transformer.process(context.current_expression, context)
 
     # Check metadata was stored in context
@@ -361,7 +361,7 @@ def test_type_preservation_metadata() -> None:
 
     transformer = ParameterizeLiterals(type_preservation=True)
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     transformer.process(context.current_expression, context)
 
     # Check parameter metadata for type information
@@ -390,7 +390,7 @@ def test_context_aware_parameterization() -> None:
 
     transformer = ParameterizeLiterals(placeholder_style=":name")
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     transformer.process(context.current_expression, context)
 
     # Check that parameters were extracted
@@ -416,7 +416,7 @@ def test_empty_query_handling() -> None:
 
     transformer = ParameterizeLiterals()
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
 
     # Should not extract any parameters
@@ -436,7 +436,7 @@ def test_data_type_contexts_preserved() -> None:
 
     transformer = ParameterizeLiterals()
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
     result_sql = result_expr.sql()
 
@@ -460,7 +460,7 @@ def test_subquery_handling() -> None:
 
     transformer = ParameterizeLiterals()
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     transformer.process(context.current_expression, context)
 
     # Should parameterize literals in subquery
@@ -479,6 +479,7 @@ def test_placeholders_already_present() -> None:
     context = create_context_with_sql(sql, config)
 
     transformer = ParameterizeLiterals()
+    assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
 
     # Should not modify SQL that already has placeholders
@@ -496,7 +497,7 @@ def test_transformer_method_access() -> None:
 
     transformer = ParameterizeLiterals()
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     transformer.process(context.current_expression, context)
 
     # Test get_parameters method
@@ -525,7 +526,7 @@ def test_named_parameter_generation() -> None:
 
     transformer = ParameterizeLiterals(placeholder_style=":name")
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
     result_sql = result_expr.sql()
 
@@ -556,7 +557,7 @@ def test_comprehensive_parameterization_scenarios(sql: str, expected_min_params:
     """Test comprehensive parameterization across various SQL patterns."""
     transformer = ParameterizeLiterals()
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     transformer.process(context.current_expression, context)
 
     parameters = context.extracted_parameters_from_pipeline or []
@@ -588,7 +589,7 @@ def test_transformer_handles_complex_ast() -> None:
 
     transformer = ParameterizeLiterals()
     context = create_context_with_sql(sql)
-
+    assert context.current_expression is not None
     # Should not crash on complex query
     transformer.process(context.current_expression, context)
 

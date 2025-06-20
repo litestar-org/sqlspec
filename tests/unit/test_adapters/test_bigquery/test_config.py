@@ -25,37 +25,35 @@ if TYPE_CHECKING:
 # Constants Tests
 def test_connection_fields_constant() -> None:
     """Test CONNECTION_FIELDS constant contains all expected fields."""
-    expected_fields = frozenset(
-        {
-            "project",
-            "location",
-            "credentials",
-            "dataset_id",
-            "credentials_path",
-            "client_options",
-            "client_info",
-            "default_query_job_config",
-            "default_load_job_config",
-            "use_query_cache",
-            "maximum_bytes_billed",
-            "enable_bigquery_ml",
-            "enable_gemini_integration",
-            "query_timeout_ms",
-            "job_timeout_ms",
-            "reservation_id",
-            "edition",
-            "enable_cross_cloud",
-            "enable_bigquery_omni",
-            "use_avro_logical_types",
-            "parquet_enable_list_inference",
-            "enable_column_level_security",
-            "enable_row_level_security",
-            "enable_dataframes",
-            "dataframes_backend",
-            "enable_continuous_queries",
-            "enable_vector_search",
-        }
-    )
+    expected_fields = frozenset({
+        "project",
+        "location",
+        "credentials",
+        "dataset_id",
+        "credentials_path",
+        "client_options",
+        "client_info",
+        "default_query_job_config",
+        "default_load_job_config",
+        "use_query_cache",
+        "maximum_bytes_billed",
+        "enable_bigquery_ml",
+        "enable_gemini_integration",
+        "query_timeout_ms",
+        "job_timeout_ms",
+        "reservation_id",
+        "edition",
+        "enable_cross_cloud",
+        "enable_bigquery_omni",
+        "use_avro_logical_types",
+        "parquet_enable_list_inference",
+        "enable_column_level_security",
+        "enable_row_level_security",
+        "enable_dataframes",
+        "dataframes_backend",
+        "enable_continuous_queries",
+        "enable_vector_search",
+    })
     assert CONNECTION_FIELDS == expected_fields
 
 
@@ -152,7 +150,7 @@ def test_extras_handling(init_kwargs: dict[str, Any], expected_extras: dict[str,
 )
 def test_feature_flags(feature_flag: str, value: bool) -> None:
     """Test feature flag configuration."""
-    config = BigQueryConfig(project="test-project", **{feature_flag: value})  # pyright: ignore
+    config = BigQueryConfig(project="test-project", **{feature_flag: value})  # type: ignore[arg-type]
     assert getattr(config, feature_flag) == value
 
 
