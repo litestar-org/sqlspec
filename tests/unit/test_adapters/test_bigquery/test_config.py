@@ -152,7 +152,7 @@ def test_extras_handling(init_kwargs: dict[str, Any], expected_extras: dict[str,
 )
 def test_feature_flags(feature_flag: str, value: bool) -> None:
     """Test feature flag configuration."""
-    config = BigQueryConfig(project="test-project", **{feature_flag: value})
+    config = BigQueryConfig(project="test-project", **{feature_flag: value})  # pyright: ignore
     assert getattr(config, feature_flag) == value
 
 
@@ -305,7 +305,7 @@ def test_preferred_parameter_style() -> None:
 )
 def test_timeout_configuration(timeout_type: str, value: int) -> None:
     """Test timeout configuration."""
-    config = BigQueryConfig(project="test-project", **{timeout_type: value})  # pyright: ignore
+    config = BigQueryConfig(project="test-project", **{timeout_type: value})  # type: ignore[arg-type]
     assert getattr(config, timeout_type) == value
 
 
@@ -364,7 +364,7 @@ def test_job_config_objects() -> None:
 )
 def test_storage_format_options(option: str, value: bool) -> None:
     """Test storage format options."""
-    config = BigQueryConfig(project="test-project", **{option: value})
+    config = BigQueryConfig(project="test-project", **{option: value})  # type: ignore[arg-type]
     assert getattr(config, option) == value
 
 

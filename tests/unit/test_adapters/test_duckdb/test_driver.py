@@ -265,7 +265,7 @@ def test_wrap_select_result(driver: DuckDBDriver) -> None:
     statement = SQL("SELECT * FROM users")
     result = {"data": [(1, "Alice"), (2, "Bob")], "column_names": ["id", "name"], "rows_affected": 2}
 
-    wrapped = driver._wrap_select_result(statement, result)
+    wrapped = driver._wrap_select_result(statement, result)  # pyright: ignore
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.statement is statement
@@ -288,7 +288,7 @@ def test_wrap_select_result_with_schema(driver: DuckDBDriver) -> None:
     statement = SQL("SELECT * FROM users")
     result = {"data": [(1, "Alice"), (2, "Bob")], "column_names": ["id", "name"], "rows_affected": 2}
 
-    wrapped = driver._wrap_select_result(statement, result, schema_type=User)
+    wrapped = driver._wrap_select_result(statement, result, schema_type=User)  # pyright: ignore
 
     assert isinstance(wrapped, SQLResult)
     assert all(isinstance(item, User) for item in wrapped.data)
@@ -303,7 +303,7 @@ def test_wrap_execute_result_dml(driver: DuckDBDriver) -> None:
 
     result = {"rows_affected": 1}
 
-    wrapped = driver._wrap_execute_result(statement, result)
+    wrapped = driver._wrap_execute_result(statement, result)  # pyright: ignore
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.data == []
@@ -424,7 +424,7 @@ def test_fetch_arrow_table_with_parameters(driver: DuckDBDriver, mock_connection
     import pyarrow as pa
 
     # Setup mock arrow table
-    mock_arrow_table = pa.table({"id": [1], "name": ["Alice"]})
+    mock_arrow_table = pa.table({"id": [1], "name": ["Alice"]})  # pyright: ignore
     mock_result = mock_connection.execute.return_value
     mock_result.arrow.return_value = mock_arrow_table
 

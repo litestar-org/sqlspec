@@ -13,7 +13,7 @@ This module tests the SqliteDriver class including:
 import sqlite3
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unittest.mock import MagicMock, Mock, PropertyMock, mock_open, patch
 
 import pytest
@@ -23,9 +23,6 @@ from sqlspec.statement.parameters import ParameterInfo, ParameterStyle
 from sqlspec.statement.result import SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
-
-if TYPE_CHECKING:
-    pass
 
 
 # Test Fixtures
@@ -406,7 +403,7 @@ def test_wrap_select_result(driver: SqliteDriver) -> None:
         "rows_affected": 2,
     }
 
-    wrapped = driver._wrap_select_result(statement, result)
+    wrapped = driver._wrap_select_result(statement, result)  # pyright: ignore
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.statement is statement
@@ -449,7 +446,7 @@ def test_wrap_execute_result_dml(driver: SqliteDriver) -> None:
     result = {"rows_affected": 1, "status_message": "OK"}
 
     with patch.object(type(statement), "expression", new_callable=PropertyMock, return_value=mock_expression):
-        wrapped = driver._wrap_execute_result(statement, result)
+        wrapped = driver._wrap_execute_result(statement, result)  # pyright: ignore
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.data == []
@@ -465,7 +462,7 @@ def test_wrap_execute_result_script(driver: SqliteDriver) -> None:
     result = {"statements_executed": 2, "status_message": "SCRIPT EXECUTED"}
 
     with patch.object(type(statement), "expression", new_callable=PropertyMock, return_value=None):
-        wrapped = driver._wrap_execute_result(statement, result)
+        wrapped = driver._wrap_execute_result(statement, result)  # pyright: ignore
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.data == []

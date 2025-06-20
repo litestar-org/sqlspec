@@ -351,7 +351,7 @@ def test_insert_sql_injection_in_dict() -> None:
         ({}, "empty_dict"),
         ({"key": "value"}, "dict_as_value"),
         ([1, 2, 3], "list_as_value"),
-        ({"a", "b", "c"}, "set_as_value"),
+        (("a", "b", "c"), "tuple_as_value"),
         ("x" * 10000, "very_long_string"),
     ],
     ids=lambda x: x[1] if isinstance(x, tuple) else str(x),

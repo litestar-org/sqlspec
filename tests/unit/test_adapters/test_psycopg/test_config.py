@@ -205,7 +205,7 @@ def test_async_config_initialization(kwargs: dict[str, Any], expected_attrs: dic
 )
 def test_timeout_configuration(timeout_type: str, value: float) -> None:
     """Test timeout configuration."""
-    config = PsycopgSyncConfig(host="localhost", **{timeout_type: value})
+    config = PsycopgSyncConfig(host="localhost", **{timeout_type: value})  # pyright: ignore
     assert getattr(config, timeout_type) == value
 
 
@@ -233,7 +233,7 @@ def test_application_settings() -> None:
 )
 def test_ssl_configuration(ssl_param: str, value: str) -> None:
     """Test SSL configuration parameters."""
-    config = PsycopgSyncConfig(host="localhost", **{ssl_param: value})
+    config = PsycopgSyncConfig(host="localhost", **{ssl_param: value})  # pyright: ignore
     assert getattr(config, ssl_param) == value
 
 
@@ -304,7 +304,7 @@ def test_sync_create_connection() -> None:
         connection = config.create_connection()
 
         # Verify pool was created
-        config.create_pool.assert_called_once()
+        config.create_pool.assert_called_once()  # pyright: ignore
 
         # Verify connection was obtained from pool
         mock_pool.getconn.assert_called_once()
@@ -349,7 +349,7 @@ async def test_async_create_connection() -> None:
         connection = await config.create_connection()
 
         # Verify pool was created
-        config.create_pool.assert_called_once()
+        config.create_pool.assert_called_once()  # pyright: ignore
 
         # Verify connection was obtained from pool
         mock_pool.getconn.assert_called_once()

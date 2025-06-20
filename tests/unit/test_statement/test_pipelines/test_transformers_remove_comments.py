@@ -56,7 +56,7 @@ def test_basic_comment_removal(
     transformer = CommentRemover()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
     result_sql = result_expr.sql()
 
     # Check that comments are removed
@@ -79,7 +79,7 @@ def test_empty_comments_removal() -> None:
     transformer = CommentRemover()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
     result_sql = result_expr.sql()
 
     assert "SELECT" in result_sql
@@ -98,7 +98,7 @@ def test_comments_preservation_in_strings() -> None:
     transformer = CommentRemover()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
     result_sql = result_expr.sql()
 
     # String contents should be preserved
@@ -148,7 +148,7 @@ def test_complex_query_comment_removal(sql: str, description: str) -> None:
     transformer = CommentRemover()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
     result_sql = result_expr.sql()
 
     # Should preserve query structure
@@ -180,7 +180,7 @@ def test_comments_in_case_statements() -> None:
     transformer = CommentRemover()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
     result_sql = result_expr.sql()
 
     # CASE structure should be preserved
@@ -205,7 +205,7 @@ def test_comments_in_function_calls() -> None:
     transformer = CommentRemover()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
     result_sql = result_expr.sql()
 
     # Function calls should be preserved
@@ -233,7 +233,7 @@ def test_no_comments_to_remove(sql: str, expected_structure_preserved: list[str]
     transformer = CommentRemover()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
     result_sql = result_expr.sql()
 
     # Structure should be preserved
@@ -252,7 +252,7 @@ def test_comments_with_special_characters() -> None:
     transformer = CommentRemover()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
     result_sql = result_expr.sql()
 
     # Query structure should be preserved
@@ -274,7 +274,7 @@ def test_mixed_comment_styles() -> None:
     transformer = CommentRemover()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
     result_sql = result_expr.sql()
 
     # Essential structure should be preserved
@@ -325,7 +325,7 @@ def test_comment_positions(sql: str, description: str) -> None:
     transformer = CommentRemover()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
     result_sql = result_expr.sql()
 
     # Core query structure should remain
@@ -353,7 +353,7 @@ def test_hint_preservation(sql: str, preserved_hints: list[str], description: st
     transformer = CommentRemover()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
     result_sql = result_expr.sql()
 
     # Hints should be preserved (though exact format may vary)
@@ -374,7 +374,7 @@ def test_transformer_disabled() -> None:
     transformer = CommentRemover(enabled=False)
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
     result_sql = result_expr.sql()
 
     # When disabled, comments might still be removed by SQLGlot's parsing
@@ -394,7 +394,7 @@ def test_metadata_tracking() -> None:
     transformer = CommentRemover()
     context = create_context_with_sql(sql)
 
-    transformer.process(context.current_expression, context)
+    transformer.process(context.current_expression, context)  # type: ignore[arg-type]
 
     # Check metadata was stored
     metadata = context.metadata.get("comments_removed")
@@ -410,7 +410,7 @@ def test_null_expression_handling() -> None:
     context.current_expression = None
 
     # Should not crash when expression is None
-    result = transformer.process(None, context)
+    result = transformer.process(None, context)  # type: ignore[arg-type]
     assert result is None
 
 
@@ -433,7 +433,7 @@ def test_preserves_query_structure() -> None:
     transformer = CommentRemover()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
     result_sql = result_expr.sql()
 
     # Should preserve the basic structure (SQLGlot may add AS keywords)
@@ -486,7 +486,7 @@ def test_comprehensive_comment_removal(sql: str, min_preserved_tokens: list[str]
     transformer = CommentRemover()
     context = create_context_with_sql(sql)
 
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
     result_sql = result_expr.sql()
 
     # Ensure essential SQL structure is preserved
@@ -521,7 +521,7 @@ def test_transformer_handles_complex_ast() -> None:
     context = create_context_with_sql(sql)
 
     # Should not crash on complex query
-    result_expr = transformer.process(context.current_expression, context)
+    result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
 
     # Should preserve essential structure
     result_sql = result_expr.sql()

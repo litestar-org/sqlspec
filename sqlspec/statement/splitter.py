@@ -135,11 +135,13 @@ class DialectConfig(ABC):
 
         return patterns
 
-    def _get_dialect_specific_patterns(self) -> list[tuple[TokenType, TokenPattern]]:
+    @staticmethod
+    def _get_dialect_specific_patterns() -> list[tuple[TokenType, TokenPattern]]:
         """Override to add dialect-specific token patterns."""
         return []
 
-    def is_real_block_ender(self, tokens: list[Token], current_pos: int) -> bool:
+    @staticmethod
+    def is_real_block_ender(tokens: list[Token], current_pos: int) -> bool:  # noqa: ARG004
         """Check if this END keyword is actually a block ender.
 
         Override in dialect configs to handle cases like END IF, END LOOP, etc.
@@ -147,7 +149,8 @@ class DialectConfig(ABC):
         """
         return True
 
-    def should_delay_semicolon_termination(self, tokens: list[Token], current_pos: int) -> bool:
+    @staticmethod
+    def should_delay_semicolon_termination(tokens: list[Token], current_pos: int) -> bool:  # noqa: ARG004
         """Check if semicolon termination should be delayed.
 
         Override in dialect configs to handle special cases like Oracle END; /
@@ -223,7 +226,8 @@ class OracleDialectConfig(DialectConfig):
 
         return False
 
-    def is_real_block_ender(self, tokens: list[Token], current_pos: int) -> bool:
+    @staticmethod
+    def is_real_block_ender(tokens: list[Token], current_pos: int) -> bool:
         """Check if this END keyword is actually a block ender.
 
         In Oracle PL/SQL, END followed by IF, LOOP, CASE etc. are not block enders
@@ -252,7 +256,8 @@ class OracleDialectConfig(DialectConfig):
             break
         return True  # This is a real block ender
 
-    def _handle_slash_terminator(self, tokens: list[Token], current_pos: int) -> bool:
+    @staticmethod
+    def _handle_slash_terminator(tokens: list[Token], current_pos: int) -> bool:
         """Oracle / must be on its own line after whitespace only."""
         if current_pos == 0:
             return True  # / at start is valid
@@ -294,7 +299,8 @@ class TSQLDialectConfig(DialectConfig):
     def batch_separators(self) -> set[str]:
         return {"GO"}
 
-    def validate_batch_separator(self, tokens: list[Token], current_pos: int) -> bool:
+    @staticmethod
+    def validate_batch_separator(tokens: list[Token], current_pos: int) -> bool:  # noqa: ARG004
         """GO must be the only keyword on its line."""
         # Look for non-whitespace tokens on the same line
         # Implementation similar to Oracle slash handler
@@ -324,7 +330,8 @@ class PostgreSQLDialectConfig(DialectConfig):
         """Add PostgreSQL-specific patterns like dollar-quoted strings."""
         return [(TokenType.STRING_LITERAL, self._handle_dollar_quoted_string)]
 
-    def _handle_dollar_quoted_string(self, text: str, position: int, line: int, column: int) -> Optional[Token]:
+    @staticmethod
+    def _handle_dollar_quoted_string(text: str, position: int, line: int, column: int) -> Optional[Token]:
         """Handle PostgreSQL dollar-quoted strings like $tag$...$tag$."""
         # Match opening tag
         start_match = re.match(r"\$([a-zA-Z_][a-zA-Z0-9_]*)?\$", text[position:])
@@ -495,11 +502,16 @@ class StatementSplitter:
                 # Save the statement
                 statement = "".join(current_statement_chars).strip()
 
+                # Determine if this is a PL/SQL block
+                is_plsql_block = self._is_plsql_block(current_statement_tokens)
+
                 # Optionally strip the trailing terminator
+                # For PL/SQL blocks, never strip the semicolon as it's syntactically required
                 if (
                     self.strip_trailing_semicolon
                     and token.type == TokenType.TERMINATOR
                     and statement.endswith(token.value)
+                    and not is_plsql_block
                 ):
                     statement = statement[: -len(token.value)].rstrip()
 
@@ -515,6 +527,22 @@ class StatementSplitter:
                 statements.append(statement)
 
         return statements
+
+    @staticmethod
+    def _is_plsql_block(tokens: list[Token]) -> bool:
+        """Check if the token list represents a PL/SQL block.
+
+        Args:
+            tokens: List of tokens for the current statement
+
+        Returns:
+            True if this is a PL/SQL block (BEGIN...END or DECLARE...END)
+        """
+        # Find the first meaningful keyword token (skip whitespace and comments)
+        for token in tokens:
+            if token.type == TokenType.KEYWORD:
+                return token.value.upper() in {"BEGIN", "DECLARE"}
+        return False
 
     def _contains_executable_content(self, statement: str) -> bool:
         """Check if a statement contains actual executable content (not just comments/whitespace).

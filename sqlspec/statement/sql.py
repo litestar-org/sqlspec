@@ -168,140 +168,120 @@ class SQL:
         _existing_state: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
-        """Initialize SQL with centralized parameter management.
-
-        Args:
-            statement: SQL string, expression, or another SQL object
-            *parameters: Mixed positional args - can be parameters or filters
-            dialect: SQL dialect to use
-            config: SQL configuration
-            _builder_result_type: Internal - for query builders
-            _existing_state: Internal - for copy() method
-            **kwargs: Named parameters
-        """
-        # Initialize config
+        """Initialize SQL with centralized parameter management."""
         self._config = _config or SQLConfig()
         self._dialect = _dialect
         self._builder_result_type = _builder_result_type
-        self._is_many = False
-        self._is_script = False
-        self._processed_state = None
-
-        # Initialize parameter storage
+        self._processed_state: Optional[_ProcessedState] = None
         self._positional_params: list[Any] = []
         self._named_params: dict[str, Any] = {}
         self._filters: list[StatementFilter] = []
-        self._statement: exp.Expression  # Will be set below
+        self._statement: exp.Expression
+        self._raw_sql: str = ""
+        self._original_parameters: Any = None
+        self._is_many: bool = False
+        self._is_script: bool = False
 
-        # Handle statement conversion
         if isinstance(statement, SQL):
-            # Copy from existing SQL object
-            self._statement = statement._statement
-            self._dialect = _dialect or statement._dialect
-            self._config = _config or statement._config
-            self._builder_result_type = _builder_result_type or statement._builder_result_type
-            self._is_many = statement._is_many
-            self._is_script = statement._is_script
-            self._raw_sql: str = statement._raw_sql
-            self._original_parameters = statement._original_parameters
-            # Copy internal state
-            self._positional_params.extend(statement._positional_params)
-            self._named_params.update(statement._named_params)
-            self._filters.extend(statement._filters)
+            self._init_from_sql_object(statement, _dialect, _config, _builder_result_type)
         else:
-            # Store raw SQL string if provided
-            if isinstance(statement, str):
-                self._raw_sql = statement
-                # Check if the SQL already has placeholders
-                if self._raw_sql and not self._config.input_sql_had_placeholders:
-                    # Use parameter validator to check for existing placeholders
-                    param_info = self._config.parameter_validator.extract_parameters(self._raw_sql)
-                    if param_info:
-                        # SQL already has placeholders, update config
-                        from dataclasses import replace
+            self._init_from_str_or_expression(statement)
 
-                        self._config = replace(self._config, input_sql_had_placeholders=True)
-            elif isinstance(statement, exp.Expression):
-                self._raw_sql = statement.sql(dialect=self._dialect)
-            else:
-                self._raw_sql = ""
-            # Convert to expression if string
-            self._statement = self._to_expression(statement) if isinstance(statement, str) else statement
-
-        # Load from existing state if provided (used by copy())
         if _existing_state:
-            self._positional_params = list(_existing_state.get("positional_params", []))
-            self._named_params = dict(_existing_state.get("named_params", {}))
-            self._filters = list(_existing_state.get("filters", []))
-            if "is_many" in _existing_state:
-                self._is_many = _existing_state["is_many"]
-            if "is_script" in _existing_state:
-                self._is_script = _existing_state["is_script"]
-            if "raw_sql" in _existing_state:
-                self._raw_sql = _existing_state["raw_sql"]
+            self._load_from_existing_state(_existing_state)
 
-        # Store original parameters for compatibility
-        if isinstance(statement, SQL):
-            # When copying from another SQL, don't overwrite original parameters
-            pass
-        elif len(parameters) == 1 and not isinstance(parameters[0], StatementFilter):
+        if not isinstance(statement, SQL):
+            self._set_original_parameters(*parameters)
+
+        self._process_parameters(*parameters, **kwargs)
+
+    def _init_from_sql_object(
+        self,
+        statement: "SQL",
+        dialect: Optional[DialectType],
+        config: Optional[SQLConfig],
+        builder_result_type: Optional[type],
+    ) -> None:
+        """Initialize attributes from an existing SQL object."""
+        self._statement = statement._statement
+        self._dialect = dialect or statement._dialect
+        self._config = config or statement._config
+        self._builder_result_type = builder_result_type or statement._builder_result_type
+        self._is_many = statement._is_many
+        self._is_script = statement._is_script
+        self._raw_sql = statement._raw_sql
+        self._original_parameters = statement._original_parameters
+        self._positional_params.extend(statement._positional_params)
+        self._named_params.update(statement._named_params)
+        self._filters.extend(statement._filters)
+
+    def _init_from_str_or_expression(self, statement: Union[str, exp.Expression]) -> None:
+        """Initialize attributes from a SQL string or expression."""
+        if isinstance(statement, str):
+            self._raw_sql = statement
+            if self._raw_sql and not self._config.input_sql_had_placeholders:
+                param_info = self._config.parameter_validator.extract_parameters(self._raw_sql)
+                if param_info:
+                    from dataclasses import replace
+
+                    self._config = replace(self._config, input_sql_had_placeholders=True)
+            self._statement = self._to_expression(statement)
+        else:
+            self._raw_sql = statement.sql(dialect=self._dialect)  # pyright: ignore
+            self._statement = statement
+
+    def _load_from_existing_state(self, existing_state: dict[str, Any]) -> None:
+        """Load state from a dictionary (used by copy)."""
+        self._positional_params = list(existing_state.get("positional_params", self._positional_params))
+        self._named_params = dict(existing_state.get("named_params", self._named_params))
+        self._filters = list(existing_state.get("filters", self._filters))
+        self._is_many = existing_state.get("is_many", self._is_many)
+        self._is_script = existing_state.get("is_script", self._is_script)
+        self._raw_sql = existing_state.get("raw_sql", self._raw_sql)
+
+    def _set_original_parameters(self, *parameters: Any) -> None:
+        """Store the original parameters for compatibility."""
+        if len(parameters) == 1 and not isinstance(parameters[0], StatementFilter):
             self._original_parameters = parameters[0]
         elif len(parameters) > 1:
             self._original_parameters = parameters
         else:
             self._original_parameters = None
 
-        # Process parameters from *args
+    def _process_parameters(self, *parameters: Any, **kwargs: Any) -> None:
+        """Process positional and keyword arguments for parameters and filters."""
         for param in parameters:
-            if isinstance(param, StatementFilter):
-                # Store filter and extract its parameters
-                self._filters.append(param)
-                pos_params, named_params = self._extract_filter_parameters(param)
-                self._positional_params.extend(pos_params)
-                self._named_params.update(named_params)
-            elif isinstance(param, list):
-                # Handle list of items
-                for item in param:
-                    if isinstance(item, StatementFilter):
-                        self._filters.append(item)
-                        pos_params, named_params = self._extract_filter_parameters(item)
-                        self._positional_params.extend(pos_params)
-                        self._named_params.update(named_params)
-                    elif isinstance(item, dict):
-                        # Merge dict as named params
-                        self._named_params.update(item)
-                    else:
-                        # Add as positional param
-                        self._positional_params.append(item)
-            elif isinstance(param, dict):
-                # Merge dict as named params
-                self._named_params.update(param)
-            elif isinstance(param, tuple):
-                # Handle tuple as positional parameters
-                self._positional_params.extend(param)
-            else:
-                # Add as positional param
-                self._positional_params.append(param)
+            self._process_parameter_item(param)
 
-        # Process **kwargs - highest precedence
-        # Special handling for 'parameters' keyword
         if "parameters" in kwargs:
             param_value = kwargs.pop("parameters")
             if isinstance(param_value, (list, tuple)):
-                # Add as positional parameters
                 self._positional_params.extend(param_value)
             elif isinstance(param_value, dict):
-                # Merge as named parameters
                 self._named_params.update(param_value)
             else:
-                # Single value
                 self._positional_params.append(param_value)
 
-        # Add remaining kwargs as named parameters
-        # Skip internal parameters that start with underscore
         for key, value in kwargs.items():
             if not key.startswith("_"):
                 self._named_params[key] = value
+
+    def _process_parameter_item(self, item: Any) -> None:
+        """Process a single item from the parameters list."""
+        if isinstance(item, StatementFilter):
+            self._filters.append(item)
+            pos_params, named_params = self._extract_filter_parameters(item)
+            self._positional_params.extend(pos_params)
+            self._named_params.update(named_params)
+        elif isinstance(item, list):
+            for sub_item in item:
+                self._process_parameter_item(sub_item)
+        elif isinstance(item, dict):
+            self._named_params.update(item)
+        elif isinstance(item, tuple):
+            self._positional_params.extend(item)
+        else:
+            self._positional_params.append(item)
 
     def _ensure_processed(self) -> None:
         """Ensure the SQL has been processed through the pipeline (lazy initialization).
@@ -395,7 +375,7 @@ class SQL:
 
         try:
             # Parse with sqlglot
-            expressions = sqlglot.parse(statement, dialect=self._dialect)
+            expressions = sqlglot.parse(statement, dialect=self._dialect)  # pyright: ignore
             if not expressions:
                 # Empty statement
                 return exp.Anonymous(this=statement)
@@ -518,10 +498,10 @@ class SQL:
 
         # Apply WHERE to statement
         if hasattr(self._statement, "where"):
-            new_statement = self._statement.where(condition_expr)
+            new_statement = self._statement.where(condition_expr)  # pyright: ignore
         else:
             # Wrap in SELECT if needed
-            new_statement = exp.Select().from_(self._statement).where(condition_expr)
+            new_statement = exp.Select().from_(self._statement).where(condition_expr)  # pyright: ignore
 
         return self.copy(statement=new_statement)
 
@@ -544,8 +524,7 @@ class SQL:
             # Replace parameters for executemany
             new_obj._positional_params = []
             new_obj._named_params = {}
-            if isinstance(parameters, list):
-                new_obj._positional_params = parameters
+            new_obj._positional_params = parameters
         return new_obj
 
     def as_script(self) -> "SQL":
@@ -562,21 +541,11 @@ class SQL:
         # Apply all filters to the expression
         for filter_obj in self._filters:
             if hasattr(filter_obj, "append_to_statement"):
-                # New style filter that modifies expression directly
                 temp_sql = SQL(final_expr, config=self._config, dialect=self._dialect)
                 temp_sql._positional_params = list(self._positional_params)
                 temp_sql._named_params = dict(self._named_params)
                 result = filter_obj.append_to_statement(temp_sql)
                 final_expr = result._statement if isinstance(result, SQL) else result
-            elif hasattr(filter_obj, "apply"):
-                # Legacy filter - needs to be updated
-                # For now, create a temporary SQL object to apply it
-                temp_sql = SQL(final_expr, config=self._config, dialect=self._dialect)
-                temp_sql._positional_params = list(self._positional_params)
-                temp_sql._named_params = dict(self._named_params)
-                result = filter_obj.apply(temp_sql)
-                if isinstance(result, SQL):
-                    final_expr = result._statement
 
         # Determine final parameters format
         final_params: Any
@@ -685,121 +654,241 @@ class SQL:
 
         # Convert to requested placeholder style
         if placeholder_style and params is not None:
-            # Extract parameter info from current SQL
-            converter = self._config.parameter_converter
-            param_info = converter.validator.extract_parameters(sql)
-
-            # Convert SQL to target style
-            if param_info:
-                # Use the internal denormalize method to convert to target style
-                from sqlspec.statement.parameters import ParameterStyle
-
-                target_style = (
-                    ParameterStyle(placeholder_style) if isinstance(placeholder_style, str) else placeholder_style
-                )
-                # Replace placeholders with target style
-                # Sort by position in reverse to avoid position shifts
-                sorted_params = sorted(param_info, key=lambda p: p.position, reverse=True)
-                for p in sorted_params:
-                    # Generate new placeholder based on target style
-                    if target_style == ParameterStyle.QMARK:
-                        new_placeholder = "?"
-                    elif target_style == ParameterStyle.NUMERIC:
-                        # Use 1-based numbering for numeric style
-                        new_placeholder = f"${p.ordinal + 1}"
-                    elif target_style == ParameterStyle.NAMED_COLON:
-                        # Use generated parameter names
-                        new_placeholder = f":param_{p.ordinal}"
-                    elif target_style == ParameterStyle.NAMED_AT:
-                        # Use @ prefix for BigQuery style
-                        new_placeholder = f"@{p.name or f'param_{p.ordinal}'}"
-                    elif target_style == ParameterStyle.POSITIONAL_COLON:
-                        # Keep the original numeric placeholder
-                        new_placeholder = p.placeholder_text
-                    elif target_style == ParameterStyle.POSITIONAL_PYFORMAT:
-                        # Use %s for positional pyformat
-                        new_placeholder = "%s"
-                    elif target_style == ParameterStyle.NAMED_PYFORMAT:
-                        # Use %(name)s for named pyformat
-                        new_placeholder = f"%({p.name or f'param_{p.ordinal}'})s"
-                    else:
-                        # Keep original for unknown styles
-                        new_placeholder = p.placeholder_text
-
-                    # Replace the placeholder in SQL
-                    start = p.position
-                    end = start + len(p.placeholder_text)
-                    sql = sql[:start] + new_placeholder + sql[end:]
-
-                # Convert parameters to appropriate format for target style
-                if target_style == ParameterStyle.POSITIONAL_COLON:
-                    # Convert to dict format for Oracle numeric style
-                    if isinstance(params, (list, tuple)):
-                        # For Oracle numeric parameters, map based on numeric order
-                        # First, extract only Oracle numeric parameters and sort by numeric value
-                        oracle_params = [
-                            (int(p.name), p)
-                            for p in param_info
-                            if p.style == ParameterStyle.POSITIONAL_COLON and p.name and p.name.isdigit()
-                        ]
-                        oracle_params.sort(key=operator.itemgetter(0))  # Sort by numeric value
-
-                        # Map list items to parameters based on numeric order
-                        result_dict = {}
-                        for i, (_, p) in enumerate(oracle_params):
-                            if i < len(params):
-                                result_dict[p.name] = params[i]
-                        params = result_dict
-                    elif not is_dict(params):
-                        # Single value - map to first parameter name
-                        if param_info:
-                            params = {param_info[0].name: params}
-                elif target_style in {
-                    ParameterStyle.QMARK,
-                    ParameterStyle.NUMERIC,
-                    ParameterStyle.POSITIONAL_PYFORMAT,
-                } and is_dict(params):
-                    # Convert dict to list, preserving order from param_info
-                    result_list = []
-                    for p in param_info:
-                        if p.name and p.name in params:
-                            # Named parameter - get from dict
-                            result_list.append(params[p.name])
-                        elif p.name is None:
-                            # Unnamed parameter (qmark style) - look for _arg_N
-                            arg_key = f"_arg_{p.ordinal}"
-                            if arg_key in params:
-                                # Extract value from TypedParameter if needed
-                                val = params[arg_key]
-                                if hasattr(val, "value"):
-                                    result_list.append(val.value)
-                                else:
-                                    result_list.append(val)
-                            else:
-                                result_list.append(None)
-                        else:
-                            # Named parameter not in dict
-                            result_list.append(None)
-                    params = result_list
-                elif target_style == ParameterStyle.NAMED_COLON and is_dict(params):
-                    # Remap dict keys to match the generated parameter names
-                    result_dict = {}
-                    for p in param_info:
-                        if p.name and p.name in params:
-                            # Map from original name to generated name
-                            new_name = f"param_{p.ordinal}"
-                            result_dict[new_name] = params[p.name]
-                    params = result_dict
-                elif target_style == ParameterStyle.NAMED_PYFORMAT and isinstance(params, (list, tuple)):
-                    # Convert list to dict with generated names
-                    result_dict = {}
-                    for i, p in enumerate(param_info):
-                        if i < len(params):
-                            param_name = p.name or f"param_{i}"
-                            result_dict[param_name] = params[i]
-                    params = result_dict
+            sql, params = self._convert_placeholder_style(sql, params, placeholder_style)
 
         return sql, params
+
+    def _convert_placeholder_style(self, sql: str, params: Any, placeholder_style: str) -> tuple[str, Any]:
+        """Convert SQL and parameters to the requested placeholder style.
+
+        Args:
+            sql: The SQL string to convert
+            params: The parameters to convert
+            placeholder_style: Target placeholder style
+
+        Returns:
+            Tuple of (converted_sql, converted_params)
+        """
+        # Extract parameter info from current SQL
+        converter = self._config.parameter_converter
+        param_info = converter.validator.extract_parameters(sql)
+
+        if not param_info:
+            return sql, params
+
+        # Use the internal denormalize method to convert to target style
+        from sqlspec.statement.parameters import ParameterStyle
+
+        target_style = ParameterStyle(placeholder_style) if isinstance(placeholder_style, str) else placeholder_style
+
+        # Replace placeholders in SQL
+        sql = self._replace_placeholders_in_sql(sql, param_info, target_style)
+
+        # Convert parameters to appropriate format
+        params = self._convert_parameters_format(params, param_info, target_style)
+
+        return sql, params
+
+    def _replace_placeholders_in_sql(self, sql: str, param_info: list[Any], target_style: "ParameterStyle") -> str:
+        """Replace placeholders in SQL string with target style placeholders.
+
+        Args:
+            sql: The SQL string
+            param_info: List of parameter information
+            target_style: Target parameter style
+
+        Returns:
+            SQL string with replaced placeholders
+        """
+        # Sort by position in reverse to avoid position shifts
+        sorted_params = sorted(param_info, key=lambda p: p.position, reverse=True)
+
+        for p in sorted_params:
+            new_placeholder = self._generate_placeholder(p, target_style)
+            # Replace the placeholder in SQL
+            start = p.position
+            end = start + len(p.placeholder_text)
+            sql = sql[:start] + new_placeholder + sql[end:]
+
+        return sql
+
+    @staticmethod
+    def _generate_placeholder(param: Any, target_style: "ParameterStyle") -> str:
+        """Generate a placeholder string for the given parameter style.
+
+        Args:
+            param: Parameter information object
+            target_style: Target parameter style
+
+        Returns:
+            Placeholder string
+        """
+        if target_style == ParameterStyle.QMARK:
+            return "?"
+        if target_style == ParameterStyle.NUMERIC:
+            # Use 1-based numbering for numeric style
+            return f"${param.ordinal + 1}"
+        if target_style == ParameterStyle.NAMED_COLON:
+            # Use generated parameter names
+            return f":param_{param.ordinal}"
+        if target_style == ParameterStyle.NAMED_AT:
+            # Use @ prefix for BigQuery style
+            return f"@{param.name or f'param_{param.ordinal}'}"
+        if target_style == ParameterStyle.POSITIONAL_COLON:
+            # Keep the original numeric placeholder
+            return str(param.placeholder_text)
+        if target_style == ParameterStyle.POSITIONAL_PYFORMAT:
+            # Use %s for positional pyformat
+            return "%s"
+        if target_style == ParameterStyle.NAMED_PYFORMAT:
+            # Use %(name)s for named pyformat
+            return f"%({param.name or f'param_{param.ordinal}'})s"
+        # Keep original for unknown styles
+        return str(param.placeholder_text)
+
+    def _convert_parameters_format(self, params: Any, param_info: list[Any], target_style: "ParameterStyle") -> Any:
+        """Convert parameters to the appropriate format for the target style.
+
+        Args:
+            params: Original parameters
+            param_info: List of parameter information
+            target_style: Target parameter style
+
+        Returns:
+            Converted parameters
+        """
+        if target_style == ParameterStyle.POSITIONAL_COLON:
+            return self._convert_to_positional_colon_format(params, param_info)
+        if target_style in {ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_PYFORMAT}:
+            return self._convert_to_positional_format(params, param_info)
+        if target_style == ParameterStyle.NAMED_COLON:
+            return self._convert_to_named_colon_format(params, param_info)
+        if target_style == ParameterStyle.NAMED_PYFORMAT:
+            return self._convert_to_named_pyformat_format(params, param_info)
+        return params
+
+    @staticmethod
+    def _convert_to_positional_colon_format(params: Any, param_info: list[Any]) -> Any:
+        """Convert to dict format for Oracle numeric style.
+
+        Args:
+            params: Original parameters
+            param_info: List of parameter information
+
+        Returns:
+            Dict of parameters with numeric keys
+        """
+        if isinstance(params, (list, tuple)):
+            # For Oracle numeric parameters, map based on numeric order
+            # First, extract only Oracle numeric parameters and sort by numeric value
+            oracle_params = [
+                (int(p.name), p)
+                for p in param_info
+                if p.style == ParameterStyle.POSITIONAL_COLON and p.name and p.name.isdigit()
+            ]
+            oracle_params.sort(key=operator.itemgetter(0))  # Sort by numeric value
+
+            # Map list items to parameters based on numeric order
+            result_dict: dict[str, Any] = {}
+            for i, (_, p) in enumerate(oracle_params):
+                if i < len(params):
+                    result_dict[p.name] = params[i]
+            return result_dict
+        if not is_dict(params) and param_info:
+            return {param_info[0].name: params}
+        return params
+
+    @staticmethod
+    def _convert_to_positional_format(params: Any, param_info: list[Any]) -> Any:
+        """Convert to list format for positional parameter styles.
+
+        Args:
+            params: Original parameters
+            param_info: List of parameter information
+
+        Returns:
+            List of parameters
+        """
+        if is_dict(params):
+            # Convert dict to list, preserving order from param_info
+            result_list: list[Any] = []
+            for p in param_info:
+                if p.name and p.name in params:
+                    # Named parameter - get from dict and extract value from TypedParameter if needed
+                    val = params[p.name]
+                    if hasattr(val, "value"):
+                        result_list.append(val.value)
+                    else:
+                        result_list.append(val)
+                elif p.name is None:
+                    # Unnamed parameter (qmark style) - look for _arg_N
+                    arg_key = f"_arg_{p.ordinal}"
+                    if arg_key in params:
+                        # Extract value from TypedParameter if needed
+                        val = params[arg_key]
+                        if hasattr(val, "value"):
+                            result_list.append(val.value)
+                        else:
+                            result_list.append(val)
+                    else:
+                        result_list.append(None)
+                else:
+                    # Named parameter not in dict
+                    result_list.append(None)
+            return result_list
+        if isinstance(params, (list, tuple)):
+            # Extract values from TypedParameter objects if present
+            result_list: list[Any] = []
+            for param in params:
+                if hasattr(param, "value"):
+                    result_list.append(param.value)
+                else:
+                    result_list.append(param)
+            return result_list
+        return params
+
+    @staticmethod
+    def _convert_to_named_colon_format(params: Any, param_info: list[Any]) -> Any:
+        """Convert to dict format for named colon style.
+
+        Args:
+            params: Original parameters
+            param_info: List of parameter information
+
+        Returns:
+            Dict of parameters with generated names
+        """
+        if is_dict(params):
+            # Remap dict keys to match the generated parameter names
+            result_dict: dict[str, Any] = {}
+            for p in param_info:
+                if p.name and p.name in params:
+                    # Map from original name to generated name
+                    new_name = f"param_{p.ordinal}"
+                    result_dict[new_name] = params[p.name]
+            return result_dict
+        return params
+
+    @staticmethod
+    def _convert_to_named_pyformat_format(params: Any, param_info: list[Any]) -> Any:
+        """Convert to dict format for named pyformat style.
+
+        Args:
+            params: Original parameters
+            param_info: List of parameter information
+
+        Returns:
+            Dict of parameters with names
+        """
+        if isinstance(params, (list, tuple)):
+            # Convert list to dict with generated names
+            result_dict: dict[str, Any] = {}
+            for i, p in enumerate(param_info):
+                if i < len(params):
+                    param_name = p.name or f"param_{i}"
+                    result_dict[param_name] = params[i]
+            return result_dict
+        return params
 
     # Validation properties for compatibility
     @property
@@ -829,13 +918,9 @@ class SQL:
     @property
     def parameter_info(self) -> list[Any]:
         """Get parameter information from the SQL statement."""
-        # Use the parameter validator to extract parameter info
         validator = self._config.parameter_validator
-        # For parameter validation, use the SQL formatted for the target dialect
-        # This ensures we validate the actual placeholders that would be sent to the database
         if self._config.enable_parsing and self._processed_state:
-            # Get the SQL formatted for the dialect
-            sql_for_validation = self.expression.sql(dialect=self._dialect) if self.expression else self.sql
+            sql_for_validation = self.expression.sql(dialect=self._dialect) if self.expression else self.sql  # pyright: ignore
         else:
             sql_for_validation = self.sql
         return validator.extract_parameters(sql_for_validation)
@@ -871,14 +956,14 @@ class SQL:
             result = result.add_named_parameter(param_name, count)
             # Use placeholder in the expression
             if hasattr(result._statement, "limit"):
-                new_statement = result._statement.limit(exp.Placeholder(this=param_name))
+                new_statement = result._statement.limit(exp.Placeholder(this=param_name))  # pyright: ignore
             else:
-                new_statement = exp.Select().from_(result._statement).limit(exp.Placeholder(this=param_name))
+                new_statement = exp.Select().from_(result._statement).limit(exp.Placeholder(this=param_name))  # pyright: ignore
             return result.copy(statement=new_statement)
         if hasattr(self._statement, "limit"):
-            new_statement = self._statement.limit(count)
+            new_statement = self._statement.limit(count)  # pyright: ignore
         else:
-            new_statement = exp.Select().from_(self._statement).limit(count)
+            new_statement = exp.Select().from_(self._statement).limit(count)  # pyright: ignore
         return self.copy(statement=new_statement)
 
     def offset(self, count: int, use_parameter: bool = False) -> "SQL":
@@ -891,20 +976,20 @@ class SQL:
             result = result.add_named_parameter(param_name, count)
             # Use placeholder in the expression
             if hasattr(result._statement, "offset"):
-                new_statement = result._statement.offset(exp.Placeholder(this=param_name))
+                new_statement = result._statement.offset(exp.Placeholder(this=param_name))  # pyright: ignore
             else:
-                new_statement = exp.Select().from_(result._statement).offset(exp.Placeholder(this=param_name))
+                new_statement = exp.Select().from_(result._statement).offset(exp.Placeholder(this=param_name))  # pyright: ignore
             return result.copy(statement=new_statement)
         if hasattr(self._statement, "offset"):
-            new_statement = self._statement.offset(count)
+            new_statement = self._statement.offset(count)  # pyright: ignore
         else:
-            new_statement = exp.Select().from_(self._statement).offset(count)
+            new_statement = exp.Select().from_(self._statement).offset(count)  # pyright: ignore
         return self.copy(statement=new_statement)
 
     def order_by(self, expression: exp.Expression) -> "SQL":
         """Add ORDER BY clause."""
         if hasattr(self._statement, "order_by"):
-            new_statement = self._statement.order_by(expression)
+            new_statement = self._statement.order_by(expression)  # pyright: ignore
         else:
-            new_statement = exp.Select().from_(self._statement).order_by(expression)
+            new_statement = exp.Select().from_(self._statement).order_by(expression)  # pyright: ignore
         return self.copy(statement=new_statement)

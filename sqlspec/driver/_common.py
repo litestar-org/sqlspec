@@ -244,7 +244,7 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         # This shouldn't happen, but return as-is
         return parameters
 
-    def _split_script_statements(self, script: str) -> list[str]:
+    def _split_script_statements(self, script: str, strip_trailing_semicolon: bool = False) -> list[str]:
         """Split a SQL script into individual statements.
 
         This method uses a robust lexer-driven state machine to handle
@@ -253,6 +253,7 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
 
         Args:
             script: The SQL script to split
+            strip_trailing_semicolon: If True, remove trailing semicolons from statements
 
         Returns:
             A list of individual SQL statements
@@ -279,9 +280,7 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         splitter_dialect = dialect_map.get(dialect_name.lower(), dialect_name.lower())
 
         try:
-            # Use the splitter with strip_trailing_semicolon=True to handle
-            # terminator stripping at the parsing level
-            return split_sql_script(script, dialect=splitter_dialect, strip_trailing_semicolon=True)
+            return split_sql_script(script, dialect=splitter_dialect, strip_trailing_semicolon=strip_trailing_semicolon)
         except ValueError as e:
             # Unsupported dialect, fall back to simple split
             logger.warning(

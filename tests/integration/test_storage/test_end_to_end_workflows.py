@@ -498,7 +498,7 @@ def test_multi_format_export_workflow(analytics_database: SqliteDriver, temp_dir
 
         export_kwargs = {"format": format_name}
         if config["compression"]:
-            export_kwargs["compression"] = config["compression"]
+            export_kwargs["compression"] = config["compression"]  # pyright: ignore
 
         analytics_database.export_to_storage(
             base_query, destination_uri=str(output_file), _config=None, **export_kwargs

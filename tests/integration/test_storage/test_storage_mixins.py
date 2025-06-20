@@ -89,8 +89,8 @@ def test_driver_export_to_storage_with_parameters(
     # Export with parameters
     sqlite_driver_with_storage.export_to_storage(
         "SELECT name, price FROM storage_test WHERE category = ? AND price > ?",
-        str(output_file),
-        parameters=("electronics", 20.0),
+        ("electronics", 20.0),
+        destination_uri=str(output_file),
     )
 
     assert output_file.exists()
@@ -113,7 +113,7 @@ def test_driver_export_to_storage_csv_format(sqlite_driver_with_storage: SqliteD
 
     # Export to CSV
     sqlite_driver_with_storage.export_to_storage(
-        "SELECT name, category, price FROM storage_test ORDER BY price", str(output_file), format="csv"
+        "SELECT name, category, price FROM storage_test ORDER BY price", destination_uri=str(output_file), format="csv"
     )
 
     assert output_file.exists()
@@ -237,7 +237,9 @@ def test_driver_storage_operations_with_large_dataset(
     # Export large dataset
     output_file = temp_directory / "large_export.parquet"
     sqlite_driver_with_storage.export_to_storage(
-        "SELECT * FROM storage_test WHERE value > 5000 ORDER BY value", str(output_file), compression="snappy"
+        "SELECT * FROM storage_test WHERE value > 5000 ORDER BY value",
+        destination_uri=str(output_file),
+        compression="snappy",
     )
 
     assert output_file.exists()
@@ -298,7 +300,7 @@ def test_driver_storage_compression_options(sqlite_driver_with_storage: SqliteDr
     for compression in compression_types:
         output_file = temp_directory / f"compressed_{compression}.parquet"
 
-        sqlite_driver_with_storage.export_to_storage(query, str(output_file), compression=compression)
+        sqlite_driver_with_storage.export_to_storage(query, destination_uri=str(output_file), compression=compression)
 
         assert output_file.exists()
         file_sizes[compression] = output_file.stat().st_size
@@ -328,7 +330,7 @@ def test_driver_storage_schema_preservation(sqlite_driver_with_storage: SqliteDr
 
     # Export and import back
     export_file = temp_directory / "schema_test.parquet"
-    sqlite_driver_with_storage.export_to_storage("SELECT * FROM schema_test", str(export_file))
+    sqlite_driver_with_storage.export_to_storage("SELECT * FROM schema_test", destination_uri=str(export_file))
 
     # Read back as Arrow to check schema
     _ = sqlite_driver_with_storage.fetch_arrow_table(
@@ -356,7 +358,7 @@ def test_driver_concurrent_storage_operations(sqlite_driver_with_storage: Sqlite
     def export_worker(worker_id: int) -> str:
         output_file = temp_directory / f"concurrent_export_{worker_id}.parquet"
         sqlite_driver_with_storage.export_to_storage(
-            f"SELECT * FROM storage_test WHERE id = {worker_id + 1}", str(output_file)
+            f"SELECT * FROM storage_test WHERE id = {worker_id + 1}", destination_uri=str(output_file)
         )
         return str(output_file)
 

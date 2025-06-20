@@ -109,32 +109,34 @@ class OracleSyncDriver(
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
-            cursor.execute(sql, parameters or [])  # type: ignore[no-untyped-call]
+            cursor.execute(sql, parameters or [])
 
             if self.returns_rows(statement.expression):
-                fetched_data = cursor.fetchall()  # type: ignore[no-untyped-call]
-                column_names = [col[0] for col in cursor.description or []]  # type: ignore[attr-defined]
-                return {"data": fetched_data, "column_names": column_names, "rows_affected": cursor.rowcount}  # type: ignore[attr-defined]
+                fetched_data = cursor.fetchall()
+                column_names = [col[0] for col in cursor.description or []]
+                return {"data": fetched_data, "column_names": column_names, "rows_affected": cursor.rowcount}
 
-            return {"rows_affected": cursor.rowcount, "status_message": "OK"}  # type: ignore[attr-defined]
+            return {"rows_affected": cursor.rowcount, "status_message": "OK"}
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
-            cursor.executemany(sql, param_list or [])  # type: ignore[no-untyped-call]
-            return {"rows_affected": cursor.rowcount, "status_message": "OK"}  # type: ignore[attr-defined]
+            if param_list and not isinstance(param_list[0], (list, tuple, dict)):
+                param_list = [param_list]
+            cursor.executemany(sql, param_list or [])
+            return {"rows_affected": cursor.rowcount, "status_message": "OK"}
 
     def _execute_script(
         self, script: str, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
     ) -> ScriptResultDict:
         conn = self._connection(connection)
-        statements = self._split_script_statements(script)
+        statements = self._split_script_statements(script, strip_trailing_semicolon=True)
         with self._get_cursor(conn) as cursor:
             for statement in statements:
                 if statement and statement.strip():
-                    cursor.execute(statement)
+                    cursor.execute(statement.strip())
 
         return {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
 
@@ -221,201 +223,6 @@ class OracleSyncDriver(
             metadata={"status_message": status_message},
         )
 
-    def _execute_pipeline_native(self, operations: "list[Any]", **options: Any) -> "list[SQLResult[RowT]]":
-        """Native pipeline execution using Oracle's pipeline support.
-
-        Oracle has built-in pipeline support through the create_pipeline() and run_pipeline() API.
-        This provides significant performance benefits for batch operations.
-
-        Args:
-            operations: List of PipelineOperation objects
-            **options: Pipeline configuration options
-
-        Returns:
-            List of SQLResult objects from all operations
-        """
-        import oracledb
-
-        from sqlspec.exceptions import PipelineExecutionError
-
-        results = []
-        connection = self._connection()
-
-        try:
-            # Create Oracle's native pipeline
-            pipeline = oracledb.create_pipeline()
-
-            # Add operations to Oracle pipeline
-            for i, op in enumerate(operations):
-                if not self._add_pipeline_operation(pipeline, i, op, options, results):
-                    continue  # Error was handled with continue_on_error
-
-            # Execute the entire pipeline in one network round-trip
-            oracle_results = connection.run_pipeline(pipeline)
-
-            # Convert Oracle results to SQLResult objects
-            for i, (op, oracle_result) in enumerate(zip(operations, oracle_results)):
-                self._process_pipeline_result(i, op, oracle_result, options, results)
-
-        except Exception as e:
-            if not isinstance(e, PipelineExecutionError):
-                msg = f"Oracle pipeline execution failed: {e}"
-                raise PipelineExecutionError(msg) from e
-            raise
-
-        return results
-
-    def _add_pipeline_operation(
-        self, pipeline: Any, i: int, op: Any, options: dict[str, Any], results: list[Any]
-    ) -> bool:
-        """Add a single operation to the Oracle pipeline with error handling.
-
-        Returns:
-            True if operation was added successfully, False if error was handled with continue_on_error
-        """
-        from sqlspec.exceptions import PipelineExecutionError
-
-        try:
-            # Apply operation-specific filters
-            filtered_sql = self._apply_operation_filters(op.sql, op.filters)
-            sql_str = filtered_sql.to_sql(placeholder_style=self.default_parameter_style)
-            params = self._convert_oracle_params(filtered_sql.parameters)
-
-            # Add to pipeline based on operation type
-            if op.operation_type == "execute_many":
-                # Oracle's add_executemany for batch operations
-                pipeline.add_executemany(sql_str, params)
-            elif op.operation_type == "select":
-                # Use fetchall for SELECT statements
-                pipeline.add_fetchall(sql_str, params)
-            elif op.operation_type == "execute_script":
-                # For scripts, split and add each statement
-                script_statements = self._split_script_statements(sql_str)
-                for stmt in script_statements:
-                    if stmt.strip():
-                        pipeline.add_execute(stmt)
-            else:
-                # Regular execute for DML/DDL
-                pipeline.add_execute(sql_str, params)
-
-        except Exception as e:
-            if options.get("continue_on_error"):
-                # Create error result and continue
-                error_result = SQLResult[RowT](
-                    statement=op.sql, error=e, operation_index=i, parameters=op.original_params
-                )
-                results.append(error_result)
-                return False
-            msg = f"Oracle pipeline failed to add operation {i}: {e}"
-            raise PipelineExecutionError(
-                msg, operation_index=i, partial_results=results, failed_operation=op
-            ) from e
-        else:
-            return True
-
-    def _process_pipeline_result(
-        self, i: int, op: Any, oracle_result: Any, options: dict[str, Any], results: list[Any]
-    ) -> None:
-        """Process a single Oracle pipeline result with error handling."""
-        from sqlspec.exceptions import PipelineExecutionError
-
-        try:
-            if hasattr(oracle_result, "rows") and oracle_result.rows is not None:
-                # SELECT operation - has row data
-                if oracle_result.rows:
-                    # Extract column names from first row if available
-                    column_names = list(oracle_result.rows[0].keys()) if oracle_result.rows else []
-                else:
-                    column_names = []
-
-                result = SQLResult[RowT](
-                    statement=op.sql,
-                    data=cast("list[RowT]", oracle_result.rows or []),
-                    rows_affected=len(oracle_result.rows) if oracle_result.rows else 0,
-                    operation_type="select",
-                    metadata={"column_names": column_names},
-                )
-            else:
-                # DML operation - check for row count
-                rows_affected = getattr(oracle_result, "rowcount", 0)
-                operation_type = op.operation_type
-
-                if op.operation_type == "execute_script":
-                    script_statements = self._split_script_statements(op.sql.to_sql())
-                    result = SQLResult[RowT](
-                        statement=op.sql,
-                        data=cast("list[RowT]", []),
-                        rows_affected=rows_affected,
-                        operation_type="execute_script",
-                        metadata={
-                            "status_message": "SCRIPT EXECUTED",
-                            "statements_executed": len(script_statements),
-                        },
-                    )
-                else:
-                    result = SQLResult[RowT](
-                        statement=op.sql,
-                        data=cast("list[RowT]", []),
-                        rows_affected=rows_affected,
-                        operation_type=operation_type,
-                        metadata={"status_message": "OK"},
-                    )
-
-            # Add operation context
-            result.operation_index = i
-            result.pipeline_sql = op.sql
-            results.append(result)
-
-        except Exception as e:
-            if options.get("continue_on_error"):
-                # Create error result
-                error_result = SQLResult[RowT](
-                    statement=op.sql, error=e, operation_index=i, parameters=op.original_params
-                )
-                results.append(error_result)
-            else:
-                msg = f"Oracle pipeline failed to process result {i}: {e}"
-                raise PipelineExecutionError(
-                    msg, operation_index=i, partial_results=results, failed_operation=op
-                ) from e
-
-    @staticmethod
-    def _convert_oracle_params(params: Any) -> Any:
-        """Convert parameters to Oracle-compatible format.
-
-        Oracle supports both named (:name) and positional (:1, :2) parameters.
-        We prefer named parameters for better readability.
-
-        Args:
-            params: Parameters in various formats
-
-        Returns:
-            Parameters in Oracle-compatible format
-        """
-        if params is None:
-            return None
-        if isinstance(params, dict):
-            # Oracle handles dict parameters directly for named placeholders
-            return params
-        if isinstance(params, (list, tuple)):
-            # Convert to list for positional parameters
-            return list(params)
-        # Single parameter
-        return [params]
-
-    @staticmethod
-    def _apply_operation_filters(sql: "SQL", filters: "list[Any]") -> "SQL":
-        """Apply filters to a SQL object for pipeline operations."""
-        if not filters:
-            return sql
-
-        result_sql = sql
-        for filter_obj in filters:
-            if hasattr(filter_obj, "apply"):
-                result_sql = filter_obj.apply(result_sql)
-
-        return result_sql
-
 
 class OracleAsyncDriver(
     AsyncDriverAdapterProtocol[OracleAsyncConnection, RowT],
@@ -500,14 +307,14 @@ class OracleAsyncDriver(
         conn = self._connection(connection)
         async with self._get_cursor(conn) as cursor:
             if parameters is None:
-                await cursor.execute(sql)  # type: ignore[no-untyped-call]
+                await cursor.execute(sql)
             else:
-                await cursor.execute(sql, parameters)  # type: ignore[no-untyped-call]
+                await cursor.execute(sql, parameters)
 
             # For SELECT statements, extract data while cursor is open
             if self.returns_rows(statement.expression):
-                fetched_data = await cursor.fetchall()  # type: ignore[no-untyped-call]
-                column_names = [col[0] for col in cursor.description or []]  # type: ignore[attr-defined]
+                fetched_data = await cursor.fetchall()
+                column_names = [col[0] for col in cursor.description or []]
                 result: SelectResultDict = {
                     "data": fetched_data,
                     "column_names": column_names,
@@ -522,7 +329,11 @@ class OracleAsyncDriver(
     ) -> DMLResultDict:
         conn = self._connection(connection)
         async with self._get_cursor(conn) as cursor:
-            await cursor.executemany(sql, param_list or [])  # type: ignore[no-untyped-call]
+            # Ensure param_list is a list of parameter sets
+            if param_list and not isinstance(param_list[0], (list, tuple, dict)):
+                # Single parameter set, wrap it
+                param_list = [param_list]
+            await cursor.executemany(sql, param_list or [])
             result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
             return result
 
@@ -531,16 +342,13 @@ class OracleAsyncDriver(
     ) -> ScriptResultDict:
         conn = self._connection(connection)
         # Oracle doesn't support multi-statement scripts in a single execute
-        # Split the script into individual statements
-        statements = self._split_script_statements(script)
+        # The splitter now handles PL/SQL blocks correctly when strip_trailing_semicolon=True
+        statements = self._split_script_statements(script, strip_trailing_semicolon=True)
 
         async with self._get_cursor(conn) as cursor:
             for statement in statements:
-                if statement:
-                    statement = statement.strip()
-                    if statement:
-                        # No need to manually strip semicolons - the splitter handles it
-                        await cursor.execute(statement)
+                if statement and statement.strip():
+                    await cursor.execute(statement.strip())
 
         result: ScriptResultDict = {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
         return result
@@ -633,196 +441,3 @@ class OracleAsyncDriver(
             operation_type=operation_type,
             metadata={"status_message": status_message},
         )
-
-    async def _execute_pipeline_native(self, operations: "list[Any]", **options: Any) -> "list[SQLResult[RowT]]":
-        """Native async pipeline execution using Oracle's pipeline support.
-
-        Oracle has built-in async pipeline support through the create_pipeline() and run_pipeline() API.
-        This provides significant performance benefits for batch operations.
-
-        Args:
-            operations: List of PipelineOperation objects
-            **options: Pipeline configuration options
-
-        Returns:
-            List of SQLResult objects from all operations
-        """
-        import oracledb
-
-        from sqlspec.exceptions import PipelineExecutionError
-
-        results = []
-        connection = self._connection()
-
-        try:
-            # Create Oracle's native pipeline
-            pipeline = oracledb.create_pipeline()
-
-            # Add operations to Oracle pipeline
-            for i, op in enumerate(operations):
-                if not self._add_async_pipeline_operation(pipeline, i, op, options, results):
-                    continue  # Error was handled with continue_on_error
-
-            # Execute the entire pipeline in one network round-trip
-            oracle_results = await connection.run_pipeline(pipeline)
-
-            # Convert Oracle results to SQLResult objects
-            for i, (op, oracle_result) in enumerate(zip(operations, oracle_results)):
-                self._process_async_pipeline_result(i, op, oracle_result, options, results)
-
-        except Exception as e:
-            if not isinstance(e, PipelineExecutionError):
-                msg = f"Oracle async pipeline execution failed: {e}"
-                raise PipelineExecutionError(msg) from e
-            raise
-
-        return results
-
-    def _convert_oracle_params(self, params: Any) -> Any:
-        """Convert parameters to Oracle-compatible format.
-
-        Oracle supports both named (:name) and positional (:1, :2) parameters.
-        We prefer named parameters for better readability.
-
-        Args:
-            params: Parameters in various formats
-
-        Returns:
-            Parameters in Oracle-compatible format
-        """
-        if params is None:
-            return None
-        if isinstance(params, dict):
-            # Oracle handles dict parameters directly for named placeholders
-            return params
-        if isinstance(params, (list, tuple)):
-            # Convert to list for positional parameters
-            return list(params)
-        # Single parameter
-        return [params]
-
-    def _apply_operation_filters(self, sql: "SQL", filters: "list[Any]") -> "SQL":
-        """Apply filters to a SQL object for pipeline operations."""
-        if not filters:
-            return sql
-
-        result_sql = sql
-        for filter_obj in filters:
-            if hasattr(filter_obj, "apply"):
-                result_sql = filter_obj.apply(result_sql)
-
-        return result_sql
-
-    def _add_async_pipeline_operation(
-        self, pipeline: Any, i: int, op: Any, options: dict[str, Any], results: list[Any]
-    ) -> bool:
-        """Add a single operation to the Oracle async pipeline with error handling.
-
-        Returns:
-            True if operation was added successfully, False if error was handled with continue_on_error
-        """
-        from sqlspec.exceptions import PipelineExecutionError
-
-        try:
-            # Apply operation-specific filters
-            filtered_sql = self._apply_operation_filters(op.sql, op.filters)
-            sql_str = filtered_sql.to_sql(placeholder_style=self.default_parameter_style)
-            params = self._convert_oracle_params(filtered_sql.parameters)
-
-            # Add to pipeline based on operation type
-            if op.operation_type == "execute_many":
-                # Oracle's add_executemany for batch operations
-                pipeline.add_executemany(sql_str, params)
-            elif op.operation_type == "select":
-                # Use fetchall for SELECT statements
-                pipeline.add_fetchall(sql_str, params)
-            elif op.operation_type == "execute_script":
-                # For scripts, split and add each statement
-                script_statements = self._split_script_statements(sql_str)
-                for stmt in script_statements:
-                    if stmt.strip():
-                        pipeline.add_execute(stmt)
-            else:
-                # Regular execute for DML/DDL
-                pipeline.add_execute(sql_str, params)
-
-        except Exception as e:
-            if options.get("continue_on_error"):
-                # Create error result and continue
-                error_result = SQLResult[RowT](
-                    statement=op.sql, error=e, operation_index=i, parameters=op.original_params
-                )
-                results.append(error_result)
-                return False
-            msg = f"Oracle async pipeline failed to add operation {i}: {e}"
-            raise PipelineExecutionError(
-                msg, operation_index=i, partial_results=results, failed_operation=op
-            ) from e
-        else:
-            return True
-
-    def _process_async_pipeline_result(
-        self, i: int, op: Any, oracle_result: Any, options: dict[str, Any], results: list[Any]
-    ) -> None:
-        """Process a single Oracle async pipeline result with error handling."""
-        from sqlspec.exceptions import PipelineExecutionError
-
-        try:
-            if hasattr(oracle_result, "rows") and oracle_result.rows is not None:
-                # SELECT operation - has row data
-                if oracle_result.rows:
-                    # Extract column names from first row if available
-                    column_names = list(oracle_result.rows[0].keys()) if oracle_result.rows else []
-                else:
-                    column_names = []
-
-                result = SQLResult[RowT](
-                    statement=op.sql,
-                    data=cast("list[RowT]", oracle_result.rows or []),
-                    rows_affected=len(oracle_result.rows) if oracle_result.rows else 0,
-                    operation_type="select",
-                    metadata={"column_names": column_names},
-                )
-            else:
-                # DML operation - check for row count
-                rows_affected = getattr(oracle_result, "rowcount", 0)
-                operation_type = op.operation_type
-
-                if op.operation_type == "execute_script":
-                    script_statements = self._split_script_statements(op.sql.to_sql())
-                    result = SQLResult[RowT](
-                        statement=op.sql,
-                        data=cast("list[RowT]", []),
-                        rows_affected=rows_affected,
-                        operation_type="execute_script",
-                        metadata={
-                            "status_message": "SCRIPT EXECUTED",
-                            "statements_executed": len(script_statements),
-                        },
-                    )
-                else:
-                    result = SQLResult[RowT](
-                        statement=op.sql,
-                        data=cast("list[RowT]", []),
-                        rows_affected=rows_affected,
-                        operation_type=operation_type,
-                        metadata={"status_message": "OK"},
-                    )
-
-            # Add operation context
-            result.operation_index = i
-            result.pipeline_sql = op.sql
-            results.append(result)
-
-        except Exception as e:
-            if options.get("continue_on_error"):
-                # Create error result
-                error_result = SQLResult[RowT](
-                    statement=op.sql, error=e, operation_index=i, parameters=op.original_params
-                )
-                results.append(error_result)
-            else:
-                msg = f"Oracle async pipeline failed to process result {i}: {e}"
-                raise PipelineExecutionError(
-                    msg, operation_index=i, partial_results=results, failed_operation=op
-                ) from e

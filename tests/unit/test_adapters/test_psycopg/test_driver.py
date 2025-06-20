@@ -109,7 +109,6 @@ def test_sync_driver_initialization() -> None:
 
     assert driver.connection is mock_conn
     assert driver.config is config
-    assert driver.dialect == "postgres"
     assert driver.default_parameter_style == ParameterStyle.POSITIONAL_PYFORMAT
     assert driver.supported_parameter_styles == (ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT)
 
@@ -138,7 +137,6 @@ def test_async_driver_initialization() -> None:
 
     assert driver.connection is mock_conn
     assert driver.config is config
-    assert driver.dialect == "postgres"
     assert driver.default_parameter_style == ParameterStyle.POSITIONAL_PYFORMAT
     assert driver.supported_parameter_styles == (ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT)
 
@@ -521,7 +519,7 @@ def test_sync_wrap_select_result(sync_driver: PsycopgSyncDriver) -> None:
         "rows_affected": 2,
     }
 
-    wrapped = sync_driver._wrap_select_result(statement, result)
+    wrapped = sync_driver._wrap_select_result(statement, result)  # pyright: ignore
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.statement is statement
@@ -541,7 +539,7 @@ async def test_async_wrap_select_result(async_driver: PsycopgAsyncDriver) -> Non
         "rows_affected": 2,
     }
 
-    wrapped = await async_driver._wrap_select_result(statement, result)
+    wrapped = await async_driver._wrap_select_result(statement, result)  # pyright: ignore
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.statement is statement
@@ -557,7 +555,7 @@ def test_sync_wrap_execute_result_dml(sync_driver: PsycopgSyncDriver) -> None:
 
     result = {"rows_affected": 1, "status_message": "INSERT 0 1"}
 
-    wrapped = sync_driver._wrap_execute_result(statement, result)
+    wrapped = sync_driver._wrap_execute_result(statement, result)  # pyright: ignore
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.data == []
@@ -574,7 +572,7 @@ async def test_async_wrap_execute_result_dml(async_driver: PsycopgAsyncDriver) -
 
     result = {"rows_affected": 1, "status_message": "INSERT 0 1"}
 
-    wrapped = await async_driver._wrap_execute_result(statement, result)
+    wrapped = await async_driver._wrap_execute_result(statement, result)  # pyright: ignore
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.data == []

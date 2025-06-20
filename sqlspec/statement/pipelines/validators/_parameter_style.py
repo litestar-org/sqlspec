@@ -1,7 +1,7 @@
 """Parameter style validation for SQL statements."""
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Union
 
 from sqlglot import exp
 
@@ -77,12 +77,7 @@ class ParameterStyleValidator(ProcessorProtocol):
 
                 # Check for mixed styles first (before checking individual styles)
                 if len(unique_styles) > 1 and not config.allow_mixed_parameter_styles:
-                    # Defensive handling for detected styles
-                    detected_style_strs = []
-                    for s in unique_styles:
-                        str_val = str(s)
-                        if str_val is not None:  # Defensive check
-                            detected_style_strs.append(str_val)
+                    detected_style_strs = [str(s) for s in unique_styles]
                     detected_styles = ", ".join(sorted(detected_style_strs))
                     msg = f"Mixed parameter styles detected ({detected_styles}) but not allowed."
                     if self.fail_on_violation:
@@ -102,14 +97,13 @@ class ParameterStyleValidator(ProcessorProtocol):
                 if disallowed_styles:
                     disallowed_str = ", ".join(sorted(disallowed_styles))
                     # Defensive handling to avoid "expected str instance, NoneType found"
-                    allowed_styles_strs = []
-                    for s in config.allowed_parameter_styles:
-                        if s is not None:
-                            str_val = str(s)
-                            if str_val is not None:  # Extra defensive check
-                                allowed_styles_strs.append(str_val)
-                    allowed_str = ", ".join(allowed_styles_strs)
-                    msg = f"Parameter style(s) {disallowed_str} not supported. Allowed: {allowed_str}"
+                    if config.allowed_parameter_styles:
+                        allowed_styles_strs = [str(s) for s in config.allowed_parameter_styles]
+                        allowed_str = ", ".join(allowed_styles_strs)
+                        msg = f"Parameter style(s) {disallowed_str} not supported. Allowed: {allowed_str}"
+                    else:
+                        msg = f"Parameter style(s) {disallowed_str} not supported."
+
                     if self.fail_on_violation:
                         self._raise_unsupported_style_error(msg)
                     error = ValidationError(
@@ -168,163 +162,133 @@ class ParameterStyleValidator(ProcessorProtocol):
         raise UnsupportedParameterStyleError(msg)
 
     def _validate_missing_parameters(self, context: "SQLProcessingContext", expression: exp.Expression) -> None:
-        """Validate that all required parameters have values provided.
-
-        Args:
-            context: SQL processing context
-            expression: The SQL expression being validated
-        """
-        # Get parameter info from SQL
+        """Validate that all required parameters have values provided."""
         param_info = context.parameter_info
         if not param_info:
             return
 
-        # Get merged parameters
+        merged_params = self._prepare_merged_parameters(context, param_info)
+
+        if merged_params is None:
+            self._handle_no_parameters(context, expression, param_info)
+        elif isinstance(merged_params, (list, tuple)):
+            self._handle_positional_parameters(context, expression, param_info, merged_params)
+        elif is_dict(merged_params):
+            self._handle_named_parameters(context, expression, param_info, merged_params)
+        elif len(param_info) > 1:
+            self._handle_single_value_multiple_params(context, expression, param_info)
+
+    @staticmethod
+    def _prepare_merged_parameters(context: "SQLProcessingContext", param_info: list[Any]) -> Any:
+        """Prepare merged parameters for validation."""
         merged_params = context.merged_parameters
 
-        # Special handling for Oracle numeric parameters with single values
-        # When we have Oracle numeric params and a single positional value,
-        # it gets unwrapped from [value] to value, but we need to treat it as a list
+        # If we have extracted parameters from transformers (like ParameterizeLiterals),
+        # use those for validation instead of the original merged_parameters
+        if context.extracted_parameters_from_pipeline and not context.input_sql_had_placeholders:
+            # Use extracted parameters as they represent the actual values to be used
+            merged_params = context.extracted_parameters_from_pipeline
         has_positional_colon = any(p.style.value == "positional_colon" for p in param_info)
         if has_positional_colon and not isinstance(merged_params, (list, tuple, dict)) and merged_params is not None:
-            # Single value with Oracle numeric params - treat as single-element list
-            merged_params = [merged_params]
+            return [merged_params]
+        return merged_params
 
-        # Handle different parameter formats
-        if merged_params is None:
-            # Check if parameters were extracted by transformers
-            if context.extracted_parameters_from_pipeline:
-                # Parameters will be merged after validation, don't check now
+    def _report_error(self, context: "SQLProcessingContext", expression: exp.Expression, message: str) -> None:
+        """Report a missing parameter error."""
+        if self.fail_on_violation:
+            raise MissingParameterError(message)
+        error = ValidationError(
+            message=message,
+            code="missing-parameters",
+            risk_level=self.risk_level,
+            processor="ParameterStyleValidator",
+            expression=expression,
+        )
+        context.validation_errors.append(error)
+
+    def _handle_no_parameters(
+        self, context: "SQLProcessingContext", expression: exp.Expression, param_info: list[Any]
+    ) -> None:
+        """Handle validation when no parameters are provided."""
+        if context.extracted_parameters_from_pipeline:
+            return
+        missing = [p.name or p.placeholder_text or f"param_{p.ordinal}" for p in param_info]
+        msg = f"Missing required parameters: {', '.join(str(m) for m in missing)}"
+        self._report_error(context, expression, msg)
+
+    def _handle_positional_parameters(
+        self,
+        context: "SQLProcessingContext",
+        expression: exp.Expression,
+        param_info: list[Any],
+        merged_params: "Union[list[Any], tuple[Any, ...]]",
+    ) -> None:
+        """Handle validation for positional parameters."""
+        has_named = any(p.style.value in {"named_colon", "named_at"} for p in param_info)
+        if has_named:
+            missing_named = [
+                p.name or p.placeholder_text for p in param_info if p.style.value in {"named_colon", "named_at"}
+            ]
+            if missing_named:
+                msg = f"Missing required parameters: {', '.join(str(m) for m in missing_named if m)}"
+                self._report_error(context, expression, msg)
                 return
-            # No parameters provided at all
-            if param_info:
-                missing = [p.name or p.placeholder_text or f"param_{p.ordinal}" for p in param_info]
-                msg = f"Missing required parameters: {', '.join(str(m) for m in missing)}"
-                if self.fail_on_violation:
-                    raise MissingParameterError(msg)
-                error = ValidationError(
-                    message=msg,
-                    code="missing-parameters",
-                    risk_level=self.risk_level,
-                    processor="ParameterStyleValidator",
-                    expression=expression,
-                )
-                context.validation_errors.append(error)
-        elif isinstance(merged_params, (list, tuple)):
-            # Positional parameters - check count
-            required_count = len(param_info)
-            provided_count = len(merged_params)
 
-            # Check for mixed parameter styles (e.g., Oracle numeric + named)
-            has_named = any(p.style.value in {"named_colon", "named_at"} for p in param_info)
-            if has_named:
-                # We have named parameters but only positional values provided
-                missing_named = [
-                    p.name or p.placeholder_text for p in param_info if p.style.value in {"named_colon", "named_at"}
-                ]
-                if missing_named:
-                    msg = f"Missing required parameters: {', '.join(str(m) for m in missing_named if m)}"
-                    if self.fail_on_violation:
-                        raise MissingParameterError(msg)
-                    error = ValidationError(
-                        message=msg,
-                        code="missing-parameters",
-                        risk_level=self.risk_level,
-                        processor="ParameterStyleValidator",
-                        expression=expression,
-                    )
-                    context.validation_errors.append(error)
-                    return  # Don't continue checking positional params
+        has_positional_colon = any(p.style.value == "positional_colon" for p in param_info)
+        if has_positional_colon:
+            self._validate_oracle_numeric_params(context, expression, param_info, merged_params)
+        elif len(merged_params) < len(param_info):
+            msg = f"Expected {len(param_info)} parameters but got {len(merged_params)}"
+            self._report_error(context, expression, msg)
 
-            # Check for Oracle numeric parameters
-            if has_positional_colon:
-                # For Oracle numeric, we need to check if all required indices have values
-                missing_indices = []
-                for p in param_info:
-                    # Skip non-Oracle numeric parameters
-                    if p.style.value != "positional_colon" or p.name is None:
-                        continue
-                    try:
-                        # Oracle numeric parameter names are the indices
-                        idx = int(p.name)
-                        # Check if this index has a value in the list
-                        # For 0-based: :0, :1 maps to list indices 0, 1
-                        # For 1-based: :1, :2 maps to list indices 0, 1 (subtract 1)
-                        # We'll check both interpretations
-                        if idx < provided_count:
-                            # 0-based interpretation - direct index
-                            continue
-                        if idx > 0 and (idx - 1) < provided_count:
-                            # 1-based interpretation - subtract 1
-                            continue
-                        # Missing this parameter
-                        missing_indices.append(p.name)
-                    except (ValueError, TypeError):
-                        # Not a numeric parameter name
-                        pass
+    def _validate_oracle_numeric_params(
+        self,
+        context: "SQLProcessingContext",
+        expression: exp.Expression,
+        param_info: list[Any],
+        merged_params: "Union[list[Any], tuple[Any, ...]]",
+    ) -> None:
+        """Validate Oracle-style numeric parameters."""
+        missing_indices: list[str] = []
+        provided_count = len(merged_params)
+        for p in param_info:
+            if p.style.value != "positional_colon" or not p.name:
+                continue
+            try:
+                idx = int(p.name)
+                if not (idx < provided_count or (idx > 0 and (idx - 1) < provided_count)):
+                    missing_indices.append(p.name)
+            except (ValueError, TypeError):
+                pass
+        if missing_indices:
+            msg = f"Missing required parameters: :{', :'.join(missing_indices)}"
+            self._report_error(context, expression, msg)
 
-                if missing_indices:
-                    msg = f"Missing required parameters: :{', :'.join(missing_indices)}"
-                    if self.fail_on_violation:
-                        raise MissingParameterError(msg)
-                    error = ValidationError(
-                        message=msg,
-                        code="missing-parameters",
-                        risk_level=self.risk_level,
-                        processor="ParameterStyleValidator",
-                        expression=expression,
-                    )
-                    context.validation_errors.append(error)
-            elif provided_count < required_count:
-                # Regular positional parameters - simple count check
-                msg = f"Expected {required_count} parameters but got {provided_count}"
-                if self.fail_on_violation:
-                    raise MissingParameterError(msg)
-                error = ValidationError(
-                    message=msg,
-                    code="missing-parameters",
-                    risk_level=self.risk_level,
-                    processor="ParameterStyleValidator",
-                    expression=expression,
-                )
-                context.validation_errors.append(error)
-        elif is_dict(merged_params):
-            # Named parameters - check keys
-            missing = []
-            for p in param_info:
-                param_name = p.name
-                # Check if this parameter exists in merged_params
-                if param_name not in merged_params:
-                    # Also check for _arg_ style names for positional params
-                    if not any(key.startswith(("_arg_", "param_")) for key in merged_params):
-                        missing.append(param_name)
-                    elif p.style.value not in {"qmark", "numeric"}:
-                        # For named parameters, we need the exact name
-                        missing.append(param_name)
+    def _handle_named_parameters(
+        self,
+        context: "SQLProcessingContext",
+        expression: exp.Expression,
+        param_info: list[Any],
+        merged_params: dict[str, Any],
+    ) -> None:
+        """Handle validation for named parameters."""
+        missing: list[str] = []
+        for p in param_info:
+            param_name = p.name
+            if param_name not in merged_params:
+                is_synthetic = any(key.startswith(("_arg_", "param_")) for key in merged_params)
+                is_named_style = p.style.value not in {"qmark", "numeric"}
+                if (not is_synthetic or is_named_style) and param_name:
+                    missing.append(param_name)
 
-            if missing:
-                msg = f"Missing required parameters: {', '.join(missing)}"
-                if self.fail_on_violation:
-                    raise MissingParameterError(msg)
-                error = ValidationError(
-                    message=msg,
-                    code="missing-parameters",
-                    risk_level=self.risk_level,
-                    processor="ParameterStyleValidator",
-                    expression=expression,
-                )
-                context.validation_errors.append(error)
-        # Single value - only valid if we have exactly one parameter
-        elif len(param_info) > 1:
-            missing = [p.name or p.placeholder_text or f"param_{p.ordinal}" for p in param_info[1:]]
-            msg = f"Missing required parameters: {', '.join(str(m) for m in missing)}"
-            if self.fail_on_violation:
-                raise MissingParameterError(msg)
-            error = ValidationError(
-                message=msg,
-                code="missing-parameters",
-                risk_level=self.risk_level,
-                processor="ParameterStyleValidator",
-                expression=expression,
-            )
-            context.validation_errors.append(error)
+        if missing:
+            msg = f"Missing required parameters: {', '.join(missing)}"
+            self._report_error(context, expression, msg)
+
+    def _handle_single_value_multiple_params(
+        self, context: "SQLProcessingContext", expression: exp.Expression, param_info: list[Any]
+    ) -> None:
+        """Handle validation for a single value provided for multiple parameters."""
+        missing = [p.name or p.placeholder_text or f"param_{p.ordinal}" for p in param_info[1:]]
+        msg = f"Missing required parameters: {', '.join(str(m) for m in missing)}"
+        self._report_error(context, expression, msg)
