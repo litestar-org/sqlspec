@@ -59,7 +59,7 @@ def _separate_filters_from_parameters(
         return filters, None
     if len(params) == 1:
         return filters, params[0]
-    return filters, params  # type: ignore[return-value]
+    return filters, params
 
 
 class StorageMixinBase(ABC):
@@ -153,7 +153,7 @@ class StorageMixinBase(ABC):
             # Empty table with column names
             # Create empty arrays for each column
             empty_data: dict[str, list[Any]] = {col: [] for col in columns}
-            return pa.table(empty_data)  # type: ignore[no-any-return]
+            return pa.table(empty_data)
 
         # Convert rows to columnar format
         if isinstance(rows[0], dict):
@@ -163,7 +163,7 @@ class StorageMixinBase(ABC):
             # Tuple/list rows
             data = {col: [cast("tuple[Any, ...]", row)[i] for row in rows] for i, col in enumerate(columns)}
 
-        return pa.table(data)  # type: ignore[no-any-return]
+        return pa.table(data)
 
 
 class SyncStorageMixin(StorageMixinBase):
@@ -353,7 +353,7 @@ class SyncStorageMixin(StorageMixinBase):
         if file_format == "parquet":
             # Use Arrow for efficient transfer - if statement is already a SQL object, use it directly
             if hasattr(statement, "compile"):  # It's already a SQL object from export_to_storage
-                arrow_result = self._fetch_arrow_table(statement, connection=_connection, **kwargs)
+                arrow_result = self._fetch_arrow_table(cast("SQL", statement), connection=_connection, **kwargs)
             else:
                 # Create SQL object if it's still a string
                 arrow_result = self.fetch_arrow_table(statement, *parameters, _connection=_connection, _config=_config)

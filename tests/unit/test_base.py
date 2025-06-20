@@ -26,12 +26,12 @@ class MockDriver:
 
     def __init__(
         self,
-        connection: "Optional[MockConnection]" = None,
-        instrumentation_config: "Optional[Any]" = None,
-        default_row_type: "Optional[type]" = None,
+        connection: "MockConnection",
+        config: "Optional[Any]" = None,
+        default_row_type: "Optional[type[Any]]" = None,
     ) -> None:
-        self.connection = connection or MockConnection()
-        self.instrumentation_config = instrumentation_config
+        self.connection = connection
+        self.config = config
         self.default_row_type = default_row_type or dict
 
 
@@ -40,12 +40,12 @@ class MockAsyncDriver:
 
     def __init__(
         self,
-        connection: "Optional[MockConnection]" = None,
-        instrumentation_config: "Optional[Any]" = None,
-        default_row_type: "Optional[type]" = None,
+        connection: "MockConnection",
+        config: "Optional[Any]" = None,
+        default_row_type: "Optional[type[Any]]" = None,
     ) -> None:
-        self.connection = connection or MockConnection()
-        self.instrumentation_config = instrumentation_config
+        self.connection = connection
+        self.config = config
         self.default_row_type = default_row_type or dict
 
 

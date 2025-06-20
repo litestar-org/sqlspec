@@ -57,7 +57,7 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         """
         self.connection = connection
         self.config = config or SQLConfig()
-        self.default_row_type = default_row_type or dict[str, Any]  # type: ignore[assignment]
+        self.default_row_type = default_row_type or dict[str, Any]
 
     def _connection(self, connection: "Optional[ConnectionT]" = None) -> "ConnectionT":
         return connection or self.connection

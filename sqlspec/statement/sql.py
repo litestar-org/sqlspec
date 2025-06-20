@@ -48,7 +48,7 @@ class SQLConfig:
     enable_transformations: bool = True
     enable_analysis: bool = False
     enable_normalization: bool = True
-    strict_mode: bool = True
+    strict_mode: bool = False
     cache_parsed_expression: bool = True
 
     # Component lists for explicit staging

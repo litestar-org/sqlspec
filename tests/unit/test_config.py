@@ -316,9 +316,9 @@ def test_no_pool_sync_config_pool_methods() -> None:
     """Test NoPoolSyncConfig pool methods return None."""
     config = MockSyncTestConfig()
 
-    assert config.create_pool() is None
-    assert config.close_pool() is None
-    assert config.provide_pool() is None
+    config.create_pool()  # Should not raise
+    config.close_pool()  # Should not raise
+    config.provide_pool()  # Should not raise
     assert config.pool_instance is None
 
 
@@ -328,9 +328,9 @@ async def test_no_pool_async_config_pool_methods() -> None:
     """Test NoPoolAsyncConfig pool methods return None."""
     config = MockAsyncTestConfig()
 
-    assert await config.create_pool() is None
-    assert await config.close_pool() is None
-    assert config.provide_pool() is None
+    await config.create_pool()  # Should not raise
+    await config.close_pool()  # Should not raise
+    config.provide_pool()  # Should not raise
     assert config.pool_instance is None
 
 

@@ -320,15 +320,15 @@ class StatementAnalyzer(ProcessorProtocol):
         """Analyze subquery complexity and nesting depth."""
         subqueries: list[exp.Expression] = list(expression.find_all(exp.Subquery))
         subqueries.extend(
-            in_clause.args.get("query")
+            query
             for in_clause in expression.find_all(exp.In)
-            if in_clause.args.get("query") and isinstance(in_clause.args.get("query"), exp.Select)
+            if (query := in_clause.args.get("query")) and isinstance(query, exp.Select)
         )
-        subqueries.extend(
+        subqueries.extend([
             exists_clause.this
             for exists_clause in expression.find_all(exp.Exists)
             if exists_clause.this and isinstance(exists_clause.this, exp.Select)
-        )
+        ])
 
         analysis.subquery_count = len(subqueries)
         max_depth = 0
@@ -529,6 +529,8 @@ class StatementAnalyzer(ProcessorProtocol):
     def _extract_parameters(_expr: exp.Expression) -> "dict[str, Any]":
         """Extract parameters from the expression."""
         # This could be enhanced to extract actual parameter placeholders
+        # For now, _expr is unused but will be used in future enhancements
+        _ = _expr
         return {}
 
     @staticmethod

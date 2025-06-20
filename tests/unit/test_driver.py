@@ -280,7 +280,7 @@ def test_sync_driver_build_statement_with_filters() -> None:
     # Mock filter - needs both methods
     mock_filter = Mock()
 
-    def mock_append(stmt):
+    def mock_append(stmt: Any) -> SQL:
         # Return a new SQL object with modified query
         return SQL("SELECT * FROM users WHERE active = true")
 

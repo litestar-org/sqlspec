@@ -189,6 +189,9 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
 
         # Use first parameter as the sequence for execute_many
         param_sequence = param_sequences[0] if param_sequences else None
+        # Convert tuple to list if needed
+        if isinstance(param_sequence, tuple):
+            param_sequence = list(param_sequence)
         sql_statement = self._build_statement(statement, _config=_config or self.config, **kwargs).as_many(
             param_sequence
         )

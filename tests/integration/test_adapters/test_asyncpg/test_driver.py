@@ -508,7 +508,6 @@ async def test_asyncpg_json_operations(asyncpg_session: AsyncpgDriver) -> None:
     await asyncpg_session.execute_script("DROP TABLE json_test")
 
 
-@pytest.mark.skip(reason="Date parameter handling needs investigation")
 @pytest.mark.xdist_group("postgres")
 async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDriver) -> None:
     """Test the exact asset_maintenance_alert query with full PostgreSQL features.
@@ -608,23 +607,6 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDri
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
-
-    # Debug: Check what data we have in the maintenance table
-    # First check all maintenance records
-    all_maint = await asyncpg_session.execute("SELECT * FROM asset_maintenance")
-    for row in all_maint.data:
-        pass
-
-    # Try a simple test without the date filter first
-    await asyncpg_session.execute("SELECT * FROM asset_maintenance WHERE cancelled = False")
-
-    # Check the actual date values in the database
-    date_check = await asyncpg_session.execute(
-        "SELECT id, planned_date_start::text as date_str FROM asset_maintenance ORDER BY id"
-    )
-    for row in date_check.data:
-        pass
-
     # Now try with dates as strings
     date_test = await asyncpg_session.execute(
         "SELECT * FROM asset_maintenance WHERE planned_date_start::text BETWEEN '2024-01-15' AND '2024-01-17' AND cancelled = False"
@@ -682,7 +664,7 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDri
             insert into alert_users (user_id, asset_maintenance_id, alert_definition_id)
             select responsible_id, id, (select id from alert_definition where name = 'maintenances_today') from asset_maintenance
             where planned_date_start is not null
-            and planned_date_start between :date_start and :date_end
+            and planned_date_start between $1 and $2
             and cancelled = False ON CONFLICT ON CONSTRAINT unique_alert DO NOTHING
             returning *)
         select inserted_data.*, to_jsonb(users.*) as user

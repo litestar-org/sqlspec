@@ -171,6 +171,9 @@ class Pipeline:
             raise ValueError(msg)
 
         batch_params = parameters[0]
+        # Convert tuple to list if needed
+        if isinstance(batch_params, tuple):
+            batch_params = list(batch_params)
         # Create SQL object and mark as many, passing remaining args as filters
         sql_obj = SQL(statement, *parameters[1:], **kwargs).as_many(batch_params)
 
@@ -205,7 +208,7 @@ class Pipeline:
 
         # Check for native support
         if hasattr(self.driver, "_execute_pipeline_native"):
-            results = self.driver._execute_pipeline_native(self._operations, **self.options)  # type: ignore[attr-defined]
+            results = self.driver._execute_pipeline_native(self._operations, **self.options)
         else:
             results = self._execute_pipeline_simulated()
 
@@ -230,7 +233,7 @@ class Pipeline:
 
         try:
             # Get a connection for the entire pipeline
-            connection = self.driver._connection()  # type: ignore[attr-defined]
+            connection = self.driver._connection()
 
             # Start transaction if not already in one
             if self.isolation_level:
@@ -267,9 +270,9 @@ class Pipeline:
         try:
             # Execute based on operation type
             if op.operation_type == "execute_script":
-                result = self.driver.execute_script(op.sql, _connection=connection)  # type: ignore[attr-defined]
+                result = self.driver.execute_script(op.sql, _connection=connection)
             elif op.operation_type == "execute_many":
-                result = self.driver.execute_many(op.sql, _connection=connection)  # type: ignore[attr-defined]
+                result = self.driver.execute_many(op.sql, _connection=connection)
             else:
                 result = self.driver.execute(op.sql, _connection=connection)
 
@@ -399,6 +402,9 @@ class AsyncPipeline:
             raise ValueError(msg)
 
         batch_params = parameters[0]
+        # Convert tuple to list if needed
+        if isinstance(batch_params, tuple):
+            batch_params = list(batch_params)
         # Create SQL object and mark as many, passing remaining args as filters
         sql_obj = SQL(statement, *parameters[1:], **kwargs).as_many(batch_params)
 
@@ -424,7 +430,7 @@ class AsyncPipeline:
 
         # Check for native support
         if hasattr(self.driver, "_execute_pipeline_native"):
-            results = await self.driver._execute_pipeline_native(self._operations, **self.options)  # type: ignore[attr-defined]
+            results = await self.driver._execute_pipeline_native(self._operations, **self.options)
         else:
             results = await self._execute_pipeline_simulated()
 
@@ -447,7 +453,7 @@ class AsyncPipeline:
             self._simulation_logged = True
 
         try:
-            connection = self.driver._connection()  # type: ignore[attr-defined]
+            connection = self.driver._connection()
 
             if hasattr(connection, "in_transaction") and not connection.in_transaction():
                 if hasattr(connection, "begin"):
@@ -477,9 +483,9 @@ class AsyncPipeline:
         """Execute a single async pipeline operation with error handling."""
         try:
             if op.operation_type == "execute_script":
-                result = await self.driver.execute_script(op.sql, _connection=connection)  # type: ignore[attr-defined]
+                result = await self.driver.execute_script(op.sql, _connection=connection)
             elif op.operation_type == "execute_many":
-                result = await self.driver.execute_many(op.sql, _connection=connection)  # type: ignore[attr-defined]
+                result = await self.driver.execute_many(op.sql, _connection=connection)
             else:
                 result = await self.driver.execute(op.sql, _connection=connection)
 

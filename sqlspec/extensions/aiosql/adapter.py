@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypeVar, Union, cast
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import AIOSQL_INSTALLED, DictRow, RowT
+from sqlspec.typing import AIOSQL_INSTALLED, RowT
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
@@ -247,7 +247,8 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
         sql_obj = self._create_sql_object(sql, parameters)
         result = self.driver.execute(sql_obj, connection=conn)
 
-        return getattr(result, "rows_affected", 0)
+        # SQLResult has rows_affected attribute
+        return result.rows_affected if hasattr(result, "rows_affected") else 0  # type: ignore[union-attr]
 
     def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> int:
         """Execute INSERT/UPDATE/DELETE with many parameter sets.
@@ -266,7 +267,8 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
 
         result = self.driver.execute_many(sql_obj, parameters=parameters, connection=conn)
 
-        return getattr(result, "rows_affected", 0)
+        # SQLResult has rows_affected attribute
+        return result.rows_affected if hasattr(result, "rows_affected") else 0  # type: ignore[union-attr]
 
     def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Optional[Any]:
         """Execute INSERT with RETURNING and return result.
@@ -328,7 +330,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
 
         sql_obj = self._create_sql_object(sql, parameters)
 
-        result = cast("SQLResult[DictRow]", await self.driver.execute(sql_obj, connection=conn))
+        result = await self.driver.execute(sql_obj, connection=conn)  # type: ignore[misc]
 
         if hasattr(result, "data") and result.data is not None and isinstance(result, SQLResult):
             return list(result.data)
@@ -361,7 +363,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
 
         sql_obj = self._create_sql_object(sql, parameters)
 
-        result = cast("SQLResult[DictRow]", await self.driver.execute(sql_obj, connection=conn))
+        result = await self.driver.execute(sql_obj, connection=conn)  # type: ignore[misc]
 
         if hasattr(result, "data") and result.data and isinstance(result, SQLResult):
             return result.data[0]
@@ -406,13 +408,14 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
             Cursor-like object with results
         """
         sql_obj = self._create_sql_object(sql, parameters)
-        result = await self.driver.execute(sql_obj, connection=conn)
+        result = await self.driver.execute(sql_obj, connection=conn)  # type: ignore[misc]
 
         class AsyncCursorLike:
             def __init__(self, result: Any) -> None:
                 self.result = result
 
-            async def fetchall(self) -> list[Any]:
+            @staticmethod
+            async def fetchall() -> list[Any]:
                 if isinstance(result, SQLResult) and result.data is not None:
                     return list(result.data)
                 return []
@@ -437,7 +440,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
         """
         sql_obj = self._create_sql_object(sql, parameters)
 
-        await self.driver.execute(sql_obj, connection=conn)
+        await self.driver.execute(sql_obj, connection=conn)  # type: ignore[misc]
 
     async def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> None:
         """Execute INSERT/UPDATE/DELETE with many parameter sets.
@@ -453,7 +456,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
         """
         # For executemany, we don't extract sqlspec filters from individual parameter sets
         sql_obj = self._create_sql_object(sql)
-        await self.driver.execute_many(sql_obj, parameters=parameters, connection=conn)
+        await self.driver.execute_many(sql_obj, parameters=parameters, connection=conn)  # type: ignore[misc]
 
     async def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Optional[Any]:
         """Execute INSERT with RETURNING and return result.

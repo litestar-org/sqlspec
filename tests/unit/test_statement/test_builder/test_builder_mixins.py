@@ -1001,34 +1001,3 @@ def test_aggregate_functions(method: str, column: str, expected_function: str) -
         if expr is not None
     )
     assert found
-
-
-@pytest.mark.skip(reason="aggregate with filter not implemented")
-def test_aggregate_with_filter() -> None:
-    """Test aggregate functions with FILTER clause."""
-    builder = AggregateTestBuilder(exp.Select())
-    result = builder.count_("*", filter="status = 'active'")
-    assert result is builder
-
-
-@pytest.mark.skip(reason="count_distinct not implemented")
-def test_aggregate_with_distinct() -> None:
-    """Test aggregate functions with DISTINCT."""
-    builder = AggregateTestBuilder(exp.Select())
-    result = builder.count_distinct("user_id")
-    assert result is builder
-
-
-@pytest.mark.skip(reason="percentile functions not implemented")
-def test_percentile_functions() -> None:
-    """Test percentile aggregate functions."""
-    builder = AggregateTestBuilder(exp.Select())
-
-    # Test percentile_cont
-    result = builder.percentile_cont(0.5, "value")
-    assert result is builder
-
-    # Test percentile_disc
-    builder = AggregateTestBuilder(exp.Select())
-    result = builder.percentile_disc(0.9, "score")
-    assert result is builder
