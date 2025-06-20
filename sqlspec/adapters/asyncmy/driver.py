@@ -20,6 +20,7 @@ from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT
 
 if TYPE_CHECKING:
+    from asyncmy.cursors import Cursor, DictCursor
     from sqlglot.dialects.dialect import DialectType
 
 __all__ = ("AsyncmyConnection", "AsyncmyDriver")

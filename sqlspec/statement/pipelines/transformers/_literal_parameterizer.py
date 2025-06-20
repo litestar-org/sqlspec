@@ -101,9 +101,6 @@ class ParameterizeLiterals(ProcessorProtocol):
         param_context = ParameterizationContext(parent_stack=[])
         transformed_expression = self._transform_with_context(context.current_expression.copy(), param_context)
         context.current_expression = transformed_expression
-
-        if context.extracted_parameters_from_pipeline is None:
-            context.extracted_parameters_from_pipeline = []
         context.extracted_parameters_from_pipeline.extend(self.extracted_parameters)
 
         context.metadata["parameter_metadata"] = self._parameter_metadata
@@ -332,7 +329,8 @@ class ParameterizeLiterals(ProcessorProtocol):
 
         return value, type_hint, sqlglot_type, semantic_name
 
-    def _infer_sqlglot_type(self, type_hint: str, value: Any) -> "Optional[exp.DataType]":
+    @staticmethod
+    def _infer_sqlglot_type(type_hint: str, value: Any) -> "Optional[exp.DataType]":
         """Infer SQLGlot DataType from type hint without parsing.
 
         Args:
@@ -372,8 +370,9 @@ class ParameterizeLiterals(ProcessorProtocol):
         # Default case - just the type name
         return exp.DataType.build(type_name)
 
+    @staticmethod
     def _generate_semantic_name_from_context(
-        self, literal: exp.Expression, context: ParameterizationContext
+        literal: exp.Expression, context: ParameterizationContext
     ) -> "Optional[str]":
         """Generate semantic name from AST context using existing parent stack.
 
@@ -441,23 +440,23 @@ class ParameterizeLiterals(ProcessorProtocol):
 
         # Handle both style names and actual placeholder prefixes
         style = self.placeholder_style
-        if style in ("?", ParameterStyle.QMARK, "qmark"):
+        if style in {"?", ParameterStyle.QMARK, "qmark"}:
             placeholder = exp.Placeholder()
         elif style == ":name":
             # Use hint in parameter name if available
             param_name = f"{hint}_{self._parameter_counter}" if hint else f"param_{self._parameter_counter}"
             placeholder = exp.Placeholder(this=param_name)
-        elif style in (ParameterStyle.NAMED_COLON, "named_colon") or style.startswith(":"):
+        elif style in {ParameterStyle.NAMED_COLON, "named_colon"} or style.startswith(":"):
             param_name = f"param_{self._parameter_counter}"
             placeholder = exp.Placeholder(this=param_name)
-        elif style in (ParameterStyle.NUMERIC, "numeric") or style.startswith("$"):
-            # PostgreSQL style numbered parameters - use Parameter node, not Placeholder
-            placeholder = exp.Parameter(this=str(self._parameter_counter))
-        elif style in (ParameterStyle.NAMED_AT, "named_at"):
+        elif style in {ParameterStyle.NUMERIC, "numeric"} or style.startswith("$"):
+            # PostgreSQL style numbered parameters - use Var for consistent $N format
+            placeholder = exp.Var(this=f"${self._parameter_counter}")
+        elif style in {ParameterStyle.NAMED_AT, "named_at"}:
             # BigQuery style @param
             param_name = f"param_{self._parameter_counter}"
             placeholder = exp.Placeholder(this=f"@{param_name}")
-        elif style in (ParameterStyle.POSITIONAL_PYFORMAT, "pyformat"):
+        elif style in {ParameterStyle.POSITIONAL_PYFORMAT, "pyformat"}:
             # Use %s for pyformat
             placeholder = exp.Anonymous(this="%s")
         else:

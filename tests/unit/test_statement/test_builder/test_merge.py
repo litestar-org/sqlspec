@@ -434,8 +434,9 @@ def test_merge_sync_tables_pattern() -> None:
     query = builder.build()
     assert "MERGE" in query.sql
     # Check that the condition parts are present (order might vary)
-    assert "prod.sku = wh.sku" in query.sql
-    assert "prod.location = wh.location" in query.sql
+    # Column names might be quoted
+    assert "prod.sku = wh.sku" in query.sql or '"prod"."sku" = "wh"."sku"' in query.sql
+    assert "prod.location = wh.location" in query.sql or '"prod"."location" = "wh"."location"' in query.sql
     assert "AND" in query.sql
 
 

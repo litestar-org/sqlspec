@@ -80,15 +80,14 @@ def test_basic_crud(adbc_postgresql_session: AdbcDriver) -> None:
     """Test basic CRUD operations with ADBC PostgreSQL."""
     # INSERT
     insert_result = adbc_postgresql_session.execute(
-        SQL("INSERT INTO test_table (name, value) VALUES ($1, $2)"), ("test_name", 42)
+        "INSERT INTO test_table (name, value) VALUES ($1, $2)", ("test_name", 42)
     )
     assert isinstance(insert_result, SQLResult)
-    # ADBC drivers may not support rowcount and return -1
-    assert insert_result.rows_affected in (-1, 1)
+    assert insert_result.rows_affected == 1
 
     # SELECT
     select_result = adbc_postgresql_session.execute(
-        SQL("SELECT name, value FROM test_table WHERE name = $1"), ("test_name",)
+        "SELECT name, value FROM test_table WHERE name = $1", ("test_name",)
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -98,26 +97,24 @@ def test_basic_crud(adbc_postgresql_session: AdbcDriver) -> None:
 
     # UPDATE
     update_result = adbc_postgresql_session.execute(
-        SQL("UPDATE test_table SET value = $1 WHERE name = $2"), (100, "test_name")
+        "UPDATE test_table SET value = $1 WHERE name = $2", (100, "test_name")
     )
     assert isinstance(update_result, SQLResult)
-    # ADBC drivers may not support rowcount and return -1
-    assert update_result.rows_affected in (-1, 1)
+    assert update_result.rows_affected == 1
 
     # Verify UPDATE
-    verify_result = adbc_postgresql_session.execute(SQL("SELECT value FROM test_table WHERE name = $1"), ("test_name",))
+    verify_result = adbc_postgresql_session.execute("SELECT value FROM test_table WHERE name = $1", ("test_name",))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
-    delete_result = adbc_postgresql_session.execute(SQL("DELETE FROM test_table WHERE name = $1"), ("test_name",))
+    delete_result = adbc_postgresql_session.execute("DELETE FROM test_table WHERE name = $1", ("test_name",))
     assert isinstance(delete_result, SQLResult)
-    # ADBC drivers may not support rowcount and return -1
-    assert delete_result.rows_affected in (-1, 1)
+    assert delete_result.rows_affected == 1
 
     # Verify DELETE
-    empty_result = adbc_postgresql_session.execute(SQL("SELECT COUNT(*) as count FROM test_table"))
+    empty_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(empty_result, SQLResult)
     assert empty_result.data is not None
     assert empty_result.data[0]["count"] == 0
@@ -923,7 +920,7 @@ def test_schema_operations(adbc_postgresql_session: AdbcDriver) -> None:
     """Test schema operations (DDL) with ADBC PostgreSQL."""
     # Create a new table
     adbc_postgresql_session.execute_script("""
-        CREATE TABLE schema_test (
+        CREATE TABLE IF NOT EXISTS schema_test (
             id SERIAL PRIMARY KEY,
             description TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -935,8 +932,7 @@ def test_schema_operations(adbc_postgresql_session: AdbcDriver) -> None:
         "INSERT INTO schema_test (description) VALUES ($1)", ("test description",)
     )
     assert isinstance(insert_result, SQLResult)
-    # ADBC drivers may not support rowcount and return -1
-    assert insert_result.rows_affected in (-1, 1)
+    assert insert_result.rows_affected == 1
 
     # Verify table structure
     info_result = adbc_postgresql_session.execute("""

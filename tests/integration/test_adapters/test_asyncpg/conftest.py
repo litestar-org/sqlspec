@@ -7,7 +7,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.statement import SQLConfig
 
 
-@pytest.fixture
+@pytest.fixture(scope="function")
 async def asyncpg_arrow_session(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgDriver, None]":
     """Create an AsyncPG session for Arrow testing."""
     config = AsyncpgConfig(

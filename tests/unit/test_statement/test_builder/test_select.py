@@ -108,7 +108,7 @@ def test_select_columns(columns: list[str], expected_count: int) -> None:
     builder = builder.from_("users")
 
     query = builder.build()
-    assert "FROM users" in query.sql
+    assert 'FROM "users"' in query.sql or "FROM users" in query.sql
     if expected_count > 0:
         assert "SELECT" in query.sql
 
@@ -573,7 +573,7 @@ def test_empty_where_in_list() -> None:
     builder = SelectBuilder().select("*").from_("users").where_in("id", [])
     query = builder.build()
     assert "SELECT" in query.sql
-    assert "FROM users" in query.sql
+    assert 'FROM "users"' in query.sql or "FROM users" in query.sql
 
 
 def test_parameter_naming_consistency() -> None:

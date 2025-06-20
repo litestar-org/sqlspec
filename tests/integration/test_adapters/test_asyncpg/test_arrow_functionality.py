@@ -197,4 +197,4 @@ async def test_asyncpg_arrow_complex_query(asyncpg_arrow_session: AsyncpgDriver)
     assert len(total_values) == 4
     # Should be ordered by total_value DESC
     assert total_values is not None
-    assert total_values == sorted(total_values, reverse=True)  # pyright: ignore
+    assert total_values == sorted(total_values, reverse=True)  # type: ignore[type-var]

@@ -14,11 +14,6 @@ from sqlglot import Dialect, exp
 from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 from sqlglot.optimizer import optimize
-from sqlglot.optimizer.eliminate_subqueries import eliminate_subqueries
-from sqlglot.optimizer.optimize_joins import optimize_joins
-from sqlglot.optimizer.pushdown_predicates import pushdown_predicates
-from sqlglot.optimizer.simplify import simplify
-from sqlglot.optimizer.unnest_subqueries import unnest_subqueries
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
@@ -271,30 +266,20 @@ class QueryBuilder(ABC, Generic[RowT]):
             return expression
 
         try:
-            # Use SQLGlot's comprehensive optimizer if schema is available
-            if hasattr(self, "schema") and self.schema:
-                return optimize(expression.copy(), schema=self.schema, dialect=self.dialect_name)
-
-            # Apply individual optimizations in order
-            optimized = expression
-            if self.simplify_expressions:
-                optimized = simplify(optimized.copy())
-
-            if self.optimize_predicates and isinstance(optimized, (exp.Select, exp.Update, exp.Delete)):
-                optimized = pushdown_predicates(optimized.copy(), dialect=self.dialect_name)  # type: ignore[no-untyped-call]
-
-            if self.optimize_joins and isinstance(optimized, exp.Select):
-                optimized = optimize_joins(optimized.copy())  # type: ignore[no-untyped-call]
-
-            # Apply additional SQLGlot optimizations
-            if isinstance(optimized, exp.Select):
-                optimized = eliminate_subqueries(optimized.copy())
-                optimized = unnest_subqueries(optimized.copy())  # type: ignore[no-untyped-call]
-
+            # Use SQLGlot's comprehensive optimizer
+            return optimize(
+                expression.copy(),
+                schema=self.schema,
+                dialect=self.dialect_name,
+                optimizer_settings={
+                    "optimize_joins": self.optimize_joins,
+                    "pushdown_predicates": self.optimize_predicates,
+                    "simplify_expressions": self.simplify_expressions,
+                },
+            )
         except Exception:
             # Continue with unoptimized query on failure
             return expression
-        return optimized
 
     def to_statement(self, config: "Optional[SQLConfig]" = None) -> "SQL":
         """Converts the built query into a SQL statement object.

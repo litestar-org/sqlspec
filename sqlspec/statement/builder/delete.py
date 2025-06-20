@@ -74,7 +74,7 @@ class DeleteBuilder(QueryBuilder[RowT], WhereClauseMixin, ReturningClauseMixin, 
         if not self._table:
             from sqlspec.exceptions import SQLBuilderError
 
-            msg = "DELETE requires a table to be specified. Use from_() to set the table."
+            msg = "DELETE requires a table to be specified. Use from() to set the table."
             raise SQLBuilderError(msg)
 
         return super().build()

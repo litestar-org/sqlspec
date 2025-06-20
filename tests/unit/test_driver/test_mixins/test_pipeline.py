@@ -143,7 +143,7 @@ def test_pipeline_add_execute_with_parameters(mock_driver):
 
     operation = pipeline._operations[0]
     # Parameters are stored in the SQL object, not in original_params
-    assert operation.sql.parameters == 42  # Single parameter gets unpacked from list
+    assert operation.sql.parameters == [42]  # Parameter list is preserved
 
 
 def test_pipeline_add_execute_with_kwargs(mock_driver):

@@ -129,7 +129,7 @@ def test_daily_analytics_export_workflow(analytics_database: SqliteDriver, temp_
         GROUP BY u.user_id, u.username, u.country, u.subscription_type
         ORDER BY event_count DESC
         """,
-        str(user_activity_file),
+        destination_uri=str(user_activity_file),
         parameters=[export_date],
     )
 
@@ -148,7 +148,7 @@ def test_daily_analytics_export_workflow(analytics_database: SqliteDriver, temp_
         WHERE r.transaction_date = ?
         ORDER BY r.amount DESC
         """,
-        str(revenue_file),
+        destination_uri=str(revenue_file),
         parameters=[export_date],
     )
 
@@ -266,7 +266,7 @@ def test_event_analytics_pipeline(analytics_database: SqliteDriver, temp_directo
         JOIN users u ON e.user_id = u.user_id
         ORDER BY e.timestamp
         """,
-        str(raw_events_file),
+        destination_uri=str(raw_events_file),
     )
 
     # Step 2: Create event type summary
@@ -285,7 +285,7 @@ def test_event_analytics_pipeline(analytics_database: SqliteDriver, temp_directo
         GROUP BY event_type
         ORDER BY event_count DESC
         """,
-        str(event_summary_file),
+        destination_uri=str(event_summary_file),
         format="csv",
     )
 
@@ -303,7 +303,7 @@ def test_event_analytics_pipeline(analytics_database: SqliteDriver, temp_directo
         GROUP BY user_id
         ORDER BY total_events DESC
         """,
-        str(user_journey_file),
+        destination_uri=str(user_journey_file),
         format="json",
     )
 
@@ -351,7 +351,7 @@ def test_revenue_analytics_workflow(analytics_database: SqliteDriver, temp_direc
         GROUP BY month, product_type
         ORDER BY month, total_revenue DESC
         """,
-        str(monthly_revenue_file),
+        destination_uri=str(monthly_revenue_file),
     )
 
     # User revenue breakdown
@@ -374,7 +374,7 @@ def test_revenue_analytics_workflow(analytics_database: SqliteDriver, temp_direc
         GROUP BY u.user_id, u.username, u.country, u.subscription_type
         ORDER BY total_spent DESC
         """,
-        str(user_revenue_file),
+        destination_uri=str(user_revenue_file),
     )
 
     # Revenue insights export
@@ -434,7 +434,7 @@ def test_data_backup_and_archival_workflow(analytics_database: SqliteDriver, tem
         # Export table with metadata
         analytics_database.export_to_storage(
             f"SELECT * FROM {table_name}",
-            str(backup_file),
+            destination_uri=str(backup_file),
             compression="gzip",  # Use compression for archival
         )
 
@@ -500,7 +500,9 @@ def test_multi_format_export_workflow(analytics_database: SqliteDriver, temp_dir
         if config["compression"]:
             export_kwargs["compression"] = config["compression"]
 
-        analytics_database.export_to_storage(base_query, str(output_file), **export_kwargs)
+        analytics_database.export_to_storage(
+            base_query, destination_uri=str(output_file), _config=None, **export_kwargs
+        )
 
         if output_file.exists():
             file_size = output_file.stat().st_size

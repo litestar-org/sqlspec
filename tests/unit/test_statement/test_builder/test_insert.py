@@ -92,7 +92,7 @@ def test_insert_values_basic(values: list[Any], expected_param_count: int) -> No
     builder = InsertBuilder().into("users").values(*values)
     query = builder.build()
 
-    assert "INSERT INTO users" in query.sql
+    assert 'INSERT INTO "users"' in query.sql or "INSERT INTO users" in query.sql
     assert "VALUES" in query.sql
     assert len(query.parameters) == expected_param_count
     for value in values:
@@ -130,7 +130,7 @@ def test_insert_multiple_rows() -> None:
     )
     query = builder.build()
 
-    assert "INSERT INTO users" in query.sql
+    assert 'INSERT INTO "users"' in query.sql or "INSERT INTO users" in query.sql
     assert "VALUES" in query.sql
     assert len(query.parameters) == 6  # 3 rows x 2 columns
 
@@ -175,7 +175,7 @@ def test_insert_values_from_dict_basic() -> None:
     builder = InsertBuilder().into("users").values_from_dict(data)
     query = builder.build()
 
-    assert "INSERT INTO users" in query.sql
+    assert 'INSERT INTO "users"' in query.sql or "INSERT INTO users" in query.sql
     assert len(query.parameters) == len(data)
     for value in data.values():
         assert value in query.parameters.values()
@@ -215,7 +215,7 @@ def test_insert_values_from_dicts_basic() -> None:
     builder = InsertBuilder().into("users").values_from_dicts(data)
     query = builder.build()
 
-    assert "INSERT INTO users" in query.sql
+    assert 'INSERT INTO "users"' in query.sql or "INSERT INTO users" in query.sql
     assert len(query.parameters) == 6  # 3 rows x 2 columns
 
 
@@ -247,7 +247,7 @@ def test_insert_from_select_basic() -> None:
     builder = InsertBuilder().into("users_backup").from_select(select_builder)
     query = builder.build()
 
-    assert "INSERT INTO users_backup" in query.sql
+    assert 'INSERT INTO "users_backup"' in query.sql
     assert "SELECT" in query.sql
     assert isinstance(query.parameters, dict)
     assert True in query.parameters.values()
@@ -361,7 +361,7 @@ def test_insert_special_values(special_value: Any, description: str) -> None:
     builder = InsertBuilder().into("data").columns("value").values(special_value)
     query = builder.build()
 
-    assert "INSERT INTO data" in query.sql
+    assert 'INSERT INTO "data"' in query.sql
     assert special_value in query.parameters.values()
 
 
@@ -391,7 +391,7 @@ def test_insert_large_batch() -> None:
     builder = InsertBuilder().into("users").values_from_dicts(large_data)
     query = builder.build()
 
-    assert "INSERT INTO users" in query.sql
+    assert 'INSERT INTO "users"' in query.sql
     assert len(query.parameters) == 300  # 100 rows x 3 columns
 
 
@@ -409,7 +409,7 @@ def test_insert_full_method_chain() -> None:
         .build()
     )
 
-    assert "INSERT INTO users" in query.sql
+    assert 'INSERT INTO "users"' in query.sql
     assert "VALUES" in query.sql
     assert len(query.parameters) == 9  # 3 rows x 3 columns
 
@@ -425,7 +425,7 @@ def test_insert_mixed_value_methods() -> None:
     )
     query = builder.build()
 
-    assert "INSERT INTO users" in query.sql
+    assert 'INSERT INTO "users"' in query.sql
     assert len(query.parameters) == 4
 
 
@@ -465,7 +465,7 @@ def test_insert_to_statement_conversion() -> None:
 
     assert isinstance(statement, SQL)
     # SQL formatting might differ between build() and to_statement()
-    assert "INSERT INTO users" in statement.sql
+    assert 'INSERT INTO "users"' in statement.sql
     assert "VALUES" in statement.sql
     assert "param_1" in statement.sql
     assert "param_2" in statement.sql

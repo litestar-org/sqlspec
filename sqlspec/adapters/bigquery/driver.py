@@ -116,7 +116,8 @@ class BigQueryDriver(
         else:
             self._default_query_job_config = None
 
-    def _copy_job_config_attrs(self, source_config: QueryJobConfig, target_config: QueryJobConfig) -> None:
+    @staticmethod
+    def _copy_job_config_attrs(source_config: QueryJobConfig, target_config: QueryJobConfig) -> None:
         """Copy non-private attributes from source config to target config."""
         for attr in dir(source_config):
             if attr.startswith("_"):
@@ -140,6 +141,9 @@ class BigQueryDriver(
         Raises:
             SQLSpecError: If value type is not supported.
         """
+        value_type = type(value)
+        if value_type is datetime.datetime:
+            return ("TIMESTAMP" if value.tzinfo else "DATETIME", None)
         type_map = {
             bool: ("BOOL", None),
             int: ("INT64", None),
@@ -147,15 +151,11 @@ class BigQueryDriver(
             Decimal: ("BIGNUMERIC", None),
             str: ("STRING", None),
             bytes: ("BYTES", None),
-            datetime.datetime: ("TIMESTAMP" if value.tzinfo else "DATETIME", None),
             datetime.date: ("DATE", None),
             datetime.time: ("TIME", None),
             dict: ("JSON", None),
         }
 
-        value_type = type(value)
-
-        # Direct mapping for simple types
         if value_type in type_map:
             return type_map[value_type]
 
@@ -505,12 +505,17 @@ class BigQueryDriver(
         # Execute the query directly with BigQuery to get the QueryJob
         params = sql.get_parameters(style=self.default_parameter_style)
         params_dict: dict[str, Any] = {}
-        if params:
+        if params is not None:
             if isinstance(params, dict):
                 params_dict = params
-            else:
-                for i, value in enumerate(params if isinstance(params, (list, tuple)) else [params]):
-                    params_dict[f"param_{i}"] = value
+            elif isinstance(params, (list, tuple)):
+                for i, value in enumerate(params):
+                    # Skip None values
+                    if value is not None:
+                        params_dict[f"param_{i}"] = value
+            # Single parameter that's not None
+            elif params is not None:
+                params_dict["param_0"] = params
 
         bq_params = self._prepare_bq_query_parameters(params_dict) if params_dict else []
         query_job = self._run_query_job(

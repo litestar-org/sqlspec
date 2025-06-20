@@ -14,7 +14,12 @@ from sqlspec.statement.sql import SQL, SQLConfig
 def mock_psqlpy_connection() -> AsyncMock:
     """Create a mock PSQLPy connection."""
     mock_connection = AsyncMock()  # Remove spec to avoid attribute errors
-    mock_connection.execute.return_value = []
+
+    # Create mock execute result with rows_affected method
+    mock_execute_result = Mock()
+    mock_execute_result.rows_affected.return_value = 1
+    mock_connection.execute.return_value = mock_execute_result
+
     mock_connection.execute_many.return_value = None
     mock_connection.execute_script.return_value = None
     mock_connection.fetch_row.return_value = None

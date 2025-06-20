@@ -21,7 +21,7 @@ ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 def psycopg_session(postgres_service: PostgresService) -> Generator[PsycopgSyncDriver, None, None]:
     """Create a psycopg session with test table."""
     from sqlspec.statement.sql import SQLConfig
-    
+
     config = PsycopgSyncConfig(
         host=postgres_service.host,
         port=postgres_service.port,
@@ -582,7 +582,8 @@ def test_psycopg_to_parquet(psycopg_session: PsycopgSyncDriver) -> None:
     statement = SQL("SELECT name, value FROM test_table ORDER BY name")
     with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
         try:
-            psycopg_session.export_to_storage(statement, destination_uri=tmp.name, format="parquet")
+            rows_exported = psycopg_session.export_to_storage(statement, destination_uri=tmp.name, format="parquet")
+            assert rows_exported == 2
             table = pq.read_table(tmp.name)
             assert table.num_rows == 2
             assert set(table.column_names) == {"name", "value"}

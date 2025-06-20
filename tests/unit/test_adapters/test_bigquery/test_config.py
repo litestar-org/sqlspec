@@ -305,7 +305,7 @@ def test_preferred_parameter_style() -> None:
 )
 def test_timeout_configuration(timeout_type: str, value: int) -> None:
     """Test timeout configuration."""
-    config = BigQueryConfig(project="test-project", **{timeout_type: value})
+    config = BigQueryConfig(project="test-project", **{timeout_type: value})  # pyright: ignore
     assert getattr(config, timeout_type) == value
 
 

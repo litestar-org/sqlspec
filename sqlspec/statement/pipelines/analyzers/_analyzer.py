@@ -270,96 +270,67 @@ class StatementAnalyzer(ProcessorProtocol):
 
     def _analyze_complexity(self, expression: exp.Expression, analysis: StatementAnalysis) -> None:
         """Perform comprehensive complexity analysis."""
-        join_analysis_res = self._analyze_joins(expression)
-        analysis.join_types = join_analysis_res["join_types"]
-        analysis.potential_cartesian_products = join_analysis_res["potential_cartesian_products"]
-        analysis.complexity_warnings.extend(join_analysis_res["warnings"])
-        analysis.complexity_issues.extend(join_analysis_res["issues"])
+        self._analyze_joins(expression, analysis)
+        self._analyze_subqueries(expression, analysis)
+        self._analyze_where_clauses(expression, analysis)
+        self._analyze_functions(expression, analysis)
 
-        subquery_analysis = self._analyze_subqueries(expression)
-        analysis.max_subquery_depth = subquery_analysis["max_subquery_depth"]
-        analysis.correlated_subquery_count = subquery_analysis["correlated_subquery_count"]
-        analysis.complexity_warnings.extend(subquery_analysis["warnings"])
-        analysis.complexity_issues.extend(subquery_analysis["issues"])
-
-        where_analysis = self._analyze_where_clauses(expression)
-        analysis.where_condition_count = where_analysis["total_where_conditions"]
-        analysis.complexity_warnings.extend(where_analysis["warnings"])
-        analysis.complexity_issues.extend(where_analysis["issues"])
-
-        function_analysis = self._analyze_functions(expression)
-        analysis.function_count = function_analysis["function_count"]
-        analysis.complexity_warnings.extend(function_analysis["warnings"])
-        analysis.complexity_issues.extend(function_analysis["issues"])
-
-    def _analyze_joins(self, expression: exp.Expression) -> "dict[str, Any]":
+    def _analyze_joins(self, expression: exp.Expression, analysis: StatementAnalysis) -> None:
         """Analyze JOIN operations for potential issues."""
-        join_types: dict[str, int] = {}
         join_nodes = list(expression.find_all(exp.Join))
-        join_count = len(join_nodes)
+        analysis.join_count = len(join_nodes)
+
         warnings = []
         issues = []
         cartesian_products = 0
+
         for select in expression.find_all(exp.Select):
-            if select.from_ and hasattr(select.from_, "expressions"):  # type: ignore[truthy-function]
-                from_expressions = getattr(select.from_, "expressions", [])
-                if len(from_expressions) > 1 and not list(select.args.get("joins", [])):
-                    # Check if validation already flagged this specific type of implicit cartesian product
-                    cartesian_products += 1
+            from_clause = select.args.get("from")
+            if from_clause and hasattr(from_clause, "expressions") and len(from_clause.expressions) > 1:
+                # This logic checks for multiple tables in FROM without explicit JOINs
+                # It's a simplified check for potential cartesian products
+                cartesian_products += 1
+
         if cartesian_products > 0:
             issues.append(
                 f"Potential Cartesian product detected ({cartesian_products} instances from multiple FROM tables without JOIN)"
             )
 
-        # Check explicit cross joins and implicit joins (comma syntax)
         for join_node in join_nodes:
-            if join_node.kind and join_node.kind.upper() == "CROSS":
+            join_type = join_node.kind.upper() if join_node.kind else "INNER"
+            analysis.join_types[join_type] = analysis.join_types.get(join_type, 0) + 1
+
+            if join_type == "CROSS":
                 issues.append("Explicit CROSS JOIN found, potential Cartesian product.")
-                cartesian_products += 1  # or a different counter for explicit cross joins
-            elif not join_node.args.get("on") and not join_node.args.get("using"):
-                # Check if it's a comma join (no kind) or a join without ON/USING
-                if not join_node.kind:  # Comma syntax creates empty kind
-                    issues.append(
-                        "Implicit join (comma syntax) without ON/USING clause found, potential Cartesian product."
-                    )
-                else:
-                    issues.append(
-                        f"JOIN without ON/USING clause found ({join_node.sql()}), potential Cartesian product."
-                    )
+                cartesian_products += 1
+            elif not join_node.args.get("on") and not join_node.args.get("using") and join_type != "NATURAL":
+                issues.append(f"JOIN ({join_node.sql()}) without ON/USING clause, potential Cartesian product.")
                 cartesian_products += 1
 
-        if join_count > self.max_join_count:
-            issues.append(f"Excessive number of joins ({join_count}), may cause performance issues")
-        elif join_count > self.max_join_count // 2:
-            warnings.append(f"High number of joins ({join_count}), monitor performance")
+        if analysis.join_count > self.max_join_count:
+            issues.append(f"Excessive number of joins ({analysis.join_count}), may cause performance issues")
+        elif analysis.join_count > self.max_join_count // 2:
+            warnings.append(f"High number of joins ({analysis.join_count}), monitor performance")
 
-        return {
-            "join_types": join_types,
-            "potential_cartesian_products": cartesian_products,
-            "warnings": warnings,
-            "issues": issues,
-            "join_count": join_count,  # Also return join_count for analysis.join_count
-        }
+        analysis.potential_cartesian_products = cartesian_products
+        analysis.complexity_warnings.extend(warnings)
+        analysis.complexity_issues.extend(issues)
 
-    def _analyze_subqueries(self, expression: exp.Expression) -> "dict[str, Any]":
+    def _analyze_subqueries(self, expression: exp.Expression, analysis: StatementAnalysis) -> None:
         """Analyze subquery complexity and nesting depth."""
-        # Standard subquery detection
         subqueries: list[exp.Expression] = list(expression.find_all(exp.Subquery))
-
-        # sqlglot compatibility: IN clauses with SELECT need explicit handling
-        for in_clause in expression.find_all(exp.In):
-            query_node = in_clause.args.get("query")
-            if query_node and isinstance(query_node, exp.Select):
-                subqueries.append(query_node)
-
-        # sqlglot compatibility: EXISTS clauses with SELECT need explicit handling
+        subqueries.extend(
+            in_clause.args.get("query")
+            for in_clause in expression.find_all(exp.In)
+            if in_clause.args.get("query") and isinstance(in_clause.args.get("query"), exp.Select)
+        )
         subqueries.extend(
             exists_clause.this
             for exists_clause in expression.find_all(exp.Exists)
             if exists_clause.this and isinstance(exists_clause.this, exp.Select)
         )
 
-        subquery_count = len(subqueries)
+        analysis.subquery_count = len(subqueries)
         max_depth = 0
         correlated_count = 0
 
@@ -394,22 +365,8 @@ class StatementAnalyzer(ProcessorProtocol):
             return max_depth
 
         max_depth = calculate_depth(expression)
-
-        # Check for correlated subqueries
-        # EXISTS clauses are typically correlated
-        for exists_clause in expression.find_all(exp.Exists):
-            if exists_clause.this and isinstance(exists_clause.this, exp.Select):
-                correlated_count += 1
-
-        # Also check subqueries that reference outer table aliases
-        # This is a more complex check but necessary for proper correlation detection
-        outer_tables = set()
-        for table in expression.find_all(exp.Table):
-            if table.alias:
-                outer_tables.add(table.alias)
-
+        outer_tables = {tbl.alias or tbl.name for tbl in expression.find_all(exp.Table)}
         for subquery in subqueries:
-            # Check if subquery references any outer table aliases
             for col in subquery.find_all(exp.Column):
                 if col.table and col.table in outer_tables:
                     correlated_count += 1
@@ -423,34 +380,25 @@ class StatementAnalyzer(ProcessorProtocol):
         elif max_depth > self.max_subquery_depth // 2:
             warnings.append(f"High subquery nesting depth ({max_depth})")
 
-        if subquery_count > HIGH_SUBQUERY_COUNT_THRESHOLD:
-            warnings.append(f"High number of subqueries ({subquery_count})")
+        if analysis.subquery_count > HIGH_SUBQUERY_COUNT_THRESHOLD:
+            warnings.append(f"High number of subqueries ({analysis.subquery_count})")
 
         if correlated_count > HIGH_CORRELATED_SUBQUERY_THRESHOLD:
             warnings.append(f"Multiple correlated subqueries detected ({correlated_count})")
 
-        return {
-            "max_subquery_depth": max_depth,
-            "correlated_subquery_count": correlated_count,
-            "warnings": warnings,
-            "issues": issues,
-        }
+        analysis.max_subquery_depth = max_depth
+        analysis.correlated_subquery_count = correlated_count
+        analysis.complexity_warnings.extend(warnings)
+        analysis.complexity_issues.extend(issues)
 
-    def _analyze_where_clauses(self, expression: exp.Expression) -> "dict[str, Any]":
+    def _analyze_where_clauses(self, expression: exp.Expression, analysis: StatementAnalysis) -> None:
         """Analyze WHERE clause complexity."""
         where_clauses = list(expression.find_all(exp.Where))
         total_conditions = 0
-        complex_conditions = 0
 
         for where_clause in where_clauses:
-            # Count AND/OR conditions
-            and_conditions = len(list(where_clause.find_all(exp.And)))
-            or_conditions = len(list(where_clause.find_all(exp.Or)))
-            total_conditions += and_conditions + or_conditions
-
-            # Check for complex patterns
-            if any(where_clause.find_all(pattern) for pattern in [exp.Like, exp.In, exp.Between]):
-                complex_conditions += 1
+            total_conditions += len(list(where_clause.find_all(exp.And)))
+            total_conditions += len(list(where_clause.find_all(exp.Or)))
 
         warnings = []
         issues = []
@@ -460,20 +408,22 @@ class StatementAnalyzer(ProcessorProtocol):
         elif total_conditions > self.max_where_conditions // 2:
             warnings.append(f"Complex WHERE clause ({total_conditions} conditions)")
 
-        return {"total_where_conditions": total_conditions, "warnings": warnings, "issues": issues}
+        analysis.where_condition_count = total_conditions
+        analysis.complexity_warnings.extend(warnings)
+        analysis.complexity_issues.extend(issues)
 
-    def _analyze_functions(self, expression: exp.Expression) -> "dict[str, Any]":
+    def _analyze_functions(self, expression: exp.Expression, analysis: StatementAnalysis) -> None:
         """Analyze function usage and complexity."""
         function_types: dict[str, int] = {}
-        function_count, nested_functions = 0, 0
+        nested_functions = 0
+        function_count = 0
         for func in expression.find_all(exp.Func):
             func_name = func.name.lower() if func.name else "unknown"
             function_types[func_name] = function_types.get(func_name, 0) + 1
-            if list(func.find_all(exp.Func)):
+            if any(isinstance(arg, exp.Func) for arg in func.args.values()):
                 nested_functions += 1
             function_count += 1
 
-        # Check for expensive functions
         expensive_functions = {"regexp", "regex", "like", "concat_ws", "group_concat"}
         expensive_count = sum(function_types.get(func, 0) for func in expensive_functions)
 
@@ -491,7 +441,9 @@ class StatementAnalyzer(ProcessorProtocol):
         if nested_functions > NESTED_FUNCTION_THRESHOLD:
             warnings.append(f"Multiple nested function calls ({nested_functions})")
 
-        return {"function_count": function_count, "warnings": warnings, "issues": issues}
+        analysis.function_count = function_count
+        analysis.complexity_warnings.extend(warnings)
+        analysis.complexity_issues.extend(issues)
 
     @staticmethod
     def _calculate_comprehensive_complexity_score(analysis: StatementAnalysis) -> int:

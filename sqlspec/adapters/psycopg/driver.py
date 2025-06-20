@@ -89,10 +89,7 @@ class PsycopgSyncDriver(
             params = self._process_parameters(params)
             return self._execute_many(sql, params, connection=connection, **kwargs)
 
-        # Debug the compilation
-        logger.debug(f"Original SQL: {statement._sql}")
         sql, params = statement.compile(placeholder_style=target_style)
-        logger.debug(f"Compiled SQL: {sql}")
         params = self._process_parameters(params)
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
@@ -106,11 +103,11 @@ class PsycopgSyncDriver(
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
         with conn.cursor() as cursor:
-            # Debug: log the SQL being executed
-            logger.debug(f"Executing SQL: {sql}")
-            logger.debug(f"With parameters: {parameters}")
             cursor.execute(sql, parameters)
-            if self.returns_rows(statement.expression):
+            # When parsing is disabled, expression will be None, so check SQL directly
+            if (statement.expression and self.returns_rows(statement.expression)) or (
+                not statement.expression and sql.strip().upper().startswith("SELECT")
+            ):
                 fetched_data = cursor.fetchall()
                 column_names = [col.name for col in cursor.description or []]
                 return {"data": fetched_data, "column_names": column_names, "rows_affected": len(fetched_data)}
@@ -478,8 +475,19 @@ class PsycopgAsyncDriver(
         async with conn.cursor() as cursor:
             await cursor.execute(sql, parameters)
 
-            if self.returns_rows(statement.expression):
+            # When parsing is disabled, expression will be None, so check SQL directly
+            if statement.expression and self.returns_rows(statement.expression):
                 # For SELECT statements, extract data while cursor is open
+                fetched_data = await cursor.fetchall()
+                column_names = [col.name for col in cursor.description or []]
+                result: SelectResultDict = {
+                    "data": fetched_data,
+                    "column_names": column_names,
+                    "rows_affected": len(fetched_data),
+                }
+                return result
+            if not statement.expression and sql.strip().upper().startswith("SELECT"):
+                # For SELECT statements when parsing is disabled
                 fetched_data = await cursor.fetchall()
                 column_names = [col.name for col in cursor.description or []]
                 result: SelectResultDict = {

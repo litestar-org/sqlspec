@@ -24,7 +24,7 @@ class SQLProcessingContext:
     initial_sql_string: str
     """The original SQL string input by the user."""
 
-    dialect: "Optional[DialectType]"
+    dialect: "DialectType"
     """The SQL dialect to be used for parsing and generation."""
 
     config: "SQLConfig"

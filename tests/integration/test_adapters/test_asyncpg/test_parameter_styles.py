@@ -1,5 +1,6 @@
 """Test different parameter styles for AsyncPG drivers."""
 
+import math
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -11,7 +12,7 @@ from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQLConfig
 
 
-@pytest.fixture
+@pytest.fixture(scope="function")
 async def asyncpg_params_session(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgDriver, None]":
     """Create an AsyncPG session for parameter style testing."""
     config = AsyncpgConfig(
@@ -188,8 +189,8 @@ async def test_asyncpg_parameter_with_sql_object(asyncpg_params_session: Asyncpg
     from sqlspec.statement.sql import SQL
 
     # Test with numeric style
-    sql_obj = SQL("SELECT * FROM test_params WHERE value > $1", parameters=[150])
-    result = await asyncpg_params_session.execute(sql_obj)
+    sql_obj = SQL("SELECT * FROM test_params WHERE value > $1")
+    result = await asyncpg_params_session.execute(sql_obj, 150)
 
     assert isinstance(result, SQLResult)
     assert result is not None
@@ -214,7 +215,11 @@ async def test_asyncpg_parameter_data_types(asyncpg_params_session: AsyncpgDrive
     """)
 
     # Test different data types
-    test_data = [(42, 3.14, "hello", True, [1, 2, 3]), (-100, -2.5, "world", False, [4, 5, 6]), (0, 0.0, "", None, [])]
+    test_data = [
+        (42, math.pi, "hello", True, [1, 2, 3]),
+        (-100, -2.5, "world", False, [4, 5, 6]),
+        (0, 0.0, "", None, []),
+    ]
 
     for i, data in enumerate(test_data):
         await asyncpg_params_session.execute(
@@ -224,7 +229,7 @@ async def test_asyncpg_parameter_data_types(asyncpg_params_session: AsyncpgDrive
 
     # Verify data with parameters
     result = await asyncpg_params_session.execute(
-        "SELECT * FROM test_types WHERE int_val = $1 AND real_val = $2", (42, 3.14)
+        "SELECT * FROM test_types WHERE int_val = $1 AND real_val = $2", (42, math.pi)
     )
 
     assert len(result) == 1

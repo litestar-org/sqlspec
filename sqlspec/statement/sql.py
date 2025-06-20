@@ -151,6 +151,7 @@ class SQL:
         "_is_many",  # bool - for executemany operations
         "_is_script",  # bool - for script execution
         "_named_params",  # dict[str, Any] - named parameters
+        "_original_parameters",  # Any - original parameters as passed in
         "_positional_params",  # list[Any] - positional parameters
         "_processed_state",  # Cached processed state
         "_raw_sql",  # str - original SQL string for compatibility
@@ -202,6 +203,7 @@ class SQL:
             self._is_many = statement._is_many
             self._is_script = statement._is_script
             self._raw_sql: str = statement._raw_sql
+            self._original_parameters = statement._original_parameters
             # Copy internal state
             self._positional_params.extend(statement._positional_params)
             self._named_params.update(statement._named_params)
@@ -238,6 +240,17 @@ class SQL:
             if "raw_sql" in _existing_state:
                 self._raw_sql = _existing_state["raw_sql"]
 
+        # Store original parameters for compatibility
+        if isinstance(statement, SQL):
+            # When copying from another SQL, don't overwrite original parameters
+            pass
+        elif len(parameters) == 1 and not isinstance(parameters[0], StatementFilter):
+            self._original_parameters = parameters[0]
+        elif len(parameters) > 1:
+            self._original_parameters = parameters
+        else:
+            self._original_parameters = None
+
         # Process parameters from *args
         for param in parameters:
             if isinstance(param, StatementFilter):
@@ -263,6 +276,9 @@ class SQL:
             elif isinstance(param, dict):
                 # Merge dict as named params
                 self._named_params.update(param)
+            elif isinstance(param, tuple):
+                # Handle tuple as positional parameters
+                self._positional_params.extend(param)
             else:
                 # Add as positional param
                 self._positional_params.append(param)
@@ -568,13 +584,8 @@ class SQL:
             # Only named params
             final_params = dict(self._named_params)
         elif self._positional_params and not self._named_params:
-            # Only positional params
-            if len(self._positional_params) == 1 and not self._is_many:
-                # Single positional param
-                final_params = self._positional_params[0]
-            else:
-                # Multiple positional params
-                final_params = list(self._positional_params)
+            # Always return a list for positional params to maintain sequence type
+            final_params = list(self._positional_params)
         elif self._positional_params and self._named_params:
             # Mixed - merge into dict
             final_params = dict(self._named_params)
@@ -832,12 +843,8 @@ class SQL:
     @property
     def _raw_parameters(self) -> Any:
         """Get raw parameters for compatibility."""
-        # Return raw parameters without processing
-        _, params = self._build_final_state()
-        # For backward compatibility, return None instead of empty list
-        if isinstance(params, list) and len(params) == 0:
-            return None
-        return params
+        # Return the original parameters as passed in
+        return self._original_parameters
 
     @property
     def _sql(self) -> str:

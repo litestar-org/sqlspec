@@ -172,7 +172,7 @@ def test_extension_configuration() -> None:
 )
 def test_extension_flags(extension_flag: str, value: bool) -> None:
     """Test extension-related flags."""
-    config = DuckDBConfig(database=":memory:", **{extension_flag: value})
+    config = DuckDBConfig(database=":memory:", **{extension_flag: value})  # pyright: ignore
     assert getattr(config, extension_flag) == value
 
 

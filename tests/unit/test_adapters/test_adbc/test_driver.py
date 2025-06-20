@@ -230,36 +230,28 @@ def test_adbc_driver_get_cursor_exception_handling(adbc_driver: AdbcDriver) -> N
 
 def test_adbc_driver_execute_statement_select(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
     """Test AdbcDriver._execute_statement for SELECT statements."""
-    import pyarrow as pa
-
     mock_connection = adbc_driver.connection
-    mock_connection.cursor = Mock(return_value=mock_cursor)
+    mock_connection.cursor.return_value = mock_cursor
 
-    # Setup mock cursor for ADBC native Arrow support
-    mock_arrow_table = pa.table(
-        {"id": [1, 2], "name": ["John Doe", "Jane Smith"], "email": ["john@example.com", "jane@example.com"]}
-    )
-    mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
+    # Setup mock cursor for fetchall
+    mock_cursor.fetchall.return_value = [(1, "John Doe", "john@example.com")]
+    mock_cursor.description = [("id",), ("name",), ("email",)]
 
-    result = adbc_driver.fetch_arrow_table("SELECT * FROM users WHERE id = $1", parameters=[123])
+    statement = SQL("SELECT * FROM users WHERE id = ?", parameters=[123])
+    result = cast("SelectResultDict", adbc_driver._execute_statement(statement))
 
-    assert isinstance(result, ArrowResult)
-    assert not isinstance(result.statement, str)
-    # The ArrowResult stores the original SQL statement object
-    # The actual SQL sent to the database is converted to QMARK style internally
-    assert isinstance(result.statement, SQL)
-    # Check that the SQL can be compiled to QMARK style
-    compiled_sql, _ = result.statement.compile(placeholder_style="qmark")
-    assert "?" in compiled_sql  # pyright: ignore
+    assert isinstance(result, dict)
+    assert "data" in result
+    assert "column_names" in result
+    assert "rows_affected" in result
 
-    # Check that it's an Arrow table with the expected data
-    assert isinstance(result.data, pa.Table)
-    assert result.data.num_rows == 2
-    assert result.data.column_names == ["id", "name", "email"]
+    assert len(result["data"]) == 1
+    assert result["column_names"] == ["id", "name", "email"]
+    assert result["rows_affected"] == 1
 
-    # Verify execute and fetch_arrow_table were called
-    mock_cursor.execute.assert_called_once()
-    mock_cursor.fetch_arrow_table.assert_called_once()
+    # Verify execute and fetchall were called
+    mock_cursor.execute.assert_called_once_with("SELECT * FROM users WHERE id = ?", [123])
+    mock_cursor.fetchall.assert_called_once()
 
 
 def test_adbc_driver_fetch_arrow_table_with_parameters(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
@@ -471,7 +463,7 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
     built_stmt_with_params = adbc_driver._build_statement(string_sql_with_params, params_for_string, _config=sql_config)
     assert isinstance(built_stmt_with_params, SQL)
     assert built_stmt_with_params.sql == string_sql_with_params
-    assert built_stmt_with_params.parameters == params_for_string
+    assert built_stmt_with_params.parameters == [1]  # Tuple params are unpacked into list
 
 
 def test_adbc_driver_fetch_arrow_table_native(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:

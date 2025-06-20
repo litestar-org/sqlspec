@@ -46,7 +46,7 @@ class WhereClauseMixin:
 
         # Check if table is set for DELETE queries
         if isinstance(builder._expression, exp.Delete) and not builder._expression.args.get("this"):
-            msg = "WHERE clause requires a table to be set. Use from_() to set the table first."
+            msg = "WHERE clause requires a table to be set. Use from() to set the table first."
             raise SQLBuilderError(msg)
 
         # Normalize the condition using enhanced parsing

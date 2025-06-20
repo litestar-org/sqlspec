@@ -209,9 +209,9 @@ def test_sql_parameters_property() -> None:
     stmt1 = SQL("SELECT * FROM users")
     assert stmt1.parameters is None
 
-    # With parameters
+    # With parameters - positional params are returned as list
     stmt2 = SQL("SELECT * FROM users WHERE id = ?", (1,))
-    assert stmt2.parameters == (1,)
+    assert stmt2.parameters == [1]
 
     # Dict parameters
     stmt3 = SQL("SELECT * FROM users WHERE id = :id", {"id": 1})
@@ -321,7 +321,7 @@ def test_sql_with_missing_parameters() -> None:
 def test_sql_with_extra_parameters() -> None:
     """Test SQL handles extra parameters gracefully."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", (1, 2, 3))
-    assert stmt.parameters == (1, 2, 3)
+    assert stmt.parameters == [1, 2, 3]  # Positional params are returned as list
     assert stmt.sql == "SELECT * FROM users WHERE id = ?"
 
 

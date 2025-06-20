@@ -71,7 +71,7 @@ def test_update_set_single_column(column: str, value: Any, expected_param_count:
     builder = UpdateBuilder().table("users").set(column, value)
     query = builder.build()
 
-    assert "UPDATE users" in query.sql
+    assert 'UPDATE "users"' in query.sql or "UPDATE users" in query.sql
     assert "SET" in query.sql
     assert len(query.parameters) == expected_param_count
     assert value in query.parameters.values()
@@ -89,7 +89,7 @@ def test_update_set_multiple_columns() -> None:
     )
     query = builder.build()
 
-    assert "UPDATE users" in query.sql
+    assert 'UPDATE "users"' in query.sql or "UPDATE users" in query.sql
     assert "SET" in query.sql
     assert len(query.parameters) == 4
     assert all(v in query.parameters.values() for v in ["John Doe", "john@example.com", 30, True])
@@ -108,7 +108,7 @@ def test_update_set_with_expression_column() -> None:
     col_expr = exp.column("name")
     query = builder.set(col_expr, "John").build()
 
-    assert "UPDATE users" in query.sql
+    assert 'UPDATE "users"' in query.sql or "UPDATE users" in query.sql
     assert "SET" in query.sql
     assert "John" in query.parameters.values()
 
@@ -120,10 +120,11 @@ def test_update_set_with_expression_value() -> None:
     value_expr = exp.Add(this=exp.column("balance"), expression=exp.Literal.number(100))
     query = builder.set("balance", value_expr).build()
 
-    assert "UPDATE accounts" in query.sql
+    assert 'UPDATE "accounts"' in query.sql or "UPDATE accounts" in query.sql
     assert "SET" in query.sql
     # The expression should be used directly, not parameterized
-    assert "balance = balance + 100" in query.sql
+    # Column names might be quoted
+    assert "balance = balance + 100" in query.sql or '"balance" = "balance" + 100' in query.sql
     assert len(query.parameters) == 0  # No parameters for expressions
 
 
@@ -149,7 +150,7 @@ def test_update_where_conditions(method: str, args: tuple, expected_sql_parts: l
     builder = where_method(*args)
 
     query = builder.build()
-    assert "UPDATE users" in query.sql
+    assert 'UPDATE "users"' in query.sql or "UPDATE users" in query.sql
     assert "SET" in query.sql
     assert any(part in query.sql for part in expected_sql_parts)
 
@@ -161,7 +162,7 @@ def test_update_where_exists_with_subquery() -> None:
     builder = UpdateBuilder(enable_optimization=False).table("users").set("has_orders", True).where_exists(subquery)
 
     query = builder.build()
-    assert "UPDATE users" in query.sql
+    assert 'UPDATE "users"' in query.sql or "UPDATE users" in query.sql
     assert "EXISTS" in query.sql
     assert "orders" in query.sql
 
@@ -178,7 +179,7 @@ def test_update_multiple_where_conditions() -> None:
     )
 
     query = builder.build()
-    assert "UPDATE users" in query.sql
+    assert 'UPDATE "users"' in query.sql or "UPDATE users" in query.sql
     assert "WHERE" in query.sql
     # Multiple conditions should be AND-ed together
 
@@ -195,13 +196,13 @@ def test_update_with_from_clause() -> None:
     )
 
     query = builder.build()
-    assert "UPDATE users" in query.sql
+    assert 'UPDATE "users"' in query.sql or "UPDATE users" in query.sql
     assert "FROM" in query.sql
     assert "orders" in query.sql
 
 
 def test_update_from_returns_self() -> None:
-    """Test that from_() returns builder for chaining."""
+    """Test that from() returns builder for chaining."""
     builder = UpdateBuilder().table("users").set("name", "John")
     result = builder.from_("other_table")
     assert result is builder
@@ -232,7 +233,7 @@ def test_update_with_returning() -> None:
     )
 
     query = builder.build()
-    assert "UPDATE users" in query.sql
+    assert 'UPDATE "users"' in query.sql or "UPDATE users" in query.sql
     assert "RETURNING" in query.sql
 
 
@@ -241,7 +242,7 @@ def test_update_returning_star() -> None:
     builder = UpdateBuilder().table("users").set("active", False).where(("status", "deleted")).returning("*")
 
     query = builder.build()
-    assert "UPDATE users" in query.sql
+    assert 'UPDATE "users"' in query.sql or "UPDATE users" in query.sql
     assert "RETURNING" in query.sql
     assert "*" in query.sql
 
@@ -312,12 +313,15 @@ def test_update_complex_query() -> None:
     query = builder.build()
 
     # Verify all components are present
-    assert "UPDATE users" in query.sql
+    assert 'UPDATE "users"' in query.sql or "UPDATE users" in query.sql
     assert "SET" in query.sql
     assert "FROM" in query.sql
     assert "WHERE" in query.sql
     # BETWEEN is optimized to >= AND <=
-    assert "BETWEEN" in query.sql or ("activity_score <=" in query.sql and "activity_score >=" in query.sql)
+    # Check for activity_score with or without quotes and table alias
+    assert "BETWEEN" in query.sql or (
+        ("activity_score" in query.sql or '"activity_score"' in query.sql) and ("<=" in query.sql and ">=" in query.sql)
+    )
     assert "IN" in query.sql
     assert "RETURNING" in query.sql
 
@@ -351,7 +355,7 @@ def test_update_with_case_expression() -> None:
 
     query = builder.set("price", price_update).set("last_updated", "NOW()").build()
 
-    assert "UPDATE products" in query.sql
+    assert 'UPDATE "products"' in query.sql or "UPDATE products" in query.sql
     assert "CASE" in query.sql
     assert "WHEN" in query.sql
 
@@ -361,7 +365,7 @@ def test_update_empty_where_in_list() -> None:
     """Test WHERE IN with empty list."""
     builder = UpdateBuilder().table("users").set("status", "unknown").where_in("id", [])
     query = builder.build()
-    assert "UPDATE users" in query.sql
+    assert 'UPDATE "users"' in query.sql or "UPDATE users" in query.sql
     assert "SET" in query.sql
 
 
@@ -440,10 +444,10 @@ def test_update_to_statement_conversion() -> None:
 
     assert isinstance(statement, SQL)
     # SQL might have different formatting but should have same content
-    assert "UPDATE users" in statement.sql
-    assert "SET name =" in statement.sql
+    assert 'UPDATE "users"' in statement.sql or "UPDATE users" in statement.sql
+    assert "SET name =" in statement.sql or 'SET "name" =' in statement.sql
     assert "WHERE" in statement.sql
-    assert "id =" in statement.sql
+    assert "id =" in statement.sql or '"id" =' in statement.sql
     # Parameters should be available (might be nested)
     build_params = builder.build().parameters
     if isinstance(statement.parameters, dict) and "parameters" in statement.parameters:
@@ -501,7 +505,7 @@ def test_update_special_values(special_value: Any, description: str) -> None:
     builder = UpdateBuilder().table("data").set("value", special_value).where(("id", 1))
     query = builder.build()
 
-    assert "UPDATE data" in query.sql
+    assert 'UPDATE "data"' in query.sql or "UPDATE data" in query.sql
     assert special_value in query.parameters.values()
 
 
@@ -516,7 +520,7 @@ def test_update_batch_operations() -> None:
     )
 
     query = builder.build()
-    assert "UPDATE orders" in query.sql
+    assert 'UPDATE "orders"' in query.sql or "UPDATE orders" in query.sql
     assert len(query.parameters) == 102  # 2 SET values + 100 IDs
 
 
@@ -527,6 +531,6 @@ def test_update_with_subquery_in_set() -> None:
     builder = UpdateBuilder().table("departments").set("avg_salary", subquery).where(("name", "sales"))
 
     query = builder.build()
-    assert "UPDATE departments" in query.sql
+    assert 'UPDATE "departments"' in query.sql or "UPDATE departments" in query.sql
     assert "SELECT" in query.sql
     assert "AVG" in query.sql

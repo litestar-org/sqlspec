@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 
-from psycopg.rows import DictRow as PsycopgDictRow
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
@@ -286,12 +285,12 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
                 "num_workers": all_config.pop("num_workers", 3),
             }
-            
+
             # Create a configure callback to set row_factory
             def configure_connection(conn: "PsycopgSyncConnection") -> None:
                 # Set DictRow as the row factory
                 conn.row_factory = dict_row
-                
+
             pool_params["configure"] = all_config.pop("configure", configure_connection)
 
             # Remove None values from pool_params
@@ -620,12 +619,12 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
                 "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
                 "num_workers": all_config.pop("num_workers", 3),
             }
-            
+
             # Create a configure callback to set row_factory
             async def configure_connection(conn: "PsycopgAsyncConnection") -> None:
                 # Set DictRow as the row factory
                 conn.row_factory = dict_row
-                
+
             pool_params["configure"] = all_config.pop("configure", configure_connection)
 
             # Remove None values from pool_params

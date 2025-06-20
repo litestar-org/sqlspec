@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from sqlspec.extensions.aiosql.adapter import AiosqlAsyncAdapter, AiosqlSyncAdapter
-from sqlspec.statement.filters import LimitOffsetFilter, SearchFilter
 from sqlspec.statement.result import SQLResult
 
 
@@ -28,13 +27,9 @@ def sync_adapter(mock_sync_driver: Mock) -> AiosqlSyncAdapter:
 
 def test_sync_adapter_initialization(mock_sync_driver: Mock) -> None:
     """Test sync adapter initialization."""
-    adapter = AiosqlSyncAdapter(
-        mock_sync_driver, default_filters=[LimitOffsetFilter(100, 0)], allow_sqlspec_filters=True
-    )
+    adapter = AiosqlSyncAdapter(mock_sync_driver)
 
     assert adapter.driver is mock_sync_driver
-    assert len(adapter.default_filters) == 1
-    assert adapter.allow_sqlspec_filters is True
     assert adapter.is_aio_driver is False
 
 
@@ -43,39 +38,6 @@ def test_sync_adapter_process_sql(sync_adapter: AiosqlSyncAdapter) -> None:
     sql = "SELECT * FROM users"
     result = sync_adapter.process_sql("test_query", "SELECT", sql)
     assert result == sql
-
-
-def test_sync_adapter_extract_sqlspec_filters_dict_params(sync_adapter: AiosqlSyncAdapter) -> None:
-    """Test extracting SQLSpec filters from dict parameters."""
-    filters = [SearchFilter("name", "John")]
-    parameters = {"user_id": 123, "_sqlspec_filters": filters}
-
-    cleaned_params, extracted_filters = sync_adapter._extract_sqlspec_filters(parameters)
-
-    assert cleaned_params == {"user_id": 123}
-    assert len(extracted_filters) == 1
-    assert extracted_filters[0] is filters[0]
-
-
-def test_sync_adapter_extract_sqlspec_filters_non_dict_params(sync_adapter: AiosqlSyncAdapter) -> None:
-    """Test extracting filters from non-dict parameters."""
-    parameters = [123, "test"]
-
-    cleaned_params, extracted_filters = sync_adapter._extract_sqlspec_filters(parameters)
-
-    assert cleaned_params == parameters
-    assert extracted_filters == []
-
-
-def test_sync_adapter_extract_sqlspec_filters_disabled(mock_sync_driver: Mock) -> None:
-    """Test filter extraction when disabled."""
-    adapter = AiosqlSyncAdapter(mock_sync_driver, allow_sqlspec_filters=False)
-    parameters = {"user_id": 123, "_sqlspec_filters": [SearchFilter("name", "John")]}
-
-    cleaned_params, extracted_filters = adapter._extract_sqlspec_filters(parameters)
-
-    assert cleaned_params == parameters  # Filters not extracted
-    assert extracted_filters == []
 
 
 def test_sync_adapter_select_with_record_class_warning(
@@ -101,7 +63,7 @@ def test_sync_adapter_select_with_record_class_warning(
 
 
 def test_sync_adapter_select_with_schema_type_in_params(sync_adapter: AiosqlSyncAdapter) -> None:
-    """Test select with schema_type in parameters."""
+    """Test select with schema_type in parameters (passed through as regular param)."""
     from pydantic import BaseModel
 
     class User(BaseModel):
@@ -112,6 +74,7 @@ def test_sync_adapter_select_with_schema_type_in_params(sync_adapter: AiosqlSync
     mock_result.data = [User(id=1, name="John")]
     sync_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
 
+    # _sqlspec_schema_type is just passed through as a regular parameter
     parameters = {"active": True, "_sqlspec_schema_type": User}
 
     result = list(
@@ -123,10 +86,8 @@ def test_sync_adapter_select_with_schema_type_in_params(sync_adapter: AiosqlSync
         )
     )
 
-    # Verify schema_type was passed to driver
+    # Verify driver was called (parameters are passed through as-is)
     sync_adapter.driver.execute.assert_called_once()  # type: ignore[attr-defined]
-    call_kwargs = sync_adapter.driver.execute.call_args[1]  # type: ignore[attr-defined]
-    assert call_kwargs["schema_type"] is User
     assert result == [User(id=1, name="John")]
 
 
@@ -255,13 +216,9 @@ def async_adapter(mock_async_driver: Mock) -> AiosqlAsyncAdapter:
 
 def test_async_adapter_initialization(mock_async_driver: Mock) -> None:
     """Test async adapter initialization."""
-    adapter = AiosqlAsyncAdapter(
-        mock_async_driver, default_filters=[LimitOffsetFilter(100, 0)], allow_sqlspec_filters=True
-    )
+    adapter = AiosqlAsyncAdapter(mock_async_driver)
 
     assert adapter.driver is mock_async_driver
-    assert len(adapter.default_filters) == 1
-    assert adapter.allow_sqlspec_filters is True
     assert adapter.is_aio_driver is True
 
 
@@ -305,10 +262,8 @@ async def test_async_adapter_select_with_schema_type_in_params(async_adapter: Ai
         conn=Mock(), query_name="test_query", sql="SELECT * FROM users WHERE active = :active", parameters=parameters
     )
 
-    # Verify schema_type was passed to driver
+    # Verify driver was called (parameters are passed through as-is)
     async_adapter.driver.execute.assert_called_once()  # type: ignore[attr-defined]
-    call_kwargs = async_adapter.driver.execute.call_args[1]  # type: ignore[attr-defined]
-    assert call_kwargs["schema_type"] is User
     assert result == [User(id=1, name="John")]
 
 
@@ -405,21 +360,6 @@ async def test_async_adapter_insert_returning(async_adapter: AiosqlAsyncAdapter)
 
     mock_select_one.assert_called_once()
     assert result == expected_result
-
-
-def test_async_adapter_extract_sqlspec_filters_with_default_filters(mock_async_driver: Mock) -> None:
-    """Test filter extraction with default filters."""
-    default_filter = LimitOffsetFilter(50, 0)
-    adapter = AiosqlAsyncAdapter(mock_async_driver, default_filters=[default_filter])
-
-    parameters = {"user_id": 123, "_sqlspec_filters": [SearchFilter("name", "John")]}
-
-    cleaned_params, extracted_filters = adapter._extract_sqlspec_filters(parameters)
-
-    assert cleaned_params == {"user_id": 123}
-    assert len(extracted_filters) == 2  # Default + provided
-    assert extracted_filters[0] is default_filter
-    assert isinstance(extracted_filters[1], SearchFilter)
 
 
 @patch("sqlspec.extensions.aiosql.adapter._check_aiosql_available")

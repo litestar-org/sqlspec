@@ -126,38 +126,3 @@ async def test_oracle_async_driver_get_cursor(
     # Verify cursor was created and closed
     mock_oracle_async_connection.cursor.assert_called_once()
     mock_cursor.close.assert_called_once()
-
-
-def test_oracle_sync_driver_execute_statement_select(
-    oracle_sync_driver: OracleSyncDriver, mock_oracle_sync_connection: Mock
-) -> None:
-    """Test Oracle sync driver _execute_statement for SELECT statements."""
-    # Skip this complex mock test - unified storage changes affect execution flow
-    pytest.skip("Complex driver execution mocking - unified storage integration better tested in integration tests")
-
-
-@pytest.mark.asyncio
-async def test_oracle_async_driver_fetch_arrow_table_with_parameters(
-    oracle_async_driver: OracleAsyncDriver, mock_oracle_async_connection: AsyncMock
-) -> None:
-    """Test Oracle async driver fetch_arrow_table method with parameters."""
-    # Skip this complex mock test - unified storage changes affect execution flow
-    pytest.skip("Complex driver execution mocking - unified storage integration better tested in integration tests")
-
-
-@pytest.mark.asyncio
-async def test_oracle_async_driver_non_query_statement(
-    oracle_async_driver: OracleAsyncDriver, mock_oracle_async_connection: AsyncMock
-) -> None:
-    """Test Oracle async driver with non-query statement."""
-    # Skip this complex mock test - unified storage changes affect execution flow
-    pytest.skip("Complex driver execution mocking - unified storage integration better tested in integration tests")
-
-
-@pytest.mark.asyncio
-async def test_oracle_async_driver_to_parquet(
-    oracle_async_driver: OracleAsyncDriver, mock_oracle_async_connection: AsyncMock, monkeypatch: "pytest.MonkeyPatch"
-) -> None:
-    """Test export_to_storage using unified storage mixin."""
-    # Skip this complex test - the unified storage mixin integration tests better suited for integration testing
-    pytest.skip("Complex storage backend mocking - unified storage integration better tested in integration tests")

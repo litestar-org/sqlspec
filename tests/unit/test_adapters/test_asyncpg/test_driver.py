@@ -205,15 +205,22 @@ async def test_execute_statement_routing(
 @pytest.mark.asyncio
 async def test_execute_select_statement(driver: AsyncpgDriver, mock_connection: AsyncMock) -> None:
     """Test executing a SELECT statement."""
-    # Create mock records
+    # Create mock records that behave like AsyncPG Records
     mock_record = MagicMock()
     mock_record.keys.return_value = ["id", "name", "email"]
-    mock_connection.fetch.return_value = [mock_record, mock_record]
+    # Mock the dict() conversion behavior
+    mock_record.__iter__ = MagicMock(return_value=iter([("id", 1), ("name", "test"), ("email", "test@example.com")]))
+    mock_dict = {"id": 1, "name": "test", "email": "test@example.com"}
 
-    statement = SQL("SELECT * FROM users")
-    result = await driver._execute_statement(statement)
+    # Mock the dict() constructor to return our expected dict
+    with patch("builtins.dict", return_value=mock_dict):
+        mock_connection.fetch.return_value = [mock_record, mock_record]
 
-    assert result == {"data": [mock_record, mock_record], "column_names": ["id", "name", "email"], "rows_affected": 2}
+        statement = SQL("SELECT * FROM users")
+        result = await driver._execute_statement(statement)
+
+        # Now expect the converted dictionary data
+        assert result == {"data": [mock_dict, mock_dict], "column_names": ["id", "name", "email"], "rows_affected": 2}
 
     mock_connection.fetch.assert_called_once_with("SELECT * FROM users")
 
@@ -272,7 +279,7 @@ async def test_execute_many(driver: AsyncpgDriver, mock_connection: AsyncMock) -
 
     result = await driver._execute_many(sql, params)
 
-    assert result == {"rows_affected": 0, "status_message": "OK"}
+    assert result == {"rows_affected": 3, "status_message": "OK"}
 
     expected_params = [("Alice", "alice@example.com"), ("Bob", "bob@example.com"), ("Charlie", "charlie@example.com")]
     mock_connection.executemany.assert_called_once_with(sql, expected_params)

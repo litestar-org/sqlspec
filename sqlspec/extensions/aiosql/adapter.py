@@ -169,7 +169,7 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
 
         sql_obj = self._create_sql_object(sql, parameters)
 
-        result = cast("SQLResult[RowT]", self.driver.execute(sql_obj, connection=conn, schema_type=schema_type))
+        result = cast("SQLResult[RowT]", self.driver.execute(sql_obj, connection=conn))
 
         if hasattr(result, "data") and result.data and isinstance(result, SQLResult):
             return cast("Optional[RowT]", result.data[0])
@@ -328,9 +328,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
 
         sql_obj = self._create_sql_object(sql, parameters)
 
-        result = cast(
-            "SQLResult[DictRow]", await self.driver.execute(sql_obj, connection=conn, schema_type=schema_type)
-        )
+        result = cast("SQLResult[DictRow]", await self.driver.execute(sql_obj, connection=conn))
 
         if hasattr(result, "data") and result.data is not None and isinstance(result, SQLResult):
             return list(result.data)
@@ -363,9 +361,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
 
         sql_obj = self._create_sql_object(sql, parameters)
 
-        result = cast(
-            "SQLResult[DictRow]", await self.driver.execute(sql_obj, connection=conn, schema_type=schema_type)
-        )
+        result = cast("SQLResult[DictRow]", await self.driver.execute(sql_obj, connection=conn))
 
         if hasattr(result, "data") and result.data and isinstance(result, SQLResult):
             return result.data[0]

@@ -595,7 +595,7 @@ def test_create_table_as_select_builder_basic() -> None:
     assert "CREATE TABLE" in sql
     assert "IF NOT EXISTS" in sql
     assert "AS SELECT" in sql or "AS\nSELECT" in sql
-    assert "FROM users" in sql
+    assert 'FROM "users"' in sql or "FROM users" in sql
     assert "id" in sql and "name" in sql
     assert True in result.parameters.values()
 
@@ -619,7 +619,7 @@ def test_create_materialized_view_basic() -> None:
     assert "CREATE MATERIALIZED VIEW" in sql or "CREATE MATERIALIZED_VIEW" in sql
     assert "IF NOT EXISTS" in sql
     assert "AS SELECT" in sql or "AS\nSELECT" in sql
-    assert "FROM users" in sql
+    assert 'FROM "users"' in sql or "FROM users" in sql
     assert True in result.parameters.values()
 
 
@@ -636,7 +636,7 @@ def test_create_view_basic() -> None:
     assert "CREATE VIEW" in sql
     assert "IF NOT EXISTS" in sql
     assert "AS SELECT" in sql or "AS\nSELECT" in sql
-    assert "FROM users" in sql
+    assert 'FROM "users"' in sql or "FROM users" in sql
     assert True in result.parameters.values()
 
 
@@ -680,7 +680,7 @@ def test_comment_on_table_builder() -> None:
     from sqlspec.statement.builder.ddl import CommentOnBuilder
 
     sql = CommentOnBuilder().on_table("users").is_("User table").build().sql
-    assert "COMMENT ON TABLE users IS 'User table'" in sql
+    assert "COMMENT ON TABLE \"users\" IS 'User table'" in sql or "COMMENT ON TABLE users IS 'User table'" in sql
 
 
 def test_comment_on_column_builder() -> None:
@@ -705,7 +705,7 @@ def test_rename_table_builder() -> None:
     from sqlspec.statement.builder.ddl import RenameTableBuilder
 
     sql = RenameTableBuilder().table("users").to("customers").build().sql
-    assert "ALTER TABLE users RENAME TO customers" in sql or "RENAME TO customers" in sql
+    assert 'ALTER TABLE "users" RENAME TO "customers"' in sql or "ALTER TABLE users RENAME TO customers" in sql
 
 
 def test_rename_table_builder_error() -> None:

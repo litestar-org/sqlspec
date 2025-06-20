@@ -227,13 +227,13 @@ def test_prepare_bq_query_parameters_array(driver: BigQueryDriver) -> None:
 
     # Find the tags parameter
     tags_param = next(p for p in bq_params if p.name == "tags")
-    assert tags_param.array_type == "STRING"
-    assert tags_param.values == ["python", "sql", "bigquery"]
+    assert tags_param.array_type == "STRING"  # pyright: ignore
+    assert tags_param.values == ["python", "sql", "bigquery"]  # pyright: ignore
 
     # Find the numbers parameter
     numbers_param = next(p for p in bq_params if p.name == "numbers")
-    assert numbers_param.array_type == "INT64"
-    assert numbers_param.values == [1, 2, 3, 4, 5]
+    assert numbers_param.array_type == "INT64"  # pyright: ignore
+    assert numbers_param.values == [1, 2, 3, 4, 5]  # pyright: ignore
 
 
 def test_prepare_bq_query_parameters_empty(driver: BigQueryDriver) -> None:
@@ -308,6 +308,7 @@ def test_execute_dml_statement(driver: BigQueryDriver, mock_connection: MagicMoc
     mock_job.schema = None
     mock_job.state = "DONE"
     mock_job.errors = None
+    mock_job.statement_type = "INSERT"  # This is the key - identify it as a DML statement
 
     statement = SQL("INSERT INTO users (name) VALUES (@name)", {"name": "Alice"})
     result = driver._execute_statement(statement)
@@ -639,7 +640,7 @@ def test_connection_override(driver: BigQueryDriver) -> None:
 
     override_connection.query.assert_called_once()
     # Original connection should not be called
-    driver.connection.query.assert_not_called()
+    driver.connection.query.assert_not_called()  # pyright: ignore
 
 
 def test_fetch_arrow_table_native(driver: BigQueryDriver, mock_connection: MagicMock) -> None:

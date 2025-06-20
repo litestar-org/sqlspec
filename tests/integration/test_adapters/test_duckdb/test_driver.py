@@ -57,7 +57,7 @@ def test_insert(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) ->
 
     result = duckdb_session.execute(sql, params)
     assert isinstance(result, SQLResult)
-    assert result.rows_affected in (1, -1)
+    assert result.rows_affected == 1
 
     # Verify insertion
     select_result = duckdb_session.execute("SELECT name, id FROM test_table")
@@ -236,12 +236,12 @@ def test_update_operation(duckdb_session: DuckDBDriver) -> None:
     # Insert a record first
     insert_result = duckdb_session.execute("INSERT INTO test_table (name, id) VALUES (?, ?)", ("original_name", 42))
     assert isinstance(insert_result, SQLResult)
-    assert insert_result.rows_affected in (1, -1)
+    assert insert_result.rows_affected == 1
 
     # Update the record
     update_result = duckdb_session.execute("UPDATE test_table SET name = ? WHERE id = ?", ("updated_name", 42))
     assert isinstance(update_result, SQLResult)
-    assert update_result.rows_affected in (1, -1)
+    assert update_result.rows_affected == 1
 
     # Verify the update
     select_result = duckdb_session.execute("SELECT name FROM test_table WHERE id = ?", (42,))
@@ -256,12 +256,12 @@ def test_delete_operation(duckdb_session: DuckDBDriver) -> None:
     # Insert a record first
     insert_result = duckdb_session.execute("INSERT INTO test_table (name, id) VALUES (?, ?)", ("to_delete", 99))
     assert isinstance(insert_result, SQLResult)
-    assert insert_result.rows_affected in (1, -1)
+    assert insert_result.rows_affected == 1
 
     # Delete the record
     delete_result = duckdb_session.execute("DELETE FROM test_table WHERE id = ?", (99,))
     assert isinstance(delete_result, SQLResult)
-    assert delete_result.rows_affected in (1, -1)
+    assert delete_result.rows_affected == 1
 
     # Verify the deletion
     select_result = duckdb_session.execute("SELECT COUNT(*) as count FROM test_table")
@@ -450,7 +450,7 @@ def test_duckdb_schema_operations(duckdb_session: DuckDBDriver) -> None:
     insert_result = duckdb_session.execute(
         "INSERT INTO schema_test (id, name, email) VALUES (?, ?, ?)", [1, "Test User", "test@example.com"]
     )
-    assert insert_result.rows_affected in (1, -1)
+    assert insert_result.rows_affected == 1
 
     select_result = duckdb_session.execute("SELECT id, name, email FROM schema_test")
     assert len(select_result.data) == 1
@@ -701,13 +701,13 @@ def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> No
     )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.was_inserted()
-    assert insert_result.get_affected_count() in (1, -1)
+    assert insert_result.get_affected_count() == 1
 
     # Test DELETE result
     delete_result = duckdb_session.execute("DELETE FROM result_methods_test WHERE category = 'C'")
     assert isinstance(delete_result, SQLResult)
     assert delete_result.was_deleted()
-    assert delete_result.get_affected_count() in (1, -1)
+    assert delete_result.get_affected_count() == 1
 
     # Clean up
     duckdb_session.execute_script("DROP TABLE result_methods_test")

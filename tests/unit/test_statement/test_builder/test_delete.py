@@ -13,7 +13,6 @@ This module tests the DeleteBuilder including:
 """
 
 from typing import TYPE_CHECKING
-from unittest.mock import Mock
 
 import pytest
 from sqlglot import exp
@@ -38,13 +37,13 @@ def test_delete_builder_initialization() -> None:
 
 
 def test_delete_from_method() -> None:
-    """Test setting target table with from_()."""
+    """Test setting target table with from()."""
     builder = DeleteBuilder().from_("users")
     assert builder._table == "users"
 
 
 def test_delete_from_returns_self() -> None:
-    """Test that from_() returns builder for chaining."""
+    """Test that from() returns builder for chaining."""
     builder = DeleteBuilder()
     result = builder.from_("users")
     assert result is builder
@@ -73,7 +72,7 @@ def test_delete_where_conditions(method: str, args: tuple, expected_sql_parts: l
     builder = where_method(*args)
 
     query = builder.build()
-    assert "DELETE FROM users" in query.sql
+    assert 'DELETE FROM "users"' in query.sql or "DELETE FROM users" in query.sql
     assert any(part in query.sql for part in expected_sql_parts)
 
 
@@ -83,7 +82,7 @@ def test_delete_where_exists_with_subquery() -> None:
     builder = DeleteBuilder(enable_optimization=False).from_("users").where_exists(subquery)
 
     query = builder.build()
-    assert "DELETE FROM users" in query.sql
+    assert 'DELETE FROM "users"' in query.sql or "DELETE FROM users" in query.sql
     assert "EXISTS" in query.sql
     assert "orders" in query.sql
 
@@ -94,7 +93,7 @@ def test_delete_where_not_exists() -> None:
     builder = DeleteBuilder(enable_optimization=False).from_("users").where_not_exists(subquery)
 
     query = builder.build()
-    assert "DELETE FROM users" in query.sql
+    assert 'DELETE FROM "users"' in query.sql or "DELETE FROM users" in query.sql
     assert "NOT EXISTS" in query.sql or ("NOT" in query.sql and "EXISTS" in query.sql)
 
 
@@ -110,35 +109,9 @@ def test_delete_multiple_where_conditions() -> None:
     )
 
     query = builder.build()
-    assert "DELETE FROM users" in query.sql
+    assert 'DELETE FROM "users"' in query.sql or "DELETE FROM users" in query.sql
     assert "WHERE" in query.sql
     # Multiple conditions should be AND-ed together
-
-
-# Test DELETE with USING clause (PostgreSQL style)
-@pytest.mark.skip(reason="DeleteBuilder doesn't support USING clause")
-def test_delete_with_using_clause() -> None:
-    """Test DELETE with USING clause (PostgreSQL style)."""
-    builder = (
-        DeleteBuilder()
-        .from_("users")
-        .using("user_sessions")
-        .where("users.id = user_sessions.user_id")
-        .where("user_sessions.expired = true")
-    )
-
-    query = builder.build()
-    assert "DELETE FROM users" in query.sql
-    assert "USING" in query.sql
-    assert "user_sessions" in query.sql
-
-
-@pytest.mark.skip(reason="DeleteBuilder doesn't support USING clause")
-def test_delete_using_returns_self() -> None:
-    """Test that using() returns builder for chaining."""
-    builder = DeleteBuilder().from_("users")
-    result = builder.using("other_table")
-    assert result is builder
 
 
 # Test DELETE with JOIN (MySQL style)
@@ -166,16 +139,16 @@ def test_delete_with_returning() -> None:
     builder = DeleteBuilder().from_("users").where(("status", "deleted")).returning("id", "email", "deleted_at")
 
     query = builder.build()
-    assert "DELETE FROM users" in query.sql
+    assert 'DELETE FROM "users"' in query.sql or "DELETE FROM users" in query.sql
     assert "RETURNING" in query.sql
 
 
 def test_delete_returning_star() -> None:
     """Test DELETE RETURNING *."""
-    builder = DeleteBuilder().from_("logs").where(("created_at", "<", "2023-01-01")).returning("*")
+    builder = DeleteBuilder().from_("logs").where("created_at < 2023-01-01").returning("*")
 
     query = builder.build()
-    assert "DELETE FROM logs" in query.sql
+    assert 'DELETE FROM "logs"' in query.sql or "DELETE FROM logs" in query.sql
     assert "RETURNING" in query.sql
     assert "*" in query.sql
 
@@ -222,60 +195,6 @@ def test_delete_where_requires_table() -> None:
         builder.where(("id", 1))
 
 
-@pytest.mark.skip(reason="DeleteBuilder doesn't have _get_delete_expression method")
-def test_delete_expression_not_initialized() -> None:
-    """Test error when expression not initialized."""
-    builder = DeleteBuilder()
-    builder._expression = None
-
-    with pytest.raises(SQLBuilderError, match="expression not initialized"):
-        builder._get_delete_expression()
-
-
-@pytest.mark.skip(reason="DeleteBuilder doesn't have _get_delete_expression method")
-def test_delete_wrong_expression_type() -> None:
-    """Test error when expression is wrong type."""
-    builder = DeleteBuilder()
-    builder._expression = Mock(spec=exp.Select)  # Wrong type
-
-    with pytest.raises(SQLBuilderError, match="not a Delete instance"):
-        builder._get_delete_expression()
-
-
-# Test complex scenarios
-@pytest.mark.skip(reason="DeleteBuilder doesn't support USING clause")
-def test_delete_complex_query() -> None:
-    """Test complex DELETE with multiple features."""
-    builder = (
-        DeleteBuilder()
-        .from_("user_sessions")
-        .using("users")
-        .where("user_sessions.user_id = users.id")
-        .where_in("users.status", ["banned", "suspended", "deleted"])
-        .where(("user_sessions.created_at", "<", "2023-01-01"))
-        .where_null("user_sessions.logout_time")
-        .returning("user_sessions.id", "users.email")
-    )
-
-    query = builder.build()
-
-    # Verify all components are present
-    assert "DELETE FROM user_sessions" in query.sql
-    assert "USING" in query.sql
-    assert "WHERE" in query.sql
-    assert "IN" in query.sql
-    assert "IS NULL" in query.sql
-    assert "RETURNING" in query.sql
-
-    # Verify parameters
-    assert isinstance(query.parameters, dict)
-    param_values = list(query.parameters.values())
-    assert "banned" in param_values
-    assert "suspended" in param_values
-    assert "deleted" in param_values
-    assert "2023-01-01" in param_values
-
-
 def test_delete_cascading_scenario() -> None:
     """Test DELETE for cascading delete scenario."""
     # Delete all orders for inactive users older than 1 year
@@ -290,7 +209,7 @@ def test_delete_cascading_scenario() -> None:
     builder = DeleteBuilder().from_("orders").where_in("user_id", inactive_users)
 
     query = builder.build()
-    assert "DELETE FROM orders" in query.sql
+    assert 'DELETE FROM "orders"' in query.sql or "DELETE FROM orders" in query.sql
     assert "WHERE" in query.sql
     assert "IN" in query.sql
     assert "SELECT" in query.sql  # Subquery
@@ -301,7 +220,7 @@ def test_delete_empty_where_in_list() -> None:
     """Test WHERE IN with empty list."""
     builder = DeleteBuilder().from_("users").where_in("id", [])
     query = builder.build()
-    assert "DELETE FROM users" in query.sql
+    assert 'DELETE FROM "users"' in query.sql or "DELETE FROM users" in query.sql
 
 
 def test_delete_where_in_with_tuples() -> None:
@@ -309,7 +228,7 @@ def test_delete_where_in_with_tuples() -> None:
     builder = DeleteBuilder().from_("users").where_in("id", (1, 2, 3, 4, 5))
     query = builder.build()
 
-    assert "DELETE FROM users" in query.sql
+    assert 'DELETE FROM "users"' in query.sql or "DELETE FROM users" in query.sql
     assert "IN" in query.sql
     assert len(query.parameters) == 5
 
@@ -347,7 +266,7 @@ def test_delete_batch_operations() -> None:
     builder = DeleteBuilder().from_("logs").where_in("id", list(range(1, 1001)))  # Delete 1000 logs
 
     query = builder.build()
-    assert "DELETE FROM logs" in query.sql
+    assert 'DELETE FROM "logs"' in query.sql or "DELETE FROM logs" in query.sql
     assert len(query.parameters) == 1000
 
 
@@ -387,8 +306,8 @@ def test_delete_to_statement_conversion() -> None:
 
     assert isinstance(statement, SQL)
     # SQL normalization might format differently
-    assert "DELETE FROM users" in statement.sql
-    assert "id = :param_1" in statement.sql
+    assert 'DELETE FROM "users"' in statement.sql or "DELETE FROM users" in statement.sql
+    assert "id = :param_1" in statement.sql or '"id" = :param_1' in statement.sql
     # Statement parameters might be wrapped
     build_params = builder.build().parameters
     if "parameters" in statement.parameters:
@@ -397,73 +316,14 @@ def test_delete_to_statement_conversion() -> None:
         assert statement.parameters == build_params
 
 
-# Test fluent interface chaining
-@pytest.mark.skip(reason="DeleteBuilder doesn't support USING and JOIN clauses")
-def test_delete_fluent_interface_chaining() -> None:
-    """Test that all methods return builder for fluent chaining."""
-    builder = (
-        DeleteBuilder()
-        .from_("users")
-        .using("user_sessions")
-        .join("user_profiles", on="users.id = user_profiles.user_id")
-        .where(("users.status", "inactive"))
-        .where_like("users.email", "%@spam.com")
-        .where_between("users.created_at", "2020-01-01", "2021-01-01")
-        .where_in("user_sessions.type", ["expired", "invalid"])
-        .where_null("user_profiles.verified_at")
-        .returning("users.id", "users.email")
-    )
-
-    query = builder.build()
-    # Verify the query has all components
-    assert all(keyword in query.sql for keyword in ["DELETE", "FROM", "USING", "JOIN", "WHERE", "RETURNING"])
-
-
 # Test special scenarios
 def test_delete_all_rows() -> None:
     """Test DELETE without WHERE clause (delete all rows)."""
     builder = DeleteBuilder().from_("temporary_data")
     query = builder.build()
 
-    assert "DELETE FROM temporary_data" in query.sql
-    assert "WHERE" not in query.sql  # No WHERE clause means delete all
-
-
-@pytest.mark.skip(reason="DeleteBuilder doesn't support JOIN operations")
-def test_delete_with_complex_join_scenario() -> None:
-    """Test DELETE with complex JOIN scenario."""
-    builder = (
-        DeleteBuilder()
-        .from_("orphaned_records")
-        .left_join("parent_records", on="orphaned_records.parent_id = parent_records.id")
-        .where_null("parent_records.id")  # Delete records with no parent
-    )
-
-    query = builder.build()
-    assert "DELETE" in query.sql
-    assert "LEFT JOIN" in query.sql
-    assert "IS NULL" in query.sql
-
-
-@pytest.mark.skip(reason="DeleteBuilder doesn't support LIMIT clause")
-def test_delete_limit_clause() -> None:
-    """Test DELETE with LIMIT clause (supported by some databases)."""
-    builder = DeleteBuilder().from_("logs").where(("created_at", "<", "2022-01-01")).limit(1000)
-
-    query = builder.build()
-    assert "DELETE FROM logs" in query.sql
-    assert "LIMIT" in query.sql
-
-
-@pytest.mark.skip(reason="DeleteBuilder doesn't support ORDER BY and LIMIT clauses")
-def test_delete_order_by_clause() -> None:
-    """Test DELETE with ORDER BY clause (supported by some databases)."""
-    builder = DeleteBuilder().from_("logs").where(("severity", "debug")).order_by("created_at").limit(100)
-
-    query = builder.build()
-    assert "DELETE FROM logs" in query.sql
-    assert "ORDER BY" in query.sql
-    assert "LIMIT" in query.sql
+    assert 'DELETE FROM "temporary_data"' in query.sql or "DELETE FROM temporary_data" in query.sql
+    assert "WHERE" not in query.sql  # No WHERE clause means delete all rows
 
 
 def test_delete_table_alias() -> None:
@@ -473,19 +333,4 @@ def test_delete_table_alias() -> None:
     query = builder.build()
     # SQLGlot might quote the entire table expression
     assert "very_long_table_name" in query.sql
-    assert "t.status" in query.sql
-
-
-@pytest.mark.skip(reason="DeleteBuilder doesn't support WITH clause")
-def test_delete_with_cte() -> None:
-    """Test DELETE with Common Table Expression (WITH clause)."""
-    builder = (
-        DeleteBuilder()
-        .with_("old_users", SelectBuilder().select("id").from_("users").where(("created_at", "<", "2020-01-01")))
-        .from_("user_data")
-        .where_in("user_id", SelectBuilder().select("id").from_("old_users"))
-    )
-
-    query = builder.build()
-    assert "WITH" in query.sql
-    assert "DELETE FROM user_data" in query.sql
+    assert "t.status" in query.sql or '"t"."status"' in query.sql

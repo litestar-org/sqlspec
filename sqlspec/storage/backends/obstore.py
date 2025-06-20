@@ -238,11 +238,11 @@ class ObStoreBackend(ObjectStoreBase):
                 custom_metadata = getattr(metadata, "metadata", None)
                 if custom_metadata:
                     result["custom_metadata"] = custom_metadata
-
-            return result
         except Exception:
             # Object doesn't exist
             return {"path": resolved_path, "exists": False}
+        else:
+            return result
 
     def is_object(self, path: str) -> bool:
         """Check if path is an object using obstore."""
