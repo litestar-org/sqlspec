@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 import io
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
@@ -19,6 +20,7 @@ from sqlspec.driver.mixins import (
 )
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.statement.splitter import split_sql_script
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, ModelDTOT, RowT, is_dict_with_field
 from sqlspec.utils.logging import get_logger
@@ -104,10 +106,8 @@ class PsycopgSyncDriver(
         conn = self._connection(connection)
         with conn.cursor() as cursor:
             cursor.execute(sql, parameters)
-            # When parsing is disabled, expression will be None, so check SQL directly
-            if (statement.expression and self.returns_rows(statement.expression)) or (
-                not statement.expression and sql.strip().upper().startswith("SELECT")
-            ):
+            # Check if the statement returns rows
+            if self.returns_rows(statement.expression):
                 fetched_data = cursor.fetchall()
                 column_names = [col.name for col in cursor.description or []]
                 return {"data": fetched_data, "column_names": column_names, "rows_affected": len(fetched_data)}
@@ -395,12 +395,11 @@ class PsycopgSyncDriver(
 
         return result_sql
 
-    def _split_script_statements(self, script: str) -> "list[str]":
+    def _split_script_statements(self, script: str, strip_trailing_semicolon: bool = False) -> "list[str]":
         """Split a SQL script into individual statements."""
-        from sqlspec.statement.splitter import split_sql_script
 
         # Use the sophisticated splitter with PostgreSQL dialect
-        return split_sql_script(script, dialect="postgresql", strip_trailing_semicolon=False)
+        return split_sql_script(script=script, dialect="postgresql", strip_trailing_semicolon=strip_trailing_semicolon)
 
 
 class PsycopgAsyncDriver(

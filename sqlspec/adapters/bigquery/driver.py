@@ -261,23 +261,26 @@ class BigQueryDriver(
                     param_value,
                     type(param_value),
                 )
-        job_id = f"sqlspec-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"  # noqa: DTZ005
-        if self.on_job_start:
+        # Let BigQuery generate the job ID to avoid collisions
+        # This is the recommended approach for production code and works better with emulators
+        query_job = conn.query(sql_str, job_config=final_job_config)
+
+        # Get the auto-generated job ID for callbacks
+        if self.on_job_start and query_job.job_id:
             try:
-                self.on_job_start(job_id)
+                self.on_job_start(query_job.job_id)
             except Exception as e:
                 logger.warning("Job start callback failed: %s", str(e), extra={"adapter": "bigquery"})
-
-        query_job = conn.query(sql_str, job_config=final_job_config, job_id=job_id)
-        if self.on_job_complete:
+        if self.on_job_complete and query_job.job_id:
             try:
-                self.on_job_complete(job_id, query_job)
+                self.on_job_complete(query_job.job_id, query_job)
             except Exception as e:
                 logger.warning("Job complete callback failed: %s", str(e), extra={"adapter": "bigquery"})
 
         return query_job
 
-    def _rows_to_results(self, rows_iterator: Iterator[BigQueryRow]) -> list[RowT]:
+    @staticmethod
+    def _rows_to_results(rows_iterator: Iterator[BigQueryRow]) -> list[RowT]:
         """Convert BigQuery rows to dictionary format.
 
         Args:
@@ -297,17 +300,38 @@ class BigQueryDriver(
         return {"data": rows_list, "column_names": column_names, "rows_affected": len(rows_list)}
 
     def _handle_dml_job(self, query_job: QueryJob) -> DMLResultDict:
-        """Handle a DML job."""
+        """Handle a DML job.
+
+        Note: BigQuery emulators (e.g., goccy/bigquery-emulator) may report 0 rows affected
+        for successful DML operations. In production BigQuery, num_dml_affected_rows accurately
+        reflects the number of rows modified. For integration tests, consider using state-based
+        verification (SELECT COUNT(*) before/after) instead of relying on row counts.
+        """
         query_job.result()  # Wait for the job to complete
         num_affected = query_job.num_dml_affected_rows
 
-        # BigQuery emulator workaround: if num_dml_affected_rows is None or 0 for DML, assume success
+        # Log for debugging
+        logger.debug(
+            "DML job details - num_affected: %s, statement_type: %s, state: %s, errors: %s",
+            num_affected,
+            getattr(query_job, "statement_type", "UNKNOWN"),
+            getattr(query_job, "state", "UNKNOWN"),
+            bool(query_job.errors) if hasattr(query_job, "errors") else "N/A",
+        )
+
+        # EMULATOR WORKAROUND: BigQuery emulators may incorrectly report 0 rows for successful DML.
+        # This heuristic assumes at least 1 row was affected if the job completed without errors.
+        # TODO: Remove this workaround when emulator behavior is fixed or use state verification in tests.
         if (
             (num_affected is None or num_affected == 0)
             and query_job.statement_type in {"INSERT", "UPDATE", "DELETE", "MERGE"}
             and query_job.state == "DONE"
             and not query_job.errors
         ):
+            logger.warning(
+                "BigQuery emulator workaround: DML operation reported 0 rows but completed successfully. "
+                "Assuming 1 row affected. Consider using state-based verification in tests."
+            )
             num_affected = 1  # Assume at least one row was affected
 
         return {"rows_affected": num_affected or 0, "status_message": f"OK - job_id: {query_job.job_id}"}
@@ -363,9 +387,21 @@ class BigQueryDriver(
             param_dict = {"param_0": converted_params}
 
         bq_params = self._prepare_bq_query_parameters(param_dict)
+        
+        # Debug logging
+        logger.debug("BigQuery execution - SQL: %r, param_dict: %r", converted_sql, param_dict)
+        
         query_job = self._run_query_job(converted_sql, bq_params, connection=connection)
 
         try:
+            # Log statement type for debugging
+            logger.debug(
+                "BigQuery job completed. Statement type: %s, Has schema: %s, Schema length: %s",
+                getattr(query_job, "statement_type", "UNKNOWN"),
+                hasattr(query_job, "schema") and query_job.schema is not None,
+                len(query_job.schema) if hasattr(query_job, "schema") and query_job.schema else 0,
+            )
+
             if query_job.statement_type == "SELECT" or (
                 hasattr(query_job, "schema") and query_job.schema and len(query_job.schema) > 0
             ):
@@ -482,6 +518,33 @@ class BigQueryDriver(
     def _connection(self, connection: "Optional[Client]" = None) -> "Client":
         """Get the connection to use for the operation."""
         return connection or self.connection
+
+    # ============================================================================
+    # BigQuery Native Export Support
+    # ============================================================================
+    
+    def _export_native(self, query: str, destination_uri: str, format: str, **options: Any) -> int:
+        """BigQuery native export implementation.
+        
+        For local files, BigQuery doesn't support direct export, so we raise NotImplementedError
+        to trigger the fallback mechanism that uses fetch + write.
+        
+        Args:
+            query: SQL query to execute
+            destination_uri: Destination URI (local file path or gs:// URI)
+            format: Export format (parquet, csv, json, avro)
+            **options: Additional export options
+            
+        Returns:
+            Number of rows exported
+            
+        Raises:
+            NotImplementedError: Always, to trigger fallback to fetch + write
+        """
+        # BigQuery only supports native export to GCS, not local files
+        # By raising NotImplementedError, the mixin will fall back to fetch + write
+        msg = "BigQuery native export only supports GCS URIs, using fallback for local files"
+        raise NotImplementedError(msg)
 
     # ============================================================================
     # BigQuery Native Arrow Support

@@ -321,7 +321,10 @@ class SQL:
 
         # Extract processed state
         processed_expr = result.expression
-        processed_sql = processed_expr.sql(dialect=self._dialect, comments=False)
+        if isinstance(processed_expr, exp.Anonymous):
+            processed_sql = self._raw_sql or context.initial_sql_string
+        else:
+            processed_sql = processed_expr.sql(dialect=self._dialect, comments=False)
 
         # Merge parameters from pipeline
         merged_params = final_params

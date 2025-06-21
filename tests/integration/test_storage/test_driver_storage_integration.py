@@ -102,7 +102,7 @@ def test_export_to_storage_with_filters(sqlite_with_test_data: SqliteDriver, tem
     assert "Book" not in names  # Should be filtered out
 
     # Verify ordering (DESC by price)
-    assert prices[0] > prices[1]  # First should be more expensive
+    assert prices[0] > prices[1]  # type: ignore[operator]
 
 
 def test_export_to_storage_csv_format(sqlite_with_test_data: SqliteDriver, temp_directory: Path) -> None:
@@ -204,7 +204,7 @@ def test_fetch_arrow_table_with_parameters(sqlite_with_test_data: SqliteDriver) 
         assert all(50.0 <= price <= 500.0 for price in prices if price is not None)
         # Verify ordering
         assert prices is not None
-        assert prices == sorted(prices)
+        assert prices == sorted(prices)  # type: ignore[operator]
 
 
 def test_storage_error_handling(sqlite_with_test_data: SqliteDriver, temp_directory: Path) -> None:
@@ -301,7 +301,7 @@ def test_storage_large_dataset_handling(sqlite_with_test_data: SqliteDriver, tem
     prices = table["price"].to_pylist()
     assert prices is not None
     assert len(prices) > 0
-    assert all(price > 100 for price in prices)
+    assert all(price > 100 for price in prices)  # type: ignore[operator]
 
 
 def test_export_with_complex_sql(sqlite_with_test_data: SqliteDriver, temp_directory: Path) -> None:
@@ -337,14 +337,14 @@ def test_export_with_complex_sql(sqlite_with_test_data: SqliteDriver, temp_direc
 
     # Verify aggregations make sense
     product_counts = table["product_count"].to_pylist() or []
-    assert all(count > 0 for count in product_counts)
+    assert all(count > 0 for count in product_counts)  # type: ignore[operator]
 
     avg_prices = table["avg_price"].to_pylist() or []
     max_prices = table["max_price"].to_pylist() or []
 
     # Max should be >= avg for each category
     for avg, max_price in zip(avg_prices, max_prices):
-        assert max_price >= avg
+        assert max_price >= avg  # type: ignore[operator]
 
 
 def test_concurrent_storage_operations(sqlite_with_test_data: SqliteDriver, temp_directory: Path) -> None:

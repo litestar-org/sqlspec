@@ -280,7 +280,7 @@ def test_bigquery_arrow_with_window_functions(
     running_totals = result.data["running_total"].to_pylist()
     # Running total should be monotonically increasing
     assert running_totals is not None
-    assert all(running_totals[i] <= running_totals[i + 1] for i in range(len(running_totals) - 1))  # pyright: ignore
+    assert all(running_totals[i] <= running_totals[i + 1] for i in range(len(running_totals) - 1))  # type: ignore[operator]
 
 
 @pytest.mark.xdist_group("bigquery")

@@ -1,14 +1,18 @@
 """Common driver attributes and utilities."""
 
+import re
 from abc import ABC
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional
 
+import sqlglot
 from sqlglot import exp
+from sqlglot.tokens import TokenType
 
 from sqlspec.exceptions import NotFoundError
 from sqlspec.statement import SQLConfig
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.statement.splitter import split_sql_script
 from sqlspec.typing import ConnectionT, DictRow, RowT, T
 from sqlspec.utils.logging import get_logger
 
@@ -62,8 +66,7 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
     def _connection(self, connection: "Optional[ConnectionT]" = None) -> "ConnectionT":
         return connection or self.connection
 
-    @staticmethod
-    def returns_rows(expression: "Optional[exp.Expression]") -> bool:
+    def returns_rows(self, expression: "Optional[exp.Expression]") -> bool:
         """Check if the SQL expression is expected to return rows.
 
         Args:
@@ -78,9 +81,78 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         if isinstance(expression, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma, exp.Command)):
             return True
         if isinstance(expression, exp.With) and expression.expressions:
-            return CommonDriverAttributesMixin.returns_rows(expression.expressions[-1])
+            return self.returns_rows(expression.expressions[-1])
         if isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
             return bool(expression.find(exp.Returning))
+        # Handle Anonymous expressions (failed to parse) using a robust approach
+        if isinstance(expression, exp.Anonymous):
+            return self._check_anonymous_returns_rows(expression)
+        return False
+
+    def _check_anonymous_returns_rows(self, expression: "exp.Anonymous") -> bool:
+        """Check if an Anonymous expression returns rows using robust methods.
+
+        This method handles SQL that failed to parse (often due to database-specific
+        placeholders) by:
+        1. Attempting to re-parse with placeholders sanitized
+        2. Using the tokenizer as a fallback for keyword detection
+
+        Args:
+            expression: The Anonymous expression to check
+
+        Returns:
+            True if the expression likely returns rows
+        """
+
+        sql_text = str(expression.this) if expression.this else ""
+        if not sql_text.strip():
+            return False
+
+        # Regex to find common SQL placeholders: ?, %s, $1, $2, :name, etc.
+        placeholder_regex = re.compile(r"(\?|%s|\$\d+|:\w+|%\(\w+\)s)")
+
+        # Approach 1: Try to re-parse with placeholders replaced
+        try:
+            # Replace placeholders with a dummy literal that sqlglot can parse
+            sanitized_sql = placeholder_regex.sub("1", sql_text)
+
+            # If we replaced any placeholders, try parsing again
+            if sanitized_sql != sql_text:
+                parsed = sqlglot.parse_one(sanitized_sql, read=None)
+                # Check if it's a query type that returns rows
+                if isinstance(
+                    parsed, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma, exp.Command)
+                ):
+                    return True
+                if isinstance(parsed, exp.With) and parsed.expressions:
+                    return self.returns_rows(parsed.expressions[-1])
+                if isinstance(parsed, (exp.Insert, exp.Update, exp.Delete)):
+                    return bool(parsed.find(exp.Returning))
+                if not isinstance(parsed, exp.Anonymous):
+                    return False
+        except Exception:
+            logger.debug("Could not parse using placeholders.  Using tokenizer. %s", sql_text)
+
+        # Approach 2: Use tokenizer for robust keyword detection
+        try:
+            tokens = list(sqlglot.tokenize(sql_text, read=None))
+            row_returning_tokens = {
+                TokenType.SELECT,
+                TokenType.WITH,
+                TokenType.VALUES,
+                TokenType.TABLE,
+                TokenType.SHOW,
+                TokenType.DESCRIBE,
+                TokenType.PRAGMA,
+            }
+            for token in tokens:
+                if token.token_type in {TokenType.COMMENT, TokenType.SEMICOLON}:
+                    continue
+                return token.token_type in row_returning_tokens
+
+        except Exception:
+            return False
+
         return False
 
     @staticmethod
@@ -262,7 +334,6 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             This is particularly useful for databases that don't natively
             support multi-statement execution (e.g., Oracle, some async drivers).
         """
-        from sqlspec.statement.splitter import split_sql_script
 
         # Map database dialect names to splitter dialect names
         dialect_map = {

@@ -378,7 +378,7 @@ def test_duckdb_enhanced_csv_export_with_options(duckdb_arrow_session: DuckDBDri
         # Export CSV with custom delimiter and compression
         rows_exported = duckdb_arrow_session.export_to_storage(
             "SELECT name, value, price FROM test_arrow ORDER BY id",
-            str(output_path),
+            destination_uri=str(output_path),
             format="csv",
             delimiter="|",
             compression="gzip",

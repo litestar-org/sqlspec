@@ -160,8 +160,8 @@ def test_daily_analytics_export_workflow(analytics_database: SqliteDriver, temp_
         activity_table = pq.read_table(user_activity_file)
         summary_data["total_active_users"] = activity_table.num_rows
         if activity_table.num_rows > 0:
-            total_events = sum(activity_table["event_count"].to_pylist())
-            total_sessions = sum(activity_table["session_count"].to_pylist())
+            total_events = sum(activity_table["event_count"].to_pylist())  # type: ignore[arg-type]
+            total_sessions = sum(activity_table["session_count"].to_pylist())  # type: ignore[arg-type]
             summary_data["total_events"] = total_events
             summary_data["total_sessions"] = total_sessions
 
@@ -170,7 +170,7 @@ def test_daily_analytics_export_workflow(analytics_database: SqliteDriver, temp_
         revenue_table = pq.read_table(revenue_file)
         summary_data["total_transactions"] = revenue_table.num_rows
         if revenue_table.num_rows > 0:
-            daily_revenue = sum(revenue_table["amount"].to_pylist())
+            daily_revenue = sum(revenue_table["amount"].to_pylist())  # type: ignore[arg-type]
             summary_data["daily_revenue"] = daily_revenue
 
     # Save summary

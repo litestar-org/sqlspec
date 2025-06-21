@@ -194,7 +194,7 @@ def test_driver_fetch_arrow_table_direct(sqlite_driver_with_storage: SqliteDrive
 
     # Verify data ordering (by price)
     prices = result.data["price"].to_pylist()
-    assert prices == sorted(prices)  # Should be ordered
+    assert prices == sorted(prices)  # pyright: ignore
 
     names = result.data["name"].to_pylist()
     assert "Product E" in names  # Cheapest
@@ -220,7 +220,7 @@ def test_driver_fetch_arrow_table_with_parameters(sqlite_driver_with_storage: Sq
         # All should be electronics
         assert all(cat == "electronics" for cat in categories)
         # All values should be > 50
-        assert all(val > 50 for val in values)
+        assert all(val > 50 for val in values)  # pyright: ignore
 
 
 def test_driver_storage_operations_with_large_dataset(
@@ -253,8 +253,8 @@ def test_driver_storage_operations_with_large_dataset(
 
     # Verify data integrity with spot checks
     values = table["value"].to_pylist()
-    assert all(val > 5000 for val in values)
-    assert values == sorted(values)  # Should be ordered
+    assert all(val > 5000 for val in values)  # pyright: ignore
+    assert values == sorted(values)  # pyright: ignore
 
 
 def test_driver_storage_error_handling(sqlite_driver_with_storage: SqliteDriver, temp_directory: Path) -> None:
@@ -263,7 +263,7 @@ def test_driver_storage_error_handling(sqlite_driver_with_storage: SqliteDriver,
     invalid_path = "/root/invalid_export.parquet"
 
     with pytest.raises(Exception):  # Should raise permission or path error
-        sqlite_driver_with_storage.export_to_storage("SELECT * FROM storage_test", invalid_path)
+        sqlite_driver_with_storage.export_to_storage("SELECT * FROM storage_test", destination_uri=invalid_path)
 
     # Test import from nonexistent file
     nonexistent_file = temp_directory / "nonexistent.parquet"
