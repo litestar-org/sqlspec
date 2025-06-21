@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 """Replaces literals in SQL with placeholders and extracts them using SQLGlot AST."""
 
 from dataclasses import dataclass
@@ -199,15 +200,13 @@ class ParameterizeLiterals(ProcessorProtocol):
 
         # Add to parameters list
         self.extracted_parameters.append(typed_param)
-        self._parameter_metadata.append(
-            {
-                "index": len(self.extracted_parameters) - 1,
-                "type": type_hint,
-                "semantic_name": semantic_name,
-                "context": self._get_context_description(context),
-                # Note: We avoid calling literal.sql() for performance
-            }
-        )
+        self._parameter_metadata.append({
+            "index": len(self.extracted_parameters) - 1,
+            "type": type_hint,
+            "semantic_name": semantic_name,
+            "context": self._get_context_description(context),
+            # Note: We avoid calling literal.sql() for performance
+        })
 
         # Create appropriate placeholder
         return self._create_placeholder(hint=semantic_name)
@@ -236,6 +235,7 @@ class ParameterizeLiterals(ProcessorProtocol):
             if (
                 self.preserve_numbers_in_limit
                 and isinstance(parent, (exp.Limit, exp.Offset))
+                and isinstance(literal, exp.Literal)
                 and self._is_number_literal(literal)
             ):
                 return True
@@ -246,7 +246,7 @@ class ParameterizeLiterals(ProcessorProtocol):
                 return not isinstance(literal.parent, Binary)
 
         # Check string length
-        if self._is_string_literal(literal):
+        if isinstance(literal, exp.Literal) and self._is_string_literal(literal):
             string_value = str(literal.this)
             if len(string_value) > self.max_string_length:
                 return True
@@ -257,6 +257,10 @@ class ParameterizeLiterals(ProcessorProtocol):
         """Extract the Python value and type info from a SQLGlot literal."""
         if isinstance(literal, Null) or literal.this is None:
             return None, "null"
+
+        # Ensure we have a Literal for type checking methods
+        if not isinstance(literal, exp.Literal):
+            return str(literal), "string"
 
         if isinstance(literal, Boolean) or isinstance(literal.this, bool):
             return literal.this, "boolean"
@@ -451,14 +455,14 @@ class ParameterizeLiterals(ProcessorProtocol):
             placeholder = exp.Placeholder(this=param_name)
         elif style in {ParameterStyle.NUMERIC, "numeric"} or style.startswith("$"):
             # PostgreSQL style numbered parameters - use Var for consistent $N format
-            placeholder = exp.Var(this=f"${self._parameter_counter}")
+            placeholder = exp.Var(this=f"${self._parameter_counter}")  # type: ignore[assignment]
         elif style in {ParameterStyle.NAMED_AT, "named_at"}:
             # BigQuery style @param
             param_name = f"param_{self._parameter_counter}"
             placeholder = exp.Placeholder(this=f"@{param_name}")
         elif style in {ParameterStyle.POSITIONAL_PYFORMAT, "pyformat"}:
             # Use %s for pyformat
-            placeholder = exp.Anonymous(this="%s")
+            placeholder = exp.Anonymous(this="%s")  # type: ignore[assignment]
         else:
             # Default to question mark
             placeholder = exp.Placeholder()
@@ -509,14 +513,12 @@ class ParameterizeLiterals(ProcessorProtocol):
 
             # Replace entire array with a single parameter
             self.extracted_parameters.append(typed_param)
-            self._parameter_metadata.append(
-                {
-                    "index": len(self.extracted_parameters) - 1,
-                    "type": f"array<{element_type}>",
-                    "length": len(array_values),
-                    "context": "array_literal",
-                }
-            )
+            self._parameter_metadata.append({
+                "index": len(self.extracted_parameters) - 1,
+                "type": f"array<{element_type}>",
+                "length": len(array_values),
+                "context": "array_literal",
+            })
             return self._create_placeholder("array")
         # Process individual elements
         new_expressions = []

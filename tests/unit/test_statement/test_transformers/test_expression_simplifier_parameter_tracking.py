@@ -115,10 +115,7 @@ def test_parameter_reordering_with_dict_params() -> None:
     from sqlspec.statement.sql import SQL
 
     # Create SQL with dict parameters
-    sql_obj = SQL(
-        "SELECT * FROM test WHERE value >= ? AND value <= ?",
-        {"param_0": 200, "param_1": 400}
-    )
+    sql_obj = SQL("SELECT * FROM test WHERE value >= ? AND value <= ?", {"param_0": 200, "param_1": 400})
 
     # Compile and get parameters
     _, params = sql_obj.compile(placeholder_style="qmark")

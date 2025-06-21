@@ -89,6 +89,7 @@ def test_mixed_parameter_styles(
     config = SQLConfig(
         allowed_parameter_styles=("positional_colon", "qmark", "named_colon"),
         allow_mixed_parameter_styles=True,  # Allow mixed styles for these tests
+        strict_mode=True,  # Enable strict mode to raise validation errors
     )
     if error_type:
         stmt = SQL(sql, parameters=parameters, _config=config)
@@ -264,7 +265,10 @@ def test_positional_colon_parameter_validation(
 ) -> None:
     """Test parameter validation for Oracle numeric style."""
     # Enable parameter validation by setting allowed_parameter_styles
-    config = SQLConfig(allowed_parameter_styles=("positional_colon", "positional_colon"))
+    config = SQLConfig(
+        allowed_parameter_styles=("positional_colon", "positional_colon"),
+        strict_mode=True,  # Enable strict mode to raise validation errors
+    )
     stmt = SQL(sql, parameters=parameters, _config=config)
 
     if should_fail:

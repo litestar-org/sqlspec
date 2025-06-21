@@ -551,7 +551,7 @@ async def test_async_list_objects(backend_with_mock_store: ObStoreBackend, mock_
     item.path = "/data/file.txt"
 
     # Create an async generator for the mock
-    async def async_list_items():
+    async def async_list_items() -> Any:
         yield item
 
     mock_store.list_async = MagicMock(return_value=async_list_items())
@@ -632,7 +632,7 @@ def test_error_propagation(
     elif method_name == "move":
         mock_method = mock_store.rename
 
-    mock_method.side_effect = Exception(error_msg)
+    mock_method.side_effect = Exception(error_msg)  # pyright: ignore
 
     with pytest.raises(StorageOperationFailedError) as exc_info:
         getattr(backend, method_name)(*args)

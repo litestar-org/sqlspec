@@ -368,7 +368,7 @@ class DuckDBDriver(
                     this=exp.to_table(table_name), expression=exp.Select().from_(temp_name).select("*"), kind="TABLE"
                 )
             elif mode == "append":
-                sql_expr = exp.Insert(
+                sql_expr = exp.Insert(  # type: ignore[assignment]
                     this=exp.to_table(table_name), expression=exp.Select().from_(temp_name).select("*")
                 )
             elif mode == "replace":

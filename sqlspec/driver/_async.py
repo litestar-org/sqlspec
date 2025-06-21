@@ -44,18 +44,11 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> "SQL":
-        # Check if we need to return the original SQL object as-is
-        if isinstance(statement, SQL) and not parameters and not kwargs and _config is None:
-            return statement
-
         # Use driver's config if none provided
         _config = _config or self.config
 
         if isinstance(statement, QueryBuilder):
             return statement.to_statement(config=_config)
-        # If it's already a SQL object, create new one with merged parameters
-        if isinstance(statement, SQL):
-            return SQL(statement._sql, *parameters, _dialect=self.dialect, _config=_config, **kwargs)
         return SQL(statement, *parameters, _dialect=self.dialect, _config=_config, **kwargs)
 
     @abstractmethod

@@ -1,5 +1,6 @@
 """Unit tests for sqlspec.statement.parameters module."""
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Optional
 from unittest.mock import patch
 
@@ -292,8 +293,8 @@ def converter() -> ParameterConverter:
 def test_merge_parameters(
     converter: ParameterConverter,
     parameters: "SQLParameterType",
-    args: "SQLParameterType",
-    kwargs: "dict[str, Any]",
+    args: "Optional[Sequence[Any]]",
+    kwargs: "Optional[dict[str, Any]]",
     expected_result: "SQLParameterType",
 ) -> None:
     """Test parameter merging logic."""

@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 """SQL script statement splitter with dialect-aware lexer-driven state machine.
 
 This module provides a robust way to split SQL scripts into individual statements,
@@ -126,17 +127,11 @@ class DialectConfig(ABC):
             patterns.append((TokenType.TERMINATOR, "|".join(re.escape(t) for t in all_terminators)))
 
         # 5. Add low-precedence patterns
-        patterns.extend(
-            [
-                (TokenType.WHITESPACE, r"\s+"),
-                (TokenType.OTHER, r"."),  # Fallback for any other character
-            ]
-        )
+        patterns.extend([(TokenType.WHITESPACE, r"\s+"), (TokenType.OTHER, r".")])
 
         return patterns
 
-    @staticmethod
-    def _get_dialect_specific_patterns() -> list[tuple[TokenType, TokenPattern]]:
+    def _get_dialect_specific_patterns(self) -> list[tuple[TokenType, TokenPattern]]:
         """Override to add dialect-specific token patterns."""
         return []
 
@@ -149,8 +144,7 @@ class DialectConfig(ABC):
         """
         return True
 
-    @staticmethod
-    def should_delay_semicolon_termination(tokens: list[Token], current_pos: int) -> bool:  # noqa: ARG004
+    def should_delay_semicolon_termination(self, tokens: list[Token], current_pos: int) -> bool:
         """Check if semicolon termination should be delayed.
 
         Override in dialect configs to handle special cases like Oracle END; /

@@ -30,7 +30,7 @@ if TYPE_CHECKING:
                 "enable_transformations": True,
                 "enable_analysis": False,
                 "enable_normalization": True,
-                "strict_mode": True,
+                "strict_mode": False,
                 "cache_parsed_expression": True,
                 "analysis_cache_size": 1000,
                 "input_sql_had_placeholders": False,
@@ -169,7 +169,7 @@ def test_sql_lazy_processing() -> None:
     # Track when _ensure_processed is called
     calls = []
 
-    def track_ensure_processed(self):
+    def track_ensure_processed(self) -> None:
         calls.append("ensure_processed")
         # Set up minimal processed state to avoid AttributeError
         from sqlspec.statement.sql import _ProcessedState

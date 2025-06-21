@@ -85,7 +85,7 @@ def test_driver_default_row_type() -> None:
 
     # Default row type - DuckDB uses a string type hint
     driver = DuckDBDriver(connection=mock_conn)
-    assert driver.default_row_type == "dict[str, Any]"
+    assert driver.default_row_type == "dict[str, Any]"  # type: ignore[comparison-overlap]
 
     # Custom row type
     custom_type: type[DictRow] = dict
@@ -325,7 +325,7 @@ def test_wrap_execute_result_script(driver: DuckDBDriver) -> None:
         "description": "The script was sent to the database.",
     }
 
-    wrapped = driver._wrap_execute_result(statement, result)
+    wrapped = driver._wrap_execute_result(statement, result)  # pyright: ignore
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.data == []
@@ -408,8 +408,8 @@ def test_fetch_arrow_table_native(driver: DuckDBDriver, mock_connection: MagicMo
     assert result.statement.to_sql() == statement.to_sql()
 
     # Verify DuckDB native method was called
-    # SQL processing pipeline may add extracted parameters
-    mock_connection.execute.assert_called_once_with("SELECT * FROM users", [None])
+    # SQL with no parameters should pass an empty list
+    mock_connection.execute.assert_called_once_with("SELECT * FROM users", [])
     mock_result.arrow.assert_called_once()
 
 
@@ -429,8 +429,7 @@ def test_fetch_arrow_table_with_parameters(driver: DuckDBDriver, mock_connection
     assert result.data is mock_arrow_table
 
     # Verify DuckDB native method was called with parameters
-    # Note: After SQL processing, parameters may include extracted values
-    mock_connection.execute.assert_called_once_with("SELECT * FROM users WHERE id = ?", [42, None])
+    mock_connection.execute.assert_called_once_with("SELECT * FROM users WHERE id = ?", [42])
     mock_result.arrow.assert_called_once()
 
 
@@ -451,9 +450,8 @@ def test_fetch_arrow_table_streaming(driver: DuckDBDriver, mock_connection: Magi
     assert result.statement.to_sql() == statement.to_sql()
 
     # Verify DuckDB streaming method was called
-    # Note: batch_size is passed as a named parameter due to storage mixin implementation
-    # The _arg_0: None is from parameter processing pipeline
-    mock_connection.execute.assert_called_once_with("SELECT * FROM users", {"batch_size": 1000, "_arg_0": None})
+    # batch_size is passed as a kwarg which SQL treats as a parameter
+    mock_connection.execute.assert_called_once_with("SELECT * FROM users", {"batch_size": 1000})
     mock_result.fetch_record_batch.assert_called_once_with(1000)
 
 
@@ -475,8 +473,7 @@ def test_fetch_arrow_table_with_connection_override(driver: DuckDBDriver) -> Non
     assert result.data is mock_arrow_table
 
     # Verify override connection was used
-    # SQL processing pipeline may add extracted parameters
-    override_connection.execute.assert_called_once_with("SELECT * FROM users", [None])
+    override_connection.execute.assert_called_once_with("SELECT * FROM users", [])
     mock_result.arrow.assert_called_once()
 
 
@@ -659,7 +656,6 @@ def test_fetch_arrow_table_empty_batch_list(driver: DuckDBDriver, mock_connectio
     # Should create empty table when no batches
     assert isinstance(result.data, pa.Table)
 
-    # Note: batch_size is passed as a named parameter due to storage mixin implementation
-    # The _arg_0: None is from parameter processing pipeline
-    mock_connection.execute.assert_called_once_with("SELECT * FROM empty_table", {"batch_size": 1000, "_arg_0": None})
+    # batch_size is passed as a kwarg which SQL treats as a parameter
+    mock_connection.execute.assert_called_once_with("SELECT * FROM empty_table", {"batch_size": 1000})
     mock_result.fetch_record_batch.assert_called_once_with(1000)

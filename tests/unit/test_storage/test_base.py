@@ -413,6 +413,8 @@ def test_empty_implementation_with_notimplemented() -> None:
 
         async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
             raise NotImplementedError("stream_arrow_async not implemented")
+            # Make it an async generator to satisfy the return type
+            yield  # type: ignore[unreachable]
 
         async def read_arrow_async(self, path: str, **kwargs: Any) -> "ArrowTable":
             raise NotImplementedError("read_arrow_async not implemented")

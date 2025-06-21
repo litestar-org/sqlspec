@@ -496,8 +496,10 @@ def test_adbc_driver_to_parquet(adbc_driver: AdbcDriver, mock_cursor: Mock, monk
 
     # Patch fetch_arrow_table to return a mock ArrowResult with a pyarrow.Table
     mock_table = pa.table({"id": [1, 2], "name": ["Alice", "Bob"]})
+    # Ensure the table has the expected num_rows
+    assert mock_table.num_rows == 2
     monkeypatch.setattr(
-        adbc_driver, "fetch_arrow_table", lambda stmt, **kwargs: ArrowResult(statement=stmt, data=mock_table)
+        adbc_driver, "_fetch_arrow_table", lambda stmt, **kwargs: ArrowResult(statement=stmt, data=mock_table)
     )
 
     # Patch the storage backend to avoid file system operations
@@ -520,5 +522,6 @@ def test_adbc_driver_to_parquet(adbc_driver: AdbcDriver, mock_cursor: Mock, monk
         # This should use the Arrow table from fetch_arrow_table
         result = adbc_driver.export_to_storage(statement, destination_uri=tmp.name, format="parquet")  # type: ignore[attr-defined]
         assert isinstance(result, int)  # Should return number of rows
+        assert result == 2  # mock_table has 2 rows
         assert called.get("table") is mock_table
         assert tmp.name in called.get("path", "")  # type: ignore[operator]

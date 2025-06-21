@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 """Unified Storage Registry for ObjectStore backends.
 
 This module provides a flexible, lazy-loading storage registry that supports:
@@ -59,10 +60,10 @@ class StorageRegistry:
 
     def __init__(self) -> None:
         # Named aliases (secondary feature) - internal storage
-        self._alias_configs: dict[str, tuple[type[ObjectStoreProtocol], dict[str, Any]]] = {}
+        self._alias_configs: dict[str, tuple[type[ObjectStoreProtocol], str, dict[str, Any]]] = {}
         # Expose configs for testing compatibility
         self._aliases: dict[str, dict[str, Any]] = {}
-        self._instances: dict[str, ObjectStoreProtocol] = {}
+        self._instances: dict[Union[str, tuple[str, tuple[tuple[str, Any], ...]]], ObjectStoreProtocol] = {}
 
     def register_alias(
         self,
@@ -123,7 +124,7 @@ class StorageRegistry:
             raise AttributeError(msg)
 
         # Handle empty string
-        if uri_or_alias == "":
+        if not uri_or_alias:
             msg = "Unknown storage alias: ''"
             raise ImproperConfigurationError(msg)
 
@@ -132,7 +133,9 @@ class StorageRegistry:
             uri_or_alias = f"file://{uri_or_alias.resolve()}"
 
         # Check cache first
-        cache_key = (uri_or_alias, tuple(sorted(kwargs.items()))) if kwargs else uri_or_alias
+        cache_key: Union[str, tuple[str, tuple[tuple[str, Any], ...]]] = (
+            (uri_or_alias, tuple(sorted(kwargs.items()))) if kwargs else uri_or_alias
+        )
         if cache_key in self._instances:
             return self._instances[cache_key]
 
@@ -140,7 +143,7 @@ class StorageRegistry:
         if "://" in uri_or_alias:
             backend = self._resolve_from_uri(uri_or_alias, **kwargs)
             # Cache the instance for future use
-            self._instances[cache_key] = backend
+            self._instances[cache_key] = backend  # type: ignore[assignment]
             return backend
 
         # SECONDARY: Check if it's a registered alias
@@ -151,7 +154,7 @@ class StorageRegistry:
             merged_config.update(kwargs)
             # URI is passed as first positional arg
             instance = backend_cls(stored_uri, **merged_config)
-            self._instances[cache_key] = instance
+            self._instances[cache_key] = instance  # type: ignore[assignment]
             return instance
 
         # Not a URI and not an alias

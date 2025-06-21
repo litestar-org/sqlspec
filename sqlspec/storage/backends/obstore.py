@@ -55,6 +55,7 @@ class ObStoreBackend(ObjectStoreBase):
             self.store_uri = store_uri
             self.base_path = base_path.rstrip("/") if base_path else ""
             self.store_options = store_options
+            self.store: Any  # Will be set based on store_uri
 
             # Initialize obstore instance
             if store_uri.startswith("memory://"):
@@ -73,7 +74,7 @@ class ObStoreBackend(ObjectStoreBase):
                 # Use obstore's from_url for automatic URI parsing
                 from obstore.store import from_url
 
-                self.store = from_url(store_uri, **store_options)  # type: ignore[assignment]  # pyright: ignore[reportAttributeAccessIssue]
+                self.store = from_url(store_uri, **store_options)  # pyright: ignore[reportAttributeAccessIssue]
 
             # Log successful initialization
             logger.debug("ObStore backend initialized for %s", store_uri)
@@ -108,7 +109,7 @@ class ObStoreBackend(ObjectStoreBase):
         try:
             resolved_path = self._resolve_path(path)
             result = self.store.get(resolved_path)
-            return result.bytes()  # type: ignore[return-value]  # pyright: ignore[reportReturnType]
+            return result.bytes()  # type: ignore[no-any-return] # pyright: ignore[reportReturnType]
         except Exception as exc:
             msg = f"Failed to read bytes from {path}"
             raise StorageOperationFailedError(msg) from exc
@@ -271,7 +272,7 @@ class ObStoreBackend(ObjectStoreBase):
             resolved_path = self._resolve_path(path)
             # Check if the store has native Arrow support
             if hasattr(self.store, "read_arrow"):
-                return self.store.read_arrow(resolved_path, **kwargs)  # type: ignore[attr-defined,no-any-return]  # pyright: ignore[reportAttributeAccessIssue]
+                return self.store.read_arrow(resolved_path, **kwargs)  # type: ignore[no-any-return]  # pyright: ignore[reportAttributeAccessIssue]
             # Fall back to reading as Parquet via bytes
             import io
 
@@ -290,7 +291,7 @@ class ObStoreBackend(ObjectStoreBase):
             resolved_path = self._resolve_path(path)
             # Check if the store has native Arrow support
             if hasattr(self.store, "write_arrow"):
-                self.store.write_arrow(resolved_path, table, **kwargs)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+                self.store.write_arrow(resolved_path, table, **kwargs)  # pyright: ignore[reportAttributeAccessIssue]
             else:
                 # Fall back to writing as Parquet via bytes
                 import io
@@ -313,7 +314,7 @@ class ObStoreBackend(ObjectStoreBase):
         """
         try:
             resolved_pattern = self._resolve_path(pattern)
-            yield from self.store.stream_arrow(resolved_pattern, **kwargs)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+            yield from self.store.stream_arrow(resolved_pattern, **kwargs)  # pyright: ignore[reportAttributeAccessIssue]
         except Exception as exc:
             msg = f"Failed to stream Arrow data for pattern {pattern}"
             raise StorageOperationFailedError(msg) from exc
@@ -325,7 +326,7 @@ class ObStoreBackend(ObjectStoreBase):
         """Private async read bytes using native obstore async if available."""
         resolved_path = self._resolve_path(path)
         result = await self.store.get_async(resolved_path)
-        return result.bytes()  # type: ignore[return-value]  # pyright: ignore[reportReturnType]
+        return result.bytes()  # pyright: ignore[reportReturnType]
 
     async def write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Private async write bytes using native obstore async."""
@@ -337,7 +338,7 @@ class ObStoreBackend(ObjectStoreBase):
         resolved_prefix = self._resolve_path(prefix) if prefix else self.base_path or ""
 
         # Note: store.list_async returns an async iterator
-        objects = [str(item.path) async for item in self.store.list_async(resolved_prefix)]  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+        objects = [str(item.path) async for item in self.store.list_async(resolved_prefix)]  # pyright: ignore[reportAttributeAccessIssue]
 
         # Manual filtering for non-recursive if needed as obstore lacks an
         # async version of list_with_delimiter.
@@ -410,14 +411,14 @@ class ObStoreBackend(ObjectStoreBase):
     async def read_arrow_async(self, path: str, **kwargs: Any) -> ArrowTable:
         """Async read Arrow table using native obstore async."""
         resolved_path = self._resolve_path(path)
-        return await self.store.read_arrow_async(resolved_path, **kwargs)  # type: ignore[attr-defined,no-any-return]  # pyright: ignore[reportAttributeAccessIssue]
+        return await self.store.read_arrow_async(resolved_path, **kwargs)  # type: ignore[no-any-return]  # pyright: ignore[reportAttributeAccessIssue]
 
     async def write_arrow_async(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
         """Async write Arrow table using native obstore async."""
         resolved_path = self._resolve_path(path)
         # Check if the store has native async Arrow support
         if hasattr(self.store, "write_arrow_async"):
-            await self.store.write_arrow_async(resolved_path, table, **kwargs)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+            await self.store.write_arrow_async(resolved_path, table, **kwargs)  # pyright: ignore[reportAttributeAccessIssue]
         else:
             # Fall back to writing as Parquet via bytes
             import io
@@ -431,5 +432,5 @@ class ObStoreBackend(ObjectStoreBase):
 
     async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
         resolved_pattern = self._resolve_path(pattern)
-        async for batch in self.store.stream_arrow_async(resolved_pattern, **kwargs):  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+        async for batch in self.store.stream_arrow_async(resolved_pattern, **kwargs):  # pyright: ignore[reportAttributeAccessIssue]
             yield batch

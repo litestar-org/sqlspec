@@ -116,7 +116,7 @@ class SQLConfig:
             validators = list(self.validators)
         # Use default validators
         elif self.enable_validation:
-            validators = [ParameterStyleValidator(), DMLSafetyValidator()]
+            validators = [ParameterStyleValidator(fail_on_violation=self.strict_mode), DMLSafetyValidator()]
 
         # Create analyzers based on config
         analyzers = []
@@ -580,7 +580,7 @@ class SQL:
     def sql(self) -> str:
         """Get SQL string."""
         # Handle empty string case
-        if self._raw_sql == "" or (self._raw_sql and not self._raw_sql.strip()):
+        if not self._raw_sql or (self._raw_sql and not self._raw_sql.strip()):
             return ""
 
         # For scripts, always return the raw SQL to preserve multi-statement scripts

@@ -444,7 +444,7 @@ async def test_async_operations_with_wrap(backend_with_mock_fs: FSSpecBackend) -
     # Test list_objects_async
     with patch.object(backend, "list_objects", return_value=["file1.txt", "file2.txt"]):
         result = await backend.list_objects_async()
-        assert result == ["file1.txt", "file2.txt"]
+        assert result == ["file1.txt", "file2.txt"]  # type: ignore[comparison-overlap]
 
 
 @pytest.mark.asyncio
@@ -572,7 +572,7 @@ def test_error_propagation(
     elif method_name == "move":
         mock_method = mock_fs.mv
 
-    mock_method.side_effect = Exception(error_msg)
+    mock_method.side_effect = Exception(error_msg)  # pyright: ignore
 
     with pytest.raises(Exception, match=error_msg):
         getattr(backend, method_name)(*args)
