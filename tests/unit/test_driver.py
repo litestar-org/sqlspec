@@ -188,30 +188,36 @@ def test_common_driver_attributes_default_values() -> None:
     ],
 )
 def test_common_driver_attributes_returns_rows(expression: exp.Expression | None, expected: bool) -> None:
-    """Test returns_rows static method."""
-    result = CommonDriverAttributesMixin.returns_rows(expression)
+    """Test returns_rows method."""
+    # Create a driver instance to test the method
+    driver = MockSyncDriver(MockConnection())
+    result = driver.returns_rows(expression)
     assert result == expected
 
 
 def test_common_driver_attributes_returns_rows_with_clause() -> None:
     """Test returns_rows with WITH clause."""
+    driver = MockSyncDriver(MockConnection())
+    
     # WITH clause with SELECT
     with_select = exp.With(expressions=[exp.Select()])
-    assert CommonDriverAttributesMixin.returns_rows(with_select) is True
+    assert driver.returns_rows(with_select) is True
 
     # WITH clause with INSERT
     with_insert = exp.With(expressions=[exp.Insert()])
-    assert CommonDriverAttributesMixin.returns_rows(with_insert) is False
+    assert driver.returns_rows(with_insert) is False
 
 
 def test_common_driver_attributes_returns_rows_returning_clause() -> None:
     """Test returns_rows with RETURNING clause."""
+    driver = MockSyncDriver(MockConnection())
+    
     # INSERT with RETURNING
     insert_returning = exp.Insert()
     insert_returning.set("expressions", [exp.Returning()])
 
     with patch.object(insert_returning, "find", return_value=exp.Returning()):
-        assert CommonDriverAttributesMixin.returns_rows(insert_returning) is True
+        assert driver.returns_rows(insert_returning) is True
 
 
 def test_common_driver_attributes_check_not_found_success() -> None:
@@ -269,7 +275,10 @@ def test_sync_driver_build_statement_with_sql_object() -> None:
 
     sql_obj = SQL("SELECT * FROM users WHERE id = :id", parameters={"id": 1})
     statement = driver._build_statement(sql_obj)
-    assert statement is sql_obj
+    # SQL objects are immutable, so a new instance is created
+    assert isinstance(statement, SQL)
+    assert statement._raw_sql == sql_obj._raw_sql
+    assert statement._named_params == sql_obj._named_params
 
 
 def test_sync_driver_build_statement_with_filters() -> None:

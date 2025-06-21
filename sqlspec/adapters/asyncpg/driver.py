@@ -136,7 +136,7 @@ class AsyncpgDriver(
             else:
                 args_for_driver.append(parameters)
 
-        if AsyncDriverAdapterProtocol.returns_rows(statement.expression):
+        if self.returns_rows(statement.expression):
             records = await conn.fetch(sql, *args_for_driver)
             # Convert asyncpg Records to dicts
             data = [dict(record) for record in records]

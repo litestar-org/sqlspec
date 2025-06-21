@@ -796,10 +796,10 @@ class SQL:
             return f"${param.ordinal + 1}"
         if target_style == ParameterStyle.NAMED_COLON:
             # Use generated parameter names
-            return f":param_{param.ordinal}"
+            return f":_arg_{param.ordinal}"
         if target_style == ParameterStyle.NAMED_AT:
             # Use @ prefix for BigQuery style
-            return f"@{param.name or f'param_{param.ordinal}'}"
+            return f"@{param.name or f'_arg_{param.ordinal}'}"
         if target_style == ParameterStyle.POSITIONAL_COLON:
             # Keep the original numeric placeholder
             return str(param.placeholder_text)
@@ -808,7 +808,7 @@ class SQL:
             return "%s"
         if target_style == ParameterStyle.NAMED_PYFORMAT:
             # Use %(name)s for named pyformat
-            return f"%({param.name or f'param_{param.ordinal}'})s"
+            return f"%({param.name or f'_arg_{param.ordinal}'})s"
         # Keep original for unknown styles
         return str(param.placeholder_text)
 
@@ -929,8 +929,8 @@ class SQL:
             result_dict: dict[str, Any] = {}
             for p in param_info:
                 if p.name and p.name in params:
-                    # Map from original name to generated name
-                    new_name = f"param_{p.ordinal}"
+                    # Map from original name to generated name (_arg_N to match placeholder)
+                    new_name = f"_arg_{p.ordinal}"
                     result_dict[new_name] = params[p.name]
             return result_dict
         return params

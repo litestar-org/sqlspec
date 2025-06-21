@@ -301,10 +301,9 @@ def test_sync_execute_dml_statement(sync_driver: PsycopgSyncDriver, mock_sync_co
 
     assert result == {"rows_affected": 1, "status_message": "INSERT 0 1"}
 
-    # Note: SQLGlot normalizes to uppercase and adds extra ()
-    # Also, parameters remain as list since _process_parameters doesn't convert to tuple
+    # Parameters remain as list since _process_parameters doesn't convert to tuple
     mock_cursor.execute.assert_called_once_with(
-        "INSERT INTO USERS (NAME, EMAIL) VALUES (%s, %s)()", ["Alice", "alice@example.com"]
+        "INSERT INTO users (name, email) VALUES (%s, %s)", ["Alice", "alice@example.com"]
     )
 
 
@@ -385,10 +384,9 @@ async def test_async_execute_dml_statement(async_driver: PsycopgAsyncDriver, moc
 
     assert result == {"rows_affected": 1, "status_message": "INSERT 0 1"}
 
-    # Note: SQLGlot normalizes to uppercase and adds extra ()
-    # Also, parameters remain as list since _process_parameters doesn't convert to tuple
+    # Parameters remain as list since _process_parameters doesn't convert to tuple
     mock_cursor.execute.assert_called_once_with(
-        "INSERT INTO USERS (NAME, EMAIL) VALUES (%s, %s)()", ["Alice", "alice@example.com"]
+        "INSERT INTO users (name, email) VALUES (%s, %s)", ["Alice", "alice@example.com"]
     )
 
 

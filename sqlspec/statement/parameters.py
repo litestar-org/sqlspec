@@ -720,16 +720,16 @@ class ParameterConverter:
         if target_style == ParameterStyle.NUMERIC:
             return f"${param_info.ordinal + 1}"
         if target_style == ParameterStyle.NAMED_COLON:
-            return f":{param_info.name}" if param_info.name else f":param_{param_info.ordinal}"
+            return f":{param_info.name}" if param_info.name else f":_arg_{param_info.ordinal}"
         if target_style == ParameterStyle.POSITIONAL_COLON:
             # Oracle numeric uses :1, :2 format
             return f":{param_info.ordinal + 1}"
         if target_style == ParameterStyle.NAMED_AT:
-            return f"@{param_info.name}" if param_info.name else f"@param_{param_info.ordinal}"
+            return f"@{param_info.name}" if param_info.name else f"@_arg_{param_info.ordinal}"
         if target_style == ParameterStyle.NAMED_DOLLAR:
-            return f"${param_info.name}" if param_info.name else f"$param_{param_info.ordinal}"
+            return f"${param_info.name}" if param_info.name else f"$_arg_{param_info.ordinal}"
         if target_style == ParameterStyle.NAMED_PYFORMAT:
-            return f"%({param_info.name})s" if param_info.name else f"%(param_{param_info.ordinal})s"
+            return f"%({param_info.name})s" if param_info.name else f"%(_arg_{param_info.ordinal})s"
         if target_style == ParameterStyle.POSITIONAL_PYFORMAT:
             return "%s"
         # Fallback to original

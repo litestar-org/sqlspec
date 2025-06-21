@@ -109,15 +109,35 @@ class DuckDBDriver(
 
         with self._get_cursor(conn) as cursor:
             cursor.execute(sql, parameters or [])
-            return {"rows_affected": cursor.rowcount}
+            # DuckDB returns -1 for rowcount on DML operations
+            # However, fetchone() returns the actual affected row count as (count,)
+            rows_affected = cursor.rowcount
+            if rows_affected < 0:
+                try:
+                    # Get actual affected row count from fetchone()
+                    result = cursor.fetchone()
+                    rows_affected = result[0] if result else 0
+                except Exception:
+                    # Fallback to 1 if fetchone fails
+                    rows_affected = 1
+            return {"rows_affected": rows_affected}
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
     ) -> "DMLResultDict":
         conn = self._connection(connection)
+        param_list = param_list or []
+
+        # DuckDB throws an error if executemany is called with empty parameter list
+        if not param_list:
+            return {"rows_affected": 0}
         with self._get_cursor(conn) as cursor:
-            cursor.executemany(sql, param_list or [])
-            return {"rows_affected": cursor.rowcount}
+            cursor.executemany(sql, param_list)
+            # DuckDB returns -1 for rowcount on DML operations
+            # For executemany, fetchone() only returns the count from the last operation,
+            # so use parameter list length as the most accurate estimate
+            rows_affected = cursor.rowcount if cursor.rowcount >= 0 else len(param_list)
+            return {"rows_affected": rows_affected}
 
     def _execute_script(
         self, script: str, connection: Optional["DuckDBConnection"] = None, **kwargs: Any

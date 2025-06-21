@@ -296,9 +296,36 @@ class ObStoreBackend(ObjectStoreBase):
                 # Fall back to writing as Parquet via bytes
                 import io
 
+                import pyarrow as pa
                 import pyarrow.parquet as pq
 
                 buffer = io.BytesIO()
+
+                # Check for decimal64 columns and convert to decimal128
+                # PyArrow doesn't support decimal64 in Parquet files
+                schema = table.schema
+                needs_conversion = False
+                new_fields = []
+
+                for field in schema:
+                    if str(field.type).startswith("decimal64"):
+                        # Convert decimal64 to decimal128
+                        import re
+                        match = re.match(r"decimal64\((\d+),\s*(\d+)\)", str(field.type))
+                        if match:
+                            precision, scale = int(match.group(1)), int(match.group(2))
+                            new_field = pa.field(field.name, pa.decimal128(precision, scale))
+                            new_fields.append(new_field)
+                            needs_conversion = True
+                        else:
+                            new_fields.append(field)
+                    else:
+                        new_fields.append(field)
+
+                if needs_conversion:
+                    new_schema = pa.schema(new_fields)
+                    table = table.cast(new_schema)
+                
                 pq.write_table(table, buffer, **kwargs)
                 buffer.seek(0)
                 self.write_bytes(resolved_path, buffer.read())

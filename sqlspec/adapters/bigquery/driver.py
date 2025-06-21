@@ -192,23 +192,27 @@ class BigQueryDriver(
         if params_dict:
             for name, value in params_dict.items():
                 param_name_for_bq = name.lstrip("@")
-                param_type, array_element_type = self._get_bq_param_type(value)
+
+                # Extract value from TypedParameter if needed
+                actual_value = value.value if hasattr(value, "value") else value
+
+                param_type, array_element_type = self._get_bq_param_type(actual_value)
 
                 logger.debug(
                     "Processing parameter %s: value=%r, type=%s, array_element_type=%s",
                     name,
-                    value,
+                    actual_value,
                     param_type,
                     array_element_type,
                 )
 
                 if param_type == "ARRAY" and array_element_type:
-                    bq_params.append(ArrayQueryParameter(param_name_for_bq, array_element_type, value))
+                    bq_params.append(ArrayQueryParameter(param_name_for_bq, array_element_type, actual_value))
                 elif param_type == "JSON":
-                    json_str = to_json(value)
+                    json_str = to_json(actual_value)
                     bq_params.append(ScalarQueryParameter(param_name_for_bq, "STRING", json_str))
                 elif param_type:
-                    bq_params.append(ScalarQueryParameter(param_name_for_bq, param_type, value))
+                    bq_params.append(ScalarQueryParameter(param_name_for_bq, param_type, actual_value))
                 else:
                     msg = f"Unsupported BigQuery parameter type for value of param '{name}': {type(value)}"
                     raise SQLSpecError(msg)
@@ -263,6 +267,8 @@ class BigQueryDriver(
                 )
         # Let BigQuery generate the job ID to avoid collisions
         # This is the recommended approach for production code and works better with emulators
+        logger.warning("About to send to BigQuery - SQL: %r", sql_str)
+        logger.warning("Query parameters in job config: %r", final_job_config.query_parameters)
         query_job = conn.query(sql_str, job_config=final_job_config)
 
         # Get the auto-generated job ID for callbacks
@@ -339,6 +345,9 @@ class BigQueryDriver(
     def _execute_statement(
         self, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
+        logger.debug("_execute_statement - raw SQL: %r", statement._raw_sql)
+        logger.debug("_execute_statement - parameters: %r", statement.parameters)
+        
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
@@ -361,7 +370,9 @@ class BigQueryDriver(
             return self._execute_many(sql, params, connection=connection, **kwargs)
 
         sql, params = statement.compile(placeholder_style=target_style)
+        logger.debug("compile() returned - sql: %r, params: %r", sql, params)
         params = self._process_parameters(params)
+        logger.debug("after _process_parameters - params: %r", params)
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
@@ -371,6 +382,8 @@ class BigQueryDriver(
         converted_sql = sql
         # Parameters are already in the correct format from compile()
         converted_params = parameters
+        
+        logger.warning("_execute received - sql: %r, parameters: %r", sql, parameters)
 
         # Prepare BigQuery parameters
         # Convert various parameter formats to dict format for BigQuery
@@ -378,7 +391,13 @@ class BigQueryDriver(
         if converted_params is None:
             param_dict = {}
         elif isinstance(converted_params, dict):
-            param_dict = converted_params
+            # Filter out non-parameter keys (dialect, config, etc.)
+            # Real parameters start with '_arg_' or are user-provided named parameters
+            param_dict = {
+                k: v for k, v in converted_params.items()
+                if k.startswith('_arg_') or (not k.startswith('_') and k not in ('dialect', 'config'))
+            }
+            logger.warning("Filtered param_dict from %r to %r", converted_params, param_dict)
         elif isinstance(converted_params, (list, tuple)):
             # Convert positional parameters to named parameters for BigQuery
             param_dict = {f"param_{i}": val for i, val in enumerate(converted_params)}
@@ -389,7 +408,9 @@ class BigQueryDriver(
         bq_params = self._prepare_bq_query_parameters(param_dict)
         
         # Debug logging
-        logger.debug("BigQuery execution - SQL: %r, param_dict: %r", converted_sql, param_dict)
+        logger.warning("BigQuery execution - SQL: %r", converted_sql)
+        logger.warning("BigQuery param_dict after filtering: %r", param_dict)
+        logger.warning("BigQuery params prepared: %r", bq_params)
         
         query_job = self._run_query_job(converted_sql, bq_params, connection=connection)
 

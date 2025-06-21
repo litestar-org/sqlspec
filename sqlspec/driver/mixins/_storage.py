@@ -312,10 +312,18 @@ class SyncStorageMixin(StorageMixinBase):
         """
         # Create SQL object with proper parameter handling
         filters, params = _separate_filters_from_parameters(parameters)
+        
+        # For storage operations, disable transformations that might add unwanted parameters
+        if _config is None:
+            _config = self.config
+        if _config and _config.enable_transformations:
+            from dataclasses import replace
+            _config = replace(_config, enable_transformations=False)
+        
         if params is not None:
-            sql = SQL(statement, params, *filters, _config=_config or self.config, _dialect=self.dialect, **options)
+            sql = SQL(statement, params, *filters, _config=_config, _dialect=self.dialect)
         else:
-            sql = SQL(statement, *filters, _config=_config or self.config, _dialect=self.dialect, **options)
+            sql = SQL(statement, *filters, _config=_config, _dialect=self.dialect)
 
         return self._export_to_storage(
             sql, destination_uri=destination_uri, format=format, _connection=_connection, **options
@@ -349,7 +357,11 @@ class SyncStorageMixin(StorageMixinBase):
             if hasattr(statement, "compile") and hasattr(statement, "parameters") and statement.parameters:
                 _compiled_sql, _compiled_params = statement.compile(placeholder_style=self.default_parameter_style)
             else:
-                return self._export_native(query_str, destination_uri, file_format, **kwargs)
+                try:
+                    return self._export_native(query_str, destination_uri, file_format, **kwargs)
+                except NotImplementedError:
+                    # Fall through to use storage backend
+                    pass
 
         # Use storage backend
         backend, path = self._resolve_backend_and_path(destination_uri)
@@ -478,20 +490,43 @@ class SyncStorageMixin(StorageMixinBase):
             return len(result.data or [])
 
         # Convert to appropriate format and write to backend
-        with tempfile.NamedTemporaryFile(mode="w", suffix=f".{format}", delete=False, encoding="utf-8") as tmp:
-            if format == "csv":
-                self._write_csv(result, tmp, **options)
-            elif format == "json":
-                self._write_json(result, tmp, **options)
-            else:
-                msg = f"Unsupported format for backend export: {format}"
-                raise ValueError(msg)
+        compression = options.get("compression")
+        
+        # Create temp file with appropriate suffix
+        suffix = f".{format}"
+        if compression == "gzip":
+            suffix += ".gz"
+        
+        with tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False, encoding="utf-8") as tmp:
+            # Handle compression if requested
+            file_to_write = tmp
+            if compression == "gzip":
+                import gzip
+                tmp.close()  # Close text mode file
+                file_to_write = gzip.open(tmp.name, "wt", encoding="utf-8")
+            
+            try:
+                if format == "csv":
+                    self._write_csv(result, file_to_write, **options)
+                elif format == "json":
+                    self._write_json(result, file_to_write, **options)
+                else:
+                    msg = f"Unsupported format for backend export: {format}"
+                    raise ValueError(msg)
+            finally:
+                if compression == "gzip":
+                    file_to_write.close()
 
             tmp_path = Path(tmp.name)
 
         try:
             # Upload to storage backend
-            backend.write_bytes(path, tmp_path.read_bytes())
+            # Adjust path if compression was used
+            final_path = path
+            if compression == "gzip" and not path.endswith(".gz"):
+                final_path = path + ".gz"
+            
+            backend.write_bytes(final_path, tmp_path.read_bytes())
             return result.rows_affected or len(result.data or [])
         finally:
             tmp_path.unlink(missing_ok=True)
@@ -516,8 +551,12 @@ class SyncStorageMixin(StorageMixinBase):
     @staticmethod
     def _write_csv(result: "SQLResult", file: Any, **options: Any) -> None:
         """Write result to CSV file."""
+        # Remove options that csv.writer doesn't understand
+        csv_options = options.copy()
+        csv_options.pop("compression", None)  # Handle compression separately
+        csv_options.pop("partition_by", None)  # Not applicable to CSV
 
-        writer = csv.writer(file, **options)  # TODO: anything better?
+        writer = csv.writer(file, **csv_options)  # TODO: anything better?
         if result.column_names:
             writer.writerow(result.column_names)
         if result.data:
@@ -676,10 +715,18 @@ class AsyncStorageMixin(StorageMixinBase):
     ) -> int:
         # Create SQL object with proper parameter handling
         filters, params = _separate_filters_from_parameters(parameters)
+        
+        # For storage operations, disable transformations that might add unwanted parameters
+        if _config is None:
+            _config = self.config
+        if _config and _config.enable_transformations:
+            from dataclasses import replace
+            _config = replace(_config, enable_transformations=False)
+        
         if params is not None:
-            sql = SQL(statement, params, *filters, _config=_config or self.config, _dialect=self.dialect, **options)
+            sql = SQL(statement, params, *filters, _config=_config, _dialect=self.dialect, **options)
         else:
-            sql = SQL(statement, *filters, _config=_config or self.config, _dialect=self.dialect, **options)
+            sql = SQL(statement, *filters, _config=_config, _dialect=self.dialect, **options)
 
         return await self._export_to_storage(sql, destination_uri, format, connection=_connection, **options)
 
@@ -712,7 +759,8 @@ class AsyncStorageMixin(StorageMixinBase):
         backend, path = self._resolve_backend_and_path(destination_uri)
 
         if file_format == "parquet":
-            arrow_result = await self.fetch_arrow_table(query, _connection=connection)
+            # query is already a SQL object, call _fetch_arrow_table directly
+            arrow_result = await self._fetch_arrow_table(query, connection=connection, **options)
             arrow_table = arrow_result.data
             if arrow_table is not None:
                 await backend.write_arrow_async(path, arrow_table, **options)

@@ -144,7 +144,7 @@ def test_positional_colon_parameter_conversion(
         # Convert to question marks
         ("INSERT INTO users VALUES (:1, :2)", ["john", 42], ParameterStyle.QMARK, ["?", "?"]),
         # Convert to named style
-        ("INSERT INTO users VALUES (:1, :2)", ["john", 42], ParameterStyle.NAMED_COLON, [":param_0", ":param_1"]),
+        ("INSERT INTO users VALUES (:1, :2)", ["john", 42], ParameterStyle.NAMED_COLON, [":_arg_0", ":_arg_1"]),
         # Convert to numeric dollar style
         ("INSERT INTO users VALUES (:1, :2)", ["john", 42], ParameterStyle.NUMERIC, ["$1", "$2"]),
     ],
