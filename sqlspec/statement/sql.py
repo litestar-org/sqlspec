@@ -154,6 +154,7 @@ class SQL:
         "_original_parameters",  # Any - original parameters as passed in
         "_positional_params",  # list[Any] - positional parameters
         "_processed_state",  # Cached processed state
+        "_processing_context",  # SQLProcessingContext - context from pipeline processing
         "_raw_sql",  # str - original SQL string for compatibility
         "_statement",  # exp.Expression - the SQL expression
     )
@@ -173,6 +174,7 @@ class SQL:
         self._dialect = _dialect
         self._builder_result_type = _builder_result_type
         self._processed_state: Optional[_ProcessedState] = None
+        self._processing_context: Optional[SQLProcessingContext] = None
         self._positional_params: list[Any] = []
         self._named_params: dict[str, Any] = {}
         self._filters: list[StatementFilter] = []
@@ -313,6 +315,9 @@ class SQL:
         # Run the pipeline
         pipeline = self._config.get_statement_pipeline()
         result = pipeline.execute_pipeline(context)
+
+        # Store the processing context for later use
+        self._processing_context = result.context
 
         # Extract processed state
         processed_expr = result.expression
@@ -648,6 +653,13 @@ class SQL:
         sql = self._processed_state.processed_sql
         params = self._processed_state.merged_parameters
 
+        # Check if parameters were reordered during processing
+        if params is not None and hasattr(self, "_processing_context") and self._processing_context:
+            parameter_mapping = self._processing_context.metadata.get("parameter_position_mapping")
+            if parameter_mapping:
+                # Apply parameter reordering based on the mapping
+                params = self._reorder_parameters(params, parameter_mapping)
+
         # If no placeholder style requested, return as-is
         if placeholder_style is None:
             return sql, params
@@ -657,6 +669,57 @@ class SQL:
             sql, params = self._convert_placeholder_style(sql, params, placeholder_style)
 
         return sql, params
+
+    @staticmethod
+    def _reorder_parameters(params: Any, mapping: dict[int, int]) -> Any:
+        """Reorder parameters based on the position mapping.
+
+        Args:
+            params: Original parameters (list, tuple, or dict)
+            mapping: Dict mapping new positions to original positions
+
+        Returns:
+            Reordered parameters in the same format as input
+        """
+        if isinstance(params, (list, tuple)):
+            # Create a new list with reordered parameters
+            reordered = [None] * len(params)
+            for new_pos, old_pos in mapping.items():
+                if old_pos < len(params):
+                    reordered[new_pos] = params[old_pos]
+
+            # Handle any unmapped positions
+            for i, val in enumerate(reordered):
+                if val is None and i < len(params) and i not in mapping:
+                    # If position wasn't mapped, try to use original
+                    reordered[i] = params[i]
+
+            # Return in same format as input
+            return tuple(reordered) if isinstance(params, tuple) else reordered
+
+        if isinstance(params, dict):
+            # For dict parameters, we need to handle differently
+            # If keys are like param_0, param_1, we can reorder them
+            if all(key.startswith("param_") and key[6:].isdigit() for key in params):
+                reordered = {}
+                for new_pos, old_pos in mapping.items():
+                    old_key = f"param_{old_pos}"
+                    new_key = f"param_{new_pos}"
+                    if old_key in params:
+                        reordered[new_key] = params[old_key]
+
+                # Add any unmapped parameters
+                for key, value in params.items():
+                    if key not in reordered and key.startswith("param_"):
+                        idx = int(key[6:])
+                        if idx not in mapping:
+                            reordered[key] = value
+
+                return reordered
+            # Can't reorder named parameters, return as-is
+            return params
+        # Single value or unknown format, return as-is
+        return params
 
     def _convert_placeholder_style(self, sql: str, params: Any, placeholder_style: str) -> tuple[str, Any]:
         """Convert SQL and parameters to the requested placeholder style.

@@ -24,9 +24,9 @@ def demo_unified_storage_architecture() -> None:
 
     # Create SQLSpec with unified storage (no config needed - uses intelligent backend selection)
     sqlspec = SQLSpec()
-    config = sqlspec.add_config(DuckDBConfig(":memory:"))
+    duck = sqlspec.add_config(DuckDBConfig(database=":memory:"))
 
-    with config.provide_session() as session:
+    with sqlspec.provide_session(duck) as session:
         print("\n📊 Creating sample data...")
 
         # Create sample data
@@ -53,20 +53,7 @@ def demo_unified_storage_architecture() -> None:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
-            parquet_file = tmp_path / "sales_native.parquet"
-
-            # DuckDB can write Parquet natively - no intermediate steps!
-            try:
-                session.write_parquet_direct("SELECT * FROM sales WHERE amount > 500", str(parquet_file))
-                print(f"✅ Native export to: {parquet_file}")
-                print(f"   File size: {parquet_file.stat().st_size:,} bytes")
-
-                # DuckDB can read Parquet natively too
-                result = session.read_parquet_direct(str(parquet_file))
-                print(f"✅ Native import read {len(result.data)} rows")
-
-            except NotImplementedError as e:
-                print(f"⚠️  Native operations not available: {e}")
+            _parquet_file = tmp_path / "sales_native.parquet"
 
         # ================================================================
         # Demonstration 2: Storage Backend Operations
@@ -79,15 +66,14 @@ def demo_unified_storage_architecture() -> None:
             # Export using storage backend (automatic format detection)
             rows_exported = session.export_to_storage(
                 "SELECT product_name, SUM(amount) as total_sales FROM sales GROUP BY product_name",
-                "analytics/product_summary.csv",  # Relative path uses default backend
-                storage_key="local_temp",
+                destination_uri="analytics/product_summary.csv",
             )
             print(f"✅ Exported {rows_exported} rows to storage backend")
 
             # Import from storage backend
             session.execute(SQL("DROP TABLE IF EXISTS product_summary"))
             rows_imported = session.import_from_storage(
-                "analytics/product_summary.csv", "product_summary", storage_key="local_temp"
+                source_uri="analytics/product_summary.csv", table_name="product_summary", storage_key="local_temp"
             )
             print(f"✅ Imported {rows_imported} rows from storage backend")
 
@@ -109,11 +95,11 @@ def demo_unified_storage_architecture() -> None:
             # Fetch data as Arrow table (zero-copy with DuckDB)
             arrow_table = session.fetch_arrow_table("SELECT * FROM sales ORDER BY amount DESC LIMIT 100")
             print(f"✅ Fetched Arrow table: {arrow_table.num_rows} rows, {arrow_table.num_columns} columns")
-            print(f"   Schema: {list(arrow_table.schema.names)}")
+            print(f"   Schema: {arrow_table.schema}")
 
             # Ingest Arrow table back to database
             session.execute(SQL("DROP TABLE IF EXISTS top_sales"))
-            rows_ingested = session.ingest_arrow_table(arrow_table, "top_sales", mode="create")
+            rows_ingested = session.ingest_arrow_table(table=arrow_table.data, table_name="top_sales", mode="create")
             print(f"✅ Ingested {rows_ingested} rows from Arrow table")
 
         except Exception as e:

@@ -42,7 +42,7 @@ class FromClauseMixin:
             from_expr = exp.alias_(table, alias) if alias else table
         elif hasattr(table, "build"):
             # Query builder with build() method
-            subquery = table.build()  # type: ignore[attr-defined]
+            subquery = table.build()  # pyright: ignore
             subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(builder, "dialect", None)))
             from_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
             current_params = getattr(builder, "_parameters", None)

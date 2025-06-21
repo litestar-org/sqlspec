@@ -1,6 +1,7 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 
+from sqlglot import exp
 from sqlglot.optimizer import simplify
 
 from sqlspec.exceptions import RiskLevel
@@ -8,8 +9,6 @@ from sqlspec.statement.pipelines.base import ProcessorProtocol
 from sqlspec.statement.pipelines.result_types import TransformationLog, ValidationError
 
 if TYPE_CHECKING:
-    from sqlglot import exp
-
     from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 __all__ = ("ExpressionSimplifier", "SimplificationConfig")
@@ -53,6 +52,11 @@ class ExpressionSimplifier(ProcessorProtocol):
 
         original_sql = expression.sql(dialect=context.dialect)
 
+        # Extract placeholder info before simplification
+        placeholders_before = []
+        if context.merged_parameters:
+            placeholders_before = self._extract_placeholder_info(expression)
+
         try:
             simplified = simplify.simplify(
                 expression.copy(), constant_propagation=self.config.enable_literal_folding, dialect=context.dialect
@@ -82,6 +86,20 @@ class ExpressionSimplifier(ProcessorProtocol):
                 )
                 context.transformations.append(log)
 
+                # If we have parameters and SQL changed, check for parameter reordering
+                if context.merged_parameters and placeholders_before:
+                    placeholders_after = self._extract_placeholder_info(simplified)
+
+                    # Create parameter position mapping if placeholders were reordered
+                    if len(placeholders_after) == len(placeholders_before):
+                        parameter_mapping = self._create_parameter_mapping(placeholders_before, placeholders_after)
+
+                        # Store mapping in context metadata for later use
+                        if parameter_mapping and any(
+                            new_pos != old_pos for new_pos, old_pos in parameter_mapping.items()
+                        ):
+                            context.metadata["parameter_position_mapping"] = parameter_mapping
+
             # Store metadata
             context.metadata[self.__class__.__name__] = {
                 "simplified": original_sql != simplified_sql,
@@ -105,3 +123,107 @@ class ExpressionSimplifier(ProcessorProtocol):
         if self.config.enable_complement_removal:
             optimizations.append("complement_removal")
         return optimizations
+
+    @staticmethod
+    def _extract_placeholder_info(expression: "exp.Expression") -> list[dict[str, Any]]:
+        """Extract information about placeholder positions in an expression.
+
+        Returns:
+            List of placeholder info dicts with position, comparison context, etc.
+        """
+        placeholders = []
+
+        for node in expression.walk():
+            if isinstance(node, exp.Placeholder):
+                # Get comparison context for the placeholder
+                parent = node.parent
+                comparison_info = None
+
+                if isinstance(parent, (exp.GTE, exp.GT, exp.LTE, exp.LT, exp.EQ, exp.NEQ)):
+                    # Get the column being compared
+                    left = parent.this
+                    right = parent.expression
+
+                    # Determine which side the placeholder is on
+                    if node == right:
+                        side = "right"
+                        column = left
+                    else:
+                        side = "left"
+                        column = right
+
+                    if isinstance(column, exp.Column):
+                        comparison_info = {"column": column.name, "operator": parent.__class__.__name__, "side": side}
+
+                placeholder_info = {"node": node, "parent": parent, "comparison_info": comparison_info}
+                placeholders.append(placeholder_info)
+
+        return placeholders
+
+    @staticmethod
+    def _create_parameter_mapping(
+        placeholders_before: list[dict[str, Any]], placeholders_after: list[dict[str, Any]]
+    ) -> dict[int, int]:
+        """Create a mapping of parameter positions from transformed SQL back to original positions.
+
+        Args:
+            placeholders_before: Placeholder info from original expression
+            placeholders_after: Placeholder info from transformed expression
+
+        Returns:
+            Dict mapping new positions to original positions
+        """
+        mapping = {}
+
+        # For each placeholder in the transformed expression
+        for new_pos, ph_after in enumerate(placeholders_after):
+            after_info = ph_after["comparison_info"]
+
+            if after_info:
+                # Find matching placeholder in original based on comparison context
+                for old_pos, ph_before in enumerate(placeholders_before):
+                    before_info = ph_before["comparison_info"]
+
+                    if before_info and before_info["column"] == after_info["column"]:
+                        # Check if operators were swapped (e.g., >= became <=)
+                        if (
+                            before_info["operator"] == "GTE"
+                            and after_info["operator"] == "LTE"
+                            and before_info["side"] == after_info["side"]
+                        ):
+                            # This is the upper bound parameter that was moved
+                            # Find the original position of the upper bound (<=)
+                            for orig_pos, orig_ph in enumerate(placeholders_before):
+                                orig_info = orig_ph["comparison_info"]
+                                if (
+                                    orig_info
+                                    and orig_info["column"] == after_info["column"]
+                                    and orig_info["operator"] == "LTE"
+                                ):
+                                    mapping[new_pos] = orig_pos
+                                    break
+                        elif (
+                            before_info["operator"] == "LTE"
+                            and after_info["operator"] == "GTE"
+                            and before_info["side"] == after_info["side"]
+                        ):
+                            # This is the lower bound parameter that was moved
+                            # Find the original position of the lower bound (>=)
+                            for orig_pos, orig_ph in enumerate(placeholders_before):
+                                orig_info = orig_ph["comparison_info"]
+                                if (
+                                    orig_info
+                                    and orig_info["column"] == after_info["column"]
+                                    and orig_info["operator"] == "GTE"
+                                ):
+                                    mapping[new_pos] = orig_pos
+                                    break
+                        elif before_info["operator"] == after_info["operator"]:
+                            # Same operator, direct mapping
+                            mapping[new_pos] = old_pos
+                            break
+            # No comparison context, try to map by position
+            elif new_pos < len(placeholders_before):
+                mapping[new_pos] = new_pos
+
+        return mapping

@@ -221,7 +221,7 @@ async def test_asyncpg_parameter_data_types(asyncpg_params_session: AsyncpgDrive
         (0, 0.0, "", None, []),
     ]
 
-    for i, data in enumerate(test_data):
+    for data in test_data:
         await asyncpg_params_session.execute(
             "INSERT INTO test_types (int_val, real_val, text_val, bool_val, array_val) VALUES ($1, $2, $3, $4, $5)",
             data,

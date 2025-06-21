@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 import contextlib
 import uuid
 from collections.abc import Generator
@@ -5,6 +6,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
 from duckdb import DuckDBPyConnection
+from sqlglot import exp
 
 from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.driver.mixins import (
@@ -195,6 +197,7 @@ class DuckDBDriver(
         """Enhanced DuckDB native Arrow table fetching with streaming support."""
         conn = self._connection(connection)
         sql_string, parameters = sql.compile(placeholder_style=self.default_parameter_style)
+        parameters = self._process_parameters(parameters)
         result = conn.execute(sql_string, parameters or [])
 
         batch_size = kwargs.get("batch_size")
@@ -340,14 +343,12 @@ class DuckDBDriver(
 
         if isinstance(data, str):
             copy_sql = f"COPY ({data}) TO '{destination_uri}' {options_str}"
-            logger.debug("Executing DuckDB Parquet write (query): %s", copy_sql)
             conn.execute(copy_sql)
         else:
             temp_name = f"_arrow_data_{uuid.uuid4().hex[:8]}"
             conn.register(temp_name, data)
             try:
                 copy_sql = f"COPY {temp_name} TO '{destination_uri}' {options_str}"
-                logger.debug("Executing DuckDB Parquet write (Arrow): %s", copy_sql)
                 conn.execute(copy_sql)
             finally:
                 with contextlib.suppress(Exception):
@@ -361,7 +362,6 @@ class DuckDBDriver(
 
         try:
             conn.register(temp_name, table)
-            from sqlglot import exp
 
             if mode == "create":
                 sql_expr = exp.Create(
@@ -387,12 +387,3 @@ class DuckDBDriver(
         finally:
             with contextlib.suppress(Exception):
                 conn.unregister(temp_name)
-
-    def read_parquet_direct(
-        self, source_uri: str, columns: "Optional[list[str]]" = None, **options: Any
-    ) -> "SQLResult[dict[str, Any]]":
-        """Read Parquet file directly using database's native capabilities."""
-        if not self._has_native_capability("read", source_uri, "parquet"):
-            msg = f"{self.__class__.__name__} does not support direct Parquet reading."
-            raise NotImplementedError(msg)
-        return self._read_parquet_native(source_uri, columns, **options)

@@ -363,13 +363,7 @@ def test_get_cursor_context_manager(driver: DuckDBDriver, mock_connection: Magic
 # Storage Mixin Tests
 def test_storage_methods_available(driver: DuckDBDriver) -> None:
     """Test that driver has all storage methods from SyncStorageMixin."""
-    storage_methods = [
-        "fetch_arrow_table",
-        "ingest_arrow_table",
-        "export_to_storage",
-        "import_from_storage",
-        "read_parquet_direct",  # DuckDB specific method name
-    ]
+    storage_methods = ["fetch_arrow_table", "ingest_arrow_table", "export_to_storage", "import_from_storage"]
 
     for method in storage_methods:
         assert hasattr(driver, method)

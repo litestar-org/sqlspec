@@ -345,7 +345,11 @@ class SyncStorageMixin(StorageMixinBase):
 
         # Try native database export first
         if file_format == "parquet" and self.supports_native_parquet_export:
-            return self._export_native(query_str, destination_uri, file_format, **kwargs)
+            # If we have a SQL object with parameters, compile it first
+            if hasattr(statement, "compile") and hasattr(statement, "parameters") and statement.parameters:
+                _compiled_sql, _compiled_params = statement.compile(placeholder_style=self.default_parameter_style)
+            else:
+                return self._export_native(query_str, destination_uri, file_format, **kwargs)
 
         # Use storage backend
         backend, path = self._resolve_backend_and_path(destination_uri)

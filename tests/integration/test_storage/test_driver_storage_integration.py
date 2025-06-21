@@ -93,6 +93,9 @@ def test_export_to_storage_with_filters(sqlite_with_test_data: SqliteDriver, tem
 
     names = table["name"].to_pylist()
     prices = table["price"].to_pylist()
+    assert len(names) == 2
+    assert len(prices) == 2
+    assert prices is not None
 
     assert "Laptop" in names
     assert "Phone" in names
@@ -139,7 +142,7 @@ def test_export_to_storage_json_format(sqlite_with_test_data: SqliteDriver, temp
 
     # Export to JSON
     sqlite_with_test_data.export_to_storage(
-        "SELECT id, name, price FROM products WHERE price > 50", str(output_file), format="json"
+        "SELECT id, name, price FROM products WHERE price > 50", destination_uri=str(output_file), format="json"
     )
 
     assert output_file.exists()
@@ -200,6 +203,7 @@ def test_fetch_arrow_table_with_parameters(sqlite_with_test_data: SqliteDriver) 
         # Verify price filtering worked
         assert all(50.0 <= price <= 500.0 for price in prices if price is not None)
         # Verify ordering
+        assert prices is not None
         assert prices == sorted(prices)
 
 
@@ -295,6 +299,8 @@ def test_storage_large_dataset_handling(sqlite_with_test_data: SqliteDriver, tem
 
     # Spot check data integrity
     prices = table["price"].to_pylist()
+    assert prices is not None
+    assert len(prices) > 0
     assert all(price > 100 for price in prices)
 
 
@@ -330,11 +336,11 @@ def test_export_with_complex_sql(sqlite_with_test_data: SqliteDriver, temp_direc
         assert col in table.column_names
 
     # Verify aggregations make sense
-    product_counts = table["product_count"].to_pylist()
+    product_counts = table["product_count"].to_pylist() or []
     assert all(count > 0 for count in product_counts)
 
-    avg_prices = table["avg_price"].to_pylist()
-    max_prices = table["max_price"].to_pylist()
+    avg_prices = table["avg_price"].to_pylist() or []
+    max_prices = table["max_price"].to_pylist() or []
 
     # Max should be >= avg for each category
     for avg, max_price in zip(avg_prices, max_prices):
