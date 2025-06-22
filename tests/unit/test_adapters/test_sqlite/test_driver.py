@@ -144,6 +144,7 @@ def test_coerce_json(driver: SqliteDriver, value: Any, expected_type: type) -> N
     if isinstance(value, (dict, list)):
         import json
 
+        assert isinstance(result, str)  # Type guard for mypy
         assert json.loads(result) == value
 
 
@@ -161,6 +162,7 @@ def test_coerce_array(driver: SqliteDriver, value: Any, expected_type: type) -> 
     if isinstance(value, (list, tuple)):
         import json
 
+        assert isinstance(result, str)  # Type guard for mypy
         assert json.loads(result) == list(value)
 
 
@@ -443,7 +445,9 @@ def test_wrap_execute_result_dml(driver: SqliteDriver) -> None:
     mock_expression = MagicMock()
     mock_expression.key = "insert"
 
-    result = {"rows_affected": 1, "status_message": "OK"}
+    from sqlspec.statement.result import DMLResultDict
+    
+    result: DMLResultDict = {"rows_affected": 1, "status_message": "OK"}
 
     with patch.object(type(statement), "expression", new_callable=PropertyMock, return_value=mock_expression):
         wrapped = driver._wrap_execute_result(statement, result)  # pyright: ignore
@@ -459,7 +463,9 @@ def test_wrap_execute_result_script(driver: SqliteDriver) -> None:
     """Test wrapping script results."""
     statement = SQL("CREATE TABLE test; INSERT INTO test;")
 
-    result = {"statements_executed": 2, "status_message": "SCRIPT EXECUTED"}
+    from sqlspec.statement.result import ScriptResultDict
+    
+    result: ScriptResultDict = {"statements_executed": 2, "status_message": "SCRIPT EXECUTED"}
 
     with patch.object(type(statement), "expression", new_callable=PropertyMock, return_value=None):
         wrapped = driver._wrap_execute_result(statement, result)  # pyright: ignore

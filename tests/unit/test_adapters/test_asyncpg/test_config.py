@@ -161,7 +161,7 @@ def test_statement_config_initialization(statement_config: "SQLConfig | None", e
 )
 def test_timeout_configuration(timeout_type: str, value: str) -> None:
     """Test timeout configuration."""
-    config = AsyncpgConfig(host="localhost", **cast("AsyncpgConfig", {timeout_type: value}))  # pyright: ignore
+    config = AsyncpgConfig(host="localhost", **{timeout_type: value})  # type: ignore[arg-type]
     assert getattr(config, timeout_type) == value
 
 

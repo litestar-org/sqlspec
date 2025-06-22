@@ -18,7 +18,7 @@ import pytest
 
 from sqlspec.adapters.duckdb import DuckDBDriver
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SelectResultDict, SQLResult
+from sqlspec.statement.result import ArrowResult, DMLResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -302,7 +302,7 @@ def test_wrap_execute_result_dml(driver: DuckDBDriver) -> None:
     statement = SQL("INSERT INTO users VALUES (?)")
     # No need to mock _expression - it's computed from the SQL
 
-    result = {"rows_affected": 1}
+    result: DMLResultDict = {"rows_affected": 1}
 
     wrapped = driver._wrap_execute_result(statement, result)  # pyright: ignore
 
@@ -320,7 +320,9 @@ def test_wrap_execute_result_script(driver: DuckDBDriver) -> None:
     statement = SQL("CREATE TABLE test; INSERT INTO test;", _config=config)
     # No need to set _expression
 
-    result = {
+    from sqlspec.statement.result import ScriptResultDict
+    
+    result: ScriptResultDict = {
         "statements_executed": 2,
         "status_message": "Script executed successfully.",
         "description": "The script was sent to the database.",

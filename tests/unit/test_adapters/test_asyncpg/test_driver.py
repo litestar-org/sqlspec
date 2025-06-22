@@ -338,7 +338,7 @@ async def test_wrap_select_result(driver: AsyncpgDriver) -> None:
         },
     )
 
-    wrapped = await driver._wrap_select_result(statement, result)  # type: ignore[arg-type]  # type: ignore[arg-type]
+    wrapped: SQLResult[Any] = await driver._wrap_select_result(statement, result)  # type: ignore[arg-type]
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.statement is statement

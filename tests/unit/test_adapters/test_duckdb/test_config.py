@@ -149,7 +149,13 @@ def test_statement_config_initialization(statement_config: "SQLConfig | None", e
 # Extension Management Tests
 def test_extension_configuration() -> None:
     """Test extension configuration."""
-    extensions = [{"name": "httpfs", "version": "0.10.0"}, {"name": "parquet"}, {"name": "json", "force_install": True}]
+    from sqlspec.adapters.duckdb.config import DuckDBExtensionConfig
+    
+    extensions: list[DuckDBExtensionConfig] = [
+        {"name": "httpfs", "version": "0.10.0"}, 
+        {"name": "parquet"}, 
+        {"name": "json", "force_install": True}
+    ]
 
     config = DuckDBConfig(
         database=":memory:", extensions=extensions, autoinstall_known_extensions=True, allow_community_extensions=True

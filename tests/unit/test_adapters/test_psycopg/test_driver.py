@@ -117,9 +117,9 @@ def test_sync_driver_default_row_type() -> None:
     """Test sync driver default row type."""
     mock_conn = MagicMock()
 
-    # Default row type - Psycopg uses a string type hint
+    # Default row type - Psycopg uses dict as default
     driver = PsycopgSyncDriver(connection=mock_conn)
-    assert driver.default_row_type == "dict[str, Any]"
+    assert driver.default_row_type is dict
 
     # Custom row type
     custom_type: type[DictRow] = dict
@@ -145,9 +145,9 @@ def test_async_driver_default_row_type() -> None:
     """Test async driver default row type."""
     mock_conn = AsyncMock()
 
-    # Default row type - Psycopg uses a string type hint
+    # Default row type - Psycopg uses dict as default
     driver = PsycopgAsyncDriver(connection=mock_conn)
-    assert driver.default_row_type == "dict[str, Any]"
+    assert driver.default_row_type is dict
 
     # Note: PsycopgAsyncDriver doesn't support custom default_row_type in constructor
     # It's hardcoded to DictRow in the driver implementation
@@ -510,8 +510,10 @@ async def test_async_execute_script(async_driver: PsycopgAsyncDriver, mock_async
 # Result Wrapping Tests
 def test_sync_wrap_select_result(sync_driver: PsycopgSyncDriver) -> None:
     """Test sync wrapping SELECT results."""
+    from sqlspec.statement.result import SelectResultDict
+    
     statement = SQL("SELECT * FROM users")
-    result = {
+    result: SelectResultDict = {
         "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
         "column_names": ["id", "name"],
         "rows_affected": 2,
@@ -537,7 +539,7 @@ async def test_async_wrap_select_result(async_driver: PsycopgAsyncDriver) -> Non
         "rows_affected": 2,
     }
 
-    wrapped = await async_driver._wrap_select_result(statement, result)  # pyright: ignore
+    wrapped: SQLResult[Any] = await async_driver._wrap_select_result(statement, result)  # pyright: ignore
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.statement is statement
