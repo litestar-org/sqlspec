@@ -684,39 +684,39 @@ class SQL:
         """
         if isinstance(params, (list, tuple)):
             # Create a new list with reordered parameters
-            reordered = [None] * len(params)  # pyright: ignore
+            reordered_list = [None] * len(params)  # pyright: ignore
             for new_pos, old_pos in mapping.items():
                 if old_pos < len(params):
-                    reordered[new_pos] = params[old_pos]  # pyright: ignore
+                    reordered_list[new_pos] = params[old_pos]  # pyright: ignore
 
             # Handle any unmapped positions
-            for i, val in enumerate(reordered):
+            for i, val in enumerate(reordered_list):
                 if val is None and i < len(params) and i not in mapping:
                     # If position wasn't mapped, try to use original
-                    reordered[i] = params[i]  # pyright: ignore
+                    reordered_list[i] = params[i]  # pyright: ignore
 
             # Return in same format as input
-            return tuple(reordered) if isinstance(params, tuple) else reordered
+            return tuple(reordered_list) if isinstance(params, tuple) else reordered_list
 
         if isinstance(params, dict):
             # For dict parameters, we need to handle differently
             # If keys are like param_0, param_1, we can reorder them
             if all(key.startswith("param_") and key[6:].isdigit() for key in params):
-                reordered: dict[str, Any] = {}
+                reordered_dict: dict[str, Any] = {}
                 for new_pos, old_pos in mapping.items():
                     old_key = f"param_{old_pos}"
                     new_key = f"param_{new_pos}"
                     if old_key in params:
-                        reordered[new_key] = params[old_key]
+                        reordered_dict[new_key] = params[old_key]
 
                 # Add any unmapped parameters
                 for key, value in params.items():
-                    if key not in reordered and key.startswith("param_"):
+                    if key not in reordered_dict and key.startswith("param_"):
                         idx = int(key[6:])
                         if idx not in mapping:
-                            reordered[key] = value
+                            reordered_dict[key] = value
 
-                return reordered
+                return reordered_dict
             # Can't reorder named parameters, return as-is
             return params
         # Single value or unknown format, return as-is

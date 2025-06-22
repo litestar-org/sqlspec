@@ -45,7 +45,9 @@ class ExpressionSimplifier(ProcessorProtocol):
         self.enabled = enabled
         self.config = config or SimplificationConfig()
 
-    def process(self, expression: "Optional[exp.Expression]", context: "SQLProcessingContext") -> "Optional[exp.Expression]":
+    def process(
+        self, expression: "Optional[exp.Expression]", context: "SQLProcessingContext"
+    ) -> "Optional[exp.Expression]":
         """Process the expression to apply SQLGlot's simplification optimizations."""
         if not self.enabled or expression is None:
             return expression

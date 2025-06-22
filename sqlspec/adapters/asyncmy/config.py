@@ -22,24 +22,26 @@ __all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "AsyncmyConfig")
 
 logger = logging.getLogger(__name__)
 
-CONNECTION_FIELDS = frozenset({
-    "host",
-    "user",
-    "password",
-    "database",
-    "port",
-    "unix_socket",
-    "charset",
-    "connect_timeout",
-    "read_default_file",
-    "read_default_group",
-    "autocommit",
-    "local_infile",
-    "ssl",
-    "sql_mode",
-    "init_command",
-    "cursor_class",
-})
+CONNECTION_FIELDS = frozenset(
+    {
+        "host",
+        "user",
+        "password",
+        "database",
+        "port",
+        "unix_socket",
+        "charset",
+        "connect_timeout",
+        "read_default_file",
+        "read_default_group",
+        "autocommit",
+        "local_infile",
+        "ssl",
+        "sql_mode",
+        "init_command",
+        "cursor_class",
+    }
+)
 
 POOL_FIELDS = CONNECTION_FIELDS.union({"minsize", "maxsize", "echo", "pool_recycle"})
 
@@ -140,6 +142,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             maxsize: Maximum number of connections allowed in the pool
             echo: If True, logging will be enabled for all SQL statements
             pool_recycle: Number of seconds after which a connection is recycled
+            pool_instance: Existing connection pool instance to use
             **kwargs: Additional parameters (stored in extras)
         """
         # Store connection parameters as instance attributes

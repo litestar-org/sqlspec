@@ -212,7 +212,7 @@ class Pipeline:
 
         # Check for native support
         if hasattr(self.driver, "_execute_pipeline_native"):
-            results = self.driver._execute_pipeline_native(self._operations, **self.options)  # type: ignore[attr-defined]
+            results = self.driver._execute_pipeline_native(self._operations, **self.options)  # pyright: ignore
         else:
             results = self._execute_pipeline_simulated()
 

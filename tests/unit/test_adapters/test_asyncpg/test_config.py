@@ -12,7 +12,7 @@ This module tests the AsyncpgConfig class including:
 """
 
 import ssl
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -161,7 +161,7 @@ def test_statement_config_initialization(statement_config: "SQLConfig | None", e
 )
 def test_timeout_configuration(timeout_type: str, value: str) -> None:
     """Test timeout configuration."""
-    config = AsyncpgConfig(host="localhost", **{timeout_type: value})  # pyright: ignore
+    config = AsyncpgConfig(host="localhost", **cast("AsyncpgConfig", {timeout_type: value}))  # pyright: ignore
     assert getattr(config, timeout_type) == value
 
 

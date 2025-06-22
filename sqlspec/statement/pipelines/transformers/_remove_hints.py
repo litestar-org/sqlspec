@@ -35,7 +35,9 @@ class HintRemover(ProcessorProtocol):
         self.remove_oracle_hints = remove_oracle_hints
         self.remove_mysql_version_comments = remove_mysql_version_comments
 
-    def process(self, expression: "Optional[exp.Expression]", context: "SQLProcessingContext") -> "Optional[exp.Expression]":
+    def process(
+        self, expression: "Optional[exp.Expression]", context: "SQLProcessingContext"
+    ) -> "Optional[exp.Expression]":
         """Removes SQL hints from the expression using SQLGlot AST traversal."""
         if not self.enabled or expression is None or context.current_expression is None:
             return expression

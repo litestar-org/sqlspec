@@ -359,7 +359,7 @@ class SyncStorageMixin(StorageMixinBase):
         if file_format == "parquet" and self.supports_native_parquet_export:
             # If we have a SQL object with parameters, compile it first
             if hasattr(statement, "compile") and hasattr(statement, "parameters") and statement.parameters:
-                _compiled_sql, _compiled_params = statement.compile(placeholder_style=self.default_parameter_style)
+                _compiled_sql, _compiled_params = statement.compile(placeholder_style=self.default_parameter_style)  # type: ignore[attr-defined]
             else:
                 try:
                     return self._export_native(query_str, destination_uri, file_format, **kwargs)

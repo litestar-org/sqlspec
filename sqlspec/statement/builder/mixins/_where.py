@@ -1,3 +1,4 @@
+# ruff: noqa: PLR2004
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from sqlglot import exp, parse_one
@@ -80,16 +81,17 @@ class WhereClauseMixin:
                     ">": exp.GT,
                     ">=": exp.GTE,
                     "like": exp.Like,
-                    "LIKE": exp.Like,
                     "in": exp.In,
-                    "IN": exp.In,
+                    "any": exp.Any,
                 }
-
+                operator = operator.lower()
                 # Handle special cases for NOT operators
-                if operator.lower() == "not like":
+                if operator == "not like":
                     condition_expr = exp.Not(this=exp.Like(this=col_expr, expression=placeholder_expr))
-                elif operator.lower() == "not in":
+                elif operator == "not in":
                     condition_expr = exp.Not(this=exp.In(this=col_expr, expression=placeholder_expr))
+                elif operator == "not any":
+                    condition_expr = exp.Not(this=exp.Any(this=col_expr, expression=placeholder_expr))
                 else:
                     expr_class = operator_map.get(operator)
                     if expr_class is None:

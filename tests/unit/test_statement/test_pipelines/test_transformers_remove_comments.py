@@ -57,6 +57,7 @@ def test_basic_comment_removal(
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
+    assert result_expr is not None, "Result expression should not be None"
     result_sql = result_expr.sql()
 
     # Check that comments are removed
@@ -80,6 +81,7 @@ def test_empty_comments_removal() -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
+    assert result_expr is not None, "Result expression should not be None"
     result_sql = result_expr.sql()
 
     assert "SELECT" in result_sql
@@ -99,6 +101,7 @@ def test_comments_preservation_in_strings() -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
+    assert result_expr is not None, "Result expression should not be None"
     result_sql = result_expr.sql()
 
     # String contents should be preserved
@@ -149,6 +152,7 @@ def test_complex_query_comment_removal(sql: str, description: str) -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
+    assert result_expr is not None, "Result expression should not be None"
     result_sql = result_expr.sql()
 
     # Should preserve query structure
@@ -181,6 +185,7 @@ def test_comments_in_case_statements() -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
+    assert result_expr is not None, "Result expression should not be None"
     result_sql = result_expr.sql()
 
     # CASE structure should be preserved
@@ -206,6 +211,7 @@ def test_comments_in_function_calls() -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
+    assert result_expr is not None, "Result expression should not be None"
     result_sql = result_expr.sql()
 
     # Function calls should be preserved
@@ -234,6 +240,7 @@ def test_no_comments_to_remove(sql: str, expected_structure_preserved: list[str]
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
+    assert result_expr is not None, "Result expression should not be None"
     result_sql = result_expr.sql()
 
     # Structure should be preserved
@@ -253,6 +260,7 @@ def test_comments_with_special_characters() -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
+    assert result_expr is not None, "Result expression should not be None"
     result_sql = result_expr.sql()
 
     # Query structure should be preserved
@@ -275,6 +283,7 @@ def test_mixed_comment_styles() -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
+    assert result_expr is not None, "Result expression should not be None"
     result_sql = result_expr.sql()
 
     # Essential structure should be preserved
@@ -326,6 +335,7 @@ def test_comment_positions(sql: str, description: str) -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
+    assert result_expr is not None, "Result expression should not be None"
     result_sql = result_expr.sql()
 
     # Core query structure should remain
@@ -354,6 +364,7 @@ def test_hint_preservation(sql: str, preserved_hints: list[str], description: st
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
+    assert result_expr is not None, "Result expression should not be None"
     result_sql = result_expr.sql()
 
     # Hints should be preserved (though exact format may vary)
@@ -375,6 +386,7 @@ def test_transformer_disabled() -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
+    assert result_expr is not None, "Result expression should not be None"
     result_sql = result_expr.sql()
 
     # When disabled, comments might still be removed by SQLGlot's parsing
@@ -434,6 +446,7 @@ def test_preserves_query_structure() -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
+    assert result_expr is not None, "Result expression should not be None"
     result_sql = result_expr.sql()
 
     # Should preserve the basic structure (SQLGlot may add AS keywords)
@@ -487,6 +500,7 @@ def test_comprehensive_comment_removal(sql: str, min_preserved_tokens: list[str]
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
+    assert result_expr is not None, "Result expression should not be None"
     result_sql = result_expr.sql()
 
     # Ensure essential SQL structure is preserved
@@ -523,7 +537,7 @@ def test_transformer_handles_complex_ast() -> None:
     # Should not crash on complex query
     result_expr = transformer.process(context.current_expression, context)  # type: ignore[arg-type]
 
-    # Should preserve essential structure
+    assert result_expr is not None, "Result expression should not be None"
     result_sql = result_expr.sql()
     assert "WITH RECURSIVE" in result_sql
     assert "UNION ALL" in result_sql
