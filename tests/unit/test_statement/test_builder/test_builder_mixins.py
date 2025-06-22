@@ -20,7 +20,7 @@ This module tests the various builder mixins including:
 - AggregateFunctionsMixin for aggregate functions
 """
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from unittest.mock import Mock
 
 import pytest
@@ -836,7 +836,7 @@ def test_pivot_without_from_clause() -> None:
     result = builder.pivot(
         aggregate_function="SUM", aggregate_column="sales", pivot_column="quarter", pivot_values=["Q1"]
     )
-    assert result is builder
+    assert result is builder  # type: ignore[comparison-overlap]
     # No pivot should be added since there's no FROM clause
     assert builder._expression is not None
     assert builder._expression.args.get("from") is None
@@ -874,7 +874,10 @@ def test_unpivot_operations(value_column: str, name_column: str, columns: list[s
     builder = UnpivotTestBuilder(select_expr)
 
     result = builder.unpivot(
-        value_column_name=value_column, name_column_name=name_column, columns_to_unpivot=columns, alias=alias
+        value_column_name=value_column,
+        name_column_name=name_column,
+        columns_to_unpivot=cast("list[Union[str,exp.Expression]]", columns),  # type: ignore[misc]
+        alias=alias,
     )
 
     assert result is builder

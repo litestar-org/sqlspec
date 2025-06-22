@@ -429,7 +429,7 @@ def test_empty_query_handling() -> None:
     parameters = context.extracted_parameters_from_pipeline or []
     assert len(parameters) == 0
 
-    # SQL should remain largely unchanged
+    assert result_expr is not None
     result_sql = result_expr.sql()
     assert "id" in result_sql
     assert "name" in result_sql
@@ -489,7 +489,7 @@ def test_placeholders_already_present() -> None:
     assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
 
-    # Should not modify SQL that already has placeholders
+    assert result_expr is not None
     result_sql = result_expr.sql()
     assert "?" in result_sql
 
