@@ -136,7 +136,8 @@ class ExpressionSimplifier(ProcessorProtocol):
         placeholders = []
 
         for node in expression.walk():
-            if isinstance(node, exp.Placeholder):
+            # Check for both Placeholder and Parameter nodes (sqlglot parses $1 as Parameter)
+            if isinstance(node, (exp.Placeholder, exp.Parameter)):
                 # Get comparison context for the placeholder
                 parent = node.parent
                 comparison_info = None
@@ -157,7 +158,27 @@ class ExpressionSimplifier(ProcessorProtocol):
                     if isinstance(column, exp.Column):
                         comparison_info = {"column": column.name, "operator": parent.__class__.__name__, "side": side}
 
-                placeholder_info = {"node": node, "parent": parent, "comparison_info": comparison_info}
+                # Extract the placeholder index from its text
+                placeholder_text = str(node)
+                placeholder_index = None
+
+                # Handle different formats: "$1", "@1", ":1", etc.
+                if placeholder_text.startswith("$") and placeholder_text[1:].isdigit():
+                    # PostgreSQL style: $1, $2, etc. (1-based)
+                    placeholder_index = int(placeholder_text[1:]) - 1
+                elif placeholder_text.startswith("@") and placeholder_text[1:].isdigit():
+                    # sqlglot internal representation: @1, @2, etc. (1-based)
+                    placeholder_index = int(placeholder_text[1:]) - 1
+                elif placeholder_text.startswith(":") and placeholder_text[1:].isdigit():
+                    # Oracle style: :1, :2, etc. (1-based)
+                    placeholder_index = int(placeholder_text[1:]) - 1
+
+                placeholder_info = {
+                    "node": node,
+                    "parent": parent,
+                    "comparison_info": comparison_info,
+                    "index": placeholder_index,
+                }
                 placeholders.append(placeholder_info)
 
         return placeholders
@@ -177,55 +198,59 @@ class ExpressionSimplifier(ProcessorProtocol):
         """
         mapping = {}
 
-        # For each placeholder in the transformed expression
+        # For simplicity, if we have placeholder indices, use them directly
+        # This handles numeric placeholders like $1, $2
+        if all(ph.get("index") is not None for ph in placeholders_before + placeholders_after):
+            for new_pos, ph_after in enumerate(placeholders_after):
+                # The placeholder index tells us which original parameter this refers to
+                original_index = ph_after["index"]
+                if original_index is not None:
+                    mapping[new_pos] = original_index
+            return mapping
+
+        # For more complex cases, we need to match based on comparison context
+        # Map placeholders based on their comparison context and column
         for new_pos, ph_after in enumerate(placeholders_after):
             after_info = ph_after["comparison_info"]
 
             if after_info:
-                # Find matching placeholder in original based on comparison context
+                # For flipped comparisons (e.g., "value >= $1" becomes "$1 <= value")
+                # we need to match based on the semantic meaning, not just the operator
+
+                # First, try to find exact match based on column and operator meaning
                 for old_pos, ph_before in enumerate(placeholders_before):
                     before_info = ph_before["comparison_info"]
 
                     if before_info and before_info["column"] == after_info["column"]:
-                        # Check if operators were swapped (e.g., >= became <=)
-                        if (
-                            before_info["operator"] == "GTE"
-                            and after_info["operator"] == "LTE"
-                            and before_info["side"] == after_info["side"]
-                        ):
-                            # This is the upper bound parameter that was moved
-                            # Find the original position of the upper bound (<=)
-                            for orig_pos, orig_ph in enumerate(placeholders_before):
-                                orig_info = orig_ph["comparison_info"]
-                                if (
-                                    orig_info
-                                    and orig_info["column"] == after_info["column"]
-                                    and orig_info["operator"] == "LTE"
-                                ):
-                                    mapping[new_pos] = orig_pos
-                                    break
-                        elif (
-                            before_info["operator"] == "LTE"
-                            and after_info["operator"] == "GTE"
-                            and before_info["side"] == after_info["side"]
-                        ):
-                            # This is the lower bound parameter that was moved
-                            # Find the original position of the lower bound (>=)
-                            for orig_pos, orig_ph in enumerate(placeholders_before):
-                                orig_info = orig_ph["comparison_info"]
-                                if (
-                                    orig_info
-                                    and orig_info["column"] == after_info["column"]
-                                    and orig_info["operator"] == "GTE"
-                                ):
-                                    mapping[new_pos] = orig_pos
-                                    break
-                        elif before_info["operator"] == after_info["operator"]:
-                            # Same operator, direct mapping
+                        # Check if this is a flipped comparison
+                        # "value >= X" is semantically equivalent to "X <= value"
+                        # "value <= X" is semantically equivalent to "X >= value"
+
+                        before_op = before_info["operator"]
+                        after_op = after_info["operator"]
+                        before_side = before_info["side"]
+                        after_side = after_info["side"]
+
+                        # If sides are different, operators might be flipped
+                        if before_side != after_side:
+                            # Map flipped operators
+                            op_flip_map = {
+                                ("GTE", "right", "LTE", "left"): True,  # value >= X -> X <= value
+                                ("LTE", "right", "GTE", "left"): True,  # value <= X -> X >= value
+                                ("GT", "right", "LT", "left"): True,  # value > X -> X < value
+                                ("LT", "right", "GT", "left"): True,  # value < X -> X > value
+                            }
+
+                            if op_flip_map.get((before_op, before_side, after_op, after_side)):
+                                mapping[new_pos] = old_pos
+                                break
+                        # Same side, same operator - direct match
+                        elif before_op == after_op:
                             mapping[new_pos] = old_pos
                             break
-            # No comparison context, try to map by position
-            elif new_pos < len(placeholders_before):
+
+            # If no comparison context or no match found, try to map by position
+            if new_pos not in mapping and new_pos < len(placeholders_before):
                 mapping[new_pos] = new_pos
 
         return mapping
