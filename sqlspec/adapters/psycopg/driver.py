@@ -528,8 +528,8 @@ class PsycopgAsyncDriver(
         conn = self._connection(connection)
 
         async with conn.cursor() as cursor:
-            await cursor.execute(  # type: ignore[arg-type]
-                sql.to_sql(placeholder_style=self.default_parameter_style),
+            await cursor.execute(
+                sql.to_sql(placeholder_style=self.default_parameter_style),  # type: ignore[arg-type]
                 sql.get_parameters(style=self.default_parameter_style) or [],
             )
             arrow_table = await cursor.fetch_arrow_table()  # type: ignore[attr-defined]
@@ -542,7 +542,7 @@ class PsycopgAsyncDriver(
         conn = self._connection(None)
         async with conn.cursor() as cursor:
             if mode == "replace":
-                await cursor.execute(f"TRUNCATE TABLE {table_name}")
+                await cursor.execute(f"TRUNCATE TABLE {table_name}")  # type: ignore[arg-type]
             elif mode == "create":
                 msg = "'create' mode is not supported for psycopg ingestion."
                 raise NotImplementedError(msg)
@@ -551,7 +551,7 @@ class PsycopgAsyncDriver(
             pacsv.write_csv(table, buffer)
             buffer.seek(0)
 
-            async with cursor.copy(f"COPY {table_name} FROM STDIN WITH (FORMAT CSV, HEADER)") as copy:
+            async with cursor.copy(f"COPY {table_name} FROM STDIN WITH (FORMAT CSV, HEADER)") as copy:  # type: ignore[arg-type]
                 await copy.write(buffer.read())
 
             return cursor.rowcount if cursor.rowcount is not None else -1

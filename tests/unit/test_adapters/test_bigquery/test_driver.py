@@ -406,7 +406,7 @@ def test_wrap_select_result(driver: BigQueryDriver) -> None:
         "rows_affected": 2,
     }
 
-    wrapped = driver._wrap_select_result(statement, result)
+    wrapped = driver._wrap_select_result(statement, result)  # type: ignore[arg-type]
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.statement is statement
@@ -432,7 +432,7 @@ def test_wrap_select_result_with_schema(driver: BigQueryDriver) -> None:
         "rows_affected": 2,
     }
 
-    wrapped = driver._wrap_select_result(statement, result, schema_type=User)
+    wrapped = driver._wrap_select_result(statement, result, schema_type=User)  # type: ignore[arg-type]
 
     assert isinstance(wrapped, SQLResult)
     assert all(isinstance(item, User) for item in wrapped.data)
@@ -446,7 +446,7 @@ def test_wrap_execute_result_dml(driver: BigQueryDriver) -> None:
 
     result = {"rows_affected": 1, "status_message": "OK - job_id: test-job"}
 
-    wrapped = driver._wrap_execute_result(statement, result)
+    wrapped = driver._wrap_execute_result(statement, result)  # type: ignore[arg-type]
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.data == []
@@ -464,7 +464,7 @@ def test_wrap_execute_result_script(driver: BigQueryDriver) -> None:
 
     result = {"statements_executed": 2, "status_message": "SCRIPT EXECUTED"}
 
-    wrapped = driver._wrap_execute_result(statement, result)
+    wrapped = driver._wrap_execute_result(statement, result)  # type: ignore[arg-type]
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.data == []

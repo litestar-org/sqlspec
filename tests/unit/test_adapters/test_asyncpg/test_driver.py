@@ -335,7 +335,7 @@ async def test_wrap_select_result(driver: AsyncpgDriver) -> None:
         "rows_affected": 2,
     }
 
-    wrapped = await driver._wrap_select_result(statement, result)
+    wrapped = await driver._wrap_select_result(statement, result)  # type: ignore[arg-type]  # type: ignore[arg-type]
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.statement is statement
@@ -362,7 +362,7 @@ async def test_wrap_select_result_with_schema(driver: AsyncpgDriver) -> None:
         "rows_affected": 2,
     }
 
-    wrapped = await driver._wrap_select_result(statement, result, schema_type=User)
+    wrapped = await driver._wrap_select_result(statement, result, schema_type=User)  # type: ignore[arg-type]
 
     assert isinstance(wrapped, SQLResult)
     assert all(isinstance(item, User) for item in wrapped.data)
@@ -377,7 +377,7 @@ async def test_wrap_execute_result_dml(driver: AsyncpgDriver) -> None:
 
     result = {"rows_affected": 1, "status_message": "INSERT 0 1"}
 
-    wrapped = await driver._wrap_execute_result(statement, result)
+    wrapped = await driver._wrap_execute_result(statement, result)  # type: ignore[arg-type]
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.data == []
@@ -396,7 +396,7 @@ async def test_wrap_execute_result_script(driver: AsyncpgDriver) -> None:
 
     result = {"statements_executed": -1, "status_message": "CREATE TABLE"}
 
-    wrapped = await driver._wrap_execute_result(statement, result)
+    wrapped = await driver._wrap_execute_result(statement, result)  # type: ignore[arg-type]
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.data == []

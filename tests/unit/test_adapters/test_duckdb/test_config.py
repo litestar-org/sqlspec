@@ -199,7 +199,10 @@ def test_secret_configuration() -> None:
     ]
 
     config = DuckDBConfig(
-        database=":memory:", secrets=secrets, allow_persistent_secrets=True, secret_directory="/secrets"
+        database=":memory:",
+        secrets=secrets,
+        allow_persistent_secrets=True,
+        secret_directory="/secrets",  # type: ignore[arg-type]
     )
 
     assert config.secrets == secrets
@@ -232,7 +235,7 @@ def test_performance_settings(perf_setting: str, value: Any) -> None:
 )
 def test_cache_settings(cache_setting: str, value: bool) -> None:
     """Test cache-related settings."""
-    config = DuckDBConfig(database=":memory:", **{cache_setting: value})
+    config = DuckDBConfig(database=":memory:", **{cache_setting: value})  # type: ignore[arg-type]
     assert getattr(config, cache_setting) == value
 
 

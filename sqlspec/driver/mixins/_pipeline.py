@@ -208,7 +208,7 @@ class Pipeline:
 
         # Check for native support
         if hasattr(self.driver, "_execute_pipeline_native"):
-            results = self.driver._execute_pipeline_native(self._operations, **self.options)
+            results = self.driver._execute_pipeline_native(self._operations, **self.options)  # type: ignore[attr-defined]
         else:
             results = self._execute_pipeline_simulated()
 
@@ -269,16 +269,17 @@ class Pipeline:
         """Execute a single pipeline operation with error handling."""
         try:
             # Execute based on operation type
+            result: SQLResult[Any]
             if op.operation_type == "execute_script":
-                result = self.driver.execute_script(op.sql, _connection=connection)
+                result = cast("SQLResult[Any]", self.driver.execute_script(op.sql, _connection=connection))
             elif op.operation_type == "execute_many":
-                result = self.driver.execute_many(op.sql, _connection=connection)
+                result = cast("SQLResult[Any]", self.driver.execute_many(op.sql, _connection=connection))
             else:
-                result = self.driver.execute(op.sql, _connection=connection)
+                result = cast("SQLResult[Any]", self.driver.execute(op.sql, _connection=connection))
 
             # Add operation context to result
-            result.operation_index = i
-            result.pipeline_sql = op.sql
+            result.operation_index = i  # type: ignore[attr-defined]
+            result.pipeline_sql = op.sql  # type: ignore[attr-defined]
             results.append(result)
 
         except Exception as e:
@@ -309,7 +310,7 @@ class Pipeline:
         result = sql
         for filter_obj in filters:
             if hasattr(filter_obj, "apply"):
-                result = filter_obj.apply(result)
+                result = filter_obj.apply(result)  # type: ignore[attr-defined]
         return result
 
     def _has_native_support(self) -> bool:
@@ -430,7 +431,7 @@ class AsyncPipeline:
 
         # Check for native support
         if hasattr(self.driver, "_execute_pipeline_native"):
-            results = await self.driver._execute_pipeline_native(self._operations, **self.options)
+            results = await self.driver._execute_pipeline_native(self._operations, **self.options)  # type: ignore[attr-defined]
         else:
             results = await self._execute_pipeline_simulated()
 
@@ -482,6 +483,7 @@ class AsyncPipeline:
     ) -> None:
         """Execute a single async pipeline operation with error handling."""
         try:
+            result: SQLResult[Any]
             if op.operation_type == "execute_script":
                 result = await self.driver.execute_script(op.sql, _connection=connection)
             elif op.operation_type == "execute_many":
@@ -489,8 +491,8 @@ class AsyncPipeline:
             else:
                 result = await self.driver.execute(op.sql, _connection=connection)
 
-            result.operation_index = i
-            result.pipeline_sql = op.sql
+            result.operation_index = i  # type: ignore[attr-defined]
+            result.pipeline_sql = op.sql  # type: ignore[attr-defined]
             results.append(result)
 
         except Exception as e:

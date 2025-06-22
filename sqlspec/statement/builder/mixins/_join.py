@@ -34,11 +34,11 @@ class JoinClauseMixin:
             # Handle builder objects with build() method
             # Work directly with AST when possible to avoid string parsing
             if hasattr(table, "_expression") and getattr(table, "_expression", None) is not None:
-                subquery_exp = exp.paren(table._expression.copy())
+                subquery_exp = exp.paren(table._expression.copy())  # type: ignore[attr-defined]
                 table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
             else:
                 # Fallback to string parsing
-                subquery = table.build()
+                subquery = table.build()  # type: ignore[attr-defined]
                 subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(builder, "dialect", None)))
                 table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
             # Parameter merging logic can be added here if needed
@@ -95,11 +95,11 @@ class JoinClauseMixin:
         elif hasattr(table, "build"):
             # Handle builder objects with build() method
             if hasattr(table, "_expression") and getattr(table, "_expression", None) is not None:
-                subquery_exp = exp.paren(table._expression.copy())
+                subquery_exp = exp.paren(table._expression.copy())  # type: ignore[attr-defined]
                 table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
             else:
                 # Fallback to string parsing
-                subquery = table.build()
+                subquery = table.build()  # type: ignore[attr-defined]
                 subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(builder, "dialect", None)))
                 table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
         else:

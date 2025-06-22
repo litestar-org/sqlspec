@@ -370,6 +370,7 @@ ignore = [
   "SLF001",  # ruff - access of private method outside of class
   "S608",    # ruff - Possible sql injection
   "PLR0904", # too many public methods
+  "PLR6301", # method could be static or class method
 ]
 select = ["ALL"]
 

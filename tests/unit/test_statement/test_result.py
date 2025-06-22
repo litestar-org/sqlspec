@@ -278,7 +278,7 @@ def test_sql_result_script_execution() -> None:
     stmt3 = SQLResult[Any](
         statement=SQL("DELETE FROM test"),
         data=[],
-        rows_affected=None,  # Indicates failure
+        rows_affected=-1,  # Indicates failure
         operation_type="DELETE",
     )
     script_result.add_statement_result(stmt3)
@@ -353,7 +353,7 @@ def test_sql_result_script_total_rows_affected() -> None:
         SQLResult[Any](statement=SQL("UPDATE"), data=[], rows_affected=3, operation_type="UPDATE")
     )
     script_result.add_statement_result(
-        SQLResult[Any](statement=SQL("DELETE"), data=[], rows_affected=None, operation_type="DELETE")  # Failed
+        SQLResult[Any](statement=SQL("DELETE"), data=[], rows_affected=-1, operation_type="DELETE")  # Failed
     )
 
     assert script_result.get_total_rows_affected() == 8  # 5 + 3 + 0

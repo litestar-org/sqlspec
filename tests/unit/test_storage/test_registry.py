@@ -246,7 +246,7 @@ def test_backend_preference(
                     result = registry.get(uri)
 
                     mock_obstore_class.assert_called_once()
-                    assert result.backend_type == "obstore"
+                    assert result.backend_type == "obstore"  # type: ignore[attr-defined]
             else:
                 with patch("sqlspec.storage.backends.fsspec.FSSpecBackend") as mock_fsspec_class:
                     mock_backend = MagicMock()
@@ -256,7 +256,7 @@ def test_backend_preference(
                     result = registry.get(uri)
 
                     mock_fsspec_class.assert_called_once()
-                    assert result.backend_type == "fsspec"
+                    assert result.backend_type == "fsspec"  # type: ignore[attr-defined]
 
 
 # Clear Registry Tests

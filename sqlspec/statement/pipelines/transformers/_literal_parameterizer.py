@@ -199,13 +199,15 @@ class ParameterizeLiterals(ProcessorProtocol):
 
         # Add to parameters list
         self.extracted_parameters.append(typed_param)
-        self._parameter_metadata.append({
-            "index": len(self.extracted_parameters) - 1,
-            "type": type_hint,
-            "semantic_name": semantic_name,
-            "context": self._get_context_description(context),
-            # Note: We avoid calling literal.sql() for performance
-        })
+        self._parameter_metadata.append(
+            {
+                "index": len(self.extracted_parameters) - 1,
+                "type": type_hint,
+                "semantic_name": semantic_name,
+                "context": self._get_context_description(context),
+                # Note: We avoid calling literal.sql() for performance
+            }
+        )
 
         # Create appropriate placeholder
         return self._create_placeholder(hint=semantic_name)
@@ -512,12 +514,14 @@ class ParameterizeLiterals(ProcessorProtocol):
 
             # Replace entire array with a single parameter
             self.extracted_parameters.append(typed_param)
-            self._parameter_metadata.append({
-                "index": len(self.extracted_parameters) - 1,
-                "type": f"array<{element_type}>",
-                "length": len(array_values),
-                "context": "array_literal",
-            })
+            self._parameter_metadata.append(
+                {
+                    "index": len(self.extracted_parameters) - 1,
+                    "type": f"array<{element_type}>",
+                    "length": len(array_values),
+                    "context": "array_literal",
+                }
+            )
             return self._create_placeholder("array")
         # Process individual elements
         new_expressions = []

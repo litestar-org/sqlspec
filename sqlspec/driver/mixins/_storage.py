@@ -319,6 +319,7 @@ class SyncStorageMixin(StorageMixinBase):
             _config = self.config
         if _config and _config.enable_transformations:
             from dataclasses import replace
+
             _config = replace(_config, enable_transformations=False)
 
         if params is not None:
@@ -374,7 +375,13 @@ class SyncStorageMixin(StorageMixinBase):
                 sql_obj = cast("SQL", statement)
                 if hasattr(sql_obj, "parameters") and sql_obj.parameters and hasattr(sql_obj, "_raw_sql"):
                     # Create fresh SQL object from raw SQL without transformations
-                    fresh_sql = SQL(sql_obj._raw_sql, _config=replace(self.config, enable_transformations=False) if self.config else SQLConfig(enable_transformations=False), _dialect=self.dialect)
+                    fresh_sql = SQL(
+                        sql_obj._raw_sql,
+                        _config=replace(self.config, enable_transformations=False)
+                        if self.config
+                        else SQLConfig(enable_transformations=False),
+                        _dialect=self.dialect,
+                    )
                     arrow_result = self._fetch_arrow_table(fresh_sql, connection=_connection, **kwargs)
                 else:
                     arrow_result = self._fetch_arrow_table(sql_obj, connection=_connection, **kwargs)
@@ -511,6 +518,7 @@ class SyncStorageMixin(StorageMixinBase):
         # Handle compression and writing
         if compression == "gzip":
             import gzip
+
             with gzip.open(tmp_path, "wt", encoding="utf-8") as file_to_write:
                 if format == "csv":
                     self._write_csv(result, file_to_write, **options)
@@ -731,6 +739,7 @@ class AsyncStorageMixin(StorageMixinBase):
             _config = self.config
         if _config and _config.enable_transformations:
             from dataclasses import replace
+
             _config = replace(_config, enable_transformations=False)
 
         if params is not None:
@@ -773,7 +782,13 @@ class AsyncStorageMixin(StorageMixinBase):
             # If the query already has parameters from transformations, create a fresh SQL object
             if hasattr(query, "parameters") and query.parameters and hasattr(query, "_raw_sql"):
                 # Create fresh SQL object from raw SQL without transformations
-                fresh_sql = SQL(query._raw_sql, _config=replace(self.config, enable_transformations=False) if self.config else SQLConfig(enable_transformations=False), _dialect=self.dialect)
+                fresh_sql = SQL(
+                    query._raw_sql,
+                    _config=replace(self.config, enable_transformations=False)
+                    if self.config
+                    else SQLConfig(enable_transformations=False),
+                    _dialect=self.dialect,
+                )
                 arrow_result = await self._fetch_arrow_table(fresh_sql, connection=connection, **options)
             else:
                 # query is already a SQL object, call _fetch_arrow_table directly

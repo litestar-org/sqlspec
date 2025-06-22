@@ -40,6 +40,7 @@ def test_update_table_method() -> None:
     """Test setting target table with table()."""
     builder = UpdateBuilder().table("users")
     # Check the target table is set in the expression
+    assert builder._expression is not None
     assert builder._expression.args.get("this") is not None
     assert isinstance(builder._expression.args["this"], exp.Table)
     assert builder._expression.args["this"].name == "users"

@@ -248,11 +248,12 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
             # For script execution, sum up rows affected from all statements
             total = 0
             for stmt_result in self.statement_results:
-                if stmt_result.rows_affected is not None:
+                if stmt_result.rows_affected is not None and stmt_result.rows_affected >= 0:
+                    # Only count non-negative values, -1 indicates failure
                     total += stmt_result.rows_affected
             return total
         # For single statement execution
-        return self.rows_affected or 0
+        return max(self.rows_affected or 0, 0)  # Treat negative values as 0
 
     @property
     def num_rows(self) -> int:

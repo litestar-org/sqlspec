@@ -52,6 +52,7 @@ def test_merge_into_method() -> None:
 def test_merge_into_with_alias() -> None:
     """Test setting target table with alias."""
     builder = MergeBuilder().into("users", "u")
+    assert builder._expression is not None
     target = builder._expression.args.get("this")
     assert target is not None
     assert isinstance(target, exp.Table)

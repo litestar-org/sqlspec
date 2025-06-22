@@ -246,16 +246,17 @@ async def test_asyncmy_driver_to_parquet(
         return mock_arrow_result
 
     # Mock the execute method to handle _connection parameter
-    async def mock_execute(sql: Any, **kwargs: Any) -> Any:
+    async def mock_execute_with_connection(sql: Any, **kwargs: Any) -> Any:
         # Return a mock result with required attributes
         class MockResult:
             data = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
             column_names = ["id", "name"]
             rows_affected = 2
+
         return MockResult()
 
     monkeypatch.setattr(asyncmy_driver, "fetch_arrow_table", mock_fetch_arrow_table)
-    monkeypatch.setattr(asyncmy_driver, "execute", mock_execute)
+    monkeypatch.setattr(asyncmy_driver, "execute", mock_execute_with_connection)
 
     with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
         await asyncmy_driver.export_to_storage(statement, destination_uri=tmp.name)  # type: ignore[attr-defined]

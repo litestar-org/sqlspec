@@ -290,7 +290,7 @@ def test_case_when_else_basic() -> None:
         .when("status = 2", "Inactive")
         .else_("Unknown")
         .end()
-        .from_("users")
+        .from_("users")  # type: ignore[attr-defined]
     )
 
     query = builder.build()
@@ -312,7 +312,7 @@ def test_case_without_else() -> None:
         .when("priority = 1", "High")
         .when("priority = 2", "Medium")
         .end()
-        .from_("tasks")
+        .from_("tasks")  # type: ignore[attr-defined]
     )
 
     query = builder.build()
@@ -325,7 +325,7 @@ def test_case_without_else() -> None:
 def test_case_with_expression_conditions() -> None:
     """Test CASE with sqlglot expression conditions."""
     condition_expr = exp.GT(this=exp.column("age"), expression=exp.Literal.number(18))
-    builder = SelectBuilder().case_("age_group").when(condition_expr, "Adult").else_("Minor").end().from_("people")
+    builder = SelectBuilder().case_("age_group").when(condition_expr, "Adult").else_("Minor").end().from_("people")  # type: ignore[attr-defined]
 
     query = builder.build()
     assert "CASE" in query.sql

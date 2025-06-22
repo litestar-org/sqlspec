@@ -311,6 +311,7 @@ class ObStoreBackend(ObjectStoreBase):
                     if str(field.type).startswith("decimal64"):
                         # Convert decimal64 to decimal128
                         import re
+
                         match = re.match(r"decimal64\((\d+),\s*(\d+)\)", str(field.type))
                         if match:
                             precision, scale = int(match.group(1)), int(match.group(2))

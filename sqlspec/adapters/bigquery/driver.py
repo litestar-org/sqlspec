@@ -394,8 +394,9 @@ class BigQueryDriver(
             # Filter out non-parameter keys (dialect, config, etc.)
             # Real parameters start with '_arg_' or are user-provided named parameters
             param_dict = {
-                k: v for k, v in converted_params.items()
-                if k.startswith("_arg_") or (not k.startswith("_") and k not in ("dialect", "config"))
+                k: v
+                for k, v in converted_params.items()
+                if k.startswith("_arg_") or (not k.startswith("_") and k not in {"dialect", "config"})
             }
             logger.warning("Filtered param_dict from %r to %r", converted_params, param_dict)
         elif isinstance(converted_params, (list, tuple)):

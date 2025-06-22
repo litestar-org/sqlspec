@@ -192,6 +192,7 @@ def test_where_any_operations(values_or_subquery: Any, expected_any_type: Any) -
     # Test where_any
     result = builder.where_any("id", values_or_subquery)
     assert result is builder
+    assert builder._expression is not None
     where_expr = builder._expression.args.get("where")
     assert where_expr is not None
     assert isinstance(where_expr.this, exp.EQ)
@@ -200,6 +201,7 @@ def test_where_any_operations(values_or_subquery: Any, expected_any_type: Any) -
     builder = WhereTestBuilder(exp.Select())
     result = builder.where_not_any("id", values_or_subquery)
     assert result is builder
+    assert builder._expression is not None
     where_expr = builder._expression.args.get("where")
     assert where_expr is not None
     assert isinstance(where_expr.this, exp.NEQ)
@@ -551,6 +553,7 @@ def test_group_by_advanced_operations(method: str, columns: Any) -> None:
         result = group_method(*columns)
 
     assert result is builder
+    assert builder._expression is not None
     assert builder._expression.args.get("group") is not None
 
 
@@ -835,6 +838,7 @@ def test_pivot_without_from_clause() -> None:
     )
     assert result is builder
     # No pivot should be added since there's no FROM clause
+    assert builder._expression is not None
     assert builder._expression.args.get("from") is None
 
 
@@ -895,6 +899,7 @@ def test_unpivot_without_from_clause() -> None:
     result = builder.unpivot(value_column_name="value", name_column_name="name", columns_to_unpivot=["col1"])
     assert result is builder
     # No unpivot should be added since there's no FROM clause
+    assert builder._expression is not None
     assert builder._expression.args.get("from") is None
 
 
