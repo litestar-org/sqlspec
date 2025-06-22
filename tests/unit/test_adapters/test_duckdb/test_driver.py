@@ -144,7 +144,7 @@ def test_execute_statement_routing(
     statement._is_script = is_script
     statement._is_many = is_many
 
-    with patch.object(driver, expected_method, return_value={"rows_affected": 0}) as mock_method:
+    with patch.object(DuckDBDriver, expected_method, return_value={"rows_affected": 0}) as mock_method:
         driver._execute_statement(statement)
         mock_method.assert_called_once()
 

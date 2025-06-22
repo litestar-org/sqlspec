@@ -259,7 +259,7 @@ def test_sync_execute_statement_routing(
     statement._is_script = is_script
     statement._is_many = is_many
 
-    with patch.object(sync_driver, expected_method, return_value={"rows_affected": 0}) as mock_method:
+    with patch.object(PsycopgSyncDriver, expected_method, return_value={"rows_affected": 0}) as mock_method:
         sync_driver._execute_statement(statement)
         mock_method.assert_called_once()
 
@@ -335,7 +335,7 @@ async def test_async_execute_statement_routing(
     statement._is_script = is_script
     statement._is_many = is_many
 
-    with patch.object(async_driver, expected_method, return_value={"rows_affected": 0}) as mock_method:
+    with patch.object(PsycopgAsyncDriver, expected_method, return_value={"rows_affected": 0}) as mock_method:
         await async_driver._execute_statement(statement)
         mock_method.assert_called_once()
 

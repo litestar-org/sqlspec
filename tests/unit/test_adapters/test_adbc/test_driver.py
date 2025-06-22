@@ -498,8 +498,9 @@ def test_adbc_driver_to_parquet(adbc_driver: AdbcDriver, mock_cursor: Mock, monk
     mock_table = pa.table({"id": [1, 2], "name": ["Alice", "Bob"]})
     # Ensure the table has the expected num_rows
     assert mock_table.num_rows == 2
+    # Mock at the class level since instance has __slots__
     monkeypatch.setattr(
-        adbc_driver, "_fetch_arrow_table", lambda stmt, **kwargs: ArrowResult(statement=stmt, data=mock_table)
+        AdbcDriver, "_fetch_arrow_table", lambda self, stmt, **kwargs: ArrowResult(statement=stmt, data=mock_table)
     )
 
     # Patch the storage backend to avoid file system operations
@@ -512,7 +513,8 @@ def test_adbc_driver_to_parquet(adbc_driver: AdbcDriver, mock_cursor: Mock, monk
     # Mock the storage backend
     mock_backend = Mock()
     mock_backend.write_arrow = fake_write_arrow
-    monkeypatch.setattr(adbc_driver, "_get_storage_backend", lambda uri: mock_backend)
+    # Mock at the class level since instance has __slots__
+    monkeypatch.setattr(AdbcDriver, "_get_storage_backend", lambda self, uri: mock_backend)
 
     # Make the driver think it doesn't have native parquet export capability
     monkeypatch.setattr(adbc_driver.__class__, "supports_native_parquet_export", False)

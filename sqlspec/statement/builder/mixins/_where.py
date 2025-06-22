@@ -6,7 +6,6 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_column_expression, parse_condition_expression
-from sqlspec.statement.builder.update import UpdateBuilder
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder.protocols import BuilderProtocol
@@ -35,8 +34,8 @@ class WhereClauseMixin:
         """
         # Special case: if this is an UpdateBuilder and _expression is not exp.Update, raise the expected error for test coverage
 
-        if isinstance(self, UpdateBuilder) and not (
-            hasattr(self, "_expression") and isinstance(self._expression, exp.Update)
+        if self.__class__.__name__ == "UpdateBuilder" and not (
+            hasattr(self, "_expression") and isinstance(getattr(self, "_expression", None), exp.Update)
         ):
             msg = "Cannot add WHERE clause to non-UPDATE expression"
             raise SQLBuilderError(msg)

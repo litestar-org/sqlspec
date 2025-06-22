@@ -221,7 +221,8 @@ async def test_asyncmy_driver_to_parquet(
     def mock_resolve_backend_and_path(uri: str) -> tuple[AsyncMock, str]:
         return mock_backend, uri
 
-    monkeypatch.setattr(asyncmy_driver, "_resolve_backend_and_path", mock_resolve_backend_and_path)
+    # Mock at the class level since instance has __slots__
+    monkeypatch.setattr(AsyncmyDriver, "_resolve_backend_and_path", lambda self, uri, **kwargs: mock_resolve_backend_and_path(uri))
 
     # Mock the execute method for the unified storage mixin fallback
 
@@ -232,7 +233,8 @@ async def test_asyncmy_driver_to_parquet(
     async def mock_execute(sql_obj: SQL) -> SQLResult[dict[str, Any]]:
         return mock_result
 
-    monkeypatch.setattr(asyncmy_driver, "execute", mock_execute)
+    # Mock at the class level since instance has __slots__
+    monkeypatch.setattr(AsyncmyDriver, "execute", lambda self, sql_obj, **kwargs: mock_execute(sql_obj))
 
     # Mock fetch_arrow_table for the async export path
     import pyarrow as pa
@@ -255,8 +257,16 @@ async def test_asyncmy_driver_to_parquet(
 
         return MockResult()
 
-    monkeypatch.setattr(asyncmy_driver, "fetch_arrow_table", mock_fetch_arrow_table)
-    monkeypatch.setattr(asyncmy_driver, "execute", mock_execute_with_connection)
+    # Create async wrapper functions for the mocks
+    async def _fetch_arrow_wrapper(self: AsyncmyDriver, stmt: Any, **kwargs: Any) -> Any:
+        return await mock_fetch_arrow_table(stmt, **kwargs)
+    
+    async def _execute_wrapper(self: AsyncmyDriver, stmt: Any, **kwargs: Any) -> Any:
+        return await mock_execute_with_connection(stmt, **kwargs)
+    
+    # Mock at the class level since instance has __slots__
+    monkeypatch.setattr(AsyncmyDriver, "fetch_arrow_table", _fetch_arrow_wrapper)
+    monkeypatch.setattr(AsyncmyDriver, "execute", _execute_wrapper)
 
     with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
         await asyncmy_driver.export_to_storage(statement, destination_uri=tmp.name)  # type: ignore[attr-defined]

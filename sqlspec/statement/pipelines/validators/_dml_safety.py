@@ -197,7 +197,7 @@ class DMLSafetyValidator(BaseValidator):
         return 10000  # Conservative estimate
 
     @staticmethod
-    def _has_unique_condition(where: "exp.Expression") -> bool:
+    def _has_unique_condition(where: "Optional[exp.Expression]") -> bool:
         """Check if WHERE clause uses unique columns.
 
         Args:
@@ -206,6 +206,8 @@ class DMLSafetyValidator(BaseValidator):
         Returns:
             True if unique condition found
         """
+        if where is None:
+            return False
         # Look for id = value patterns
         for condition in where.find_all(exp.EQ):
             if isinstance(condition.left, exp.Column):
@@ -215,7 +217,7 @@ class DMLSafetyValidator(BaseValidator):
         return False
 
     @staticmethod
-    def _has_indexed_condition(where: "exp.Expression") -> bool:
+    def _has_indexed_condition(where: "Optional[exp.Expression]") -> bool:
         """Check if WHERE clause uses indexed columns.
 
         Args:
@@ -224,6 +226,8 @@ class DMLSafetyValidator(BaseValidator):
         Returns:
             True if indexed condition found
         """
+        if where is None:
+            return False
         # Look for common indexed column patterns
         for condition in where.find_all(exp.Predicate):
             if hasattr(condition, "left") and isinstance(condition.left, exp.Column):  # pyright: ignore

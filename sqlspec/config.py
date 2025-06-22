@@ -47,7 +47,8 @@ logger = get_logger("config")
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Protocol defining the interface for database configurations."""
 
-    __slots__ = ("_dialect", "pool_instance")
+    # Note: __slots__ cannot be used with dataclass fields in Python < 3.10
+    # Concrete subclasses can still use __slots__ for any additional attributes
 
     is_async: "ClassVar[bool]" = field(init=False, default=False)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
