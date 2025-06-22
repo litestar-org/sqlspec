@@ -174,7 +174,7 @@ class AsyncpgDriver(
                 else:
                     params_list.append((param_set,))
 
-            _status = await conn.executemany(sql, params_list)
+            await conn.executemany(sql, params_list)
             # AsyncPG's executemany returns None, not a status string
             # We need to use the number of parameter sets as the row count
             rows_affected = len(params_list)
@@ -273,13 +273,13 @@ class AsyncpgDriver(
             List of SQLResult objects from all operations
         """
 
-        results = []
+        results: list[Any] = []
         connection = self._connection()
 
         # Use a single transaction for all operations
         async with connection.transaction():
             for i, op in enumerate(operations):
-                _result = await self._execute_pipeline_operation(connection, i, op, options, results)
+                await self._execute_pipeline_operation(connection, i, op, options, results)
 
         return results
 

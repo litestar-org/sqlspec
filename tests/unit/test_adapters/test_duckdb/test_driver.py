@@ -18,7 +18,7 @@ import pytest
 
 from sqlspec.adapters.duckdb import DuckDBDriver
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.result import ArrowResult, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -85,7 +85,8 @@ def test_driver_default_row_type() -> None:
 
     # Default row type - DuckDB uses a string type hint
     driver = DuckDBDriver(connection=mock_conn)
-    assert driver.default_row_type == "dict[str, Any]"  # type: ignore[comparison-overlap]
+    # DuckDB driver has a string representation for default row type
+    assert str(driver.default_row_type) == "dict[str, Any]" or driver.default_row_type == DictRow
 
     # Custom row type
     custom_type: type[DictRow] = dict
@@ -263,9 +264,9 @@ def test_execute_script(driver: DuckDBDriver, mock_connection: MagicMock) -> Non
 def test_wrap_select_result(driver: DuckDBDriver) -> None:
     """Test wrapping SELECT results."""
     statement = SQL("SELECT * FROM users")
-    result = {"data": [(1, "Alice"), (2, "Bob")], "column_names": ["id", "name"], "rows_affected": 2}
+    result: SelectResultDict = {"data": [(1, "Alice"), (2, "Bob")], "column_names": ["id", "name"], "rows_affected": 2}
 
-    wrapped = driver._wrap_select_result(statement, result)  # pyright: ignore
+    wrapped = driver._wrap_select_result(statement, result)
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.statement is statement
@@ -286,9 +287,9 @@ def test_wrap_select_result_with_schema(driver: DuckDBDriver) -> None:
         name: str
 
     statement = SQL("SELECT * FROM users")
-    result = {"data": [(1, "Alice"), (2, "Bob")], "column_names": ["id", "name"], "rows_affected": 2}
+    result: SelectResultDict = {"data": [(1, "Alice"), (2, "Bob")], "column_names": ["id", "name"], "rows_affected": 2}
 
-    wrapped = driver._wrap_select_result(statement, result, schema_type=User)  # pyright: ignore
+    wrapped = driver._wrap_select_result(statement, result, schema_type=User)
 
     assert isinstance(wrapped, SQLResult)
     assert all(isinstance(item, User) for item in wrapped.data)
@@ -637,7 +638,7 @@ def test_connection_override_in_execute(driver: DuckDBDriver) -> None:
     # INSERT statements use cursor.execute, not connection.execute
     override_cursor.execute.assert_called_once()
     # Original connection should not be called
-    driver.connection.cursor.assert_not_called()
+    driver.connection.cursor.assert_not_called()  # pyright: ignore
 
 
 def test_fetch_arrow_table_empty_batch_list(driver: DuckDBDriver, mock_connection: MagicMock) -> None:

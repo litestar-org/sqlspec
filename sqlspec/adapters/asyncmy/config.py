@@ -108,7 +108,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         ssl: Optional[Any] = None,
         sql_mode: Optional[str] = None,
         init_command: Optional[str] = None,
-        cursor_class: Optional["type[Union[Cursor, DictCursor]]"] = None,  # pyright: ignore
+        cursor_class: Optional[Union["type[Cursor]", "type[DictCursor]"]] = None,
         # Pool parameters
         minsize: Optional[int] = None,
         maxsize: Optional[int] = None,
@@ -161,7 +161,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         self.ssl = ssl
         self.sql_mode = sql_mode
         self.init_command = init_command
-        self.cursor_class = cursor_class  # pyright: ignore
+        self.cursor_class = cursor_class
 
         # Store pool parameters as instance attributes
         self.minsize = minsize

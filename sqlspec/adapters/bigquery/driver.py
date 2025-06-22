@@ -483,21 +483,21 @@ class BigQueryDriver(
         self, statement: SQL, result: SelectResultDict, schema_type: "Optional[type[ModelDTOT]]" = None, **kwargs: Any
     ) -> "Union[SQLResult[RowT], SQLResult[ModelDTOT]]":
         if schema_type:
-            return SQLResult(
+            return cast("SQLResult[ModelDTOT]", SQLResult(
                 statement=statement,
                 data=cast("list[ModelDTOT]", list(self.to_schema(data=result["data"], schema_type=schema_type))),
                 column_names=result["column_names"],
                 rows_affected=result["rows_affected"],
                 operation_type="SELECT",
-            )
+            ))
 
-        return SQLResult[RowT](
+        return cast("SQLResult[RowT]", SQLResult(
             statement=statement,
             data=result["data"],
             column_names=result["column_names"],
             operation_type="SELECT",
             rows_affected=result["rows_affected"],
-        )
+        ))
 
     def _wrap_execute_result(
         self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any

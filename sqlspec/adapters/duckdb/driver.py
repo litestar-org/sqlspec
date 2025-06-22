@@ -114,8 +114,11 @@ class DuckDBDriver(
             if rows_affected < 0:
                 try:
                     # Get actual affected row count from fetchone()
-                    result = cursor.fetchone()
-                    rows_affected = result[0] if result else 0
+                    fetch_result = cursor.fetchone()
+                    if fetch_result and isinstance(fetch_result, (tuple, list)) and len(fetch_result) > 0:
+                        rows_affected = fetch_result[0]
+                    else:
+                        rows_affected = 0
                 except Exception:
                     # Fallback to 1 if fetchone fails
                     rows_affected = 1

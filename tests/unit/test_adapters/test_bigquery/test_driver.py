@@ -89,7 +89,7 @@ def test_driver_default_row_type() -> None:
 
     # Default row type - BigQuery uses a string type hint
     driver = BigQueryDriver(connection=mock_conn)
-    assert driver.default_row_type == "dict[str, Any]"
+    assert driver.default_row_type == DictRow
 
     # Custom row type
     custom_type: type[DictRow] = dict
@@ -227,13 +227,15 @@ def test_prepare_bq_query_parameters_array(driver: BigQueryDriver) -> None:
 
     # Find the tags parameter
     tags_param = next(p for p in bq_params if p.name == "tags")
-    assert tags_param.array_type == "STRING"  # pyright: ignore
-    assert tags_param.values == ["python", "sql", "bigquery"]  # pyright: ignore
+    assert isinstance(tags_param, ArrayQueryParameter)
+    assert tags_param.array_type == "STRING"
+    assert tags_param.values == ["python", "sql", "bigquery"]
 
     # Find the numbers parameter
     numbers_param = next(p for p in bq_params if p.name == "numbers")
-    assert numbers_param.array_type == "INT64"  # pyright: ignore
-    assert numbers_param.values == [1, 2, 3, 4, 5]  # pyright: ignore
+    assert isinstance(numbers_param, ArrayQueryParameter)
+    assert numbers_param.array_type == "INT64"
+    assert numbers_param.values == [1, 2, 3, 4, 5]
 
 
 def test_prepare_bq_query_parameters_empty(driver: BigQueryDriver) -> None:

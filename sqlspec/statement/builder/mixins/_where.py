@@ -55,6 +55,7 @@ class WhereClauseMixin:
             raise SQLBuilderError(msg)
 
         # Normalize the condition using enhanced parsing
+        condition_expr: exp.Expression
         if isinstance(condition, tuple):
             # Handle tuple format with proper parameter binding
             if len(condition) == 2:
@@ -103,7 +104,7 @@ class WhereClauseMixin:
                 msg = f"WHERE tuple must have 2 or 3 elements, got {len(condition)}"
                 raise SQLBuilderError(msg)
         else:
-            condition_expr = parse_condition_expression(condition)  # type: ignore[assignment]
+            condition_expr = parse_condition_expression(condition)
 
         # Use dialect if available for Delete
         if isinstance(builder._expression, exp.Delete):

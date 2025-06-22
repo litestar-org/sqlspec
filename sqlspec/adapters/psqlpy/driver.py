@@ -99,7 +99,8 @@ class PsqlpyDriver(
             # Convert query_result to list of dicts
             dict_rows: list[dict[str, Any]] = []
             if query_result:
-                dict_rows = [dict(row) for row in query_result if hasattr(row, "__iter__")]  # pyright: ignore
+                # psqlpy QueryResult is a sequence of rows
+                dict_rows = [dict(row) for row in query_result]  # type: ignore[attr-defined]
             column_names = list(dict_rows[0].keys()) if dict_rows else []
             return {"data": dict_rows, "column_names": column_names, "rows_affected": len(dict_rows)}
         query_result = await conn.execute(sql, parameters=parameters)
@@ -110,8 +111,9 @@ class PsqlpyDriver(
         self, sql: str, param_list: Any, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
     ) -> DMLResultDict:
         conn = self._connection(connection)
-        query_result = await conn.execute_many(sql, param_list or [])
-        affected_count = getattr(query_result, "rows_affected", 0) if query_result is not None else -1
+        await conn.execute_many(sql, param_list or [])
+        # execute_many doesn't return a value with rows_affected
+        affected_count = -1
         return {"rows_affected": affected_count, "status_message": "OK"}
 
     async def _execute_script(
@@ -140,8 +142,14 @@ class PsqlpyDriver(
         pacsv.write_csv(table, buffer)
         buffer.seek(0)
 
-        await conn.copy_from_query(f"COPY {table_name} FROM STDIN WITH (FORMAT CSV, HEADER)", data=buffer.read())  # pyright: ignore
-        return table.num_rows
+        # Use copy_from_raw or copy_from depending on what's available
+        # The method name might have changed in newer versions
+        copy_method = getattr(conn, "copy_from_raw", getattr(conn, "copy_from_query", None))
+        if copy_method:
+            await copy_method(f"COPY {table_name} FROM STDIN WITH (FORMAT CSV, HEADER)", data=buffer.read())
+            return table.num_rows  # type: ignore[no-any-return]
+        msg = "Connection does not support COPY operations"
+        raise NotImplementedError(msg)
 
     async def _wrap_select_result(
         self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any

@@ -47,7 +47,7 @@ logger = get_logger("config")
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Protocol defining the interface for database configurations."""
 
-    __slots__ = ()
+    __slots__ = ("_dialect", "pool_instance")
 
     is_async: "ClassVar[bool]" = field(init=False, default=False)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)

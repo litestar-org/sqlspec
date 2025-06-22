@@ -224,10 +224,10 @@ class AiosqliteDriver(
                     data_iter = list(reader)
                     await cursor.executemany(sql, data_iter)
                     rowcount = cursor.rowcount
-                await conn.commit()  # type: ignore[attr-defined]
+                await conn.commit()
                 return rowcount
         finally:
-            await conn.close()  # type: ignore[attr-defined]
+            await conn.close()
 
     async def _wrap_select_result(
         self, statement: SQL, result: SelectResultDict, schema_type: "Optional[type[ModelDTOT]]" = None, **kwargs: Any

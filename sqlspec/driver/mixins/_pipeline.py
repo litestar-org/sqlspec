@@ -282,8 +282,8 @@ class Pipeline:
                 result = cast("SQLResult[Any]", self.driver.execute(op.sql, _connection=connection))
 
             # Add operation context to result
-            result.operation_index = i  # type: ignore[attr-defined]
-            result.pipeline_sql = op.sql  # type: ignore[attr-defined]
+            result.operation_index = i
+            result.pipeline_sql = op.sql
             results.append(result)
 
         except Exception as e:
@@ -314,7 +314,7 @@ class Pipeline:
         result = sql
         for filter_obj in filters:
             if hasattr(filter_obj, "apply"):
-                result = filter_obj.apply(result)  # type: ignore[attr-defined]
+                result = cast(Any, filter_obj).apply(result)
         return result
 
     def _has_native_support(self) -> bool:
@@ -435,7 +435,7 @@ class AsyncPipeline:
 
         # Check for native support
         if hasattr(self.driver, "_execute_pipeline_native"):
-            results = await self.driver._execute_pipeline_native(self._operations, **self.options)  # type: ignore[attr-defined]
+            results = await cast(Any, self.driver)._execute_pipeline_native(self._operations, **self.options)
         else:
             results = await self._execute_pipeline_simulated()
 
@@ -495,8 +495,8 @@ class AsyncPipeline:
             else:
                 result = await self.driver.execute(op.sql, _connection=connection)
 
-            result.operation_index = i  # type: ignore[attr-defined]
-            result.pipeline_sql = op.sql  # type: ignore[attr-defined]
+            result.operation_index = i
+            result.pipeline_sql = op.sql
             results.append(result)
 
         except Exception as e:

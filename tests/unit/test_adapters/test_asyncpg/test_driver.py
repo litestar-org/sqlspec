@@ -11,14 +11,14 @@ This module tests the AsyncpgDriver class including:
 """
 
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from sqlspec.adapters.asyncpg import AsyncpgDriver
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -329,11 +329,14 @@ async def test_execute_script(driver: AsyncpgDriver, mock_connection: AsyncMock)
 async def test_wrap_select_result(driver: AsyncpgDriver) -> None:
     """Test wrapping SELECT results."""
     statement = SQL("SELECT * FROM users")
-    result = {
-        "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
-        "column_names": ["id", "name"],
-        "rows_affected": 2,
-    }
+    result = cast(
+        "SelectResultDict",
+        {
+            "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
+            "column_names": ["id", "name"],
+            "rows_affected": 2,
+        },
+    )
 
     wrapped = await driver._wrap_select_result(statement, result)  # type: ignore[arg-type]  # type: ignore[arg-type]
 

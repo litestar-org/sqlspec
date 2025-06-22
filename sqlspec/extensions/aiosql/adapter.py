@@ -245,10 +245,10 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
             Number of affected rows
         """
         sql_obj = self._create_sql_object(sql, parameters)
-        result = self.driver.execute(sql_obj, connection=conn)
+        result = cast(SQLResult[Any], self.driver.execute(sql_obj, connection=conn))
 
         # SQLResult has rows_affected attribute
-        return result.rows_affected if hasattr(result, "rows_affected") else 0  # type: ignore[union-attr]
+        return result.rows_affected if hasattr(result, "rows_affected") else 0
 
     def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> int:
         """Execute INSERT/UPDATE/DELETE with many parameter sets.
@@ -265,10 +265,10 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
         # For executemany, we don't extract sqlspec filters from individual parameter sets
         sql_obj = self._create_sql_object(sql)
 
-        result = self.driver.execute_many(sql_obj, parameters=parameters, connection=conn)
+        result = cast(SQLResult[Any], self.driver.execute_many(sql_obj, parameters=parameters, connection=conn))
 
         # SQLResult has rows_affected attribute
-        return result.rows_affected if hasattr(result, "rows_affected") else 0  # type: ignore[union-attr]
+        return result.rows_affected if hasattr(result, "rows_affected") else 0
 
     def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Optional[Any]:
         """Execute INSERT with RETURNING and return result.

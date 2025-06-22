@@ -11,12 +11,12 @@ This module tests the DuckDBConfig class including:
 - Property accessors
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sqlspec.adapters.duckdb import CONNECTION_FIELDS, DuckDBConfig, DuckDBDriver
+from sqlspec.adapters.duckdb import CONNECTION_FIELDS, DuckDBConfig, DuckDBDriver, DuckDBSecretConfig
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow
 
@@ -27,43 +27,41 @@ if TYPE_CHECKING:
 # Constants Tests
 def test_connection_fields_constant() -> None:
     """Test CONNECTION_FIELDS constant contains all expected fields."""
-    expected_fields = frozenset(
-        {
-            "database",
-            "read_only",
-            "config",
-            "memory_limit",
-            "threads",
-            "temp_directory",
-            "max_temp_directory_size",
-            "autoload_known_extensions",
-            "autoinstall_known_extensions",
-            "allow_community_extensions",
-            "allow_unsigned_extensions",
-            "extension_directory",
-            "custom_extension_repository",
-            "autoinstall_extension_repository",
-            "allow_persistent_secrets",
-            "enable_external_access",
-            "secret_directory",
-            "enable_object_cache",
-            "parquet_metadata_cache",
-            "enable_external_file_cache",
-            "checkpoint_threshold",
-            "enable_progress_bar",
-            "progress_bar_time",
-            "enable_logging",
-            "log_query_path",
-            "logging_level",
-            "preserve_insertion_order",
-            "default_null_order",
-            "default_order",
-            "ieee_floating_point_ops",
-            "binary_as_string",
-            "arrow_large_buffer_size",
-            "errors_as_json",
-        }
-    )
+    expected_fields = frozenset({
+        "database",
+        "read_only",
+        "config",
+        "memory_limit",
+        "threads",
+        "temp_directory",
+        "max_temp_directory_size",
+        "autoload_known_extensions",
+        "autoinstall_known_extensions",
+        "allow_community_extensions",
+        "allow_unsigned_extensions",
+        "extension_directory",
+        "custom_extension_repository",
+        "autoinstall_extension_repository",
+        "allow_persistent_secrets",
+        "enable_external_access",
+        "secret_directory",
+        "enable_object_cache",
+        "parquet_metadata_cache",
+        "enable_external_file_cache",
+        "checkpoint_threshold",
+        "enable_progress_bar",
+        "progress_bar_time",
+        "enable_logging",
+        "log_query_path",
+        "logging_level",
+        "preserve_insertion_order",
+        "default_null_order",
+        "default_order",
+        "ieee_floating_point_ops",
+        "binary_as_string",
+        "arrow_large_buffer_size",
+        "errors_as_json",
+    })
     assert CONNECTION_FIELDS == expected_fields
 
 
@@ -172,7 +170,7 @@ def test_extension_configuration() -> None:
 )
 def test_extension_flags(extension_flag: str, value: bool) -> None:
     """Test extension-related flags."""
-    config = DuckDBConfig(database=":memory:", **{extension_flag: value})  # pyright: ignore
+    config = DuckDBConfig(database=":memory:", **{extension_flag: value})  # type: ignore[arg-type]
     assert getattr(config, extension_flag) == value
 
 
@@ -193,16 +191,13 @@ def test_extension_repository_configuration() -> None:
 # Secret Management Tests
 def test_secret_configuration() -> None:
     """Test secret configuration."""
-    secrets = [
+    secrets: list[DuckDBSecretConfig] = [
         {"secret_type": "openai", "name": "my_openai_key", "value": {"api_key": "sk-test"}, "scope": "LOCAL"},
         {"secret_type": "aws", "name": "my_aws_creds", "value": {"access_key_id": "test", "secret_access_key": "test"}},
     ]
 
     config = DuckDBConfig(
-        database=":memory:",
-        secrets=secrets,
-        allow_persistent_secrets=True,
-        secret_directory="/secrets",  # type: ignore[arg-type]
+        database=":memory:", secrets=secrets, allow_persistent_secrets=True, secret_directory="/secrets"
     )
 
     assert config.secrets == secrets

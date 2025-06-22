@@ -3,6 +3,9 @@ from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
+if TYPE_CHECKING:
+    from psycopg.abc import Query
+
 from psycopg import AsyncConnection, Connection
 from psycopg.rows import DictRow as PsycopgDictRow
 from sqlglot.dialects.dialect import DialectType
@@ -104,7 +107,7 @@ class PsycopgSyncDriver(
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
         with conn.cursor() as cursor:
-            cursor.execute(sql, parameters)  # type: ignore[arg-type]
+            cursor.execute(cast("Query", sql), parameters)
             # Check if the statement returns rows
             if self.returns_rows(statement.expression):
                 fetched_data = cursor.fetchall()
@@ -471,29 +474,27 @@ class PsycopgAsyncDriver(
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
         async with conn.cursor() as cursor:
-            await cursor.execute(sql, parameters)  # type: ignore[arg-type]
+            await cursor.execute(cast("Query", sql), parameters)
 
             # When parsing is disabled, expression will be None, so check SQL directly
             if statement.expression and self.returns_rows(statement.expression):
                 # For SELECT statements, extract data while cursor is open
                 fetched_data = await cursor.fetchall()
                 column_names = [col.name for col in cursor.description or []]
-                result: SelectResultDict = {
+                return {
                     "data": fetched_data,
                     "column_names": column_names,
                     "rows_affected": len(fetched_data),
                 }
-                return result
             if not statement.expression and sql.strip().upper().startswith("SELECT"):
                 # For SELECT statements when parsing is disabled
                 fetched_data = await cursor.fetchall()
                 column_names = [col.name for col in cursor.description or []]
-                result: SelectResultDict = {
+                return {
                     "data": fetched_data,
                     "column_names": column_names,
                     "rows_affected": len(fetched_data),
                 }
-                return result
             # For DML statements
             dml_result: DMLResultDict = {
                 "rows_affected": cursor.rowcount,
@@ -506,22 +507,20 @@ class PsycopgAsyncDriver(
     ) -> DMLResultDict:
         conn = self._connection(connection)
         async with conn.cursor() as cursor:
-            await cursor.executemany(sql, param_list or [])  # type: ignore[arg-type]
-            result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": cursor.statusmessage or "OK"}
-            return result
+            await cursor.executemany(cast("Query", sql), param_list or [])
+            return {"rows_affected": cursor.rowcount, "status_message": cursor.statusmessage or "OK"}
 
     async def _execute_script(
         self, script: str, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
     ) -> ScriptResultDict:
         conn = self._connection(connection)
         async with conn.cursor() as cursor:
-            await cursor.execute(script)  # type: ignore[arg-type]
+            await cursor.execute(cast("Query", script))
             # For scripts, return script result format
-            result: ScriptResultDict = {
+            return {
                 "statements_executed": -1,  # Psycopg doesn't provide this info
                 "status_message": cursor.statusmessage or "SCRIPT EXECUTED",
             }
-            return result
 
     async def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         self._ensure_pyarrow_installed()
@@ -529,7 +528,7 @@ class PsycopgAsyncDriver(
 
         async with conn.cursor() as cursor:
             await cursor.execute(
-                sql.to_sql(placeholder_style=self.default_parameter_style),  # type: ignore[arg-type]
+                cast("Query", sql.to_sql(placeholder_style=self.default_parameter_style)),
                 sql.get_parameters(style=self.default_parameter_style) or [],
             )
             arrow_table = await cursor.fetch_arrow_table()  # type: ignore[attr-defined]
@@ -542,7 +541,7 @@ class PsycopgAsyncDriver(
         conn = self._connection(None)
         async with conn.cursor() as cursor:
             if mode == "replace":
-                await cursor.execute(f"TRUNCATE TABLE {table_name}")  # type: ignore[arg-type]
+                await cursor.execute(cast("Query", f"TRUNCATE TABLE {table_name}"))
             elif mode == "create":
                 msg = "'create' mode is not supported for psycopg ingestion."
                 raise NotImplementedError(msg)
@@ -551,7 +550,7 @@ class PsycopgAsyncDriver(
             pacsv.write_csv(table, buffer)
             buffer.seek(0)
 
-            async with cursor.copy(f"COPY {table_name} FROM STDIN WITH (FORMAT CSV, HEADER)") as copy:  # type: ignore[arg-type]
+            async with cursor.copy(cast("Query", f"COPY {table_name} FROM STDIN WITH (FORMAT CSV, HEADER)")) as copy:
                 await copy.write(buffer.read())
 
             return cursor.rowcount if cursor.rowcount is not None else -1
