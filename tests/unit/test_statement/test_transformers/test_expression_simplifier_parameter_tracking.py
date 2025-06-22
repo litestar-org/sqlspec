@@ -57,7 +57,8 @@ def test_expression_simplifier_no_tracking_without_parameters() -> None:
 
     # Process with simplifier
     simplifier = ExpressionSimplifier(enabled=True)
-    simplifier.process(expression, context)
+    result = simplifier.process(expression, context)
+    assert result is not None
 
     # Should not have parameter mapping
     assert "parameter_position_mapping" not in context.metadata
@@ -80,7 +81,8 @@ def test_expression_simplifier_handles_complex_comparisons() -> None:
 
     # Process with simplifier
     simplifier = ExpressionSimplifier(enabled=True)
-    simplifier.process(expression, context)
+    result = simplifier.process(expression, context)
+    assert result is not None
 
     # If any reordering happened, it should be tracked
     if "parameter_position_mapping" in context.metadata:

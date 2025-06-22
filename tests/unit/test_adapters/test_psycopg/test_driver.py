@@ -19,7 +19,7 @@ import pytest
 
 from sqlspec.adapters.psycopg import PsycopgAsyncDriver, PsycopgSyncDriver
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
+from sqlspec.statement.result import DMLResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -531,7 +531,7 @@ def test_sync_wrap_select_result(sync_driver: PsycopgSyncDriver) -> None:
 async def test_async_wrap_select_result(async_driver: PsycopgAsyncDriver) -> None:
     """Test async wrapping SELECT results."""
     statement = SQL("SELECT * FROM users")
-    result = {
+    result: SelectResultDict = {
         "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
         "column_names": ["id", "name"],
         "rows_affected": 2,
@@ -551,9 +551,9 @@ def test_sync_wrap_execute_result_dml(sync_driver: PsycopgSyncDriver) -> None:
     """Test sync wrapping DML results."""
     statement = SQL("INSERT INTO users VALUES (%s)")
 
-    result = {"rows_affected": 1, "status_message": "INSERT 0 1"}
+    result: DMLResultDict = {"rows_affected": 1, "status_message": "INSERT 0 1"}
 
-    wrapped = sync_driver._wrap_execute_result(statement, result)  # pyright: ignore
+    wrapped = sync_driver._wrap_execute_result(statement, result)
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.data == []
@@ -568,9 +568,9 @@ async def test_async_wrap_execute_result_dml(async_driver: PsycopgAsyncDriver) -
     """Test async wrapping DML results."""
     statement = SQL("INSERT INTO users VALUES (%s)")
 
-    result = {"rows_affected": 1, "status_message": "INSERT 0 1"}
+    result: DMLResultDict = {"rows_affected": 1, "status_message": "INSERT 0 1"}
 
-    wrapped = await async_driver._wrap_execute_result(statement, result)  # pyright: ignore
+    wrapped = await async_driver._wrap_execute_result(statement, result)
 
     assert isinstance(wrapped, SQLResult)
     assert wrapped.data == []
