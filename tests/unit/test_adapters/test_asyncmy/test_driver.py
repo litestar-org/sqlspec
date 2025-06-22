@@ -222,7 +222,9 @@ async def test_asyncmy_driver_to_parquet(
         return mock_backend, uri
 
     # Mock at the class level since instance has __slots__
-    monkeypatch.setattr(AsyncmyDriver, "_resolve_backend_and_path", lambda self, uri, **kwargs: mock_resolve_backend_and_path(uri))
+    monkeypatch.setattr(
+        AsyncmyDriver, "_resolve_backend_and_path", lambda self, uri, **kwargs: mock_resolve_backend_and_path(uri)
+    )
 
     # Mock the execute method for the unified storage mixin fallback
 
@@ -260,10 +262,10 @@ async def test_asyncmy_driver_to_parquet(
     # Create async wrapper functions for the mocks
     async def _fetch_arrow_wrapper(self: AsyncmyDriver, stmt: Any, **kwargs: Any) -> Any:
         return await mock_fetch_arrow_table(stmt, **kwargs)
-    
+
     async def _execute_wrapper(self: AsyncmyDriver, stmt: Any, **kwargs: Any) -> Any:
         return await mock_execute_with_connection(stmt, **kwargs)
-    
+
     # Mock at the class level since instance has __slots__
     monkeypatch.setattr(AsyncmyDriver, "fetch_arrow_table", _fetch_arrow_wrapper)
     monkeypatch.setattr(AsyncmyDriver, "execute", _execute_wrapper)
