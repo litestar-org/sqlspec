@@ -103,7 +103,7 @@ class PsqlpyDriver(
             column_names = list(dict_rows[0].keys()) if dict_rows else []
             return {"data": dict_rows, "column_names": column_names, "rows_affected": len(dict_rows)}
         query_result = await conn.execute(sql, parameters=parameters)
-        affected_count = query_result.rows_affected() if query_result is not None else -1
+        affected_count = getattr(query_result, "rows_affected", 0) if query_result is not None else -1
         return {"rows_affected": affected_count, "status_message": "OK"}
 
     async def _execute_many(
@@ -111,7 +111,7 @@ class PsqlpyDriver(
     ) -> DMLResultDict:
         conn = self._connection(connection)
         query_result = await conn.execute_many(sql, param_list or [])
-        affected_count = query_result.rows_affected() if query_result is not None else -1
+        affected_count = getattr(query_result, "rows_affected", 0) if query_result is not None else -1
         return {"rows_affected": affected_count, "status_message": "OK"}
 
     async def _execute_script(

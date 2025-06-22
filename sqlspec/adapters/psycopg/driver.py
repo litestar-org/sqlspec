@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 import io
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
@@ -105,7 +104,7 @@ class PsycopgSyncDriver(
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
         with conn.cursor() as cursor:
-            cursor.execute(sql, parameters)
+            cursor.execute(sql, parameters)  # type: ignore[arg-type]
             # Check if the statement returns rows
             if self.returns_rows(statement.expression):
                 fetched_data = cursor.fetchall()
@@ -472,7 +471,7 @@ class PsycopgAsyncDriver(
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
         async with conn.cursor() as cursor:
-            await cursor.execute(sql, parameters)
+            await cursor.execute(sql, parameters)  # type: ignore[arg-type]
 
             # When parsing is disabled, expression will be None, so check SQL directly
             if statement.expression and self.returns_rows(statement.expression):
@@ -507,7 +506,7 @@ class PsycopgAsyncDriver(
     ) -> DMLResultDict:
         conn = self._connection(connection)
         async with conn.cursor() as cursor:
-            await cursor.executemany(sql, param_list or [])
+            await cursor.executemany(sql, param_list or [])  # type: ignore[arg-type]
             result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": cursor.statusmessage or "OK"}
             return result
 
@@ -516,7 +515,7 @@ class PsycopgAsyncDriver(
     ) -> ScriptResultDict:
         conn = self._connection(connection)
         async with conn.cursor() as cursor:
-            await cursor.execute(script)
+            await cursor.execute(script)  # type: ignore[arg-type]
             # For scripts, return script result format
             result: ScriptResultDict = {
                 "statements_executed": -1,  # Psycopg doesn't provide this info
@@ -529,11 +528,11 @@ class PsycopgAsyncDriver(
         conn = self._connection(connection)
 
         async with conn.cursor() as cursor:
-            await cursor.execute(
+            await cursor.execute(  # type: ignore[arg-type]
                 sql.to_sql(placeholder_style=self.default_parameter_style),
                 sql.get_parameters(style=self.default_parameter_style) or [],
             )
-            arrow_table = await cursor.fetch_arrow_table()
+            arrow_table = await cursor.fetch_arrow_table()  # type: ignore[attr-defined]
             return ArrowResult(statement=sql, data=arrow_table)
 
     async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:

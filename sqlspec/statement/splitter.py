@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 """SQL script statement splitter with dialect-aware lexer-driven state machine.
 
 This module provides a robust way to split SQL scripts into individual statements,

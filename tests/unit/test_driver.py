@@ -198,7 +198,7 @@ def test_common_driver_attributes_returns_rows(expression: exp.Expression | None
 def test_common_driver_attributes_returns_rows_with_clause() -> None:
     """Test returns_rows with WITH clause."""
     driver = MockSyncDriver(MockConnection())
-    
+
     # WITH clause with SELECT
     with_select = exp.With(expressions=[exp.Select()])
     assert driver.returns_rows(with_select) is True
@@ -211,7 +211,7 @@ def test_common_driver_attributes_returns_rows_with_clause() -> None:
 def test_common_driver_attributes_returns_rows_returning_clause() -> None:
     """Test returns_rows with RETURNING clause."""
     driver = MockSyncDriver(MockConnection())
-    
+
     # INSERT with RETURNING
     insert_returning = exp.Insert()
     insert_returning.set("expressions", [exp.Returning()])

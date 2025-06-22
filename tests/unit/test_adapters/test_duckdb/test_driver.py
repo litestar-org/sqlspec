@@ -618,7 +618,8 @@ def test_execute_many_with_empty_parameters(driver: DuckDBDriver, mock_connectio
 
     assert result == {"rows_affected": 0}
 
-    mock_cursor.executemany.assert_called_once_with(sql, [])
+    # DuckDB driver optimizes by not calling executemany with empty parameter list
+    mock_cursor.executemany.assert_not_called()
 
 
 def test_connection_override_in_execute(driver: DuckDBDriver) -> None:

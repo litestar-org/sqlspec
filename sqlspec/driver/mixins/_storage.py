@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.statement import SQL, ArrowResult, StatementFilter
+from sqlspec.statement.sql import SQLConfig
 from sqlspec.storage import storage_registry
 from sqlspec.typing import ArrowTable, RowT, StatementParameters
 from sqlspec.utils.sync_tools import async_
@@ -28,7 +29,7 @@ from sqlspec.utils.sync_tools import async_
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.statement import SQLConfig, SQLResult, Statement
+    from sqlspec.statement import SQLResult, Statement
     from sqlspec.storage.protocol import ObjectStoreProtocol
     from sqlspec.typing import ConnectionT
 
@@ -312,14 +313,14 @@ class SyncStorageMixin(StorageMixinBase):
         """
         # Create SQL object with proper parameter handling
         filters, params = _separate_filters_from_parameters(parameters)
-        
+
         # For storage operations, disable transformations that might add unwanted parameters
         if _config is None:
             _config = self.config
         if _config and _config.enable_transformations:
             from dataclasses import replace
             _config = replace(_config, enable_transformations=False)
-        
+
         if params is not None:
             sql = SQL(statement, params, *filters, _config=_config, _dialect=self.dialect)
         else:
@@ -369,7 +370,14 @@ class SyncStorageMixin(StorageMixinBase):
         if file_format == "parquet":
             # Use Arrow for efficient transfer - if statement is already a SQL object, use it directly
             if hasattr(statement, "compile"):  # It's already a SQL object from export_to_storage
-                arrow_result = self._fetch_arrow_table(cast("SQL", statement), connection=_connection, **kwargs)
+                # For parquet export via Arrow, we need to ensure no unwanted parameter transformations
+                sql_obj = cast("SQL", statement)
+                if hasattr(sql_obj, "parameters") and sql_obj.parameters and hasattr(sql_obj, "_raw_sql"):
+                    # Create fresh SQL object from raw SQL without transformations
+                    fresh_sql = SQL(sql_obj._raw_sql, _config=replace(self.config, enable_transformations=False) if self.config else SQLConfig(enable_transformations=False), _dialect=self.dialect)
+                    arrow_result = self._fetch_arrow_table(fresh_sql, connection=_connection, **kwargs)
+                else:
+                    arrow_result = self._fetch_arrow_table(sql_obj, connection=_connection, **kwargs)
             else:
                 # Create SQL object if it's still a string
                 arrow_result = self.fetch_arrow_table(statement, *parameters, _connection=_connection, _config=_config)
@@ -491,21 +499,19 @@ class SyncStorageMixin(StorageMixinBase):
 
         # Convert to appropriate format and write to backend
         compression = options.get("compression")
-        
+
         # Create temp file with appropriate suffix
         suffix = f".{format}"
         if compression == "gzip":
             suffix += ".gz"
-        
+
         with tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False, encoding="utf-8") as tmp:
-            # Handle compression if requested
-            file_to_write = tmp
-            if compression == "gzip":
-                import gzip
-                tmp.close()  # Close text mode file
-                file_to_write = gzip.open(tmp.name, "wt", encoding="utf-8")
-            
-            try:
+            tmp_path = Path(tmp.name)
+
+        # Handle compression and writing
+        if compression == "gzip":
+            import gzip
+            with gzip.open(tmp_path, "wt", encoding="utf-8") as file_to_write:
                 if format == "csv":
                     self._write_csv(result, file_to_write, **options)
                 elif format == "json":
@@ -513,11 +519,15 @@ class SyncStorageMixin(StorageMixinBase):
                 else:
                     msg = f"Unsupported format for backend export: {format}"
                     raise ValueError(msg)
-            finally:
-                if compression == "gzip":
-                    file_to_write.close()
-
-            tmp_path = Path(tmp.name)
+        else:
+            with tmp_path.open("w", encoding="utf-8") as file_to_write:
+                if format == "csv":
+                    self._write_csv(result, file_to_write, **options)
+                elif format == "json":
+                    self._write_json(result, file_to_write, **options)
+                else:
+                    msg = f"Unsupported format for backend export: {format}"
+                    raise ValueError(msg)
 
         try:
             # Upload to storage backend
@@ -525,7 +535,7 @@ class SyncStorageMixin(StorageMixinBase):
             final_path = path
             if compression == "gzip" and not path.endswith(".gz"):
                 final_path = path + ".gz"
-            
+
             backend.write_bytes(final_path, tmp_path.read_bytes())
             return result.rows_affected or len(result.data or [])
         finally:
@@ -715,14 +725,14 @@ class AsyncStorageMixin(StorageMixinBase):
     ) -> int:
         # Create SQL object with proper parameter handling
         filters, params = _separate_filters_from_parameters(parameters)
-        
+
         # For storage operations, disable transformations that might add unwanted parameters
         if _config is None:
             _config = self.config
         if _config and _config.enable_transformations:
             from dataclasses import replace
             _config = replace(_config, enable_transformations=False)
-        
+
         if params is not None:
             sql = SQL(statement, params, *filters, _config=_config, _dialect=self.dialect, **options)
         else:
@@ -759,8 +769,15 @@ class AsyncStorageMixin(StorageMixinBase):
         backend, path = self._resolve_backend_and_path(destination_uri)
 
         if file_format == "parquet":
-            # query is already a SQL object, call _fetch_arrow_table directly
-            arrow_result = await self._fetch_arrow_table(query, connection=connection, **options)
+            # For parquet export via Arrow, we need to ensure no unwanted parameter transformations
+            # If the query already has parameters from transformations, create a fresh SQL object
+            if hasattr(query, "parameters") and query.parameters and hasattr(query, "_raw_sql"):
+                # Create fresh SQL object from raw SQL without transformations
+                fresh_sql = SQL(query._raw_sql, _config=replace(self.config, enable_transformations=False) if self.config else SQLConfig(enable_transformations=False), _dialect=self.dialect)
+                arrow_result = await self._fetch_arrow_table(fresh_sql, connection=connection, **options)
+            else:
+                # query is already a SQL object, call _fetch_arrow_table directly
+                arrow_result = await self._fetch_arrow_table(query, connection=connection, **options)
             arrow_table = arrow_result.data
             if arrow_table is not None:
                 await backend.write_arrow_async(path, arrow_table, **options)

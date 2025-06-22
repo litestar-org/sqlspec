@@ -427,7 +427,7 @@ class AsyncpgDriver(
 
         return result_sql
 
-    def _split_script_statements(self, script: str) -> "list[str]":
+    def _split_script_statements(self, script: str, strip_trailing_semicolon: bool = False) -> "list[str]":
         """Split a SQL script into individual statements."""
         # Simple splitting on semicolon - could be enhanced with proper SQL parsing
         statements = [stmt.strip() for stmt in script.split(";")]

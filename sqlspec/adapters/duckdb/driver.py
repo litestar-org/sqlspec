@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 import contextlib
 import uuid
 from collections.abc import Generator

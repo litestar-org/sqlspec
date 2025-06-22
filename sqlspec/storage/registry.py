@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 """Unified Storage Registry for ObjectStore backends.
 
 This module provides a flexible, lazy-loading storage registry that supports:

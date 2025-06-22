@@ -325,7 +325,7 @@ class ObStoreBackend(ObjectStoreBase):
                 if needs_conversion:
                     new_schema = pa.schema(new_fields)
                     table = table.cast(new_schema)
-                
+
                 pq.write_table(table, buffer, **kwargs)
                 buffer.seek(0)
                 self.write_bytes(resolved_path, buffer.read())

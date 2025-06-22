@@ -1,4 +1,3 @@
-# ruff: noqa: PLR6301
 """Replaces literals in SQL with placeholders and extracts them using SQLGlot AST."""
 
 from dataclasses import dataclass

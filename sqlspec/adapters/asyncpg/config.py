@@ -317,7 +317,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         async with self.provide_connection(*args, **kwargs) as connection:
             # Create statement config with parameter style info if not already set
             statement_config = self.statement_config
-            if statement_config.allowed_parameter_styles is None:
+            if statement_config is not None and statement_config.allowed_parameter_styles is None:
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,

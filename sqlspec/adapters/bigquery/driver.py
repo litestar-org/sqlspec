@@ -347,7 +347,7 @@ class BigQueryDriver(
     ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
         logger.debug("_execute_statement - raw SQL: %r", statement._raw_sql)
         logger.debug("_execute_statement - parameters: %r", statement.parameters)
-        
+
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
@@ -382,7 +382,7 @@ class BigQueryDriver(
         converted_sql = sql
         # Parameters are already in the correct format from compile()
         converted_params = parameters
-        
+
         logger.warning("_execute received - sql: %r, parameters: %r", sql, parameters)
 
         # Prepare BigQuery parameters
@@ -395,7 +395,7 @@ class BigQueryDriver(
             # Real parameters start with '_arg_' or are user-provided named parameters
             param_dict = {
                 k: v for k, v in converted_params.items()
-                if k.startswith('_arg_') or (not k.startswith('_') and k not in ('dialect', 'config'))
+                if k.startswith("_arg_") or (not k.startswith("_") and k not in ("dialect", "config"))
             }
             logger.warning("Filtered param_dict from %r to %r", converted_params, param_dict)
         elif isinstance(converted_params, (list, tuple)):
@@ -406,12 +406,12 @@ class BigQueryDriver(
             param_dict = {"param_0": converted_params}
 
         bq_params = self._prepare_bq_query_parameters(param_dict)
-        
+
         # Debug logging
         logger.warning("BigQuery execution - SQL: %r", converted_sql)
         logger.warning("BigQuery param_dict after filtering: %r", param_dict)
         logger.warning("BigQuery params prepared: %r", bq_params)
-        
+
         query_job = self._run_query_job(converted_sql, bq_params, connection=connection)
 
         try:
@@ -543,22 +543,22 @@ class BigQueryDriver(
     # ============================================================================
     # BigQuery Native Export Support
     # ============================================================================
-    
+
     def _export_native(self, query: str, destination_uri: str, format: str, **options: Any) -> int:
         """BigQuery native export implementation.
-        
+
         For local files, BigQuery doesn't support direct export, so we raise NotImplementedError
         to trigger the fallback mechanism that uses fetch + write.
-        
+
         Args:
             query: SQL query to execute
             destination_uri: Destination URI (local file path or gs:// URI)
             format: Export format (parquet, csv, json, avro)
             **options: Additional export options
-            
+
         Returns:
             Number of rows exported
-            
+
         Raises:
             NotImplementedError: Always, to trigger fallback to fetch + write
         """
