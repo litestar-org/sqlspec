@@ -99,8 +99,8 @@ class PsqlpyDriver(
             # Convert query_result to list of dicts
             dict_rows: list[dict[str, Any]] = []
             if query_result:
-                # psqlpy QueryResult is a sequence of rows
-                dict_rows = [dict(row) for row in query_result]  # type: ignore[attr-defined]
+                # psqlpy QueryResult has a result() method that returns list of dicts
+                dict_rows = query_result.result()  # type: ignore[attr-defined]
             column_names = list(dict_rows[0].keys()) if dict_rows else []
             return {"data": dict_rows, "column_names": column_names, "rows_affected": len(dict_rows)}
         query_result = await conn.execute(sql, parameters=parameters)

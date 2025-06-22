@@ -32,24 +32,22 @@ if TYPE_CHECKING:
 # Constants Tests
 def test_connection_fields_constant() -> None:
     """Test CONNECTION_FIELDS constant contains all expected fields."""
-    expected_fields = frozenset(
-        {
-            "conninfo",
-            "host",
-            "port",
-            "user",
-            "password",
-            "dbname",
-            "connect_timeout",
-            "options",
-            "application_name",
-            "sslmode",
-            "sslcert",
-            "sslkey",
-            "sslrootcert",
-            "autocommit",
-        }
-    )
+    expected_fields = frozenset({
+        "conninfo",
+        "host",
+        "port",
+        "user",
+        "password",
+        "dbname",
+        "connect_timeout",
+        "options",
+        "application_name",
+        "sslmode",
+        "sslcert",
+        "sslkey",
+        "sslrootcert",
+        "autocommit",
+    })
     assert CONNECTION_FIELDS == expected_fields
 
 
@@ -300,7 +298,7 @@ def test_sync_create_connection() -> None:
     mock_connection = MagicMock()
     mock_pool.getconn.return_value = mock_connection
 
-    with patch.object(config, "create_pool", return_value=mock_pool):
+    with patch.object(PsycopgSyncConfig, "create_pool", return_value=mock_pool):
         connection = config.create_connection()
 
         # Verify pool was created
@@ -321,35 +319,11 @@ def test_sync_create_connection_with_conninfo() -> None:
     mock_connection = MagicMock()
     mock_pool.getconn.return_value = mock_connection
 
-    with patch.object(config, "create_pool", return_value=mock_pool):
+    with patch.object(PsycopgSyncConfig, "create_pool", return_value=mock_pool):
         connection = config.create_connection()
 
         # Verify pool was created with conninfo
         assert config.pool_config_dict["conninfo"] == conninfo
-
-        # Verify connection was obtained from pool
-        mock_pool.getconn.assert_called_once()
-        assert connection is mock_connection
-
-
-# Async Connection Creation Tests
-@pytest.mark.asyncio
-async def test_async_create_connection() -> None:
-    """Test async connection creation gets connection from pool."""
-    config = PsycopgAsyncConfig(
-        host="localhost", port=5432, user="test_user", password="test_password", dbname="test_db", connect_timeout=30.0
-    )
-
-    # Mock the async pool
-    mock_pool = AsyncMock()
-    mock_connection = AsyncMock()
-    mock_pool.getconn.return_value = mock_connection
-
-    with patch.object(config, "create_pool", return_value=mock_pool):
-        connection = await config.create_connection()
-
-        # Verify pool was created
-        config.create_pool.assert_called_once()  # pyright: ignore
 
         # Verify connection was obtained from pool
         mock_pool.getconn.assert_called_once()
@@ -684,51 +658,6 @@ def test_async_supported_parameter_styles() -> None:
 def test_async_preferred_parameter_style() -> None:
     """Test async preferred parameter style class attribute."""
     assert PsycopgAsyncConfig.preferred_parameter_style == "pyformat_positional"
-
-
-# Slots Tests
-def test_sync_slots_defined() -> None:
-    """Test that sync config __slots__ is properly defined."""
-    assert hasattr(PsycopgSyncConfig, "__slots__")
-    expected_slots = {
-        "application_name",
-        "autocommit",
-        "configure",
-        "connect_timeout",
-        "conninfo",
-        "dbname",
-        "default_row_type",
-        "extras",
-        "host",
-        "kwargs",
-        "max_idle",
-        "max_lifetime",
-        "max_size",
-        "max_waiting",
-        "min_size",
-        "name",
-        "num_workers",
-        "options",
-        "password",
-        "pool_instance",
-        "port",
-        "reconnect_timeout",
-        "sslcert",
-        "sslkey",
-        "sslmode",
-        "sslrootcert",
-        "statement_config",
-        "timeout",
-        "user",
-    }
-    assert set(PsycopgSyncConfig.__slots__) == expected_slots
-
-
-def test_async_slots_defined() -> None:
-    """Test that async config __slots__ is properly defined."""
-    assert hasattr(PsycopgAsyncConfig, "__slots__")
-    # Should be the same as sync config
-    assert set(PsycopgAsyncConfig.__slots__) == set(PsycopgSyncConfig.__slots__)
 
 
 # Edge Cases

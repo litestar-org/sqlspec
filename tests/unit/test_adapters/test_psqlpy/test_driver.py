@@ -1,7 +1,7 @@
 """Unit tests for PSQLPy driver."""
 
 from typing import cast
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
@@ -72,10 +72,11 @@ async def test_psqlpy_driver_execute_statement_select(
     psqlpy_driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock
 ) -> None:
     """Test PSQLPy driver _execute_statement for SELECT statements."""
-    # Setup mock connection - PSQLPy calls conn.fetch() which returns an iterable QueryResult
+    # Setup mock connection - PSQLPy calls conn.fetch() which returns a QueryResult
     mock_data = [{"id": 1, "name": "test"}]
-    # Make the mock query result iterable
-    mock_query_result = mock_data  # The query result IS the list of rows
+    # Create a mock QueryResult object with a result() method
+    mock_query_result = MagicMock()
+    mock_query_result.result.return_value = mock_data
     mock_psqlpy_connection.fetch.return_value = mock_query_result
 
     # Create SQL statement with parameters
