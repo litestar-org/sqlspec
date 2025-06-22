@@ -63,14 +63,7 @@ class BigQueryDriver(
     - execute_script() - Multi-statement scripts and DDL operations
     """
 
-    __slots__ = (
-        "_default_query_job_config",
-        "config",
-        "connection",
-        "default_row_type",
-        "on_job_complete",
-        "on_job_start",
-    )
+    __slots__ = ("_default_query_job_config", "on_job_complete", "on_job_start")
 
     dialect: "DialectType" = "bigquery"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NAMED_AT,)

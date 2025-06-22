@@ -20,6 +20,8 @@ class TypeCoercionMixin:
     and convert values to database-specific types.
     """
 
+    __slots__ = ()
+
     def _process_parameters(self, parameters: "SQLParameterType") -> "SQLParameterType":
         """Process parameters, extracting values from TypedParameter objects.
 

@@ -45,7 +45,7 @@ class AsyncmyDriver(
     default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
     __supports_arrow__: ClassVar[bool] = True
     __supports_parquet__: ClassVar[bool] = False
-    __slots__ = ("config", "connection", "default_row_type")
+    __slots__ = ()
 
     def __init__(
         self,

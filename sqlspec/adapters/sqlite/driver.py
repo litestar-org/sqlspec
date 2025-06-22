@@ -47,7 +47,7 @@ class SqliteDriver(
     instrumentation standards following the psycopg pattern.
     """
 
-    __slots__ = ("config", "connection", "default_row_type")
+    __slots__ = ()
 
     dialect: "DialectType" = "sqlite"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK, ParameterStyle.NAMED_COLON)

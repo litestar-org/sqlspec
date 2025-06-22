@@ -56,7 +56,7 @@ class AsyncpgDriver(
     dialect: "DialectType" = "postgres"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NUMERIC,)
     default_parameter_style: ParameterStyle = ParameterStyle.NUMERIC
-    __slots__ = ("config", "connection", "default_row_type")
+    __slots__ = ()
 
     def __init__(
         self,

@@ -60,7 +60,7 @@ class DuckDBDriver(
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
-    __slots__ = ("config", "connection", "default_row_type")
+    __slots__ = ()
 
     def __init__(
         self,

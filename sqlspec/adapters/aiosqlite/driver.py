@@ -44,7 +44,7 @@ class AiosqliteDriver(
     dialect: "DialectType" = "sqlite"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK, ParameterStyle.NAMED_COLON)
     default_parameter_style: ParameterStyle = ParameterStyle.QMARK
-    __slots__ = ("config", "connection", "default_row_type")
+    __slots__ = ()
 
     def __init__(
         self,
@@ -204,6 +204,7 @@ class AiosqliteDriver(
 
     async def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
         """Database-specific bulk load implementation."""
+        # TODO: convert this to use the storage backend.  it has async support
         if format != "csv":
             msg = f"aiosqlite driver only supports CSV for bulk loading, not {format}."
             raise NotImplementedError(msg)

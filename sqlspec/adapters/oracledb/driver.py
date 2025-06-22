@@ -47,7 +47,7 @@ class OracleSyncDriver(
     )
     default_parameter_style: ParameterStyle = ParameterStyle.NAMED_COLON
     support_native_arrow_export = True
-    __slots__ = ("config", "connection", "default_row_type")
+    __slots__ = ()
 
     def __init__(
         self,
@@ -242,7 +242,7 @@ class OracleAsyncDriver(
     default_parameter_style: ParameterStyle = ParameterStyle.NAMED_COLON
     __supports_arrow__: ClassVar[bool] = True
     __supports_parquet__: ClassVar[bool] = False
-    __slots__ = ("config", "connection", "default_row_type")
+    __slots__ = ()
 
     def __init__(
         self,

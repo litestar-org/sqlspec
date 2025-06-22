@@ -170,6 +170,8 @@ class StorageMixinBase(ABC):
 class SyncStorageMixin(StorageMixinBase):
     """Unified storage operations for synchronous drivers."""
 
+    __slots__ = ()
+
     def ingest_arrow_table(self, table: "ArrowTable", table_name: str, mode: str = "create", **options: Any) -> int:
         """Ingest an Arrow table into the database.
 
@@ -608,6 +610,8 @@ class SyncStorageMixin(StorageMixinBase):
 
 class AsyncStorageMixin(StorageMixinBase):
     """Unified storage operations for asynchronous drivers."""
+
+    __slots__ = ()
 
     async def ingest_arrow_table(
         self, table: "ArrowTable", table_name: str, mode: str = "create", **options: Any

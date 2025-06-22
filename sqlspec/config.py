@@ -47,6 +47,8 @@ logger = get_logger("config")
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Protocol defining the interface for database configurations."""
 
+    __slots__ = ()
+
     is_async: "ClassVar[bool]" = field(init=False, default=False)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
     supports_native_arrow_import: "ClassVar[bool]" = field(init=False, default=False)
@@ -214,7 +216,7 @@ class GenericPoolConfig:
 class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Generic Sync Database Configuration."""
 
-    __slots__ = ()  # All slots defined in parent
+    __slots__ = ()
 
     is_async: "ClassVar[bool]" = field(init=False, default=False)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=True)

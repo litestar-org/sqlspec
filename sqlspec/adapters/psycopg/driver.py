@@ -51,7 +51,7 @@ class PsycopgSyncDriver(
         ParameterStyle.NAMED_PYFORMAT,
     )
     default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
-    __slots__ = ("config", "connection", "default_row_type")
+    __slots__ = ()
 
     def __init__(
         self,
@@ -417,7 +417,7 @@ class PsycopgAsyncDriver(
         ParameterStyle.NAMED_PYFORMAT,
     )
     default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
-    __slots__ = ("config", "connection", "default_row_type")
+    __slots__ = ()
 
     def __init__(self, connection: PsycopgAsyncConnection, config: Optional[SQLConfig] = None) -> None:
         super().__init__(connection=connection, config=config, default_row_type=DictRow)
