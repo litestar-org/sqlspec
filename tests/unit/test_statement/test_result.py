@@ -69,7 +69,7 @@ def test_sql_result_select_is_success(
         statement=SQL("SELECT * FROM users"),
         data=data,
         column_names=column_names,
-        rows_affected=rows_affected,
+        rows_affected=rows_affected or 0,
         operation_type="SELECT",
     )
     assert result.is_success() == expected_success
@@ -172,7 +172,7 @@ def test_sql_result_dml_is_success(operation_type: str, rows_affected: Optional[
     result = SQLResult[dict[str, Any]](
         statement=SQL(f"{operation_type} ..."),
         data=[],  # DML typically has empty data unless RETURNING
-        rows_affected=rows_affected,
+        rows_affected=rows_affected or 0,
         operation_type=operation_type,
     )
     assert result.is_success() == expected_success

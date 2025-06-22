@@ -142,7 +142,7 @@ class StorageRegistry:
         if "://" in uri_or_alias:
             backend = self._resolve_from_uri(uri_or_alias, **kwargs)
             # Cache the instance for future use
-            self._instances[cache_key] = backend  # type: ignore[assignment]
+            self._instances[cache_key] = backend
             return backend
 
         # SECONDARY: Check if it's a registered alias
@@ -153,7 +153,7 @@ class StorageRegistry:
             merged_config.update(kwargs)
             # URI is passed as first positional arg
             instance = backend_cls(stored_uri, **merged_config)
-            self._instances[cache_key] = instance  # type: ignore[assignment]
+            self._instances[cache_key] = instance
             return instance
 
         # Not a URI and not an alias

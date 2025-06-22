@@ -29,9 +29,9 @@ class CommentRemover(ProcessorProtocol):
     def __init__(self, enabled: bool = True) -> None:
         self.enabled = enabled
 
-    def process(self, expression: exp.Expression, context: SQLProcessingContext) -> exp.Expression:
+    def process(self, expression: Optional[exp.Expression], context: SQLProcessingContext) -> Optional[exp.Expression]:
         """Process the expression to remove comments using SQLGlot AST traversal."""
-        if not self.enabled or context.current_expression is None:
+        if not self.enabled or expression is None or context.current_expression is None:
             return expression
 
         comments_removed_count = 0

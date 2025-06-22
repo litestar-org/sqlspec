@@ -1,7 +1,7 @@
 """Parameter style validation for SQL statements."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from sqlglot import exp
 
@@ -45,7 +45,7 @@ class ParameterStyleValidator(ProcessorProtocol):
         self.risk_level = risk_level
         self.fail_on_violation = fail_on_violation
 
-    def process(self, expression: exp.Expression, context: "SQLProcessingContext") -> None:
+    def process(self, expression: "Optional[exp.Expression]", context: "SQLProcessingContext") -> None:
         """Validate parameter styles in SQL.
 
         Args:
@@ -55,6 +55,9 @@ class ParameterStyleValidator(ProcessorProtocol):
         Returns:
             A ProcessorResult with the outcome of the validation.
         """
+        if expression is None:
+            return
+
         if context.current_expression is None:
             error = ValidationError(
                 message="ParameterStyleValidator received no expression.",

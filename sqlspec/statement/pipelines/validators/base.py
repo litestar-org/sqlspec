@@ -1,6 +1,6 @@
 # Base class for validators
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from sqlspec.exceptions import RiskLevel
 from sqlspec.statement.pipelines.base import ProcessorProtocol
@@ -17,7 +17,9 @@ __all__ = ("BaseValidator",)
 class BaseValidator(ProcessorProtocol, ABC):
     """Base class for all validators."""
 
-    def process(self, expression: "exp.Expression", context: "SQLProcessingContext") -> "exp.Expression":
+    def process(
+        self, expression: "Optional[exp.Expression]", context: "SQLProcessingContext"
+    ) -> "Optional[exp.Expression]":
         """Process the SQL expression through this validator.
 
         Args:
@@ -27,7 +29,8 @@ class BaseValidator(ProcessorProtocol, ABC):
         Returns:
             The expression unchanged (validators don't transform).
         """
-        # Call the abstract validate method that adds errors to context
+        if expression is None:
+            return None
         self.validate(expression, context)
         return expression
 

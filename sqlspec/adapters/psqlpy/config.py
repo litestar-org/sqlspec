@@ -18,47 +18,45 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("sqlspec.adapters.psqlpy")
 
-CONNECTION_FIELDS = frozenset(
-    {
-        "dsn",
-        "username",
-        "password",
-        "db_name",
-        "host",
-        "port",
-        "connect_timeout_sec",
-        "connect_timeout_nanosec",
-        "tcp_user_timeout_sec",
-        "tcp_user_timeout_nanosec",
-        "keepalives",
-        "keepalives_idle_sec",
-        "keepalives_idle_nanosec",
-        "keepalives_interval_sec",
-        "keepalives_interval_nanosec",
-        "keepalives_retries",
-        "ssl_mode",
-        "ca_file",
-        "target_session_attrs",
-        "options",
-        "application_name",
-        "client_encoding",
-        "gssencmode",
-        "sslnegotiation",
-        "sslcompression",
-        "sslcert",
-        "sslkey",
-        "sslpassword",
-        "sslrootcert",
-        "sslcrl",
-        "require_auth",
-        "channel_binding",
-        "krbsrvname",
-        "gsslib",
-        "gssdelegation",
-        "service",
-        "load_balance_hosts",
-    }
-)
+CONNECTION_FIELDS = frozenset({
+    "dsn",
+    "username",
+    "password",
+    "db_name",
+    "host",
+    "port",
+    "connect_timeout_sec",
+    "connect_timeout_nanosec",
+    "tcp_user_timeout_sec",
+    "tcp_user_timeout_nanosec",
+    "keepalives",
+    "keepalives_idle_sec",
+    "keepalives_idle_nanosec",
+    "keepalives_interval_sec",
+    "keepalives_interval_nanosec",
+    "keepalives_retries",
+    "ssl_mode",
+    "ca_file",
+    "target_session_attrs",
+    "options",
+    "application_name",
+    "client_encoding",
+    "gssencmode",
+    "sslnegotiation",
+    "sslcompression",
+    "sslcert",
+    "sslkey",
+    "sslpassword",
+    "sslrootcert",
+    "sslcrl",
+    "require_auth",
+    "channel_binding",
+    "krbsrvname",
+    "gsslib",
+    "gssdelegation",
+    "service",
+    "load_balance_hosts",
+})
 
 POOL_FIELDS = CONNECTION_FIELDS.union({"hosts", "ports", "conn_recycling_method", "max_db_pool_size", "configure"})
 
@@ -97,6 +95,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         "max_db_pool_size",
         "options",
         "password",
+        "pool_instance",
         "port",
         "ports",
         "require_auth",
@@ -176,6 +175,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         conn_recycling_method: Optional[str] = None,
         max_db_pool_size: Optional[int] = None,
         configure: Optional["Callable[[ConnectionPool], None]"] = None,
+        pool_instance: Optional[ConnectionPool] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize Psqlpy asynchronous configuration.
@@ -225,6 +225,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             conn_recycling_method: How a connection is recycled
             max_db_pool_size: Maximum size of the connection pool. Defaults to 10
             configure: Callback to configure new connections
+            pool_instance: Existing connection pool instance to use
             **kwargs: Additional parameters (stored in extras)
         """
         # Store connection parameters as instance attributes
@@ -278,6 +279,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
+        self.pool_instance: Optional[ConnectionPool] = pool_instance
 
         super().__init__()
 

@@ -58,8 +58,7 @@ class AdbcDriver(
     supports_native_parquet_export: ClassVar[bool] = False  # Not implemented yet
     supports_native_parquet_import: ClassVar[bool] = True
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK,)
-    default_parameter_style: ParameterStyle = ParameterStyle.QMARK
-    __slots__ = ("dialect",)
+    __slots__ = ("default_parameter_style", "dialect")
 
     def __init__(
         self,

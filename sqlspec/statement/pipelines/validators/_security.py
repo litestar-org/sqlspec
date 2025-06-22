@@ -178,7 +178,7 @@ class SecurityValidator(ProcessorProtocol):
             with contextlib.suppress(re.error):
                 self._compiled_patterns[f"custom_suspicious_{i}"] = re.compile(pattern, re.IGNORECASE)
 
-    def process(self, expression: exp.Expression, context: "SQLProcessingContext") -> None:
+    def process(self, expression: Optional[exp.Expression], context: "SQLProcessingContext") -> None:
         """Process the SQL expression and detect security issues in a single pass."""
         if not context.current_expression:
             return

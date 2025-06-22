@@ -22,26 +22,24 @@ __all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "AsyncmyConfig")
 
 logger = logging.getLogger(__name__)
 
-CONNECTION_FIELDS = frozenset(
-    {
-        "host",
-        "user",
-        "password",
-        "database",
-        "port",
-        "unix_socket",
-        "charset",
-        "connect_timeout",
-        "read_default_file",
-        "read_default_group",
-        "autocommit",
-        "local_infile",
-        "ssl",
-        "sql_mode",
-        "init_command",
-        "cursor_class",
-    }
-)
+CONNECTION_FIELDS = frozenset({
+    "host",
+    "user",
+    "password",
+    "database",
+    "port",
+    "unix_socket",
+    "charset",
+    "connect_timeout",
+    "read_default_file",
+    "read_default_group",
+    "autocommit",
+    "local_infile",
+    "ssl",
+    "sql_mode",
+    "init_command",
+    "cursor_class",
+})
 
 POOL_FIELDS = CONNECTION_FIELDS.union({"minsize", "maxsize", "echo", "pool_recycle"})
 
@@ -64,6 +62,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         "maxsize",
         "minsize",
         "password",
+        "pool_instance",
         "pool_recycle",
         "port",
         "read_default_file",
@@ -113,6 +112,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         maxsize: Optional[int] = None,
         echo: Optional[bool] = None,
         pool_recycle: Optional[int] = None,
+        pool_instance: Optional["Pool"] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize Asyncmy configuration.
@@ -170,6 +170,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
+        self.pool_instance: Optional[Pool] = pool_instance
 
         super().__init__()  # pyright: ignore
 

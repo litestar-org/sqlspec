@@ -1,7 +1,7 @@
 """SQL statement handling with centralized parameter management."""
 
 import operator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Optional, Union
 
 import sqlglot
@@ -224,8 +224,6 @@ class SQL:
             if self._raw_sql and not self._config.input_sql_had_placeholders:
                 param_info = self._config.parameter_validator.extract_parameters(self._raw_sql)
                 if param_info:
-                    from dataclasses import replace
-
                     self._config = replace(self._config, input_sql_had_placeholders=True)
             self._statement = self._to_expression(statement)
         else:
@@ -686,16 +684,16 @@ class SQL:
         """
         if isinstance(params, (list, tuple)):
             # Create a new list with reordered parameters
-            reordered = [None] * len(params)
+            reordered = [None] * len(params)  # pyright: ignore
             for new_pos, old_pos in mapping.items():
                 if old_pos < len(params):
-                    reordered[new_pos] = params[old_pos]
+                    reordered[new_pos] = params[old_pos]  # pyright: ignore
 
             # Handle any unmapped positions
             for i, val in enumerate(reordered):
                 if val is None and i < len(params) and i not in mapping:
                     # If position wasn't mapped, try to use original
-                    reordered[i] = params[i]
+                    reordered[i] = params[i]  # pyright: ignore
 
             # Return in same format as input
             return tuple(reordered) if isinstance(params, tuple) else reordered
@@ -704,7 +702,7 @@ class SQL:
             # For dict parameters, we need to handle differently
             # If keys are like param_0, param_1, we can reorder them
             if all(key.startswith("param_") and key[6:].isdigit() for key in params):
-                reordered = {}
+                reordered: dict[str, Any] = {}
                 for new_pos, old_pos in mapping.items():
                     old_key = f"param_{old_pos}"
                     new_key = f"param_{new_pos}"
@@ -875,9 +873,8 @@ class SQL:
         Returns:
             List of parameters
         """
+        result_list: list[Any] = []
         if is_dict(params):
-            # Convert dict to list, preserving order from param_info
-            result_list: list[Any] = []
             for p in param_info:
                 if p.name and p.name in params:
                     # Named parameter - get from dict and extract value from TypedParameter if needed
@@ -903,8 +900,6 @@ class SQL:
                     result_list.append(None)
             return result_list
         if isinstance(params, (list, tuple)):
-            # Extract values from TypedParameter objects if present
-            result_list: list[Any] = []
             for param in params:
                 if hasattr(param, "value"):
                     result_list.append(param.value)

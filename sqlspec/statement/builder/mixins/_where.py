@@ -5,6 +5,7 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_column_expression, parse_condition_expression
+from sqlspec.statement.builder.update import UpdateBuilder
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder.protocols import BuilderProtocol
@@ -15,11 +16,15 @@ __all__ = ("WhereClauseMixin",)
 class WhereClauseMixin:
     """Mixin providing WHERE clause methods for SELECT, UPDATE, and DELETE builders."""
 
-    def where(self, condition: Union[str, exp.Expression, exp.Condition, tuple[str, Any]]) -> Any:
+    def where(self, condition: Union[str, exp.Expression, exp.Condition, tuple[str, Any], tuple[str, str, Any]]) -> Any:
         """Add a WHERE clause to the statement.
 
         Args:
-            condition: The condition for the WHERE clause. Can be a string, sqlglot Expression, or (column, value) tuple.
+            condition: The condition for the WHERE clause. Can be:
+                - A string condition
+                - A sqlglot Expression or Condition
+                - A 2-tuple (column, value) for equality comparison
+                - A 3-tuple (column, operator, value) for custom comparison
 
         Raises:
             SQLBuilderError: If the current expression is not a supported statement type.
@@ -28,7 +33,6 @@ class WhereClauseMixin:
             The current builder instance for method chaining.
         """
         # Special case: if this is an UpdateBuilder and _expression is not exp.Update, raise the expected error for test coverage
-        from sqlspec.statement.builder.update import UpdateBuilder
 
         if isinstance(self, UpdateBuilder) and not (
             hasattr(self, "_expression") and isinstance(self._expression, exp.Update)
@@ -52,10 +56,50 @@ class WhereClauseMixin:
         # Normalize the condition using enhanced parsing
         if isinstance(condition, tuple):
             # Handle tuple format with proper parameter binding
-            param_name = builder.add_parameter(condition[1])[1]
-            condition_expr = exp.EQ(
-                this=parse_column_expression(condition[0]), expression=exp.Placeholder(this=param_name)
-            )
+            if len(condition) == 2:
+                # 2-tuple: (column, value) -> column = value
+                param_name = builder.add_parameter(condition[1])[1]
+                condition_expr = exp.EQ(
+                    this=parse_column_expression(condition[0]), expression=exp.Placeholder(this=param_name)
+                )
+            elif len(condition) == 3:
+                # 3-tuple: (column, operator, value) -> column operator value
+                column, operator, value = condition
+                param_name = builder.add_parameter(value)[1]
+                col_expr = parse_column_expression(column)
+                placeholder_expr = exp.Placeholder(this=param_name)
+
+                # Map operator strings to sqlglot expression types
+                operator_map = {
+                    "=": exp.EQ,
+                    "==": exp.EQ,
+                    "!=": exp.NEQ,
+                    "<>": exp.NEQ,
+                    "<": exp.LT,
+                    "<=": exp.LTE,
+                    ">": exp.GT,
+                    ">=": exp.GTE,
+                    "like": exp.Like,
+                    "LIKE": exp.Like,
+                    "in": exp.In,
+                    "IN": exp.In,
+                }
+
+                # Handle special cases for NOT operators
+                if operator.lower() == "not like":
+                    condition_expr = exp.Not(this=exp.Like(this=col_expr, expression=placeholder_expr))
+                elif operator.lower() == "not in":
+                    condition_expr = exp.Not(this=exp.In(this=col_expr, expression=placeholder_expr))
+                else:
+                    expr_class = operator_map.get(operator)
+                    if expr_class is None:
+                        msg = f"Unsupported operator in WHERE condition: {operator}"
+                        raise SQLBuilderError(msg)
+
+                    condition_expr = expr_class(this=col_expr, expression=placeholder_expr)
+            else:
+                msg = f"WHERE tuple must have 2 or 3 elements, got {len(condition)}"
+                raise SQLBuilderError(msg)
         else:
             condition_expr = parse_condition_expression(condition)  # type: ignore[assignment]
 

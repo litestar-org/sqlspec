@@ -129,8 +129,13 @@ class StatementAnalyzer(ProcessorProtocol):
         self._parse_cache: dict[tuple[str, Optional[str]], exp.Expression] = {}
         self._analysis_cache: dict[str, StatementAnalysis] = {}
 
-    def process(self, expression: "exp.Expression", context: "SQLProcessingContext") -> "exp.Expression":
+    def process(
+        self, expression: "Optional[exp.Expression]", context: "SQLProcessingContext"
+    ) -> "Optional[exp.Expression]":
         """Process the SQL expression to extract analysis metadata and store it in the context."""
+        if expression is None:
+            return None
+
         CorrelationContext.get()
         start_time = time.perf_counter()
 
@@ -324,13 +329,11 @@ class StatementAnalyzer(ProcessorProtocol):
             for in_clause in expression.find_all(exp.In)
             if (query := in_clause.args.get("query")) and isinstance(query, exp.Select)
         )
-        subqueries.extend(
-            [
-                exists_clause.this
-                for exists_clause in expression.find_all(exp.Exists)
-                if exists_clause.this and isinstance(exists_clause.this, exp.Select)
-            ]
-        )
+        subqueries.extend([
+            exists_clause.this
+            for exists_clause in expression.find_all(exp.Exists)
+            if exists_clause.this and isinstance(exists_clause.this, exp.Select)
+        ])
 
         analysis.subquery_count = len(subqueries)
         max_depth = 0

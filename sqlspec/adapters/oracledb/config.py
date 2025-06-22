@@ -30,44 +30,40 @@ __all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "OracleAsyncConfig", "OracleSyncC
 
 logger = logging.getLogger(__name__)
 
-CONNECTION_FIELDS = frozenset(
-    {
-        "dsn",
-        "user",
-        "password",
-        "host",
-        "port",
-        "service_name",
-        "sid",
-        "wallet_location",
-        "wallet_password",
-        "config_dir",
-        "tcp_connect_timeout",
-        "retry_count",
-        "retry_delay",
-        "mode",
-        "events",
-        "edition",
-    }
-)
+CONNECTION_FIELDS = frozenset({
+    "dsn",
+    "user",
+    "password",
+    "host",
+    "port",
+    "service_name",
+    "sid",
+    "wallet_location",
+    "wallet_password",
+    "config_dir",
+    "tcp_connect_timeout",
+    "retry_count",
+    "retry_delay",
+    "mode",
+    "events",
+    "edition",
+})
 
-POOL_FIELDS = CONNECTION_FIELDS.union(
-    {
-        "min",
-        "max",
-        "increment",
-        "threaded",
-        "getmode",
-        "homogeneous",
-        "timeout",
-        "wait_timeout",
-        "max_lifetime_session",
-        "session_callback",
-        "max_sessions_per_shard",
-        "soda_metadata_cache",
-        "ping_interval",
-    }
-)
+POOL_FIELDS = CONNECTION_FIELDS.union({
+    "min",
+    "max",
+    "increment",
+    "threaded",
+    "getmode",
+    "homogeneous",
+    "timeout",
+    "wait_timeout",
+    "max_lifetime_session",
+    "session_callback",
+    "max_sessions_per_shard",
+    "soda_metadata_cache",
+    "ping_interval",
+})
 
 
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool", OracleSyncDriver]):
@@ -91,6 +87,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         "mode",
         "password",
         "ping_interval",
+        "pool_instance",
         "port",
         "retry_count",
         "retry_delay",
@@ -156,6 +153,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         max_sessions_per_shard: Optional[int] = None,
         soda_metadata_cache: Optional[bool] = None,
         ping_interval: Optional[int] = None,
+        pool_instance: Optional["ConnectionPool"] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize Oracle synchronous configuration.
@@ -192,6 +190,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
             max_sessions_per_shard: Maximum number of sessions per shard
             soda_metadata_cache: Whether to enable SODA metadata caching
             ping_interval: Interval for pinging pooled connections
+            pool_instance: Optional existing connection pool instance
             **kwargs: Additional parameters (stored in extras)
         """
         # Store connection parameters as instance attributes
@@ -232,6 +231,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
+        self.pool_instance = pool_instance
 
         super().__init__()
 
@@ -366,6 +366,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         "mode",
         "password",
         "ping_interval",
+        "pool_instance",
         "port",
         "retry_count",
         "retry_delay",
@@ -431,6 +432,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         max_sessions_per_shard: Optional[int] = None,
         soda_metadata_cache: Optional[bool] = None,
         ping_interval: Optional[int] = None,
+        pool_instance: Optional["AsyncConnectionPool"] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize Oracle asynchronous configuration.
@@ -467,6 +469,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
             max_sessions_per_shard: Maximum number of sessions per shard
             soda_metadata_cache: Whether to enable SODA metadata caching
             ping_interval: Interval for pinging pooled connections
+            pool_instance: Optional existing async connection pool instance
             **kwargs: Additional parameters (stored in extras)
         """
         # Store connection parameters as instance attributes
@@ -507,6 +510,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
+        self.pool_instance: Optional[AsyncConnectionPool] = pool_instance
 
         super().__init__()
 

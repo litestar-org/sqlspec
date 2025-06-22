@@ -57,6 +57,7 @@ def test_literal_folding(sql: str, expected_simplifications: list[str]) -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # Check that arithmetic is simplified
@@ -79,6 +80,7 @@ def test_complex_arithmetic_simplification() -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # Complex expressions should be simplified
@@ -107,6 +109,7 @@ def test_boolean_optimization(
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # Check expected patterns
@@ -125,6 +128,7 @@ def test_connector_optimization() -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # Should potentially optimize to: a = 1 AND (b = 2 OR c = 3)
@@ -140,6 +144,7 @@ def test_equality_normalization() -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # Equality normalization might reorder expressions
@@ -156,6 +161,7 @@ def test_disabled_simplifier() -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # Should be unchanged
@@ -180,6 +186,7 @@ def test_custom_simplification_config() -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # Literal folding should work
@@ -254,6 +261,7 @@ def test_complex_query_simplification(sql: str, description: str) -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # Should preserve query structure
@@ -277,6 +285,7 @@ def test_preserves_parameters() -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # Parameters should be preserved
@@ -294,6 +303,7 @@ def test_no_optimization_needed() -> None:
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # Should be essentially unchanged
@@ -406,6 +416,7 @@ def test_comprehensive_simplification_scenarios(sql: str, expected_simplificatio
     context = create_context_with_sql(sql)
 
     result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # Check for expected simplification (may vary by SQLGlot version)
@@ -423,6 +434,7 @@ def test_chars_saved_calculation() -> None:
     assert context.current_expression is not None
     original_length = len(context.current_expression.sql())
     result_expr = transformer.process(context.current_expression, context)  # pyright: ignore
+    assert result_expr is not None
     simplified_length = len(result_expr.sql())
 
     metadata = context.metadata.get("ExpressionSimplifier")
@@ -457,7 +469,7 @@ def test_transformer_handles_complex_ast() -> None:
     assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
 
-    # Should preserve essential structure
+    assert result_expr is not None
     result_sql = result_expr.sql()
     assert "WITH RECURSIVE" in result_sql
     assert "SELECT" in result_sql

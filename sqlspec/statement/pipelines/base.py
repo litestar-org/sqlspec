@@ -83,7 +83,9 @@ class ProcessorProtocol(ABC):
     """Defines the interface for a single processing step in the SQL pipeline."""
 
     @abstractmethod
-    def process(self, expression: "exp.Expression", context: "SQLProcessingContext") -> "Optional[exp.Expression]":
+    def process(
+        self, expression: "Optional[exp.Expression]", context: "SQLProcessingContext"
+    ) -> "Optional[exp.Expression]":
         """Processes an SQL expression.
 
         Args:
@@ -226,7 +228,9 @@ class SQLValidator(ProcessorProtocol, UsesExpression):
         """Add a validator to the pipeline."""
         self.validators.append(validator)
 
-    def process(self, expression: "exp.Expression", context: "SQLProcessingContext") -> "exp.Expression":
+    def process(
+        self, expression: "Optional[exp.Expression]", context: "SQLProcessingContext"
+    ) -> "Optional[exp.Expression]":
         """Process the expression through all configured validators.
 
         Args:
@@ -236,6 +240,9 @@ class SQLValidator(ProcessorProtocol, UsesExpression):
         Returns:
             The expression unchanged (validators don't transform).
         """
+        if expression is None:
+            return None
+
         if not context.config.enable_validation:
             # Skip validation - add a skip marker to context
             return expression
@@ -262,8 +269,11 @@ class SQLValidator(ProcessorProtocol, UsesExpression):
             context.validation_errors.append(error)
             logger.warning("Individual validator %s failed: %s", validator_instance.__class__.__name__, e)
 
-    def _run_validators(self, expression: "exp.Expression", context: "SQLProcessingContext") -> None:
+    def _run_validators(self, expression: "Optional[exp.Expression]", context: "SQLProcessingContext") -> None:
         """Run all validators and handle exceptions."""
+        if not expression:
+            # If no expression, nothing to validate
+            return
         for validator_instance in self.validators:
             self._validate_safely(validator_instance, expression, context)
 

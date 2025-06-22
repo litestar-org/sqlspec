@@ -89,9 +89,9 @@ class ParameterizeLiterals(ProcessorProtocol):
         self._parameter_counter = 0
         self._parameter_metadata: list[dict[str, Any]] = []  # Track parameter types and context
 
-    def process(self, expression: exp.Expression, context: SQLProcessingContext) -> exp.Expression:
+    def process(self, expression: Optional[exp.Expression], context: SQLProcessingContext) -> Optional[exp.Expression]:
         """Advanced literal parameterization with context-aware AST analysis."""
-        if context.current_expression is None or context.config.input_sql_had_placeholders:
+        if expression is None or context.current_expression is None or context.config.input_sql_had_placeholders:
             return expression
 
         self.extracted_parameters = []

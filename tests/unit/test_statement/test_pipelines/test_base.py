@@ -31,7 +31,7 @@ class MockProcessor(ProcessorProtocol):
         self.process_called = False
         self.call_count = 0
 
-    def process(self, expression: exp.Expression, context: SQLProcessingContext) -> Optional[exp.Expression]:
+    def process(self, expression: Optional[exp.Expression], context: SQLProcessingContext) -> Optional[exp.Expression]:
         """Mock process implementation."""
         self.process_called = True
         self.call_count += 1

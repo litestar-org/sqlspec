@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError
 from sqlspec.storage.backends.base import ObjectStoreBase
@@ -354,7 +354,7 @@ class ObStoreBackend(ObjectStoreBase):
         """Private async read bytes using native obstore async if available."""
         resolved_path = self._resolve_path(path)
         result = await self.store.get_async(resolved_path)
-        return result.bytes()  # pyright: ignore[reportReturnType]
+        return cast("bytes", result.bytes())  # pyright: ignore[reportReturnType]
 
     async def write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Private async write bytes using native obstore async."""

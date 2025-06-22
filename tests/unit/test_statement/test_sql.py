@@ -169,7 +169,7 @@ def test_sql_lazy_processing() -> None:
     # Track when _ensure_processed is called
     calls = []
 
-    def track_ensure_processed(self) -> None:
+    def track_ensure_processed(self: Any) -> None:
         calls.append("ensure_processed")
         # Set up minimal processed state to avoid AttributeError
         from sqlspec.statement.sql import _ProcessedState

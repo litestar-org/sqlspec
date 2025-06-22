@@ -70,6 +70,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     """
 
     __slots__ = (
+        "_dialect",
         "account",
         "adbc_driver_manager_entrypoint",
         "authorization_header",

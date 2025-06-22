@@ -44,6 +44,7 @@ def test_merge_into_method() -> None:
     """Test setting target table with into()."""
     builder = MergeBuilder().into("users")
     # Check the target table is set in the expression
+    assert builder._expression is not None
     assert builder._expression.args.get("this") is not None
     assert isinstance(builder._expression.args["this"], exp.Table)
     assert builder._expression.args["this"].name == "users"
@@ -82,6 +83,7 @@ def test_merge_using_clause(source: Any, alias: Any, expected_has_alias: bool) -
     """Test USING clause with various source types."""
     builder = MergeBuilder().into("users").using(source, alias)
 
+    assert builder._expression is not None
     using_expr = builder._expression.args.get("using")
     assert using_expr is not None
 
@@ -118,6 +120,7 @@ def test_merge_on_condition(condition: str, expected_in_sql: list[str]) -> None:
     builder = MergeBuilder().into("users").using("staging_users", "src").on(condition)
 
     # Check the ON condition is set in the expression
+    assert builder._expression is not None
     on_expr = builder._expression.args.get("on")
     assert on_expr is not None
 

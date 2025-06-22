@@ -11,7 +11,7 @@ This module tests the foundational builder functionality including:
 """
 
 import math
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Optional
 from unittest.mock import Mock, patch
 
 import pytest
@@ -29,16 +29,22 @@ from sqlspec.statement.builder import (
     TruncateTableBuilder,
 )
 from sqlspec.statement.builder.base import QueryBuilder, SafeQuery
+from sqlspec.statement.builder.ddl import (
+    AlterTableBuilder,
+    CommentOnBuilder,
+    CreateMaterializedViewBuilder,
+    CreateTableAsSelectBuilder,
+    CreateViewBuilder,
+    RenameTableBuilder,
+)
 from sqlspec.statement.builder.mixins._where import WhereClauseMixin
-from sqlspec.statement.result import StatementResult
+from sqlspec.statement.builder.select import SelectBuilder
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-
-if TYPE_CHECKING:
-    pass
 
 
 # Test implementation of abstract QueryBuilder for testing
-class MockQueryBuilder(QueryBuilder[StatementResult[dict[str, Any]]]):
+class MockQueryBuilder(QueryBuilder[SQLResult[dict[str, Any]]]):
     """Concrete implementation of QueryBuilder for testing purposes."""
 
     def _create_base_expression(self) -> exp.Select:
@@ -46,9 +52,9 @@ class MockQueryBuilder(QueryBuilder[StatementResult[dict[str, Any]]]):
         return exp.Select()
 
     @property
-    def _expected_result_type(self) -> type[StatementResult[dict[str, Any]]]:
+    def _expected_result_type(self) -> type[SQLResult[dict[str, Any]]]:
         """Return the expected result type."""
-        return StatementResult[dict[str, Any]]
+        return SQLResult[dict[str, Any]]
 
 
 # Helper implementation of WhereClauseMixin for testing
@@ -582,8 +588,6 @@ def test_create_schema_builder_basic() -> None:
 # Complex DDL tests
 def test_create_table_as_select_builder_basic() -> None:
     """Test CREATE TABLE AS SELECT functionality."""
-    from sqlspec.statement.builder.ddl import CreateTableAsSelectBuilder
-    from sqlspec.statement.builder.select import SelectBuilder
 
     select_builder = SelectBuilder().select("id", "name").from_("users").where_eq("active", True)
     builder = (
@@ -602,8 +606,6 @@ def test_create_table_as_select_builder_basic() -> None:
 
 def test_create_materialized_view_basic() -> None:
     """Test CREATE MATERIALIZED VIEW functionality."""
-    from sqlspec.statement.builder.ddl import CreateMaterializedViewBuilder
-    from sqlspec.statement.builder.select import SelectBuilder
 
     select_builder = SelectBuilder().select("id", "name").from_("users").where_eq("active", True)
     builder = (
@@ -625,8 +627,6 @@ def test_create_materialized_view_basic() -> None:
 
 def test_create_view_basic() -> None:
     """Test CREATE VIEW functionality."""
-    from sqlspec.statement.builder.ddl import CreateViewBuilder
-    from sqlspec.statement.builder.select import SelectBuilder
 
     select_builder = SelectBuilder().select("id", "name").from_("users").where_eq("active", True)
     builder = CreateViewBuilder().name("active_users_v").if_not_exists().columns("id", "name").as_select(select_builder)
@@ -643,7 +643,6 @@ def test_create_view_basic() -> None:
 # ALTER TABLE tests
 def test_alter_table_add_column() -> None:
     """Test ALTER TABLE ADD COLUMN."""
-    from sqlspec.statement.builder.ddl import AlterTableBuilder
 
     sql = AlterTableBuilder("users").add_column("age", "INT").build().sql
     assert "ALTER TABLE" in sql and "ADD COLUMN" in sql and "age" in sql and "INT" in sql
@@ -651,7 +650,6 @@ def test_alter_table_add_column() -> None:
 
 def test_alter_table_drop_column() -> None:
     """Test ALTER TABLE DROP COLUMN."""
-    from sqlspec.statement.builder.ddl import AlterTableBuilder
 
     sql = AlterTableBuilder("users").drop_column("age").build().sql
     assert "ALTER TABLE" in sql and "DROP COLUMN" in sql and "age" in sql
@@ -659,7 +657,6 @@ def test_alter_table_drop_column() -> None:
 
 def test_alter_table_rename_column() -> None:
     """Test ALTER TABLE RENAME COLUMN."""
-    from sqlspec.statement.builder.ddl import AlterTableBuilder
 
     sql = AlterTableBuilder("users").rename_column("old_name", "new_name").build().sql
     assert "ALTER TABLE" in sql and "RENAME COLUMN" in sql and "old_name" in sql and "new_name" in sql
@@ -667,7 +664,6 @@ def test_alter_table_rename_column() -> None:
 
 def test_alter_table_error_if_no_action() -> None:
     """Test ALTER TABLE raises error without action."""
-    from sqlspec.statement.builder.ddl import AlterTableBuilder
 
     builder = AlterTableBuilder("users")
     with pytest.raises(Exception):
@@ -677,7 +673,6 @@ def test_alter_table_error_if_no_action() -> None:
 # COMMENT ON tests
 def test_comment_on_table_builder() -> None:
     """Test COMMENT ON TABLE functionality."""
-    from sqlspec.statement.builder.ddl import CommentOnBuilder
 
     sql = CommentOnBuilder().on_table("users").is_("User table").build().sql
     assert "COMMENT ON TABLE \"users\" IS 'User table'" in sql or "COMMENT ON TABLE users IS 'User table'" in sql
@@ -685,7 +680,6 @@ def test_comment_on_table_builder() -> None:
 
 def test_comment_on_column_builder() -> None:
     """Test COMMENT ON COLUMN functionality."""
-    from sqlspec.statement.builder.ddl import CommentOnBuilder
 
     sql = CommentOnBuilder().on_column("users", "age").is_("User age").build().sql
     assert "COMMENT ON COLUMN users.age IS 'User age'" in sql
@@ -693,7 +687,6 @@ def test_comment_on_column_builder() -> None:
 
 def test_comment_on_builder_error() -> None:
     """Test COMMENT ON raises error without comment."""
-    from sqlspec.statement.builder.ddl import CommentOnBuilder
 
     with pytest.raises(Exception):
         CommentOnBuilder().on_table("users").build()
@@ -702,7 +695,6 @@ def test_comment_on_builder_error() -> None:
 # RENAME TABLE test
 def test_rename_table_builder() -> None:
     """Test RENAME TABLE functionality."""
-    from sqlspec.statement.builder.ddl import RenameTableBuilder
 
     sql = RenameTableBuilder().table("users").to("customers").build().sql
     assert 'ALTER TABLE "users" RENAME TO "customers"' in sql or "ALTER TABLE users RENAME TO customers" in sql
@@ -710,7 +702,6 @@ def test_rename_table_builder() -> None:
 
 def test_rename_table_builder_error() -> None:
     """Test RENAME TABLE raises error without new name."""
-    from sqlspec.statement.builder.ddl import RenameTableBuilder
 
     with pytest.raises(Exception):
         RenameTableBuilder().table("users").build()

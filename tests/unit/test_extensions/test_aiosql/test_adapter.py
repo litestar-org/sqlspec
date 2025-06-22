@@ -46,7 +46,7 @@ def test_sync_adapter_select_with_record_class_warning(
     """Test that record_class parameter triggers warning."""
     mock_result = Mock(spec=SQLResult)
     mock_result.data = [{"id": 1, "name": "John"}]
-    sync_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
+    sync_adapter.driver.execute.return_value = mock_result  # type: ignore[union-attr]
 
     with caplog.at_level(logging.WARNING):
         list(
@@ -72,7 +72,7 @@ def test_sync_adapter_select_with_schema_type_in_params(sync_adapter: AiosqlSync
 
     mock_result = Mock(spec=SQLResult)
     mock_result.data = [User(id=1, name="John")]
-    sync_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
+    sync_adapter.driver.execute.return_value = mock_result  # type: ignore[union-attr]
 
     # _sqlspec_schema_type is just passed through as a regular parameter
     parameters = {"active": True, "_sqlspec_schema_type": User}
@@ -87,7 +87,7 @@ def test_sync_adapter_select_with_schema_type_in_params(sync_adapter: AiosqlSync
     )
 
     # Verify driver was called (parameters are passed through as-is)
-    sync_adapter.driver.execute.assert_called_once()  # type: ignore[attr-defined]
+    sync_adapter.driver.execute.assert_called_once()  # type: ignore[union-attr]
     assert result == [User(id=1, name="John")]
 
 
@@ -95,19 +95,19 @@ def test_sync_adapter_select_one_with_limit_filter(sync_adapter: AiosqlSyncAdapt
     """Test select_one applies implicit limit."""
     mock_result = Mock(spec=SQLResult)
     mock_result.data = [{"id": 1, "name": "John"}]
-    sync_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
+    sync_adapter.driver.execute.return_value = mock_result  # type: ignore[union-attr]
 
     result = sync_adapter.select_one(conn=Mock(), query_name="test_query", sql="SELECT * FROM users", parameters={})
 
     assert result == {"id": 1, "name": "John"}
-    sync_adapter.driver.execute.assert_called_once()  # type: ignore[attr-defined]
+    sync_adapter.driver.execute.assert_called_once()  # type: ignore[union-attr]
 
 
 def test_sync_adapter_select_value_dict_result(sync_adapter: AiosqlSyncAdapter) -> None:
     """Test select_value with dict result."""
     mock_result = Mock(spec=SQLResult)
     mock_result.data = [{"count": 42}]
-    sync_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
+    sync_adapter.driver.execute.return_value = mock_result  # type: ignore[union-attr]
 
     # Mock select_one to return the dict
     with patch.object(sync_adapter, "select_one", return_value={"count": 42}):
@@ -142,7 +142,7 @@ def test_sync_adapter_select_cursor(sync_adapter: AiosqlSyncAdapter) -> None:
     """Test select_cursor context manager."""
     mock_result = Mock(spec=SQLResult)
     mock_result.data = [{"id": 1}, {"id": 2}]
-    sync_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
+    sync_adapter.driver.execute.return_value = mock_result  # type: ignore[union-attr]
 
     with sync_adapter.select_cursor(
         conn=Mock(), query_name="test_query", sql="SELECT * FROM users", parameters={}
@@ -158,7 +158,7 @@ def test_sync_adapter_insert_update_delete(sync_adapter: AiosqlSyncAdapter) -> N
     """Test insert/update/delete operations."""
     mock_result = Mock()
     mock_result.rows_affected = 3
-    sync_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
+    sync_adapter.driver.execute.return_value = mock_result  # type: ignore[union-attr]
 
     result = sync_adapter.insert_update_delete(
         conn=Mock(), query_name="test_query", sql="UPDATE users SET active = :active", parameters={"active": False}
@@ -171,7 +171,7 @@ def test_sync_adapter_insert_update_delete_many(sync_adapter: AiosqlSyncAdapter)
     """Test insert/update/delete many operations."""
     mock_result = Mock()
     mock_result.rows_affected = 5
-    sync_adapter.driver.execute_many.return_value = mock_result  # type: ignore[attr-defined]
+    sync_adapter.driver.execute_many.return_value = mock_result  # type: ignore[union-attr]
 
     parameters = [{"name": "John"}, {"name": "Jane"}]
     result = sync_adapter.insert_update_delete_many(
@@ -179,7 +179,7 @@ def test_sync_adapter_insert_update_delete_many(sync_adapter: AiosqlSyncAdapter)
     )
 
     assert result == 5
-    sync_adapter.driver.execute_many.assert_called_once()  # type: ignore[attr-defined]
+    sync_adapter.driver.execute_many.assert_called_once()  # type: ignore[union-attr]
 
 
 def test_sync_adapter_insert_returning(sync_adapter: AiosqlSyncAdapter) -> None:
@@ -229,7 +229,7 @@ async def test_async_adapter_select_with_record_class_warning(
     """Test that record_class parameter triggers warning in async adapter."""
     mock_result = Mock(spec=SQLResult)
     mock_result.data = [{"id": 1, "name": "John"}]
-    async_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
+    async_adapter.driver.execute.return_value = mock_result  # type: ignore[union-attr]
 
     with caplog.at_level(logging.WARNING):
         await async_adapter.select(
@@ -254,7 +254,7 @@ async def test_async_adapter_select_with_schema_type_in_params(async_adapter: Ai
 
     mock_result = Mock(spec=SQLResult)
     mock_result.data = [User(id=1, name="John")]
-    async_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
+    async_adapter.driver.execute.return_value = mock_result  # type: ignore[union-attr]
 
     parameters = {"active": True, "_sqlspec_schema_type": User}
 
@@ -263,7 +263,7 @@ async def test_async_adapter_select_with_schema_type_in_params(async_adapter: Ai
     )
 
     # Verify driver was called (parameters are passed through as-is)
-    async_adapter.driver.execute.assert_called_once()  # type: ignore[attr-defined]
+    async_adapter.driver.execute.assert_called_once()  # type: ignore[union-attr]
     assert result == [User(id=1, name="John")]
 
 
@@ -272,7 +272,7 @@ async def test_async_adapter_select_one_with_limit(async_adapter: AiosqlAsyncAda
     """Test async select_one automatically adds limit filter."""
     mock_result = Mock(spec=SQLResult)
     mock_result.data = [{"id": 1, "name": "John"}]
-    async_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
+    async_adapter.driver.execute.return_value = mock_result  # type: ignore[union-attr]
 
     result = await async_adapter.select_one(
         conn=Mock(), query_name="test_query", sql="SELECT * FROM users", parameters={}
@@ -281,7 +281,7 @@ async def test_async_adapter_select_one_with_limit(async_adapter: AiosqlAsyncAda
     assert result == {"id": 1, "name": "John"}
 
     # Verify that LimitOffsetFilter was added
-    async_adapter.driver.execute.assert_called_once()  # type: ignore[attr-defined]
+    async_adapter.driver.execute.assert_called_once()  # type: ignore[union-attr]
     # The SQL object should have been modified to include the limit
 
 
@@ -304,7 +304,7 @@ async def test_async_adapter_select_cursor(async_adapter: AiosqlAsyncAdapter) ->
     """Test async select_cursor context manager."""
     mock_result = Mock(spec=SQLResult)
     mock_result.data = [{"id": 1}, {"id": 2}]
-    async_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
+    async_adapter.driver.execute.return_value = mock_result  # type: ignore[union-attr]
 
     async with async_adapter.select_cursor(
         conn=Mock(), query_name="test_query", sql="SELECT * FROM users", parameters={}
@@ -321,13 +321,13 @@ async def test_async_adapter_insert_update_delete(async_adapter: AiosqlAsyncAdap
     """Test async insert/update/delete operations."""
     mock_result = Mock()
     mock_result.rows_affected = 3
-    async_adapter.driver.execute.return_value = mock_result  # type: ignore[attr-defined]
+    async_adapter.driver.execute.return_value = mock_result  # type: ignore[union-attr]
 
     await async_adapter.insert_update_delete(
         conn=Mock(), query_name="test_query", sql="UPDATE users SET active = :active", parameters={"active": False}
     )
 
-    async_adapter.driver.execute.assert_called_once()  # type: ignore[attr-defined]
+    async_adapter.driver.execute.assert_called_once()  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -335,14 +335,14 @@ async def test_async_adapter_insert_update_delete_many(async_adapter: AiosqlAsyn
     """Test async insert/update/delete many operations."""
     mock_result = Mock()
     mock_result.rows_affected = 5
-    async_adapter.driver.execute_many.return_value = mock_result  # type: ignore[attr-defined]
+    async_adapter.driver.execute_many.return_value = mock_result  # type: ignore[union-attr]
 
     parameters = [{"name": "John"}, {"name": "Jane"}]
     await async_adapter.insert_update_delete_many(
         conn=Mock(), query_name="test_query", sql="INSERT INTO users (name) VALUES (:name)", parameters=parameters
     )
 
-    async_adapter.driver.execute_many.assert_called_once()  # type: ignore[attr-defined]
+    async_adapter.driver.execute_many.assert_called_once()  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
