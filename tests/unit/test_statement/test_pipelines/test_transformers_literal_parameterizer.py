@@ -75,6 +75,7 @@ def test_basic_literal_parameterization(sql: str, expected_param_count: int, exp
         assert expected_value in actual_values
 
     # Check SQL transformation
+    assert result_expr is not None
     result_sql = result_expr.sql()
     for expected_value in expected_param_values:
         # String literals should be replaced
@@ -140,6 +141,7 @@ def test_placeholder_styles(placeholder_style: str, expected_placeholder: str) -
     context = create_context_with_sql(sql)
     assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # Check that expected placeholder style appears
@@ -173,6 +175,7 @@ def test_limit_clause_preservation(sql: str, preserve_numbers_in_limit: bool, sh
     context = create_context_with_sql(sql)
     assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     if should_preserve_numbers:
@@ -192,6 +195,7 @@ def test_max_string_length_preservation() -> None:
     context = create_context_with_sql(sql)
     assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # Long string should be preserved
@@ -211,6 +215,7 @@ def test_preserve_in_functions() -> None:
     context = create_context_with_sql(sql)
     assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # 'Unknown' should be preserved in COALESCE
@@ -263,6 +268,7 @@ def test_mixed_literal_types() -> None:
     context = create_context_with_sql(sql)
     assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # Check parameter extraction
@@ -438,6 +444,7 @@ def test_data_type_contexts_preserved() -> None:
     context = create_context_with_sql(sql)
     assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # Should preserve the 50 in VARCHAR(50)
@@ -528,6 +535,7 @@ def test_named_parameter_generation() -> None:
     context = create_context_with_sql(sql)
     assert context.current_expression is not None
     result_expr = transformer.process(context.current_expression, context)
+    assert result_expr is not None
     result_sql = result_expr.sql()
 
     # Should have named parameters (using column hint + counter format)

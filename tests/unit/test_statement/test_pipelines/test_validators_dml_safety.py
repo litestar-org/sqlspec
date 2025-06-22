@@ -340,7 +340,7 @@ def test_unique_condition_detection(where_clause: str, expected_unique: bool) ->
     parsed = parse_one(sql)
     where_expr = parsed.args.get("where")
 
-    is_unique = DMLSafetyValidator._has_unique_condition(where_expr)
+    is_unique = DMLSafetyValidator._has_unique_condition(where_expr) if where_expr is not None else False
     assert is_unique == expected_unique
 
 
@@ -365,7 +365,7 @@ def test_indexed_condition_detection(where_clause: str, expected_indexed: bool) 
     parsed = parse_one(sql)
     where_expr = parsed.args.get("where")
 
-    is_indexed = DMLSafetyValidator._has_indexed_condition(where_expr)
+    is_indexed = DMLSafetyValidator._has_indexed_condition(where_expr) if where_expr is not None else False
     assert is_indexed == expected_indexed
 
 

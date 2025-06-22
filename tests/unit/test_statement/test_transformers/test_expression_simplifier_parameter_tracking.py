@@ -35,6 +35,7 @@ def test_expression_simplifier_tracks_parameter_reordering() -> None:
         assert mapping == {0: 1, 1: 0}, f"Expected parameter swap mapping, got {mapping}"
 
     # The transformed SQL should have reordered conditions
+    assert result is not None
     result_sql = result.sql(dialect="duckdb")
     assert "value <=" in result_sql and "value >=" in result_sql
 
