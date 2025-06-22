@@ -66,13 +66,13 @@ class TestSyncConfigDialect:
         """Test that NoPoolSyncConfig returns dialect from driver class."""
 
         class TestNoPoolConfig(NoPoolSyncConfig[MockConnection, MockDriver]):
-            driver_type: ClassVar[type[MockDriver]] = MockDriver
+            driver_type: ClassVar[type[MockDriver]] = MockDriver  # type: ignore[misc]
 
             def __init__(self, **kwargs: Any) -> None:
                 self.statement_config = SQLConfig()
                 self.host = "localhost"
                 self.connection_type = MockConnection  # type: ignore[assignment]
-                self.driver_type = MockDriver  # type: ignore[assignment]
+                self.driver_type = MockDriver  # type: ignore[assignment,misc]
                 super().__init__(**kwargs)
 
             @property

@@ -17,6 +17,8 @@ from sqlspec.typing import DictRow, Empty
 if TYPE_CHECKING:
     from typing import Literal
 
+    from sqlglot.dialects.dialect import DialectType
+
 
 __all__ = ("CONNECTION_FIELDS", "AiosqliteConfig")
 

@@ -15,7 +15,7 @@ from sqlspec.typing import DictRow, Empty
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    
+
     from sqlglot.dialects.dialect import DialectType
 
 logger = logging.getLogger("sqlspec.adapters.psqlpy")

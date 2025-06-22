@@ -32,22 +32,24 @@ if TYPE_CHECKING:
 # Constants Tests
 def test_connection_fields_constant() -> None:
     """Test CONNECTION_FIELDS constant contains all expected fields."""
-    expected_fields = frozenset({
-        "conninfo",
-        "host",
-        "port",
-        "user",
-        "password",
-        "dbname",
-        "connect_timeout",
-        "options",
-        "application_name",
-        "sslmode",
-        "sslcert",
-        "sslkey",
-        "sslrootcert",
-        "autocommit",
-    })
+    expected_fields = frozenset(
+        {
+            "conninfo",
+            "host",
+            "port",
+            "user",
+            "password",
+            "dbname",
+            "connect_timeout",
+            "options",
+            "application_name",
+            "sslmode",
+            "sslcert",
+            "sslkey",
+            "sslrootcert",
+            "autocommit",
+        }
+    )
     assert CONNECTION_FIELDS == expected_fields
 
 
@@ -203,7 +205,7 @@ def test_async_config_initialization(kwargs: dict[str, Any], expected_attrs: dic
 )
 def test_timeout_configuration(timeout_type: str, value: float) -> None:
     """Test timeout configuration."""
-    config = PsycopgSyncConfig(host="localhost", **{timeout_type: value})  # pyright: ignore
+    config = PsycopgSyncConfig(host="localhost", **{timeout_type: value})  # type: ignore[arg-type]
     assert getattr(config, timeout_type) == value
 
 
@@ -231,7 +233,7 @@ def test_application_settings() -> None:
 )
 def test_ssl_configuration(ssl_param: str, value: str) -> None:
     """Test SSL configuration parameters."""
-    config = PsycopgSyncConfig(host="localhost", **{ssl_param: value})  # pyright: ignore
+    config = PsycopgSyncConfig(host="localhost", **{ssl_param: value})  # type: ignore[arg-type]
     assert getattr(config, ssl_param) == value
 
 

@@ -262,7 +262,7 @@ def test_database_paths(database: str, uri: "bool | None", description: str) -> 
     if uri is not None:
         kwargs["uri"] = uri  # pyright: ignore
 
-    config = SqliteConfig(**kwargs)  # pyright: ignore
+    config = SqliteConfig(**kwargs)  # type: ignore[arg-type]
     assert config.database == database
     if uri is not None:
         assert config.uri == uri

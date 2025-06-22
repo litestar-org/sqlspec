@@ -100,11 +100,14 @@ class PsqlpyDriver(
             dict_rows: list[dict[str, Any]] = []
             if query_result:
                 # psqlpy QueryResult has a result() method that returns list of dicts
-                dict_rows = query_result.result()  # type: ignore[attr-defined]
+                dict_rows = query_result.result()
             column_names = list(dict_rows[0].keys()) if dict_rows else []
             return {"data": dict_rows, "column_names": column_names, "rows_affected": len(dict_rows)}
         query_result = await conn.execute(sql, parameters=parameters)
-        affected_count = getattr(query_result, "rows_affected", 0) if query_result is not None else -1
+        # Note: psqlpy doesn't provide rows_affected for DML operations
+        # The QueryResult object only has result(), as_class(), and row_factory() methods
+        # For accurate row counts, use RETURNING clause
+        affected_count = -1  # Unknown, as psqlpy doesn't provide this info
         return {"rows_affected": affected_count, "status_message": "OK"}
 
     async def _execute_many(
