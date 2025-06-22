@@ -150,11 +150,11 @@ def test_statement_config_initialization(statement_config: "SQLConfig | None", e
 def test_extension_configuration() -> None:
     """Test extension configuration."""
     from sqlspec.adapters.duckdb.config import DuckDBExtensionConfig
-    
+
     extensions: list[DuckDBExtensionConfig] = [
-        {"name": "httpfs", "version": "0.10.0"}, 
-        {"name": "parquet"}, 
-        {"name": "json", "force_install": True}
+        {"name": "httpfs", "version": "0.10.0"},
+        {"name": "parquet"},
+        {"name": "json", "force_install": True},
     ]
 
     config = DuckDBConfig(

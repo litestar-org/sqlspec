@@ -446,7 +446,7 @@ def test_wrap_execute_result_dml(driver: SqliteDriver) -> None:
     mock_expression.key = "insert"
 
     from sqlspec.statement.result import DMLResultDict
-    
+
     result: DMLResultDict = {"rows_affected": 1, "status_message": "OK"}
 
     with patch.object(type(statement), "expression", new_callable=PropertyMock, return_value=mock_expression):
@@ -464,7 +464,7 @@ def test_wrap_execute_result_script(driver: SqliteDriver) -> None:
     statement = SQL("CREATE TABLE test; INSERT INTO test;")
 
     from sqlspec.statement.result import ScriptResultDict
-    
+
     result: ScriptResultDict = {"statements_executed": 2, "status_message": "SCRIPT EXECUTED"}
 
     with patch.object(type(statement), "expression", new_callable=PropertyMock, return_value=None):

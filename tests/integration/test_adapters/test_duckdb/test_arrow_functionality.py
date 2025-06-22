@@ -266,7 +266,8 @@ def test_duckdb_arrow_with_aggregation(duckdb_arrow_session: DuckDBDriver) -> No
     # Verify aggregation results
     counts = result.data["count"].to_pylist()
     assert counts is not None
-    assert sum(counts) == 5  # Total should be 5 records # type: ignore[arg-type]
+    assert all(isinstance(c, (int, float)) for c in counts)
+    assert sum(c for c in counts if isinstance(c, (int, float))) == 5  # Total should be 5 records
 
 
 def test_duckdb_arrow_with_parquet_integration(duckdb_arrow_session: DuckDBDriver) -> None:

@@ -12,7 +12,7 @@ This module tests the AsyncpgConfig class including:
 """
 
 import ssl
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

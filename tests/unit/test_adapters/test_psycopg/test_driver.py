@@ -511,7 +511,7 @@ async def test_async_execute_script(async_driver: PsycopgAsyncDriver, mock_async
 def test_sync_wrap_select_result(sync_driver: PsycopgSyncDriver) -> None:
     """Test sync wrapping SELECT results."""
     from sqlspec.statement.result import SelectResultDict
-    
+
     statement = SQL("SELECT * FROM users")
     result: SelectResultDict = {
         "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],

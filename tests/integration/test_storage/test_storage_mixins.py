@@ -195,7 +195,9 @@ def test_driver_fetch_arrow_table_direct(sqlite_driver_with_storage: SqliteDrive
     # Verify data ordering (by price)
     prices = result.data["price"].to_pylist()
     assert all(p is not None for p in prices)  # No nulls in price
-    assert prices == sorted(prices)
+    # Filter out None values for sorting
+    non_null_prices = [p for p in prices if p is not None]
+    assert non_null_prices == sorted(non_null_prices)
 
     names = result.data["name"].to_pylist()
     assert "Product E" in names  # Cheapest
@@ -256,7 +258,9 @@ def test_driver_storage_operations_with_large_dataset(
     values = table["value"].to_pylist()
     assert all(val is not None and val > 5000 for val in values)
     assert all(v is not None for v in values)  # No nulls
-    assert values == sorted(values)
+    # Filter out None values for sorting
+    non_null_values = [v for v in values if v is not None]
+    assert non_null_values == sorted(non_null_values)
 
 
 def test_driver_storage_error_handling(sqlite_driver_with_storage: SqliteDriver, temp_directory: Path) -> None:

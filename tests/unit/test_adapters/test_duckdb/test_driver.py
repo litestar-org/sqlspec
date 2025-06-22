@@ -321,7 +321,7 @@ def test_wrap_execute_result_script(driver: DuckDBDriver) -> None:
     # No need to set _expression
 
     from sqlspec.statement.result import ScriptResultDict
-    
+
     result: ScriptResultDict = {
         "statements_executed": 2,
         "status_message": "Script executed successfully.",

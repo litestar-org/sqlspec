@@ -308,7 +308,9 @@ def test_bigquery_arrow_with_ml_functions(
 
     # Verify feature engineering
     interactions = result.data["feature_interaction"].to_pylist()
-    assert all(interaction > 0 for interaction in interactions)  # All should be positive numbers # pyright: ignore
+    assert all(
+        interaction is not None and interaction > 0 for interaction in interactions
+    )  # All should be positive numbers
 
 
 @pytest.mark.xdist_group("bigquery")

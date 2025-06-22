@@ -4,6 +4,7 @@ import json
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import pyarrow.parquet as pq
 import pytest
@@ -230,10 +231,12 @@ def test_user_segmentation_export(analytics_database: SqliteDriver, temp_directo
     }
 
     # Add insights based on data
-    if segment_stats.get("premium_users", {}).get("user_count", 0) > 0:
+    premium_count = segment_stats.get("premium_users", {}).get("user_count", 0)
+    if isinstance(premium_count, int) and premium_count > 0:
         segment_report["insights"].append("Premium users present in dataset")
 
-    if segment_stats.get("international_users", {}).get("user_count", 0) > 0:
+    intl_count = segment_stats.get("international_users", {}).get("user_count", 0)
+    if isinstance(intl_count, int) and intl_count > 0:
         segment_report["insights"].append("International user base detected")
 
     # Save segment analysis
@@ -246,7 +249,12 @@ def test_user_segmentation_export(analytics_database: SqliteDriver, temp_directo
     assert segment_report["total_segments"] == len(segments)
 
     # Verify at least some segments have users
-    total_users_in_segments = sum(stats.get("user_count", 0) for stats in segment_stats.values())
+    total_users_in_segments = 0
+    for stats in segment_stats.values():
+        if isinstance(stats, dict):
+            user_count = stats.get("user_count", 0)
+            if isinstance(user_count, (int, float)):
+                total_users_in_segments += user_count
     assert total_users_in_segments > 0
 
 
@@ -411,8 +419,10 @@ def test_revenue_analytics_workflow(analytics_database: SqliteDriver, temp_direc
     assert user_table.num_rows > 0
 
     # Verify insights make sense
-    assert insights["total_revenue"] > 0
-    assert insights["average_transaction"] > 0
+    total_rev = insights["total_revenue"]
+    assert isinstance(total_rev, (int, float)) and total_rev > 0
+    avg_trans = insights["average_transaction"]
+    assert isinstance(avg_trans, (int, float)) and avg_trans > 0
     assert insights["top_product"] is not None
 
 
@@ -426,7 +436,7 @@ def test_data_backup_and_archival_workflow(analytics_database: SqliteDriver, tem
 
     # Full data backup
     tables_to_backup = ["users", "events", "revenue"]
-    backup_manifest = {"backup_timestamp": timestamp, "tables": [], "total_records": 0}
+    backup_manifest: dict[str, Any] = {"backup_timestamp": timestamp, "tables": [], "total_records": 0}
 
     for table_name in tables_to_backup:
         backup_file = backup_dir / f"{table_name}_{timestamp}.parquet"
@@ -457,8 +467,11 @@ def test_data_backup_and_archival_workflow(analytics_database: SqliteDriver, tem
 
     # Verify backup completed
     assert manifest_file.exists()
-    assert len(backup_manifest["tables"]) == len(tables_to_backup)
-    assert backup_manifest["total_records"] > 0
+    tables_list = backup_manifest["tables"]
+    assert isinstance(tables_list, list)
+    assert len(tables_list) == len(tables_to_backup)
+    total_records = backup_manifest["total_records"]
+    assert isinstance(total_records, int) and total_records > 0
 
     # Verify all backup files exist
     for table_info in backup_manifest["tables"]:
@@ -496,9 +509,10 @@ def test_multi_format_export_workflow(analytics_database: SqliteDriver, temp_dir
     for format_name, config in formats.items():
         output_file = temp_directory / f"user_summary.{format_name}"
 
-        export_kwargs = {"format": format_name}
-        if config["compression"]:
-            export_kwargs["compression"] = config["compression"]  # pyright: ignore
+        export_kwargs: dict[str, Any] = {"format": format_name}
+        compression = config.get("compression") if isinstance(config, dict) else None
+        if compression:
+            export_kwargs["compression"] = compression
 
         analytics_database.export_to_storage(
             base_query, destination_uri=str(output_file), _config=None, **export_kwargs
@@ -506,10 +520,11 @@ def test_multi_format_export_workflow(analytics_database: SqliteDriver, temp_dir
 
         if output_file.exists():
             file_size = output_file.stat().st_size
+            use_case = config.get("use_case", "unknown") if isinstance(config, dict) else "unknown"
             export_results[format_name] = {
                 "file_path": str(output_file),
                 "file_size": file_size,
-                "use_case": config["use_case"],
+                "use_case": use_case,
                 "success": True,
             }
         else:
@@ -529,11 +544,14 @@ def test_multi_format_export_workflow(analytics_database: SqliteDriver, temp_dir
 
     # Verify multi-format export
     assert summary_file.exists()
-    assert summary["total_formats"] >= 2  # At least 2 formats should succeed
+    total_formats = summary["total_formats"]
+    assert isinstance(total_formats, int) and total_formats >= 2  # At least 2 formats should succeed
 
     # Verify data consistency across formats
     for format_name, result in export_results.items():
         if result.get("success"):
-            file_path = Path(result["file_path"])
-            assert file_path.exists()
-            assert file_path.stat().st_size > 0
+            file_path_str = result.get("file_path")
+            if isinstance(file_path_str, str):
+                file_path = Path(file_path_str)
+                assert file_path.exists()
+                assert file_path.stat().st_size > 0

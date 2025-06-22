@@ -204,7 +204,10 @@ def test_fetch_arrow_table_with_parameters(sqlite_with_test_data: SqliteDriver) 
         assert all(50.0 <= price <= 500.0 for price in prices if price is not None)
         # Verify ordering
         assert prices is not None
-        assert prices == sorted(prices)  # type: ignore[operator]
+        assert all(p is not None for p in prices)  # No null prices
+        # Filter out None values for sorting
+        non_null_prices = [p for p in prices if p is not None]
+        assert non_null_prices == sorted(non_null_prices)
 
 
 def test_storage_error_handling(sqlite_with_test_data: SqliteDriver, temp_directory: Path) -> None:
