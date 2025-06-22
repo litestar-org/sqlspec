@@ -111,7 +111,7 @@ def test_oracledb_config_provide_session() -> None:
     config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
 
     # Mock the pool creation to avoid real database connection
-    with patch.object(config, "create_pool") as mock_create_pool:
+    with patch.object(OracleSyncConfig, "create_pool") as mock_create_pool:
         mock_pool = MagicMock()
         mock_connection = MagicMock()
         mock_pool.acquire.return_value = mock_connection

@@ -52,9 +52,9 @@ class MockQueryBuilder(QueryBuilder[SQLResult[dict[str, Any]]]):
         return exp.Select()
 
     @property
-    def _expected_result_type(self) -> type[SQLResult[dict[str, Any]]]:
+    def _expected_result_type(self) -> "type[SQLResult[SQLResult[dict[str, Any]]]]":
         """Return the expected result type."""
-        return SQLResult[dict[str, Any]]
+        return SQLResult[SQLResult[dict[str, Any]]]  # type: ignore[arg-type]
 
 
 # Helper implementation of WhereClauseMixin for testing

@@ -88,6 +88,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         "isolation_level",
         "on_connection_create",
         "password",
+        "pool_instance",
         "project_id",
         "query_timeout",
         "role",

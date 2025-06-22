@@ -49,6 +49,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
     # Note: __slots__ cannot be used with dataclass fields in Python < 3.10
     # Concrete subclasses can still use __slots__ for any additional attributes
+    __slots__ = ()
 
     is_async: "ClassVar[bool]" = field(init=False, default=False)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
@@ -84,7 +85,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             The SQL dialect type for this database.
         """
         if self._dialect is None:
-            self._dialect = self._get_dialect()
+            self._dialect = self._get_dialect()  # type: ignore[misc]
         return self._dialect
 
     def _get_dialect(self) -> "DialectType":
@@ -230,7 +231,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         """
         if self.pool_instance is not None:
             return self.pool_instance
-        self.pool_instance = self._create_pool()
+        self.pool_instance = self._create_pool()  # type: ignore[misc]
         return self.pool_instance
 
     def close_pool(self) -> None:
@@ -240,7 +241,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
         """Provide pool instance."""
         if self.pool_instance is None:
-            self.pool_instance = self.create_pool()
+            self.pool_instance = self.create_pool()  # type: ignore[misc]
         return self.pool_instance
 
     def create_connection(self) -> ConnectionT:
@@ -283,7 +284,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         """
         if self.pool_instance is not None:
             return self.pool_instance
-        self.pool_instance = await self._create_pool()
+        self.pool_instance = await self._create_pool()  # type: ignore[misc]
         return self.pool_instance
 
     async def close_pool(self) -> None:
@@ -293,7 +294,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     async def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
         """Provide pool instance."""
         if self.pool_instance is None:
-            self.pool_instance = await self.create_pool()
+            self.pool_instance = await self.create_pool()  # type: ignore[misc]
         return self.pool_instance
 
     async def create_connection(self) -> ConnectionT:

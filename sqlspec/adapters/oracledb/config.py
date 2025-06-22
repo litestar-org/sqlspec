@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
     from oracledb import AuthMode
     from oracledb.pool import AsyncConnectionPool, ConnectionPool
+    from sqlglot.dialects.dialect import DialectType
 
 
 __all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "OracleAsyncConfig", "OracleSyncConfig")
@@ -74,6 +75,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
     """Configuration for Oracle synchronous database connections with direct field-based configuration."""
 
     __slots__ = (
+        "_dialect",
         "config_dir",
         "default_row_type",
         "dsn",
@@ -236,6 +238,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
         self.pool_instance = pool_instance
+        self._dialect: DialectType = None
 
         super().__init__()
 
@@ -353,6 +356,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
     """Configuration for Oracle asynchronous database connections with direct field-based configuration."""
 
     __slots__ = (
+        "_dialect",
         "config_dir",
         "default_row_type",
         "dsn",
@@ -515,6 +519,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
         self.pool_instance: Optional[AsyncConnectionPool] = pool_instance
+        self._dialect: DialectType = None
 
         super().__init__()
 

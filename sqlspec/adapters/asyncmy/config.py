@@ -16,6 +16,7 @@ from sqlspec.typing import DictRow, Empty
 if TYPE_CHECKING:
     from asyncmy.cursors import Cursor, DictCursor
     from asyncmy.pool import Pool
+    from sqlglot.dialects.dialect import DialectType
 
 
 __all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "AsyncmyConfig")
@@ -50,6 +51,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
     """Configuration for Asyncmy database connections with direct field-based configuration."""
 
     __slots__ = (
+        "_dialect",
         "autocommit",
         "charset",
         "connect_timeout",
@@ -174,6 +176,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
         self.pool_instance: Optional[Pool] = pool_instance
+        self._dialect: DialectType = None
 
         super().__init__()  # pyright: ignore
 

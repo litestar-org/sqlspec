@@ -445,6 +445,8 @@ def test_slots_defined() -> None:
     """Test that __slots__ is properly defined."""
     assert hasattr(DuckDBConfig, "__slots__")
     expected_slots = {
+        "_dialect",
+        "pool_instance",
         "allow_community_extensions",
         "allow_persistent_secrets",
         "allow_unsigned_extensions",

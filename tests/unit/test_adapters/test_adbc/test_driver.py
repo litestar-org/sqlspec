@@ -231,7 +231,7 @@ def test_adbc_driver_get_cursor_exception_handling(adbc_driver: AdbcDriver) -> N
 def test_adbc_driver_execute_statement_select(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
     """Test AdbcDriver._execute_statement for SELECT statements."""
     mock_connection = adbc_driver.connection
-    mock_connection.cursor.return_value = mock_cursor
+    mock_connection.cursor.return_value = mock_cursor  # type: ignore[assignment]
 
     # Setup mock cursor for fetchall
     mock_cursor.fetchall.return_value = [(1, "John Doe", "john@example.com")]

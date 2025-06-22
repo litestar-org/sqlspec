@@ -14,6 +14,8 @@ from sqlspec.typing import DictRow
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+    from sqlglot.dialects.dialect import DialectType
+
 logger = logging.getLogger(__name__)
 
 CONNECTION_FIELDS = frozenset(
@@ -36,6 +38,7 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
     """Configuration for SQLite database connections with direct field-based configuration."""
 
     __slots__ = (
+        "_dialect",
         "cached_statements",
         "check_same_thread",
         "database",
@@ -44,6 +47,7 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
         "extras",
         "factory",
         "isolation_level",
+        "pool_instance",
         "statement_config",
         "timeout",
         "uri",
@@ -104,6 +108,7 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
+        self._dialect: DialectType = None
         super().__init__()
 
     @property

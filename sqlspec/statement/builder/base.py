@@ -35,7 +35,7 @@ class SafeQuery:
 
     sql: str
     parameters: dict[str, Any] = field(default_factory=dict)
-    dialect: Optional[DialectType] = field(default=None)
+    dialect: DialectType = field(default=None)
 
 
 @dataclass

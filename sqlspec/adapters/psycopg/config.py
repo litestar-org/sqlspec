@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
 
     from psycopg import Connection
+    from sqlglot.dialects.dialect import DialectType
 
 logger = logging.getLogger("sqlspec.adapters.psycopg")
 
@@ -68,6 +69,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     """Configuration for Psycopg synchronous database connections with direct field-based configuration."""
 
     __slots__ = (
+        "_dialect",
         "application_name",
         "autocommit",
         "configure",
@@ -216,6 +218,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
+        self._dialect: DialectType = None
 
         super().__init__()
 
@@ -401,6 +404,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     """Configuration for Psycopg asynchronous database connections with direct field-based configuration."""
 
     __slots__ = (
+        "_dialect",
         "application_name",
         "autocommit",
         "configure",
@@ -550,6 +554,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
+        self._dialect: DialectType = None
 
         super().__init__()
 

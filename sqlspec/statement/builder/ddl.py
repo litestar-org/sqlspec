@@ -38,7 +38,7 @@ __all__ = (
 class DDLBuilder(QueryBuilder[Any]):
     """Base class for DDL builders (CREATE, DROP, ALTER, etc)."""
 
-    dialect: Optional[DialectType] = None
+    dialect: DialectType = None
     _expression: Optional[exp.Expression] = field(default=None, init=False, repr=False, compare=False, hash=False)
 
     def __post_init__(self) -> None:

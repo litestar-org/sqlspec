@@ -305,6 +305,8 @@ def test_slots_defined() -> None:
     """Test that __slots__ is properly defined."""
     assert hasattr(SqliteConfig, "__slots__")
     expected_slots = {
+        "_dialect",
+        "pool_instance",
         "cached_statements",
         "check_same_thread",
         "database",

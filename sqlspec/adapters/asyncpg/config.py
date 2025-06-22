@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
 
     from asyncpg.pool import Pool
+    from sqlglot.dialects.dialect import DialectType
 
 
 __all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "AsyncpgConfig")
@@ -108,6 +109,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
     """Configuration for AsyncPG database connections using TypedDict."""
 
     __slots__ = (
+        "_dialect",
         "command_timeout",
         "connect_timeout",
         "connection_class",
@@ -218,6 +220,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         self.json_serializer = kwargs.get("json_serializer", to_json)
         self.json_deserializer = kwargs.get("json_deserializer", from_json)
         pool_instance_from_kwargs = kwargs.get("pool_instance")
+        self._dialect: DialectType = None
 
         super().__init__()
 

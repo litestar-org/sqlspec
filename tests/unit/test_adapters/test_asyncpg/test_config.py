@@ -518,6 +518,7 @@ def test_slots_defined() -> None:
     """Test that __slots__ is properly defined."""
     assert hasattr(AsyncpgConfig, "__slots__")
     expected_slots = {
+        "_dialect",
         "command_timeout",
         "connect_timeout",
         "connection_class",

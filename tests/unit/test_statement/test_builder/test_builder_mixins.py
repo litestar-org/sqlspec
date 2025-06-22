@@ -72,7 +72,7 @@ class MockBuilder:
         self._expression: Optional[exp.Expression] = expression
         self._parameters: dict[str, Any] = {}
         self._parameter_counter = 0
-        self.dialect: Optional[DialectType] = None
+        self.dialect: DialectType = None
         self.dialect_name: Optional[str] = None
         self._table: Optional[str] = None
 
@@ -816,7 +816,7 @@ def test_pivot_operations(
         alias=alias,
     )
 
-    assert result is builder
+    assert result is builder  # type: ignore[comparison-overlap]
     assert isinstance(builder._expression, exp.Select)
 
     # Verify PIVOT is attached to table
@@ -880,7 +880,7 @@ def test_unpivot_operations(value_column: str, name_column: str, columns: list[s
         alias=alias,
     )
 
-    assert result is builder
+    assert result is builder  # type: ignore[comparison-overlap]
     assert isinstance(builder._expression, exp.Select)
 
     # Verify UNPIVOT is attached to table
@@ -900,7 +900,7 @@ def test_unpivot_without_from_clause() -> None:
 
     # unpivot() returns self but doesn't add anything when no FROM clause
     result = builder.unpivot(value_column_name="value", name_column_name="name", columns_to_unpivot=["col1"])
-    assert result is builder
+    assert result is builder  # type: ignore[comparison-overlap]
     # No unpivot should be added since there's no FROM clause
     assert builder._expression is not None
     assert builder._expression.args.get("from") is None

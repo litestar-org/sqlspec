@@ -34,6 +34,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
     """
 
     __slots__ = (
+        "_dialect",
         "cached_statements",
         "check_same_thread",
         "database",
@@ -41,6 +42,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
         "detect_types",
         "extras",
         "isolation_level",
+        "pool_instance",
         "statement_config",
         "timeout",
         "uri",
@@ -99,6 +101,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
+        self._dialect: DialectType = None
 
         super().__init__()
 

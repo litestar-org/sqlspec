@@ -373,6 +373,8 @@ def test_slots_defined() -> None:
     """Test that __slots__ is properly defined."""
     assert hasattr(BigQueryConfig, "__slots__")
     expected_slots = {
+        "_dialect",
+        "pool_instance",
         "_connection_instance",
         "client_info",
         "client_options",

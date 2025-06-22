@@ -163,16 +163,15 @@ def test_sql_result_select_row_operations(
         ("UPDATE", 5, True),
         ("DELETE", 3, True),
         ("INSERT", 0, True),  # 0 rows affected is still success
-        ("UPDATE", None, False),  # None rows_affected is failure for DML
         ("DELETE", -1, False),  # Negative rows_affected is failure
     ],
 )
-def test_sql_result_dml_is_success(operation_type: str, rows_affected: Optional[int], expected_success: bool) -> None:
+def test_sql_result_dml_is_success(operation_type: str, rows_affected: int, expected_success: bool) -> None:
     """Test is_success method for DML operations."""
     result = SQLResult[dict[str, Any]](
         statement=SQL(f"{operation_type} ..."),
         data=[],  # DML typically has empty data unless RETURNING
-        rows_affected=rows_affected,  # Don't convert None to 0
+        rows_affected=rows_affected,
         operation_type=operation_type,
     )
     assert result.is_success() == expected_success

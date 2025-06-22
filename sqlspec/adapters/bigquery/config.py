@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from google.api_core.client_info import ClientInfo
     from google.api_core.client_options import ClientOptions
     from google.auth.credentials import Credentials
+    from sqlglot.dialects.dialect import DialectType
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
     __slots__ = (
         "_connection_instance",
+        "_dialect",
         "client_info",
         "client_options",
         "credentials",
@@ -105,6 +107,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         "on_job_complete",
         "on_job_start",
         "parquet_enable_list_inference",
+        "pool_instance",
         "project",
         "query_timeout_ms",
         "reservation_id",
@@ -282,6 +285,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         # Store connection instance for reuse (BigQuery doesn't support traditional pooling)
         self._connection_instance: Optional[BigQueryConnection] = None
+        self._dialect: DialectType = None
 
         super().__init__()
 

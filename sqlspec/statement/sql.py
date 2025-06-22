@@ -163,7 +163,7 @@ class SQL:
         self,
         statement: Union[str, exp.Expression, "SQL"],
         *parameters: Union[Any, StatementFilter, list[Union[Any, StatementFilter]]],
-        _dialect: Optional[DialectType] = None,
+        _dialect: DialectType = None,
         _config: Optional[SQLConfig] = None,
         _builder_result_type: Optional[type] = None,
         _existing_state: Optional[dict[str, Any]] = None,
@@ -198,11 +198,7 @@ class SQL:
         self._process_parameters(*parameters, **kwargs)
 
     def _init_from_sql_object(
-        self,
-        statement: "SQL",
-        dialect: Optional[DialectType],
-        config: Optional[SQLConfig],
-        builder_result_type: Optional[type],
+        self, statement: "SQL", dialect: DialectType, config: Optional[SQLConfig], builder_result_type: Optional[type]
     ) -> None:
         """Initialize attributes from an existing SQL object."""
         self._statement = statement._statement
@@ -408,7 +404,7 @@ class SQL:
         self,
         statement: Optional[Union[str, exp.Expression]] = None,
         parameters: Optional[Any] = None,
-        dialect: Optional[DialectType] = None,
+        dialect: DialectType = None,
         config: Optional[SQLConfig] = None,
         **kwargs: Any,
     ) -> "SQL":

@@ -15,6 +15,8 @@ from sqlspec.typing import DictRow, Empty
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    
+    from sqlglot.dialects.dialect import DialectType
 
 logger = logging.getLogger("sqlspec.adapters.psqlpy")
 
@@ -69,6 +71,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     """Configuration for Psqlpy asynchronous database connections with direct field-based configuration."""
 
     __slots__ = (
+        "_dialect",
         "application_name",
         "ca_file",
         "channel_binding",
@@ -282,6 +285,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
         self.pool_instance: Optional[ConnectionPool] = pool_instance
+        self._dialect: DialectType = None
 
         super().__init__()
 

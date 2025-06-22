@@ -89,7 +89,7 @@ class SQLFactory:
     """
 
     @classmethod
-    def detect_sql_type(cls, sql: str, dialect: Optional[DialectType] = None) -> str:
+    def detect_sql_type(cls, sql: str, dialect: DialectType = None) -> str:
         try:
             # Minimal parsing just to get the command type
             parsed_expr = sqlglot.parse_one(sql, read=dialect)
@@ -110,7 +110,7 @@ class SQLFactory:
             logger.warning("Unexpected error during SQL type detection for '%s...': %s", sql[:50], e)
         return "UNKNOWN"
 
-    def __init__(self, dialect: Optional[DialectType] = None) -> None:
+    def __init__(self, dialect: DialectType = None) -> None:
         """Initialize the SQL factory.
 
         Args:
@@ -127,7 +127,7 @@ class SQLFactory:
         parameters: Optional[Any] = None,
         *filters: Any,
         config: Optional[Any] = None,
-        dialect: Optional[DialectType] = None,
+        dialect: DialectType = None,
         **kwargs: Any,
     ) -> "Any":
         """Create a SelectBuilder from a SQL string, only allowing SELECT/CTE queries.
@@ -180,9 +180,7 @@ class SQLFactory:
     # ===================
     # Statement Builders
     # ===================
-    def select(
-        self, *columns_or_sql: Union[str, exp.Expression], dialect: Optional[DialectType] = None
-    ) -> "SelectBuilder":
+    def select(self, *columns_or_sql: Union[str, exp.Expression], dialect: DialectType = None) -> "SelectBuilder":
         builder_dialect = dialect or self.dialect
         if len(columns_or_sql) == 1 and isinstance(columns_or_sql[0], str):
             sql_candidate = columns_or_sql[0].strip()
@@ -205,7 +203,7 @@ class SQLFactory:
             select_builder.select(*columns_or_sql)
         return select_builder
 
-    def insert(self, table_or_sql: Optional[str] = None, dialect: Optional[DialectType] = None) -> "InsertBuilder":
+    def insert(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "InsertBuilder":
         builder_dialect = dialect or self.dialect
         builder = InsertBuilder(dialect=builder_dialect)
         if builder._expression is None:
@@ -223,7 +221,7 @@ class SQLFactory:
             return builder.into(table_or_sql)
         return builder
 
-    def update(self, table_or_sql: Optional[str] = None, dialect: Optional[DialectType] = None) -> "UpdateBuilder":
+    def update(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "UpdateBuilder":
         builder_dialect = dialect or self.dialect
         builder = UpdateBuilder(dialect=builder_dialect)
         if builder._expression is None:
@@ -238,7 +236,7 @@ class SQLFactory:
             return builder.table(table_or_sql)
         return builder
 
-    def delete(self, table_or_sql: Optional[str] = None, dialect: Optional[DialectType] = None) -> "DeleteBuilder":
+    def delete(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "DeleteBuilder":
         builder_dialect = dialect or self.dialect
         builder = DeleteBuilder(dialect=builder_dialect)
         if builder._expression is None:
@@ -251,7 +249,7 @@ class SQLFactory:
             return self._populate_delete_from_sql(builder, table_or_sql)
         return builder
 
-    def merge(self, table_or_sql: Optional[str] = None, dialect: Optional[DialectType] = None) -> "MergeBuilder":
+    def merge(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "MergeBuilder":
         builder_dialect = dialect or self.dialect
         builder = MergeBuilder(dialect=builder_dialect)
         if builder._expression is None:

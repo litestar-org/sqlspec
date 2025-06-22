@@ -168,7 +168,7 @@ class StatementAnalyzer(ProcessorProtocol):
         }
         return expression
 
-    def analyze_statement(self, sql_string: str, dialect: "Optional[DialectType]" = None) -> StatementAnalysis:
+    def analyze_statement(self, sql_string: str, dialect: "DialectType" = None) -> StatementAnalysis:
         """Analyze SQL string and extract components efficiently.
 
         Args:
@@ -227,7 +227,7 @@ class StatementAnalyzer(ProcessorProtocol):
         return self.analyze_expression(expr)
 
     def analyze_expression(
-        self, expression: exp.Expression, dialect: "Optional[DialectType]" = None, config: "Optional[SQLConfig]" = None
+        self, expression: exp.Expression, dialect: "DialectType" = None, config: "Optional[SQLConfig]" = None
     ) -> StatementAnalysis:
         """Analyze a SQLGlot expression directly, potentially using validation results for context."""
         # Check cache first (using expression.sql() as key)

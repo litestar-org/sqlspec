@@ -76,7 +76,7 @@ class MockSyncConfig(NoPoolSyncConfig["MockConnection", "MockDriver"]):  # type:
         return mock
 
     def provide_session(self, *args: "Any", **kwargs: "Any") -> "Any":
-        driver = self.driver_type(self._connection, default_row_type=self.default_row_type)
+        driver = self.driver_type(self._connection, None, self.default_row_type)
         mock = Mock()
         mock.__enter__ = Mock(return_value=driver)
         mock.__exit__ = Mock(return_value=None)
@@ -128,7 +128,7 @@ class MockPool:
         self.closed = True
 
 
-class MockSyncPoolConfig(SyncDatabaseConfig["MockConnection", "MockDriver", "MockPool"]):  # type: ignore[type-var]
+class MockSyncPoolConfig(SyncDatabaseConfig["MockConnection", "MockPool", "MockDriver"]):  # type: ignore[type-var]
     """Mock sync config with pooling."""
 
     driver_type = MockDriver  # pyright: ignore
@@ -156,7 +156,7 @@ class MockSyncPoolConfig(SyncDatabaseConfig["MockConnection", "MockDriver", "Moc
         return mock
 
     def provide_session(self, *args: "Any", **kwargs: "Any") -> "Any":
-        driver = self.driver_type(self._connection, default_row_type=self.default_row_type)
+        driver = self.driver_type(self._connection, None, self.default_row_type)
         mock = Mock()
         mock.__enter__ = Mock(return_value=driver)
         mock.__exit__ = Mock(return_value=None)
@@ -171,7 +171,7 @@ class MockSyncPoolConfig(SyncDatabaseConfig["MockConnection", "MockDriver", "Moc
             self._pool.close()
 
 
-class MockAsyncPoolConfig(AsyncDatabaseConfig["MockConnection", "MockAsyncDriver", "MockPool"]):
+class MockAsyncPoolConfig(AsyncDatabaseConfig["MockConnection", "MockPool", "MockAsyncDriver"]):  # type: ignore[type-var]
     """Mock async config with pooling."""
 
     driver_type = MockAsyncDriver
@@ -301,7 +301,7 @@ def test_get_connection_sync(use_instance: bool) -> None:
 
     with patch.object(config, "create_connection") as mock_create:
         mock_create.return_value = MockConnection("test_conn")
-        connection = sqlspec.get_connection(config_or_type)
+        connection = sqlspec.get_connection(config_or_type)  # type: ignore[type-var]
         mock_create.assert_called_once()
         assert isinstance(connection, MockConnection)
 
@@ -315,7 +315,7 @@ async def test_get_connection_async() -> None:
 
     with patch.object(config, "create_connection") as mock_create:
         mock_create.return_value = MockConnection("test_conn")
-        connection = await sqlspec.get_connection(MockAsyncConfig)
+        connection = await sqlspec.get_connection(MockAsyncConfig)  # type: ignore[arg-type]
         mock_create.assert_called_once()
         assert isinstance(connection, MockConnection)
 
@@ -332,7 +332,7 @@ def test_get_session_sync(use_instance: bool) -> None:
     else:
         config_or_type = config
 
-    session = sqlspec.get_session(config_or_type)
+    session = sqlspec.get_session(config_or_type)  # type: ignore[type-var]
     assert isinstance(session, MockDriver)
     assert isinstance(session.connection, MockConnection)
 
@@ -378,7 +378,7 @@ async def test_get_pool_async() -> None:
     config = MockAsyncPoolConfig("test")
     sqlspec.add_config(config)
 
-    result = await sqlspec.get_pool(MockAsyncPoolConfig)  # type: ignore[arg-type]
+    result = await sqlspec.get_pool(MockAsyncPoolConfig)  # type: ignore[arg-type,misc]
     assert isinstance(result, MockPool)
 
 
@@ -392,7 +392,7 @@ def test_provide_connection() -> None:
         mock_cm = Mock()
         mock_provide.return_value = mock_cm
 
-        result = sqlspec.provide_connection(MockSyncConfig, "arg1", kwarg1="value1")  # type: ignore[arg-type]
+        result = sqlspec.provide_connection(MockSyncConfig, "arg1", kwarg1="value1")  # type: ignore[arg-type,type-var]
         assert result == mock_cm
         mock_provide.assert_called_once_with("arg1", kwarg1="value1")
 
@@ -407,7 +407,7 @@ def test_provide_session() -> None:
         mock_cm = Mock()
         mock_provide.return_value = mock_cm
 
-        result = sqlspec.provide_session(MockSyncConfig, "arg1", kwarg1="value1")  # type: ignore[arg-type]
+        result = sqlspec.provide_session(MockSyncConfig, "arg1", kwarg1="value1")  # type: ignore[arg-type,type-var]
         assert result == mock_cm
         mock_provide.assert_called_once_with("arg1", kwarg1="value1")
 
@@ -502,7 +502,7 @@ def test_thread_safety() -> None:
             sqlspec.add_config(config)
 
             # Get config
-            retrieved = sqlspec.get_config(config_class)
+            retrieved: Any = sqlspec.get_config(config_class)
             results.append((worker_id, retrieved))
         except Exception as e:
             errors.append((worker_id, e))

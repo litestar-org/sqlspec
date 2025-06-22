@@ -108,7 +108,7 @@ async def test_psqlpy_config_provide_session() -> None:
     config = PsqlpyConfig(dsn="postgresql://test_user:test_password@localhost:5432/test_db")
 
     # Mock the pool creation to avoid real database connection
-    with patch.object(config, "_create_pool") as mock_create_pool:
+    with patch.object(PsqlpyConfig, "_create_pool") as mock_create_pool:
         # Create a mock pool with acquire context manager
         mock_pool = MagicMock()
         mock_connection = AsyncMock()

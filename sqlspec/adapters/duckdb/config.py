@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
     from contextlib import AbstractContextManager
 
+    from sqlglot.dialects.dialect import DialectType
+
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +111,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
     """
 
     __slots__ = (
+        "_dialect",
         "allow_community_extensions",
         "allow_persistent_secrets",
         "allow_unsigned_extensions",
@@ -140,6 +143,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         "memory_limit",
         "on_connection_create",
         "parquet_metadata_cache",
+        "pool_instance",
         "preserve_insertion_order",
         "progress_bar_time",
         "read_only",
@@ -322,6 +326,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         self.extensions = extensions or []
         self.secrets = secrets or []
         self.on_connection_create = on_connection_create
+        self._dialect: DialectType = None
 
         super().__init__()
 
