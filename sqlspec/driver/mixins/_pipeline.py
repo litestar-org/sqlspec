@@ -314,7 +314,7 @@ class Pipeline:
         result = sql
         for filter_obj in filters:
             if hasattr(filter_obj, "apply"):
-                result = cast(Any, filter_obj).apply(result)
+                result = cast("Any", filter_obj).apply(result)
         return result
 
     def _has_native_support(self) -> bool:
@@ -435,7 +435,7 @@ class AsyncPipeline:
 
         # Check for native support
         if hasattr(self.driver, "_execute_pipeline_native"):
-            results = await cast(Any, self.driver)._execute_pipeline_native(self._operations, **self.options)
+            results = await cast("Any", self.driver)._execute_pipeline_native(self._operations, **self.options)
         else:
             results = await self._execute_pipeline_simulated()
 

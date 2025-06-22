@@ -11,7 +11,7 @@ This module tests the DuckDBConfig class including:
 - Property accessors
 """
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -27,41 +27,43 @@ if TYPE_CHECKING:
 # Constants Tests
 def test_connection_fields_constant() -> None:
     """Test CONNECTION_FIELDS constant contains all expected fields."""
-    expected_fields = frozenset({
-        "database",
-        "read_only",
-        "config",
-        "memory_limit",
-        "threads",
-        "temp_directory",
-        "max_temp_directory_size",
-        "autoload_known_extensions",
-        "autoinstall_known_extensions",
-        "allow_community_extensions",
-        "allow_unsigned_extensions",
-        "extension_directory",
-        "custom_extension_repository",
-        "autoinstall_extension_repository",
-        "allow_persistent_secrets",
-        "enable_external_access",
-        "secret_directory",
-        "enable_object_cache",
-        "parquet_metadata_cache",
-        "enable_external_file_cache",
-        "checkpoint_threshold",
-        "enable_progress_bar",
-        "progress_bar_time",
-        "enable_logging",
-        "log_query_path",
-        "logging_level",
-        "preserve_insertion_order",
-        "default_null_order",
-        "default_order",
-        "ieee_floating_point_ops",
-        "binary_as_string",
-        "arrow_large_buffer_size",
-        "errors_as_json",
-    })
+    expected_fields = frozenset(
+        {
+            "database",
+            "read_only",
+            "config",
+            "memory_limit",
+            "threads",
+            "temp_directory",
+            "max_temp_directory_size",
+            "autoload_known_extensions",
+            "autoinstall_known_extensions",
+            "allow_community_extensions",
+            "allow_unsigned_extensions",
+            "extension_directory",
+            "custom_extension_repository",
+            "autoinstall_extension_repository",
+            "allow_persistent_secrets",
+            "enable_external_access",
+            "secret_directory",
+            "enable_object_cache",
+            "parquet_metadata_cache",
+            "enable_external_file_cache",
+            "checkpoint_threshold",
+            "enable_progress_bar",
+            "progress_bar_time",
+            "enable_logging",
+            "log_query_path",
+            "logging_level",
+            "preserve_insertion_order",
+            "default_null_order",
+            "default_order",
+            "ieee_floating_point_ops",
+            "binary_as_string",
+            "arrow_large_buffer_size",
+            "errors_as_json",
+        }
+    )
     assert CONNECTION_FIELDS == expected_fields
 
 

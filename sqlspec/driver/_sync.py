@@ -187,7 +187,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
             param_sequence = list(param_sequence)
         # Ensure param_sequence is a list or None
         if param_sequence is not None and not isinstance(param_sequence, list):
-            param_sequence = list(param_sequence) if hasattr(param_sequence, '__iter__') else None
+            param_sequence = list(param_sequence) if hasattr(param_sequence, "__iter__") else None
         sql_statement = self._build_statement(statement, _config=_config or self.config, **kwargs).as_many(
             param_sequence
         )

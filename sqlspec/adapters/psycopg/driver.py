@@ -481,20 +481,12 @@ class PsycopgAsyncDriver(
                 # For SELECT statements, extract data while cursor is open
                 fetched_data = await cursor.fetchall()
                 column_names = [col.name for col in cursor.description or []]
-                return {
-                    "data": fetched_data,
-                    "column_names": column_names,
-                    "rows_affected": len(fetched_data),
-                }
+                return {"data": fetched_data, "column_names": column_names, "rows_affected": len(fetched_data)}
             if not statement.expression and sql.strip().upper().startswith("SELECT"):
                 # For SELECT statements when parsing is disabled
                 fetched_data = await cursor.fetchall()
                 column_names = [col.name for col in cursor.description or []]
-                return {
-                    "data": fetched_data,
-                    "column_names": column_names,
-                    "rows_affected": len(fetched_data),
-                }
+                return {"data": fetched_data, "column_names": column_names, "rows_affected": len(fetched_data)}
             # For DML statements
             dml_result: DMLResultDict = {
                 "rows_affected": cursor.rowcount,
