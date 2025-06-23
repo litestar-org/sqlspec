@@ -118,8 +118,8 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
     connection_type: type[OracleSyncConnection] = OracleSyncConnection
 
     # Parameter style support information
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_colon", "positional_colon", "numeric")
-    """OracleDB supports :name (named_colon), :1 (positional_colon), and $1 (numeric) parameter styles."""
+    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_colon", "positional_colon")
+    """OracleDB supports :name (named_colon) and :1 (positional_colon) parameter styles."""
 
     preferred_parameter_style: ClassVar[str] = "named_colon"
     """OracleDB's preferred parameter style is :name (named_colon)."""
@@ -399,8 +399,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
     driver_type: type[OracleAsyncDriver] = OracleAsyncDriver
 
     # Parameter style support information
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_colon", "positional_colon", "numeric")
-    """OracleDB supports :name (named_colon), :1 (positional_colon), and $1 (numeric) parameter styles."""
+    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_colon", "positional_colon")
+    """OracleDB supports :name (named_colon) and :1 (positional_colon) parameter styles."""
 
     preferred_parameter_style: ClassVar[str] = "named_colon"
     """OracleDB's preferred parameter style is :name (named_colon)."""

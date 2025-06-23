@@ -92,11 +92,30 @@ class OracleSyncDriver(
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)
-            params = self._process_parameters(params)
+            # Oracle doesn't like underscores in bind parameter names
+            if isinstance(params, list) and params and isinstance(params[0], dict):
+                # Fix the SQL and parameters
+                for key in list(params[0].keys()):
+                    if key.startswith("_arg_"):
+                        # Remove leading underscore: _arg_0 -> arg0
+                        new_key = key[1:].replace("_", "")
+                        sql = sql.replace(f":{key}", f":{new_key}")
+                        # Update all parameter sets
+                        for param_set in params:
+                            if isinstance(param_set, dict) and key in param_set:
+                                param_set[new_key] = param_set.pop(key)
             return self._execute_many(sql, params, connection=connection, **kwargs)
 
         sql, params = statement.compile(placeholder_style=target_style)
-        params = self._process_parameters(params)
+        # Oracle doesn't like underscores in bind parameter names
+        if isinstance(params, dict):
+            # Fix the SQL and parameters
+            for key in list(params.keys()):
+                if key.startswith("_arg_"):
+                    # Remove leading underscore: _arg_0 -> arg0
+                    new_key = key[1:].replace("_", "")
+                    sql = sql.replace(f":{key}", f":{new_key}")
+                    params[new_key] = params.pop(key)
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
@@ -109,7 +128,9 @@ class OracleSyncDriver(
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
-            cursor.execute(sql, parameters or [])
+            # Process parameters to extract values from TypedParameter objects
+            processed_params = self._process_parameters(parameters) if parameters else []
+            cursor.execute(sql, processed_params)
 
             if self.returns_rows(statement.expression):
                 fetched_data = cursor.fetchall()
@@ -125,7 +146,9 @@ class OracleSyncDriver(
         with self._get_cursor(conn) as cursor:
             if param_list and not isinstance(param_list[0], (list, tuple, dict)):
                 param_list = [param_list]
-            cursor.executemany(sql, param_list or [])
+            # Process parameters to extract values from TypedParameter objects
+            processed_params = self._process_parameters(param_list) if param_list else []
+            cursor.executemany(sql, processed_params)
             return {"rows_affected": cursor.rowcount, "status_message": "OK"}
 
     def _execute_script(
@@ -143,10 +166,30 @@ class OracleSyncDriver(
     def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
-        arrow_table = conn.fetch_df_all(
-            sql.to_sql(placeholder_style=self.default_parameter_style),
-            sql.get_parameters(style=self.default_parameter_style) or [],
-        )
+
+        # Get SQL and parameters
+        sql_str = sql.to_sql(placeholder_style=self.default_parameter_style)
+        params = sql.get_parameters(style=self.default_parameter_style) or []
+
+        # Fix Oracle's issue with underscores in parameter names
+        if isinstance(params, dict):
+            for key in list(params.keys()):
+                if key.startswith("_arg_"):
+                    # Remove all underscores: _arg_0 -> arg0
+                    new_key = key[1:].replace("_", "")
+                    sql_str = sql_str.replace(f":{key}", f":{new_key}")
+                    params[new_key] = params.pop(key)
+
+        # Process parameters to extract values from TypedParameter objects
+        processed_params = self._process_parameters(params) if params else []
+
+        oracle_df = conn.fetch_df_all(sql_str, processed_params)
+
+        # Convert OracleDataFrame to PyArrow Table
+        from pyarrow.interchange import from_dataframe
+
+        arrow_table = from_dataframe(oracle_df)
+
         return ArrowResult(statement=sql, data=arrow_table)
 
     def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
@@ -289,11 +332,30 @@ class OracleAsyncDriver(
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)
-            params = self._process_parameters(params)
+            # Oracle doesn't like underscores in bind parameter names
+            if isinstance(params, list) and params and isinstance(params[0], dict):
+                # Fix the SQL and parameters
+                for key in list(params[0].keys()):
+                    if key.startswith("_arg_"):
+                        # Remove leading underscore: _arg_0 -> arg0
+                        new_key = key[1:].replace("_", "")
+                        sql = sql.replace(f":{key}", f":{new_key}")
+                        # Update all parameter sets
+                        for param_set in params:
+                            if isinstance(param_set, dict) and key in param_set:
+                                param_set[new_key] = param_set.pop(key)
             return await self._execute_many(sql, params, connection=connection, **kwargs)
 
         sql, params = statement.compile(placeholder_style=target_style)
-        params = self._process_parameters(params)
+        # Oracle doesn't like underscores in bind parameter names
+        if isinstance(params, dict):
+            # Fix the SQL and parameters
+            for key in list(params.keys()):
+                if key.startswith("_arg_"):
+                    # Remove leading underscore: _arg_0 -> arg0
+                    new_key = key[1:].replace("_", "")
+                    sql = sql.replace(f":{key}", f":{new_key}")
+                    params[new_key] = params.pop(key)
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
@@ -309,7 +371,9 @@ class OracleAsyncDriver(
             if parameters is None:
                 await cursor.execute(sql)
             else:
-                await cursor.execute(sql, parameters)
+                # Process parameters to extract values from TypedParameter objects
+                processed_params = self._process_parameters(parameters)
+                await cursor.execute(sql, processed_params)
 
             # For SELECT statements, extract data while cursor is open
             if self.returns_rows(statement.expression):
@@ -333,7 +397,9 @@ class OracleAsyncDriver(
             if param_list and not isinstance(param_list[0], (list, tuple, dict)):
                 # Single parameter set, wrap it
                 param_list = [param_list]
-            await cursor.executemany(sql, param_list or [])
+            # Process parameters to extract values from TypedParameter objects
+            processed_params = self._process_parameters(param_list) if param_list else []
+            await cursor.executemany(sql, processed_params)
             result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
             return result
 
@@ -356,10 +422,30 @@ class OracleAsyncDriver(
     async def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
-        arrow_table = await conn.fetch_df_all(
-            sql.to_sql(placeholder_style=self.default_parameter_style),
-            sql.get_parameters(style=self.default_parameter_style) or [],
-        )
+
+        # Get SQL and parameters
+        sql_str = sql.to_sql(placeholder_style=self.default_parameter_style)
+        params = sql.get_parameters(style=self.default_parameter_style) or []
+
+        # Fix Oracle's issue with underscores in parameter names
+        if isinstance(params, dict):
+            for key in list(params.keys()):
+                if key.startswith("_arg_"):
+                    # Remove all underscores: _arg_0 -> arg0
+                    new_key = key[1:].replace("_", "")
+                    sql_str = sql_str.replace(f":{key}", f":{new_key}")
+                    params[new_key] = params.pop(key)
+
+        # Process parameters to extract values from TypedParameter objects
+        processed_params = self._process_parameters(params) if params else []
+
+        oracle_df = await conn.fetch_df_all(sql_str, processed_params)
+
+        # Convert OracleDataFrame to PyArrow Table
+        from pyarrow.interchange import from_dataframe
+
+        arrow_table = from_dataframe(oracle_df)
+
         return ArrowResult(statement=sql, data=arrow_table)
 
     async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:

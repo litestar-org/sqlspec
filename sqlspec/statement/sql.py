@@ -1,6 +1,5 @@
 """SQL statement handling with centralized parameter management."""
 
-import operator
 from dataclasses import dataclass, field, replace
 from typing import Any, Optional, Union
 
@@ -662,9 +661,8 @@ class SQL:
             return sql, params
 
         # Convert to requested placeholder style
-        if placeholder_style and params is not None:
+        if placeholder_style:
             sql, params = self._convert_placeholder_style(sql, params, placeholder_style)
-
         return sql, params
 
     @staticmethod
@@ -789,14 +787,17 @@ class SQL:
             # Use 1-based numbering for numeric style
             return f"${param.ordinal + 1}"
         if target_style == ParameterStyle.NAMED_COLON:
-            # Use generated parameter names
-            return f":_arg_{param.ordinal}"
+            # Use original name if available, otherwise generate one
+            # Oracle doesn't like underscores in parameter names
+            if param.name:
+                return f":{param.name}"
+            return f":arg{param.ordinal}"
         if target_style == ParameterStyle.NAMED_AT:
-            # Use @ prefix for BigQuery style
+            # Use @ prefix for BigQuery style (BigQuery is fine with underscores)
             return f"@{param.name or f'_arg_{param.ordinal}'}"
         if target_style == ParameterStyle.POSITIONAL_COLON:
-            # Keep the original numeric placeholder
-            return str(param.placeholder_text)
+            # Use :1, :2, etc. for Oracle positional style
+            return f":{param.ordinal + 1}"
         if target_style == ParameterStyle.POSITIONAL_PYFORMAT:
             # Use %s for positional pyformat
             return "%s"
@@ -829,33 +830,31 @@ class SQL:
 
     @staticmethod
     def _convert_to_positional_colon_format(params: Any, param_info: list[Any]) -> Any:
-        """Convert to dict format for Oracle numeric style.
+        """Convert to list format for Oracle positional colon style.
 
         Args:
             params: Original parameters
             param_info: List of parameter information
 
         Returns:
-            Dict of parameters with numeric keys
+            List of parameters in order
         """
         if isinstance(params, (list, tuple)):
-            # For Oracle numeric parameters, map based on numeric order
-            # First, extract only Oracle numeric parameters and sort by numeric value
-            oracle_params = [
-                (int(p.name), p)
-                for p in param_info
-                if p.style == ParameterStyle.POSITIONAL_COLON and p.name and p.name.isdigit()
-            ]
-            oracle_params.sort(key=operator.itemgetter(0))  # Sort by numeric value
-
-            # Map list items to parameters based on numeric order
-            result_dict: dict[str, Any] = {}
-            for i, (_, p) in enumerate(oracle_params):
-                if i < len(params):
-                    result_dict[p.name] = params[i]
-            return result_dict
+            # Oracle positional parameters use 1-based indexing but expects a list
+            # Just return the params as-is since Oracle driver will handle them
+            return list(params)
         if not is_dict(params) and param_info:
-            return {param_info[0].name: params}
+            # Single value parameter
+            return [params]
+        if isinstance(params, dict):
+            # Convert dict to list based on parameter order
+            result_list = []
+            for p in sorted(param_info, key=lambda x: x.ordinal):
+                if p.name and p.name in params:
+                    result_list.append(params[p.name])
+                elif f"_arg_{p.ordinal}" in params:
+                    result_list.append(params[f"_arg_{p.ordinal}"])
+            return result_list
         return params
 
     @staticmethod
@@ -916,13 +915,29 @@ class SQL:
             Dict of parameters with generated names
         """
         if is_dict(params):
-            # Remap dict keys to match the generated parameter names
+            # For dict params with matching parameter names, return as-is
+            # Otherwise, remap to match the expected names
+            if all(p.name in params for p in param_info if p.name):
+                return params
+
+            # Remap dict keys to match the parameter names in SQL
             result_dict: dict[str, Any] = {}
             for p in param_info:
                 if p.name and p.name in params:
-                    # Map from original name to generated name (_arg_N to match placeholder)
-                    new_name = f"_arg_{p.ordinal}"
-                    result_dict[new_name] = params[p.name]
+                    result_dict[p.name] = params[p.name]
+                elif f"param_{p.ordinal}" in params:
+                    # Handle param_N style names
+                    result_dict[p.name or f"_arg_{p.ordinal}"] = params[f"param_{p.ordinal}"]
+            return result_dict
+        if isinstance(params, (list, tuple)):
+            # Convert list/tuple to dict with parameter names from param_info
+            result_dict: dict[str, Any] = {}
+            for i, value in enumerate(params):
+                if i < len(param_info):
+                    p = param_info[i]
+                    # Use the actual parameter name if available
+                    param_name = p.name or f"_arg_{i}"
+                    result_dict[param_name] = value
             return result_dict
         return params
 
