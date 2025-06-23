@@ -914,14 +914,12 @@ class SQL:
         Returns:
             Dict of parameters with generated names
         """
+        result_dict: dict[str, Any] = {}
         if is_dict(params):
             # For dict params with matching parameter names, return as-is
             # Otherwise, remap to match the expected names
             if all(p.name in params for p in param_info if p.name):
                 return params
-
-            # Remap dict keys to match the parameter names in SQL
-            result_dict: dict[str, Any] = {}
             for p in param_info:
                 if p.name and p.name in params:
                     result_dict[p.name] = params[p.name]
@@ -931,7 +929,7 @@ class SQL:
             return result_dict
         if isinstance(params, (list, tuple)):
             # Convert list/tuple to dict with parameter names from param_info
-            result_dict: dict[str, Any] = {}
+
             for i, value in enumerate(params):
                 if i < len(param_info):
                     p = param_info[i]

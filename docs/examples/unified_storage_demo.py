@@ -73,7 +73,7 @@ def demo_unified_storage_architecture() -> None:
             # Import from storage backend
             session.execute(SQL("DROP TABLE IF EXISTS product_summary"))
             rows_imported = session.import_from_storage(
-                source_uri="analytics/product_summary.csv", table_name="product_summary", storage_key="local_temp"
+                source_uri="analytics/product_summary.csv", table_name="product_summary"
             )
             print(f"✅ Imported {rows_imported} rows from storage backend")
 
