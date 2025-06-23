@@ -259,10 +259,10 @@ def test_oracle_ddl_script_parsing(oracle_sync_session: OracleSyncConfig) -> Non
     from sqlspec.statement.sql import SQL, SQLConfig
 
     # Load the Oracle DDL script
-    fixture_path = Path(__file__).parent.parent.parent.parent.parent / "fixtures" / "oracle.ddl.sql"
+    fixture_path = Path(__file__).parent.parent.parent.parent / "fixtures" / "oracle.ddl.sql"
     assert fixture_path.exists(), f"Fixture file not found at {fixture_path}"
 
-    with open(fixture_path) as f:
+    with Path(fixture_path).open() as f:
         oracle_ddl = f.read()
 
     # Configure for Oracle dialect with parsing enabled
