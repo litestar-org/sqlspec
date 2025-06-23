@@ -148,7 +148,7 @@ class OracleSyncDriver(
                 param_list = [param_list]
             # Process parameters to extract values from TypedParameter objects
             processed_params = self._process_parameters(param_list) if param_list else []
-            cursor.executemany(sql, processed_params)
+            cursor.executemany(sql, processed_params)  # type: ignore[arg-type]
             return {"rows_affected": cursor.rowcount, "status_message": "OK"}
 
     def _execute_script(
@@ -184,9 +184,7 @@ class OracleSyncDriver(
         processed_params = self._process_parameters(params) if params else []
 
         oracle_df = conn.fetch_df_all(sql_str, processed_params)
-
-        # Convert OracleDataFrame to PyArrow Table
-        from pyarrow.interchange import from_dataframe
+        from pyarrow.interchange.from_dataframe import from_dataframe
 
         arrow_table = from_dataframe(oracle_df)
 
@@ -399,7 +397,7 @@ class OracleAsyncDriver(
                 param_list = [param_list]
             # Process parameters to extract values from TypedParameter objects
             processed_params = self._process_parameters(param_list) if param_list else []
-            await cursor.executemany(sql, processed_params)
+            await cursor.executemany(sql, processed_params)  # type: ignore[arg-type]
             result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
             return result
 
@@ -440,9 +438,7 @@ class OracleAsyncDriver(
         processed_params = self._process_parameters(params) if params else []
 
         oracle_df = await conn.fetch_df_all(sql_str, processed_params)
-
-        # Convert OracleDataFrame to PyArrow Table
-        from pyarrow.interchange import from_dataframe
+        from pyarrow.interchange.from_dataframe import from_dataframe
 
         arrow_table = from_dataframe(oracle_df)
 
