@@ -605,8 +605,13 @@ class SyncStorageMixin(StorageMixinBase):
         """Write result to JSON file."""
 
         if result.data and result.column_names:
-            # Convert to list of dicts
-            rows = [dict(zip(result.column_names, row)) for row in result.data]
+            # Check if data is already in dict format
+            if result.data and isinstance(result.data[0], dict):
+                # Data is already dictionaries, use as-is
+                rows = result.data
+            else:
+                # Convert tuples/lists to list of dicts
+                rows = [dict(zip(result.column_names, row)) for row in result.data]
             json.dump(rows, file, **options)  # TODO: use sqlspec.utils.serializer
         else:
             json.dump([], file)  # TODO: use sqlspec.utils.serializer
@@ -971,8 +976,13 @@ class AsyncStorageMixin(StorageMixinBase):
         """Reuse sync implementation."""
 
         if result.data and result.column_names:
-            # Convert to list of dicts
-            rows = [dict(zip(result.column_names, row)) for row in result.data]
+            # Check if data is already in dict format
+            if result.data and isinstance(result.data[0], dict):
+                # Data is already dictionaries, use as-is
+                rows = result.data
+            else:
+                # Convert tuples/lists to list of dicts
+                rows = [dict(zip(result.column_names, row)) for row in result.data]
             json.dump(rows, file, **options)
         else:
             json.dump([], file)

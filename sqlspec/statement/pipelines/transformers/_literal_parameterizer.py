@@ -462,8 +462,9 @@ class ParameterizeLiterals(ProcessorProtocol):
             param_name = f"param_{self._parameter_counter}"
             placeholder = exp.Placeholder(this=f"@{param_name}")
         elif style in {ParameterStyle.POSITIONAL_PYFORMAT, "pyformat"}:
-            # Use %s for pyformat
-            placeholder = exp.Anonymous(this="%s")  # type: ignore[assignment]
+            # Don't use pyformat directly in SQLGlot - use standard placeholder
+            # and let the compile method convert it later
+            placeholder = exp.Placeholder()
         else:
             # Default to question mark
             placeholder = exp.Placeholder()

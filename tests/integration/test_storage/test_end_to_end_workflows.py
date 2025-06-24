@@ -130,8 +130,8 @@ def test_daily_analytics_export_workflow(analytics_database: SqliteDriver, temp_
         GROUP BY u.user_id, u.username, u.country, u.subscription_type
         ORDER BY event_count DESC
         """,
+        [export_date],  # Pass parameters as positional arg
         destination_uri=str(user_activity_file),
-        parameters=[export_date],
     )
 
     # Step 2: Export revenue data for the day
@@ -149,8 +149,8 @@ def test_daily_analytics_export_workflow(analytics_database: SqliteDriver, temp_
         WHERE r.transaction_date = ?
         ORDER BY r.amount DESC
         """,
+        [export_date],  # Pass parameters as positional arg
         destination_uri=str(revenue_file),
-        parameters=[export_date],
     )
 
     # Step 3: Create summary report

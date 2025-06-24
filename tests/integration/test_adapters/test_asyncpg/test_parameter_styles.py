@@ -21,6 +21,7 @@ async def asyncpg_params_session(postgres_service: PostgresService) -> "AsyncGen
         user=postgres_service.user,
         password=postgres_service.password,
         database=postgres_service.database,
+        max_size=20,
         statement_config=SQLConfig(strict_mode=False, enable_transformations=False),
     )
 

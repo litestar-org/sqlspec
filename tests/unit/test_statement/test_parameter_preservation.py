@@ -74,9 +74,9 @@ def test_mixed_parameter_style_normalization() -> None:
     params = sql.parameters
     assert isinstance(params, dict)
 
-    # Check both the positional parameter (as _arg_0) and named parameter
-    assert "_arg_0" in params
-    assert params["_arg_0"] == 123
+    # Check both the positional parameter (as arg_0) and named parameter
+    assert "arg_0" in params
+    assert params["arg_0"] == 123
     assert "active" in params
     assert params["active"] == "enabled"
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Any, Literal
 
 import pyarrow.parquet as pq
@@ -492,9 +493,10 @@ async def test_aiosqlite_to_parquet(aiosqlite_session: AiosqliteDriver) -> None:
     await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("pq1", 123))
     await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("pq2", 456))
     statement = SQL("SELECT name, value FROM test_table ORDER BY name")
-    with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
-        await aiosqlite_session.export_to_storage(statement, destination_uri=tmp.name, format="parquet")
-        table = pq.read_table(f"{tmp.name}.parquet")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = Path(tmpdir) / "partitioned_data"
+        await aiosqlite_session.export_to_storage(statement, destination_uri=str(output_path), format="parquet")
+        table = pq.read_table(f"{output_path}.parquet")
         assert table.num_rows == 2
         assert set(table.column_names) == {"name", "value"}
         names = table.column("name").to_pylist()

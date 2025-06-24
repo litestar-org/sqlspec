@@ -60,7 +60,7 @@ class PsycopgSyncDriver(
         self,
         connection: PsycopgSyncConnection,
         config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
+        default_row_type: "type[DictRow]" = dict,
     ) -> None:
         super().__init__(connection=connection, config=config, default_row_type=default_row_type)
 
@@ -89,9 +89,12 @@ class PsycopgSyncDriver(
                     break
 
         if statement.is_many:
-            sql, _ = statement.compile(placeholder_style=target_style)
-            # For execute_many, use the parameters passed via kwargs
-            params = kwargs.get("parameters")
+            sql, params = statement.compile(placeholder_style=target_style)
+            # For execute_many, check if parameters were passed via kwargs (legacy support)
+            # Otherwise use the parameters from the SQL object
+            kwargs_params = kwargs.get("parameters")
+            if kwargs_params is not None:
+                params = kwargs_params
             if params is not None:
                 processed_params = [self._process_parameters(param_set) for param_set in params]
                 params = processed_params
@@ -425,8 +428,13 @@ class PsycopgAsyncDriver(
     default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
     __slots__ = ()
 
-    def __init__(self, connection: PsycopgAsyncConnection, config: Optional[SQLConfig] = None) -> None:
-        super().__init__(connection=connection, config=config, default_row_type=DictRow)
+    def __init__(
+        self,
+        connection: PsycopgAsyncConnection,
+        config: Optional[SQLConfig] = None,
+        default_row_type: "type[DictRow]" = dict,
+    ) -> None:
+        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
 
     @staticmethod
     @asynccontextmanager

@@ -313,7 +313,8 @@ def test_psycopg_parameter_with_json(psycopg_params_session: PsycopgSyncDriver) 
     """Test parameters with PostgreSQL JSON operations."""
     # Create table with JSONB column
     psycopg_params_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS test_json (
+        DROP TABLE IF EXISTS test_json;
+        CREATE TABLE test_json (
             id SERIAL PRIMARY KEY,
             name TEXT,
             metadata JSONB
@@ -355,7 +356,8 @@ def test_psycopg_parameter_with_arrays(psycopg_params_session: PsycopgSyncDriver
     """Test parameters with PostgreSQL array operations."""
     # Create table with array columns
     psycopg_params_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS test_arrays (
+        DROP TABLE IF EXISTS test_arrays;
+        CREATE TABLE test_arrays (
             id SERIAL PRIMARY KEY,
             name TEXT,
             tags TEXT[],

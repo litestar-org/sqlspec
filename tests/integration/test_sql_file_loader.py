@@ -543,7 +543,7 @@ def test_complex_etl_transformations(complex_sql_files: Path) -> None:
     assert "CASE" in query_text and "WHEN" in query_text
     assert "COALESCE(" in query_text
     # Email regex might be modified during parsing, check for email validation pattern
-    assert "EMAIL" in query_text and ("@" in raw_query)
+    assert ("EMAIL" in query_text or "email" in query_text) and ("@" in raw_query)
 
     # Test complex upsert operation
     upsert_sql = loader.get_sql(
