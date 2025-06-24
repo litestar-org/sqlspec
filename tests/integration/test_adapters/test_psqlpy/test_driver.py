@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import pyarrow.parquet as pq
@@ -487,10 +488,11 @@ async def test_psqlpy_to_parquet(psqlpy_config: PsqlpyConfig) -> None:
         await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("pq1",))
         await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("pq2",))
         statement = SQL("SELECT name FROM test_table ORDER BY name")
-        with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
-            rows_exported = await driver.export_to_storage(statement, destination_uri=tmp.name)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "partitioned_data"
+            rows_exported = await driver.export_to_storage(statement, destination_uri=str(output_path))
             assert rows_exported == 2
-            table = pq.read_table(f"{tmp.name}.parquet")
+            table = pq.read_table(f"{output_path}.parquet")
             assert table.num_rows == 2
             assert set(table.column_names) == {"name"}
             names = table.column("name").to_pylist()
