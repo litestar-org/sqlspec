@@ -55,26 +55,27 @@ def test_asyncmy_config_basic_creation() -> None:
         user="test_user",
         password="test_password",
         database="test_db",
-        extras={"custom": "value"},
+        custom="value",  # Additional parameters are stored in extras
     )
-    assert config.host == "localhost"
-    assert config.port == 3306
-    assert config.user == "test_user"
-    assert config.password == "test_password"
-    assert config.database == "test_db"
+    assert config_full.host == "localhost"
+    assert config_full.port == 3306
+    assert config_full.user == "test_user"
+    assert config_full.password == "test_password"
+    assert config_full.database == "test_db"
     assert config_full.extras["custom"] == "value"
 
 
 def test_asyncmy_config_extras_handling() -> None:
     """Test Asyncmy config extras parameter handling."""
-    # Test with explicit extras
+    # Test with kwargs going to extras
     config = AsyncmyConfig(
         host="localhost",
         port=3306,
         user="test_user",
         password="test_password",
         database="test_db",
-        extras={"custom_param": "value", "debug": True},
+        custom_param="value",
+        debug=True,
     )
     assert config.extras["custom_param"] == "value"
     assert config.extras["debug"] is True

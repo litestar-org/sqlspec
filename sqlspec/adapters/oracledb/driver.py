@@ -30,6 +30,44 @@ OracleAsyncConnection = AsyncConnection
 logger = get_logger("adapters.oracledb")
 
 
+def _process_oracle_parameters(params: Any) -> Any:
+    """Process parameters to handle Oracle-specific requirements.
+
+    - Extract values from TypedParameter objects
+    - Convert tuples to lists (Oracle doesn't support tuples)
+    """
+    from sqlspec.statement.parameters import TypedParameter
+
+    if params is None:
+        return None
+
+    # Handle TypedParameter objects
+    if isinstance(params, TypedParameter):
+        return _process_oracle_parameters(params.value)
+
+    if isinstance(params, tuple):
+        # Convert single tuple to list and process each element
+        return [_process_oracle_parameters(item) for item in params]
+    if isinstance(params, list):
+        # Process list of parameter sets
+        processed = []
+        for param_set in params:
+            if isinstance(param_set, tuple):
+                # Convert tuple to list and process each element
+                processed.append([_process_oracle_parameters(item) for item in param_set])
+            elif isinstance(param_set, list):
+                # Process each element in the list
+                processed.append([_process_oracle_parameters(item) for item in param_set])
+            else:
+                processed.append(_process_oracle_parameters(param_set))
+        return processed
+    if isinstance(params, dict):
+        # Process dict values
+        return {key: _process_oracle_parameters(value) for key, value in params.items()}
+    # Return as-is for other types
+    return params
+
+
 class OracleSyncDriver(
     SyncDriverAdapterProtocol[OracleSyncConnection, RowT],
     SQLTranslatorMixin,
@@ -56,6 +94,15 @@ class OracleSyncDriver(
         default_row_type: type[DictRow] = DictRow,
     ) -> None:
         super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+
+    @staticmethod
+    def _process_parameters(params: Any) -> Any:
+        """Process parameters to handle Oracle-specific requirements.
+
+        - Extract values from TypedParameter objects
+        - Convert tuples to lists (Oracle doesn't support tuples)
+        """
+        return _process_oracle_parameters(params)
 
     @contextmanager
     def _get_cursor(self, connection: Optional[OracleSyncConnection] = None) -> Generator[Cursor, None, None]:
@@ -92,6 +139,8 @@ class OracleSyncDriver(
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)
+            # Process parameters to convert tuples to lists for Oracle
+            params = self._process_parameters(params)
             # Oracle doesn't like underscores in bind parameter names
             if isinstance(params, list) and params and isinstance(params[0], dict):
                 # Fix the SQL and parameters
@@ -144,11 +193,18 @@ class OracleSyncDriver(
     ) -> DMLResultDict:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
-            if param_list and not isinstance(param_list[0], (list, tuple, dict)):
+            # Handle None or empty param_list
+            if param_list is None:
+                param_list = []
+            # Ensure param_list is a list of parameter sets
+            elif param_list and not isinstance(param_list, list):
+                # Single parameter set, wrap it
                 param_list = [param_list]
-            # Process parameters to extract values from TypedParameter objects
-            processed_params = self._process_parameters(param_list) if param_list else []
-            cursor.executemany(sql, processed_params)  # type: ignore[arg-type]
+            elif param_list and not isinstance(param_list[0], (list, tuple, dict)):
+                # Already a flat list, likely from incorrect usage
+                param_list = [param_list]
+            # Parameters have already been processed in _execute_statement
+            cursor.executemany(sql, param_list)  # type: ignore[arg-type]
             return {"rows_affected": cursor.rowcount, "status_message": "OK"}
 
     def _execute_script(
@@ -167,18 +223,11 @@ class OracleSyncDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
 
-        # Get SQL and parameters
-        sql_str = sql.to_sql(placeholder_style=self.default_parameter_style)
-        params = sql.get_parameters(style=self.default_parameter_style) or []
-
-        # Fix Oracle's issue with underscores in parameter names
-        if isinstance(params, dict):
-            for key in list(params.keys()):
-                if key.startswith("_arg_"):
-                    # Remove all underscores: _arg_0 -> arg0
-                    new_key = key[1:].replace("_", "")
-                    sql_str = sql_str.replace(f":{key}", f":{new_key}")
-                    params[new_key] = params.pop(key)
+        # Get SQL and parameters using compile to ensure they match
+        # For fetch_arrow_table, we need to use POSITIONAL_COLON style since the SQL has :1 placeholders
+        sql_str, params = sql.compile(placeholder_style=ParameterStyle.POSITIONAL_COLON)
+        if params is None:
+            params = []
 
         # Process parameters to extract values from TypedParameter objects
         processed_params = self._process_parameters(params) if params else []
@@ -293,6 +342,15 @@ class OracleAsyncDriver(
     ) -> None:
         super().__init__(connection=connection, config=config, default_row_type=default_row_type)
 
+    @staticmethod
+    def _process_parameters(params: Any) -> Any:
+        """Process parameters to handle Oracle-specific requirements.
+
+        - Extract values from TypedParameter objects
+        - Convert tuples to lists (Oracle doesn't support tuples)
+        """
+        return _process_oracle_parameters(params)
+
     @asynccontextmanager
     async def _get_cursor(
         self, connection: Optional[OracleAsyncConnection] = None
@@ -330,6 +388,8 @@ class OracleAsyncDriver(
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)
+            # Process parameters to convert tuples to lists for Oracle
+            params = self._process_parameters(params)
             # Oracle doesn't like underscores in bind parameter names
             if isinstance(params, list) and params and isinstance(params[0], dict):
                 # Fix the SQL and parameters
@@ -391,13 +451,18 @@ class OracleAsyncDriver(
     ) -> DMLResultDict:
         conn = self._connection(connection)
         async with self._get_cursor(conn) as cursor:
+            # Handle None or empty param_list
+            if param_list is None:
+                param_list = []
             # Ensure param_list is a list of parameter sets
-            if param_list and not isinstance(param_list[0], (list, tuple, dict)):
+            elif param_list and not isinstance(param_list, list):
                 # Single parameter set, wrap it
                 param_list = [param_list]
-            # Process parameters to extract values from TypedParameter objects
-            processed_params = self._process_parameters(param_list) if param_list else []
-            await cursor.executemany(sql, processed_params)  # type: ignore[arg-type]
+            elif param_list and not isinstance(param_list[0], (list, tuple, dict)):
+                # Already a flat list, likely from incorrect usage
+                param_list = [param_list]
+            # Parameters have already been processed in _execute_statement
+            await cursor.executemany(sql, param_list)  # type: ignore[arg-type]
             result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
             return result
 
@@ -421,18 +486,11 @@ class OracleAsyncDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
 
-        # Get SQL and parameters
-        sql_str = sql.to_sql(placeholder_style=self.default_parameter_style)
-        params = sql.get_parameters(style=self.default_parameter_style) or []
-
-        # Fix Oracle's issue with underscores in parameter names
-        if isinstance(params, dict):
-            for key in list(params.keys()):
-                if key.startswith("_arg_"):
-                    # Remove all underscores: _arg_0 -> arg0
-                    new_key = key[1:].replace("_", "")
-                    sql_str = sql_str.replace(f":{key}", f":{new_key}")
-                    params[new_key] = params.pop(key)
+        # Get SQL and parameters using compile to ensure they match
+        # For fetch_arrow_table, we need to use POSITIONAL_COLON style since the SQL has :1 placeholders
+        sql_str, params = sql.compile(placeholder_style=ParameterStyle.POSITIONAL_COLON)
+        if params is None:
+            params = []
 
         # Process parameters to extract values from TypedParameter objects
         processed_params = self._process_parameters(params) if params else []

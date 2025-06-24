@@ -11,46 +11,44 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQLConfig
 
-
 @pytest.fixture(scope="function")
 async def asyncpg_params_session(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgDriver, None]":
-    """Create an AsyncPG session for parameter style testing."""
+    """Create an AsyncPG session for parameter style testing.
+    
+    Optimized to avoid connection pool exhaustion.
+    """
     config = AsyncpgConfig(
         host=postgres_service.host,
         port=postgres_service.port,
         user=postgres_service.user,
         password=postgres_service.password,
         database=postgres_service.database,
-        max_size=20,
+        min_size=1,  # Minimal pool size
+        max_size=3,  # Very small pool to conserve connections
         statement_config=SQLConfig(strict_mode=False, enable_transformations=False),
     )
 
     async with config.provide_session() as session:
-        # Create test table
+        # Create test table efficiently
         await session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_params (
+            DROP TABLE IF EXISTS test_params CASCADE;
+            CREATE TABLE test_params (
                 id SERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
                 value INTEGER DEFAULT 0,
                 description TEXT
-            )
+            );
+            -- Insert all test data in one go
+            INSERT INTO test_params (name, value, description) VALUES 
+                ('test1', 100, 'First test'),
+                ('test2', 200, 'Second test'),
+                ('test3', 300, NULL),
+                ('alpha', 50, 'Alpha test'),
+                ('beta', 75, 'Beta test'),
+                ('gamma', 250, 'Gamma test');
         """)
-        # Clear any existing data
-        await session.execute_script("TRUNCATE TABLE test_params RESTART IDENTITY")
 
-        # Insert test data
-        await session.execute(
-            "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", ("test1", 100, "First test")
-        )
-        await session.execute(
-            "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", ("test2", 200, "Second test")
-        )
-        await session.execute(
-            "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", ("test3", 300, None)
-        )  # NULL description
         yield session
-        # Cleanup
-        await session.execute_script("DROP TABLE IF EXISTS test_params")
 
 
 @pytest.mark.asyncio
@@ -97,8 +95,10 @@ async def test_asyncpg_multiple_parameters_numeric(asyncpg_params_session: Async
 
     assert isinstance(result, SQLResult)
     assert result is not None
-    assert len(result) == 1
-    assert result[0]["value"] == 100
+    assert len(result) == 3  # alpha(50), beta(75), test1(100)
+    assert result[0]["value"] == 50  # First in order (alpha)
+    assert result[1]["value"] == 75  # Second in order (beta)
+    assert result[2]["value"] == 100  # Third in order (test1)
 
 
 @pytest.mark.asyncio
@@ -164,20 +164,20 @@ async def test_asyncpg_parameter_with_like(asyncpg_params_session: AsyncpgDriver
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_parameter_with_any_array(asyncpg_params_session: AsyncpgDriver) -> None:
     """Test parameters with PostgreSQL ANY and arrays."""
-    # Insert additional test data
+    # Insert additional test data with unique names
     await asyncpg_params_session.execute_many(
         "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)",
-        [("alpha", 10, "Alpha test"), ("beta", 20, "Beta test"), ("gamma", 30, "Gamma test")],
+        [("delta", 10, "Delta test"), ("epsilon", 20, "Epsilon test"), ("zeta", 30, "Zeta test")],
     )
 
-    # Test ANY with array parameter
+    # Test ANY with array parameter - use names we know exist
     result = await asyncpg_params_session.execute(
         "SELECT * FROM test_params WHERE name = ANY($1) ORDER BY name", (["alpha", "beta", "test1"],)
     )
 
     assert isinstance(result, SQLResult)
     assert result is not None
-    assert len(result) == 3
+    assert len(result) == 3  # Should find alpha, beta, and test1 from initial data
     assert result[0]["name"] == "alpha"
     assert result[1]["name"] == "beta"
     assert result[2]["name"] == "test1"
@@ -189,9 +189,9 @@ async def test_asyncpg_parameter_with_sql_object(asyncpg_params_session: Asyncpg
     """Test parameters with SQL object."""
     from sqlspec.statement.sql import SQL
 
-    # Test with numeric style
-    sql_obj = SQL("SELECT * FROM test_params WHERE value > $1")
-    result = await asyncpg_params_session.execute(sql_obj, 150)
+    # Test with numeric style - parameters must be included in SQL object constructor
+    sql_obj = SQL("SELECT * FROM test_params WHERE value > $1", parameters=[150])
+    result = await asyncpg_params_session.execute(sql_obj)
 
     assert isinstance(result, SQLResult)
     assert result is not None

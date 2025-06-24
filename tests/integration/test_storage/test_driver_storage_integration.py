@@ -165,7 +165,7 @@ def test_export_to_storage_json_format(sqlite_with_test_data: SqliteDriver, temp
     # Verify price filtering
     for item in data:
         assert item["price"] > 50
-        
+
     # Verify specific items
     names = [item["name"] for item in data]
     assert "Laptop" in names

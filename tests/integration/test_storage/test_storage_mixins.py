@@ -159,7 +159,7 @@ def test_driver_import_from_storage(sqlite_driver_with_storage: SqliteDriver, te
     sqlite_driver_with_storage.export_to_storage(
         "SELECT name, category, price FROM storage_test WHERE category = 'books'",
         destination_uri=str(export_file),
-        format="csv"
+        format="csv",
     )
 
     # Create new table for import

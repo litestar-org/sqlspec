@@ -102,11 +102,7 @@ class SQLConfig:
         elif self.enable_transformations:
             # Use target_parameter_style if available, otherwise default to "?"
             placeholder_style = self.target_parameter_style or "?"
-            transformers = [
-                CommentRemover(),
-                ParameterizeLiterals(placeholder_style=placeholder_style),
-                # ExpressionSimplifier(),  # Disabled due to reordering issues
-            ]
+            transformers = [CommentRemover(), ParameterizeLiterals(placeholder_style=placeholder_style)]
 
         # Create validators based on config
         validators = []
@@ -911,20 +907,26 @@ class SQL:
             return self._convert_to_named_pyformat_format(params, param_info)
         return params
 
-    @staticmethod
-    def _convert_to_positional_colon_format(params: Any, param_info: list[Any]) -> Any:
+    def _convert_to_positional_colon_format(self, params: Any, param_info: list[Any]) -> Any:
         """Convert to dict format for Oracle positional colon style.
 
         Oracle's positional colon style uses :1, :2, etc. placeholders and expects
         parameters as a dict with string keys "1", "2", etc.
+
+        For execute_many operations, returns a list of parameter sets.
 
         Args:
             params: Original parameters
             param_info: List of parameter information
 
         Returns:
-            Dict of parameters with string keys "1", "2", etc.
+            Dict of parameters with string keys "1", "2", etc., or list for execute_many
         """
+        # Special handling for execute_many
+        if self._is_many and isinstance(params, list) and params and isinstance(params[0], (list, tuple)):
+            # This is execute_many - keep as list but process each item
+            return params
+
         result_dict: dict[str, Any] = {}
 
         if isinstance(params, (list, tuple)):

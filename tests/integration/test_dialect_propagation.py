@@ -1,6 +1,6 @@
 """Integration tests for dialect propagation through the SQL pipeline."""
 
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 from sqlglot.dialects.dialect import DialectType
@@ -27,10 +27,11 @@ def test_sqlite_dialect_propagation_through_execute() -> None:
 
     # Use real SQLite connection for integration test
     import sqlite3
+
     connection = sqlite3.connect(":memory:")
     # Set row factory to return Row objects that can be converted to dicts
     connection.row_factory = sqlite3.Row
-    
+
     # Create table for testing
     connection.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
     connection.execute("INSERT INTO users (id, name) VALUES (1, 'test')")
@@ -44,16 +45,16 @@ def test_sqlite_dialect_propagation_through_execute() -> None:
 
     # Execute a query and verify result
     result = driver.execute("SELECT * FROM users")
-    
+
     # Verify we got results
     assert isinstance(result, SQLResult)
     assert len(result.data) == 1
     assert result.data[0]["id"] == 1
     assert result.data[0]["name"] == "test"
-    
+
     # Verify the internal SQL object has the correct dialect
     assert result.statement._dialect == "sqlite"
-    
+
     connection.close()
 
 
@@ -66,8 +67,9 @@ def test_duckdb_dialect_propagation_with_query_builder() -> None:
 
     # Use real DuckDB connection for integration test
     import duckdb
+
     connection = duckdb.connect(":memory:")
-    
+
     # Create table for testing
     connection.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR)")
     connection.execute("INSERT INTO users (id, name) VALUES (1, 'test')")
@@ -80,16 +82,16 @@ def test_duckdb_dialect_propagation_with_query_builder() -> None:
 
     # Execute and verify dialect is preserved
     result = driver.execute(query)
-    
+
     # Verify we got results
     assert isinstance(result, SQLResult)
     assert len(result.data) == 1
     assert result.data[0]["id"] == 1
     assert result.data[0]["name"] == "test"
-    
+
     # Verify the dialect propagated correctly
     assert result.statement._dialect == "duckdb"
-    
+
     connection.close()
 
 
@@ -110,11 +112,11 @@ def test_psycopg_dialect_in_execute_script() -> None:
             # Execute script and verify dialect
             script = "CREATE TEMP TABLE test_dialect (id INT); INSERT INTO test_dialect VALUES (1);"
             result = driver.execute_script(script)
-            
+
             # Verify result
             assert isinstance(result, SQLResult)
             assert result.operation_type == "SCRIPT"
-            
+
             # Verify the dialect propagated correctly
             assert result.statement._dialect == "postgres"
             assert result.statement.is_script is True
@@ -141,7 +143,7 @@ async def test_asyncpg_dialect_propagation_through_execute() -> None:
             # Create temp table and execute a query
             await connection.execute("CREATE TEMP TABLE test_users (id INT, name TEXT)")
             await connection.execute("INSERT INTO test_users VALUES (1, 'test')")
-            
+
             result = await driver.execute("SELECT * FROM test_users")
 
             # Verify we got results
@@ -149,7 +151,7 @@ async def test_asyncpg_dialect_propagation_through_execute() -> None:
             assert len(result.data) == 1
             assert result.data[0]["id"] == 1
             assert result.data[0]["name"] == "test"
-            
+
             # Verify the dialect propagated correctly
             assert result.statement._dialect == "postgres"
     except Exception:
@@ -263,6 +265,7 @@ def test_dialect_mismatch_handling() -> None:
     """Test that drivers convert SQL to their own dialect."""
     # Create driver with one dialect
     import sqlite3
+
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
     driver = SqliteDriver(connection=connection, config=SQLConfig())
@@ -272,14 +275,14 @@ def test_dialect_mismatch_handling() -> None:
 
     # Should still execute without error (driver handles conversion if needed)
     result = driver.execute(sql)
-    
+
     # Verify execution succeeded
     assert isinstance(result, SQLResult)
     assert len(result.data) == 1
     assert result.data[0]["num"] == 1
-    
+
     # Verify the SQL object retained its original dialect
     # (the driver internally handles any necessary conversion)
     assert result.statement._dialect == "postgres"
-    
+
     connection.close()

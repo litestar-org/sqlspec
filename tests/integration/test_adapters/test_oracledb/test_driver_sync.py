@@ -241,7 +241,7 @@ def test_sync_to_parquet(oracle_sync_session: OracleSyncConfig) -> None:
 
         with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
             driver.export_to_storage(statement, destination_uri=tmp.name)  # type: ignore[attr-defined]
-            table = pq.read_table(f"{tmp.name}.parquet")
+            table = pq.read_table(tmp.name)
             assert table.num_rows == 2
             assert set(table.column_names) == {"NAME", "ID"}
             names = table.column("NAME").to_pylist()
