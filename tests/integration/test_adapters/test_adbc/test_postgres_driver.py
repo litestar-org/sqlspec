@@ -814,8 +814,8 @@ def test_to_parquet(adbc_postgresql_session: AdbcDriver) -> None:
     with tempfile.NamedTemporaryFile() as tmp:
         adbc_postgresql_session.export_to_storage(statement, destination_uri=tmp.name)
 
-        # Read back the Parquet file
-        table = pq.read_table(tmp.name)
+        # Read back the Parquet file - export_to_storage appends .parquet extension
+        table = pq.read_table(f"{tmp.name}.parquet")
         assert table.num_rows == 2
         assert set(table.column_names) >= {"id", "name", "value"}
 

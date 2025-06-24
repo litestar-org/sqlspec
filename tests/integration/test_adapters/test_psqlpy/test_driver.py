@@ -490,7 +490,7 @@ async def test_psqlpy_to_parquet(psqlpy_config: PsqlpyConfig) -> None:
         with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
             rows_exported = await driver.export_to_storage(statement, destination_uri=tmp.name)
             assert rows_exported == 2
-            table = pq.read_table(tmp.name)
+            table = pq.read_table(f"{tmp.name}.parquet")
             assert table.num_rows == 2
             assert set(table.column_names) == {"name"}
             names = table.column("name").to_pylist()

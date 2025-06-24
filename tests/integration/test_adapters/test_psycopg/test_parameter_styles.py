@@ -20,6 +20,7 @@ def psycopg_params_session(postgres_service: PostgresService) -> "Generator[Psyc
         user=postgres_service.user,
         password=postgres_service.password,
         dbname=postgres_service.database,
+        autocommit=True,  # Enable autocommit for tests
         statement_config=SQLConfig(strict_mode=False),
     )
 

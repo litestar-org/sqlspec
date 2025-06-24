@@ -375,7 +375,7 @@ async def test_async_to_parquet(oracle_async_session: OracleAsyncConfig) -> None
 
         with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
             await driver.export_to_storage(statement, destination_uri=tmp.name)  # type: ignore[attr-defined]
-            table = pq.read_table(tmp.name)
+            table = pq.read_table(f"{tmp.name}.parquet")
             assert table.num_rows == 2
             assert set(table.column_names) == {"NAME", "ID"}
             names = table.column("NAME").to_pylist()

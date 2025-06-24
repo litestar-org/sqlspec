@@ -723,7 +723,7 @@ def test_duckdb_to_parquet(duckdb_session: DuckDBDriver) -> None:
     with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
         try:
             duckdb_session.export_to_storage(statement, destination_uri=tmp.name)  # type: ignore[attr-defined]
-            table = pq.read_table(tmp.name)
+            table = pq.read_table(f"{tmp.name}.parquet")
             assert table.num_rows == 2
             assert table.column_names == ["id", "name"]
             data = table.to_pylist()

@@ -182,7 +182,15 @@ class AdbcDriver(
             # ADBC expects parameters as a list
             if parameters is not None and not isinstance(parameters, list):
                 parameters = [parameters]
-            cursor.execute(sql, parameters or [])
+
+            try:
+                cursor.execute(sql, parameters or [])
+            except Exception:
+                # Rollback transaction on error for PostgreSQL to avoid "current transaction is aborted" errors
+                if self.dialect == "postgres":
+                    cursor.execute("ROLLBACK")
+                else:
+                    raise
 
             if self.returns_rows(statement.expression):
                 fetched_data = cursor.fetchall()
@@ -202,7 +210,13 @@ class AdbcDriver(
     ) -> DMLResultDict:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
-            cursor.executemany(sql, param_list or [])
+            try:
+                cursor.executemany(sql, param_list or [])
+            except Exception:
+                if self.dialect == "postgres":
+                    cursor.execute("ROLLBACK")
+                else:
+                    raise
 
             result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
             return result

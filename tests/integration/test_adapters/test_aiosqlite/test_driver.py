@@ -494,7 +494,7 @@ async def test_aiosqlite_to_parquet(aiosqlite_session: AiosqliteDriver) -> None:
     statement = SQL("SELECT name, value FROM test_table ORDER BY name")
     with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
         await aiosqlite_session.export_to_storage(statement, destination_uri=tmp.name, format="parquet")
-        table = pq.read_table(tmp.name)
+        table = pq.read_table(f"{tmp.name}.parquet")
         assert table.num_rows == 2
         assert set(table.column_names) == {"name", "value"}
         names = table.column("name").to_pylist()

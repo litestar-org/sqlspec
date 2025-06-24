@@ -136,18 +136,6 @@ class PsycopgSyncDriver(
             }
             return result
 
-    def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
-        self._ensure_pyarrow_installed()
-        conn = self._connection(connection)
-
-        with self._get_cursor(conn) as cursor:
-            cursor.execute(
-                sql.to_sql(placeholder_style=self.default_parameter_style),
-                sql.get_parameters(style=self.default_parameter_style) or [],
-            )
-            arrow_table = cursor.fetch_arrow_table()
-            return ArrowResult(statement=sql, data=arrow_table)
-
     def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
         self._ensure_pyarrow_installed()
         import pyarrow.csv as pacsv

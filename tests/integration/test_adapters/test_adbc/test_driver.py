@@ -635,12 +635,32 @@ def test_adbc_postgresql_result_methods(adbc_postgresql_session: AdbcDriver) -> 
 @pytest.mark.xdist_group("postgres")
 def test_adbc_postgresql_error_handling(adbc_postgresql_session: AdbcDriver) -> None:
     """Test error handling and exception propagation with ADBC PostgreSQL."""
+    # Ensure clean state by rolling back any existing transaction
+    try:
+        adbc_postgresql_session.execute("ROLLBACK")
+    except Exception:
+        pass
+
+    # Drop and recreate the table with a UNIQUE constraint for this test
+    adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS test_table")
+    adbc_postgresql_session.execute_script("""
+        CREATE TABLE test_table (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            value INTEGER DEFAULT 0
+        )
+    """)
+
     # Test invalid SQL
     with pytest.raises(Exception):  # ADBC error
         adbc_postgresql_session.execute("INVALID SQL STATEMENT")
 
-    # Test constraint violation
+    # Test constraint violation - first insert a row
     adbc_postgresql_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("unique_test", 1))
+
+    # Try to insert the same name again (should fail due to UNIQUE constraint)
+    with pytest.raises(Exception):  # ADBC error
+        adbc_postgresql_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("unique_test", 2))
 
     # Try to insert with invalid column reference
     with pytest.raises(Exception):  # ADBC error
@@ -665,13 +685,14 @@ def test_adbc_postgresql_data_types(adbc_postgresql_session: AdbcDriver) -> None
     """)
 
     # Insert data with various types
+    # ADBC requires explicit type casting for dates in PostgreSQL
     adbc_postgresql_session.execute(
         """
         INSERT INTO data_types_test (
             text_col, integer_col, numeric_col, boolean_col,
             array_col, date_col, timestamp_col
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7
+            $1, $2, $3, $4, $5::int[], $6::date, $7::timestamp
         )
     """,
         ("text_value", 42, 123.45, True, [1, 2, 3], "2024-01-15", "2024-01-15 10:30:00"),
@@ -924,6 +945,7 @@ def test_adbc_postgresql_to_parquet(adbc_postgresql_session: AdbcDriver) -> None
     statement = SQL("SELECT id, name, value FROM test_table ORDER BY id")
     with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
         adbc_postgresql_session.export_to_storage(statement, destination_uri=tmp.name)
+        # export_to_storage already appends .parquet, but tmp.name already has .parquet suffix
         table = pq.read_table(tmp.name)
         assert table.num_rows == 2
         assert set(table.column_names) >= {"id", "name", "value"}

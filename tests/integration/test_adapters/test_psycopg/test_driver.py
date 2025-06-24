@@ -28,6 +28,7 @@ def psycopg_session(postgres_service: PostgresService) -> Generator[PsycopgSyncD
         user=postgres_service.user,
         password=postgres_service.password,
         dbname=postgres_service.database,
+        autocommit=True,  # Enable autocommit for tests
         statement_config=SQLConfig(enable_transformations=False, enable_normalization=False, enable_parsing=False),
     )
 
@@ -577,14 +578,21 @@ def test_psycopg_fetch_arrow_table(psycopg_session: PsycopgSyncDriver) -> None:
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_to_parquet(psycopg_session: PsycopgSyncDriver) -> None:
     """Integration test: to_parquet writes correct data to a Parquet file."""
+    # Insert fresh data for this test
     psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("pq1", 123))
     psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", ("pq2", 456))
-    statement = SQL("SELECT name, value FROM test_table ORDER BY name")
+
+    # First verify data can be selected normally
+    normal_result = psycopg_session.execute("SELECT name, value FROM test_table ORDER BY name")
+    assert len(normal_result.data) >= 2, f"Expected at least 2 rows, got {len(normal_result.data)}"
+
+    # Use a simpler query without WHERE clause first
+    statement = "SELECT name, value FROM test_table ORDER BY name"
     with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
         try:
             rows_exported = psycopg_session.export_to_storage(statement, destination_uri=tmp.name, format="parquet")
             assert rows_exported == 2
-            table = pq.read_table(tmp.name)
+            table = pq.read_table(f"{tmp.name}.parquet")
             assert table.num_rows == 2
             assert set(table.column_names) == {"name", "value"}
             names = table.column("name").to_pylist()
