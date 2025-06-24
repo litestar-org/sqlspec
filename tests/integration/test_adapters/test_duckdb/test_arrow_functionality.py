@@ -366,9 +366,17 @@ def test_duckdb_enhanced_parquet_export_with_partitioning(duckdb_arrow_session: 
         assert rows_exported == 5  # All products
 
         # Check that partitioned directories were created
-        # DuckDB creates directories for each partition value
-        partition_dirs = list(output_path.glob("is_active=*"))
+        # When exporting with partitioning, DuckDB creates a directory with .parquet extension
+        # containing the partition subdirectories
+        actual_output_dir = output_path.with_suffix(".parquet")
+        assert actual_output_dir.exists() and actual_output_dir.is_dir()
+
+        partition_dirs = list(actual_output_dir.glob("is_active=*"))
         assert len(partition_dirs) == 2  # true and false partitions
+
+        # Verify the partition directories contain the expected values
+        partition_names = {p.name for p in partition_dirs}
+        assert partition_names == {"is_active=true", "is_active=false"}
 
 
 def test_duckdb_enhanced_csv_export_with_options(duckdb_arrow_session: DuckDBDriver) -> None:
