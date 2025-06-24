@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import Generator
+from pathlib import Path
 from typing import Any, Literal
 
 import pyarrow as pa
@@ -720,10 +721,11 @@ def test_duckdb_to_parquet(duckdb_session: DuckDBDriver) -> None:
     duckdb_session.execute("INSERT INTO test_table (id, name) VALUES (?, ?)", (1, "arrow1"))
     duckdb_session.execute("INSERT INTO test_table (id, name) VALUES (?, ?)", (2, "arrow2"))
     statement = SQL("SELECT id, name FROM test_table ORDER BY id")
-    with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = Path(tmpdir) / "partitioned_data"
         try:
-            duckdb_session.export_to_storage(statement, destination_uri=tmp.name)  # type: ignore[attr-defined]
-            table = pq.read_table(f"{tmp.name}.parquet")
+            duckdb_session.export_to_storage(statement, destination_uri=str(output_path))  # type: ignore[attr-defined]
+            table = pq.read_table(f"{output_path}.parquet")
             assert table.num_rows == 2
             assert table.column_names == ["id", "name"]
             data = table.to_pylist()
