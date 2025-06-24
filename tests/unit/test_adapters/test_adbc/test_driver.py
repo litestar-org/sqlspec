@@ -250,7 +250,7 @@ def test_adbc_driver_execute_statement_select(adbc_driver: AdbcDriver, mock_curs
     assert result["rows_affected"] == 1
 
     # Verify execute and fetchall were called
-    mock_cursor.execute.assert_called_once_with("SELECT * FROM users WHERE id = ?", [123])
+    mock_cursor.execute.assert_called_once_with("SELECT * FROM users WHERE id = $1", [123])
     mock_cursor.fetchall.assert_called_once()
 
 
@@ -328,9 +328,11 @@ def test_adbc_driver_fetch_arrow_table_list_parameters(adbc_driver: AdbcDriver, 
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
     # Setup mock cursor for ADBC native Arrow support
-    mock_arrow_table = pa.table(
-        {"id": [1, 2], "name": ["User 1", "User 2"], "email": ["user1@example.com", "user2@example.com"]}
-    )
+    mock_arrow_table = pa.table({
+        "id": [1, 2],
+        "name": ["User 1", "User 2"],
+        "email": ["user1@example.com", "user2@example.com"],
+    })
     mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
     # Pass parameters directly as string SQL, since that's the more common pattern
