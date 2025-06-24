@@ -370,12 +370,28 @@ def test_execute_many(driver: BigQueryDriver, mock_connection: MagicMock) -> Non
 
 
 def test_execute_many_with_non_dict_parameters(driver: BigQueryDriver, mock_connection: MagicMock) -> None:
-    """Test execute_many raises error for non-dict parameters."""
-    sql = "INSERT INTO users VALUES (@id)"
-    params = [["Alice"], ["Bob"]]  # Should be dicts
+    """Test execute_many handles non-dict parameters by converting them."""
+    sql = "INSERT INTO users VALUES (@param_0)"
+    params = [["Alice"], ["Bob"]]  # List parameters will be converted to dicts
 
-    with pytest.raises(SQLSpecError, match="BigQuery executemany requires dict parameters"):
-        driver._execute_many(sql, params)
+    # Mock the query job
+    mock_job = mock_connection.query.return_value
+    mock_job.job_id = "batch-job-123"
+    mock_job.result.return_value = None
+    mock_job.num_dml_affected_rows = 2
+
+    result = driver._execute_many(sql, params)
+
+    # Verify the script was created with converted parameters
+    assert mock_connection.query.called
+    executed_sql = mock_connection.query.call_args[0][0]
+    # Should create a multi-statement script with remapped parameters
+    assert "INSERT INTO users VALUES (@p_0)" in executed_sql
+    assert "INSERT INTO users VALUES (@p_1)" in executed_sql
+
+    # Verify result
+    assert result["rows_affected"] == 2
+    assert "batch-job-123" in result["status_message"]
 
 
 # Execute Script Tests

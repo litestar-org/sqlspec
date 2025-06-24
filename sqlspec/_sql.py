@@ -106,7 +106,7 @@ class SQLFactory:
                 return command_type
         except SQLGlotParseError:
             logger.debug("Failed to parse SQL for type detection: %s", sql[:100])
-        except Exception as e:
+        except (ValueError, TypeError, AttributeError) as e:
             logger.warning("Unexpected error during SQL type detection for '%s...': %s", sql[:50], e)
         return "UNKNOWN"
 
@@ -151,7 +151,7 @@ class SQLFactory:
             parsed_expr = sqlglot.parse_one(statement, read=dialect or self.dialect)
         except Exception as e:
             msg = f"Failed to parse SQL: {e}"
-            raise SQLBuilderError(msg)
+            raise SQLBuilderError(msg) from e
         actual_type = type(parsed_expr).__name__.upper()
         # Map sqlglot expression class to type string
         expr_type_map = {
@@ -214,7 +214,8 @@ class SQLFactory:
                 if detected not in {"INSERT", "SELECT"}:
                     msg = (
                         f"sql.insert() expects INSERT or SELECT (for insert-from-select), got {detected}. "
-                        f"Use sql.{detected.lower()}() if a dedicated builder exists, or ensure the SQL is INSERT/SELECT."
+                        f"Use sql.{detected.lower()}() if a dedicated builder exists, "
+                        f"or ensure the SQL is INSERT/SELECT."
                     )
                     raise SQLBuilderError(msg)
                 return self._populate_insert_from_sql(builder, table_or_sql)

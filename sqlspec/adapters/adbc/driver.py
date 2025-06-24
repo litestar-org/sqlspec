@@ -150,7 +150,7 @@ class AdbcDriver(
             "postgres": (ParameterStyle.NUMERIC,),  # PostgreSQL only supports $1, $2, $3
             "postgresql": (ParameterStyle.NUMERIC,),
             "bigquery": (ParameterStyle.NAMED_AT,),  # BigQuery only supports @param
-            "sqlite": (ParameterStyle.QMARK, ParameterStyle.NAMED_COLON),  # SQLite supports ? and :param
+            "sqlite": (ParameterStyle.QMARK,),  # ADBC SQLite only supports ? (not :param)
             "duckdb": (ParameterStyle.QMARK, ParameterStyle.NUMERIC),  # DuckDB supports ? and $1
             "mysql": (ParameterStyle.POSITIONAL_PYFORMAT,),  # MySQL only supports %s
             "snowflake": (ParameterStyle.QMARK, ParameterStyle.NUMERIC),  # Snowflake supports ? and :1
@@ -199,12 +199,14 @@ class AdbcDriver(
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
-            # ADBC expects parameters as a list
-            if parameters is not None and not isinstance(parameters, list):
-                parameters = [parameters]
+            # ADBC expects parameters as a list for most drivers
+            if parameters is not None and not isinstance(parameters, (list, tuple)):
+                cursor_params = [parameters]
+            else:
+                cursor_params = parameters  # type: ignore[assignment]
 
             try:
-                cursor.execute(sql, parameters or [])
+                cursor.execute(sql, cursor_params or [])
             except Exception as e:
                 # Rollback transaction on error for PostgreSQL to avoid "current transaction is aborted" errors
                 if self.dialect == "postgres":
@@ -250,12 +252,34 @@ class AdbcDriver(
         # Use the shared implementation to split the script
         statements = self._split_script_statements(script)
 
+        executed_count = 0
         with self._get_cursor(conn) as cursor:
             for statement in statements:
-                cursor.execute(statement)
+                executed_count += self._execute_single_script_statement(cursor, statement)
 
-        result: ScriptResultDict = {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
+        result: ScriptResultDict = {"statements_executed": executed_count, "status_message": "SCRIPT EXECUTED"}
         return result
+
+    def _execute_single_script_statement(self, cursor: "Cursor", statement: str) -> int:
+        """Execute a single statement from a script and handle errors.
+
+        Args:
+            cursor: The database cursor
+            statement: The SQL statement to execute
+
+        Returns:
+            1 if successful, 0 if failed
+        """
+        try:
+            cursor.execute(statement)
+        except Exception as e:
+            # Rollback transaction on error for PostgreSQL
+            if self.dialect == "postgres":
+                with contextlib.suppress(Exception):
+                    cursor.execute("ROLLBACK")
+            raise e from e
+        else:
+            return 1
 
     def _wrap_select_result(
         self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
@@ -296,7 +320,7 @@ class AdbcDriver(
                 data=[],
                 rows_affected=0,
                 total_statements=result["statements_executed"],
-                operation_type=operation_type or "SCRIPT",
+                operation_type="SCRIPT",  # Scripts always have operation_type SCRIPT
                 metadata={"status_message": result["status_message"]},
             )
         if is_dict_with_field(result, "rows_affected"):
@@ -330,10 +354,9 @@ class AdbcDriver(
         with wrap_exceptions(), self._get_cursor(conn) as cursor:
             # Execute the query
             params = sql.get_parameters(style=self.default_parameter_style)
-            # ADBC expects parameters as a list
-            if params is not None and not isinstance(params, list):
-                params = [params]
-            cursor.execute(sql.to_sql(placeholder_style=self.default_parameter_style), params or [])
+            # ADBC expects parameters as a list for most drivers
+            cursor_params = [params] if params is not None and not isinstance(params, (list, tuple)) else params
+            cursor.execute(sql.to_sql(placeholder_style=self.default_parameter_style), cursor_params or [])
             arrow_table = cursor.fetch_arrow_table()
             return ArrowResult(statement=sql, data=arrow_table)
 

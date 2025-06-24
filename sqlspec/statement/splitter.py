@@ -135,12 +135,13 @@ class DialectConfig(ABC):
         return []
 
     @staticmethod
-    def is_real_block_ender(tokens: list[Token], current_pos: int) -> bool:  # noqa: ARG004
+    def is_real_block_ender(tokens: list[Token], current_pos: int) -> bool:
         """Check if this END keyword is actually a block ender.
 
         Override in dialect configs to handle cases like END IF, END LOOP, etc.
         that are not true block enders.
         """
+        _ = tokens, current_pos  # Default implementation doesn't use these
         return True
 
     def should_delay_semicolon_termination(self, tokens: list[Token], current_pos: int) -> bool:
@@ -148,6 +149,7 @@ class DialectConfig(ABC):
 
         Override in dialect configs to handle special cases like Oracle END; /
         """
+        _ = tokens, current_pos  # Default implementation doesn't use these
         return False
 
 
@@ -293,10 +295,11 @@ class TSQLDialectConfig(DialectConfig):
         return {"GO"}
 
     @staticmethod
-    def validate_batch_separator(tokens: list[Token], current_pos: int) -> bool:  # noqa: ARG004
+    def validate_batch_separator(tokens: list[Token], current_pos: int) -> bool:
         """GO must be the only keyword on its line."""
         # Look for non-whitespace tokens on the same line
         # Implementation similar to Oracle slash handler
+        _ = tokens, current_pos  # Simplified implementation
         return True  # Simplified for now
 
 
@@ -339,13 +342,116 @@ class PostgreSQLDialectConfig(DialectConfig):
             content_end = text.index(tag, content_start)
             full_value = text[position : content_end + len(tag)]
 
-            # Count newlines to update line number
-            _newlines_in_string = full_value.count("\n")
-
             return Token(type=TokenType.STRING_LITERAL, value=full_value, line=line, column=column, position=position)
         except ValueError:
             # Closing tag not found
             return None
+
+
+class GenericDialectConfig(DialectConfig):
+    """Generic SQL dialect configuration for standard SQL."""
+
+    @property
+    def name(self) -> str:
+        return "generic"
+
+    @property
+    def block_starters(self) -> set[str]:
+        return {"BEGIN", "DECLARE", "CASE"}
+
+    @property
+    def block_enders(self) -> set[str]:
+        return {"END"}
+
+    @property
+    def statement_terminators(self) -> set[str]:
+        return {";"}
+
+
+class MySQLDialectConfig(DialectConfig):
+    """Configuration for MySQL dialect."""
+
+    @property
+    def name(self) -> str:
+        return "mysql"
+
+    @property
+    def block_starters(self) -> set[str]:
+        return {"BEGIN", "DECLARE", "CASE"}
+
+    @property
+    def block_enders(self) -> set[str]:
+        return {"END"}
+
+    @property
+    def statement_terminators(self) -> set[str]:
+        return {";"}
+
+    @property
+    def special_terminators(self) -> dict[str, Callable[[list[Token], int], bool]]:
+        """MySQL supports DELIMITER command for changing terminators."""
+        return {"\\g": lambda _tokens, _pos: True, "\\G": lambda _tokens, _pos: True}
+
+
+class SQLiteDialectConfig(DialectConfig):
+    """Configuration for SQLite dialect."""
+
+    @property
+    def name(self) -> str:
+        return "sqlite"
+
+    @property
+    def block_starters(self) -> set[str]:
+        # SQLite has limited block support
+        return {"BEGIN", "CASE"}
+
+    @property
+    def block_enders(self) -> set[str]:
+        return {"END"}
+
+    @property
+    def statement_terminators(self) -> set[str]:
+        return {";"}
+
+
+class DuckDBDialectConfig(DialectConfig):
+    """Configuration for DuckDB dialect."""
+
+    @property
+    def name(self) -> str:
+        return "duckdb"
+
+    @property
+    def block_starters(self) -> set[str]:
+        return {"BEGIN", "CASE"}
+
+    @property
+    def block_enders(self) -> set[str]:
+        return {"END"}
+
+    @property
+    def statement_terminators(self) -> set[str]:
+        return {";"}
+
+
+class BigQueryDialectConfig(DialectConfig):
+    """Configuration for BigQuery dialect."""
+
+    @property
+    def name(self) -> str:
+        return "bigquery"
+
+    @property
+    def block_starters(self) -> set[str]:
+        return {"BEGIN", "CASE"}
+
+    @property
+    def block_enders(self) -> set[str]:
+        return {"END"}
+
+    @property
+    def statement_terminators(self) -> set[str]:
+        return {";"}
 
 
 class StatementSplitter:
@@ -569,16 +675,27 @@ def split_sql_script(script: str, dialect: str = "generic", strip_trailing_semic
         List of individual SQL statements
     """
     dialect_configs = {
+        # Standard dialects
+        "generic": GenericDialectConfig(),
+        # Major databases
         "oracle": OracleDialectConfig(),
         "tsql": TSQLDialectConfig(),
+        "mssql": TSQLDialectConfig(),  # Alias for tsql
+        "sqlserver": TSQLDialectConfig(),  # Alias for tsql
         "postgresql": PostgreSQLDialectConfig(),
+        "postgres": PostgreSQLDialectConfig(),  # Common alias
+        "mysql": MySQLDialectConfig(),
+        "sqlite": SQLiteDialectConfig(),
+        # Modern analytical databases
+        "duckdb": DuckDBDialectConfig(),
+        "bigquery": BigQueryDialectConfig(),
     }
 
     config = dialect_configs.get(dialect.lower())
     if not config:
-        # Fall back to a generic config (could be implemented)
-        msg = f"Unsupported dialect: {dialect}"
-        raise ValueError(msg)
+        # Fall back to generic config for unknown dialects
+        logger.warning("Unknown dialect '%s', using generic SQL splitter", dialect)
+        config = GenericDialectConfig()
 
     splitter = StatementSplitter(config, strip_trailing_semicolon=strip_trailing_semicolon)
     return splitter.split(script)

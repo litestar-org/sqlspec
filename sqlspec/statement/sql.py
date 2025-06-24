@@ -377,7 +377,7 @@ class SQL:
         if result.context.extracted_parameters_from_pipeline and not context.input_sql_had_placeholders:
             if isinstance(merged_params, dict):
                 for i, param in enumerate(result.context.extracted_parameters_from_pipeline):
-                    param_name = f"arg_{i}"
+                    param_name = f"param_{i}"
                     merged_params[param_name] = param
             elif isinstance(merged_params, list):
                 merged_params.extend(result.context.extracted_parameters_from_pipeline)
@@ -871,8 +871,9 @@ class SQL:
             # Generate a new name for numeric placeholders or missing names
             return f":arg_{param.ordinal}"
         if target_style == ParameterStyle.NAMED_AT:
-            # Use @ prefix for BigQuery style (BigQuery is fine with underscores)
-            return f"@{param.name or f'_arg_{param.ordinal}'}"
+            # Use @ prefix for BigQuery style
+            # BigQuery requires parameter names to start with a letter, not underscore
+            return f"@{param.name or f'param_{param.ordinal}'}"
         if target_style == ParameterStyle.POSITIONAL_COLON:
             # Use :1, :2, etc. for Oracle positional style
             return f":{param.ordinal + 1}"

@@ -6,6 +6,7 @@ from typing import Any, Optional
 from sqlglot import exp
 from sqlglot.expressions import Array, Binary, Boolean, DataType, Func, Literal, Null
 
+from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.pipelines.base import ProcessorProtocol
 from sqlspec.statement.pipelines.context import SQLProcessingContext
 
@@ -438,10 +439,7 @@ class ParameterizeLiterals(ProcessorProtocol):
 
     def _create_placeholder(self, hint: Optional[str] = None) -> exp.Expression:
         """Create a placeholder expression with optional type hint."""
-        self._parameter_counter += 1
-
         # Import ParameterStyle for proper comparison
-        from sqlspec.statement.parameters import ParameterStyle
 
         # Handle both style names and actual placeholder prefixes
         style = self.placeholder_style
@@ -456,11 +454,14 @@ class ParameterizeLiterals(ProcessorProtocol):
             placeholder = exp.Placeholder(this=param_name)
         elif style in {ParameterStyle.NUMERIC, "numeric"} or style.startswith("$"):
             # PostgreSQL style numbered parameters - use Var for consistent $N format
-            placeholder = exp.Var(this=f"${self._parameter_counter}")  # type: ignore[assignment]
+            # Note: PostgreSQL uses 1-based indexing
+            placeholder = exp.Var(this=f"${self._parameter_counter + 1}")  # type: ignore[assignment]
         elif style in {ParameterStyle.NAMED_AT, "named_at"}:
-            # BigQuery style @param
+            # BigQuery style @param - don't include @ in the placeholder name
+            # The @ will be added during SQL generation
+            # Use 0-based indexing for consistency with parameter arrays
             param_name = f"param_{self._parameter_counter}"
-            placeholder = exp.Placeholder(this=f"@{param_name}")
+            placeholder = exp.Placeholder(this=param_name)
         elif style in {ParameterStyle.POSITIONAL_PYFORMAT, "pyformat"}:
             # Don't use pyformat directly in SQLGlot - use standard placeholder
             # and let the compile method convert it later
@@ -469,6 +470,8 @@ class ParameterizeLiterals(ProcessorProtocol):
             # Default to question mark
             placeholder = exp.Placeholder()
 
+        # Increment counter after creating placeholder
+        self._parameter_counter += 1
         return placeholder
 
     def _process_array(self, array_node: Array, context: ParameterizationContext) -> exp.Expression:

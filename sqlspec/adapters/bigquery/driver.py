@@ -309,15 +309,6 @@ class BigQueryDriver(
         query_job.result()  # Wait for the job to complete
         num_affected = query_job.num_dml_affected_rows
 
-        # Log for debugging
-        logger.debug(
-            "DML job details - num_affected: %s, statement_type: %s, state: %s, errors: %s",
-            num_affected,
-            getattr(query_job, "statement_type", "UNKNOWN"),
-            getattr(query_job, "state", "UNKNOWN"),
-            bool(query_job.errors) if hasattr(query_job, "errors") else "N/A",
-        )
-
         # EMULATOR WORKAROUND: BigQuery emulators may incorrectly report 0 rows for successful DML.
         # This heuristic assumes at least 1 row was affected if the job completed without errors.
         # TODO: Remove this workaround when emulator behavior is fixed or use state verification in tests.
@@ -335,12 +326,17 @@ class BigQueryDriver(
 
         return {"rows_affected": num_affected or 0, "status_message": f"OK - job_id: {query_job.job_id}"}
 
+    def _compile_bigquery_compatible(self, statement: SQL, target_style: ParameterStyle) -> tuple[str, Any]:
+        """Compile SQL statement for BigQuery.
+
+        This is now just a pass-through since the core parameter generation
+        has been fixed to generate BigQuery-compatible parameter names.
+        """
+        return statement.compile(placeholder_style=target_style)
+
     def _execute_statement(
         self, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
     ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
-        logger.debug("_execute_statement - raw SQL: %r", statement._raw_sql)
-        logger.debug("_execute_statement - parameters: %r", statement.parameters)
-
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
@@ -358,11 +354,11 @@ class BigQueryDriver(
                     break
 
         if statement.is_many:
-            sql, params = statement.compile(placeholder_style=target_style)
+            sql, params = self._compile_bigquery_compatible(statement, target_style)
             params = self._process_parameters(params)
             return self._execute_many(sql, params, connection=connection, **kwargs)
 
-        sql, params = statement.compile(placeholder_style=target_style)
+        sql, params = self._compile_bigquery_compatible(statement, target_style)
         logger.debug("compile() returned - sql: %r, params: %r", sql, params)
         params = self._process_parameters(params)
         logger.debug("after _process_parameters - params: %r", params)
@@ -376,8 +372,6 @@ class BigQueryDriver(
         # Parameters are already in the correct format from compile()
         converted_params = parameters
 
-        logger.warning("_execute received - sql: %r, parameters: %r", sql, parameters)
-
         # Prepare BigQuery parameters
         # Convert various parameter formats to dict format for BigQuery
         param_dict: dict[str, Any]
@@ -385,15 +379,15 @@ class BigQueryDriver(
             param_dict = {}
         elif isinstance(converted_params, dict):
             # Filter out non-parameter keys (dialect, config, etc.)
-            # Real parameters start with '_arg_' or are user-provided named parameters
+            # Real parameters start with 'param_' or are user-provided named parameters
             param_dict = {
                 k: v
                 for k, v in converted_params.items()
-                if k.startswith("_arg_") or (not k.startswith("_") and k not in {"dialect", "config"})
+                if k.startswith("param_") or (not k.startswith("_") and k not in {"dialect", "config"})
             }
-            logger.warning("Filtered param_dict from %r to %r", converted_params, param_dict)
         elif isinstance(converted_params, (list, tuple)):
             # Convert positional parameters to named parameters for BigQuery
+            # Use param_N to match the compiled SQL placeholders
             param_dict = {f"param_{i}": val for i, val in enumerate(converted_params)}
         else:
             # Single scalar parameter
@@ -401,30 +395,13 @@ class BigQueryDriver(
 
         bq_params = self._prepare_bq_query_parameters(param_dict)
 
-        # Debug logging
-        logger.warning("BigQuery execution - SQL: %r", converted_sql)
-        logger.warning("BigQuery param_dict after filtering: %r", param_dict)
-        logger.warning("BigQuery params prepared: %r", bq_params)
-
         query_job = self._run_query_job(converted_sql, bq_params, connection=connection)
 
-        try:
-            # Log statement type for debugging
-            logger.debug(
-                "BigQuery job completed. Statement type: %s, Has schema: %s, Schema length: %s",
-                getattr(query_job, "statement_type", "UNKNOWN"),
-                hasattr(query_job, "schema") and query_job.schema is not None,
-                len(query_job.schema) if hasattr(query_job, "schema") and query_job.schema else 0,
-            )
-
-            if query_job.statement_type == "SELECT" or (
-                hasattr(query_job, "schema") and query_job.schema and len(query_job.schema) > 0
-            ):
-                return self._handle_select_job(query_job)
-            return self._handle_dml_job(query_job)
-        except Exception:
-            logger.exception("BigQuery job failed")
-            raise
+        if query_job.statement_type == "SELECT" or (
+            hasattr(query_job, "schema") and query_job.schema and len(query_job.schema) > 0
+        ):
+            return self._handle_select_job(query_job)
+        return self._handle_dml_job(query_job)
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[BigQueryConnection] = None, **kwargs: Any
@@ -435,14 +412,20 @@ class BigQueryDriver(
         param_counter = 0
 
         for params in param_list or []:
-            if not isinstance(params, dict):
-                msg = "BigQuery executemany requires dict parameters."
-                raise SQLSpecError(msg)
-            # TODO: can't we do this in the parameter parsing step?
+            # Convert various parameter formats to dict format for BigQuery
+            if isinstance(params, dict):
+                param_dict = params
+            elif isinstance(params, (list, tuple)):
+                # Convert positional parameters to named parameters matching SQL placeholders
+                param_dict = {f"param_{i}": val for i, val in enumerate(params)}
+            else:
+                # Single scalar parameter
+                param_dict = {"param_0": params}
+
             # Remap parameters to be unique across the entire script
             param_mapping = {}
             current_sql = sql
-            for key, value in params.items():
+            for key, value in param_dict.items():
                 new_key = f"p_{param_counter}"
                 param_counter += 1
                 param_mapping[key] = new_key
@@ -457,7 +440,9 @@ class BigQueryDriver(
         # Execute as a single script
         full_script = ";\n".join(script_parts)
         bq_params = self._prepare_bq_query_parameters(all_params)
-        query_job = self._run_query_job(full_script, bq_params, connection=connection, **kwargs)
+        # Filter out kwargs that _run_query_job doesn't expect
+        query_kwargs = {k: v for k, v in kwargs.items() if k not in {"parameters", "is_many"}}
+        query_job = self._run_query_job(full_script, bq_params, connection=connection, **query_kwargs)
 
         # Wait for the job to complete
         query_job.result(timeout=kwargs.get("bq_job_timeout"))

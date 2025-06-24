@@ -414,11 +414,19 @@ def test_splitter_instance_reuse() -> None:
     assert statements1[0] != statements2[0]
 
 
-@pytest.mark.parametrize("invalid_dialect", ["invalid", "unknown", "mysql", "sqlite"])
+@pytest.mark.parametrize("invalid_dialect", ["invalid", "unknown"])
 def test_invalid_dialect(invalid_dialect: str) -> None:
-    """Test that invalid dialect raises appropriate error."""
-    with pytest.raises((ValueError, KeyError)):
-        split_sql_script("SELECT 1;", dialect=invalid_dialect)
+    """Test that unsupported dialect falls back to generic splitter."""
+    # Should not raise, but use generic splitter
+    result = split_sql_script("SELECT 1; SELECT 2;", dialect=invalid_dialect)
+    assert result == ["SELECT 1;", "SELECT 2;"]
+
+
+@pytest.mark.parametrize("valid_dialect", ["mysql", "sqlite", "duckdb", "bigquery", "generic"])
+def test_newly_supported_dialects(valid_dialect: str) -> None:
+    """Test that newly supported dialects work correctly."""
+    result = split_sql_script("SELECT 1; SELECT 2;", dialect=valid_dialect)
+    assert result == ["SELECT 1;", "SELECT 2;"]
 
 
 # Test statement preservation

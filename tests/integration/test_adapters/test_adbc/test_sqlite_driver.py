@@ -252,21 +252,17 @@ def test_execute_script_ddl(adbc_sqlite_session: AdbcDriver) -> None:
 @pytest.mark.xdist_group("adbc_sqlite")
 def test_execute_script_transaction(adbc_sqlite_session: AdbcDriver) -> None:
     """Test execute_script with transaction handling."""
+    # ADBC SQLite runs in autocommit mode, so we can't use explicit transactions in scripts
+    # Test multiple operations without explicit transaction
     transaction_script = """
-        -- Start transaction
-        BEGIN TRANSACTION;
-
-        -- Multiple operations
+        -- Multiple operations (will be executed in autocommit mode)
         INSERT INTO test_table (name, value) VALUES ('tx_test1', 100);
         INSERT INTO test_table (name, value) VALUES ('tx_test2', 200);
         UPDATE test_table SET value = value + 10 WHERE name LIKE 'tx_test%';
-
-        -- Commit transaction
-        COMMIT;
     """
 
     result = adbc_sqlite_session.execute_script(transaction_script)
-    assert isinstance(result, str) or result is None
+    assert isinstance(result, SQLResult)
 
     # Verify transaction results
     verify_result = adbc_sqlite_session.execute(
@@ -297,7 +293,7 @@ def test_execute_script_comments(adbc_sqlite_session: AdbcDriver) -> None:
     """
 
     result = adbc_sqlite_session.execute_script(script_with_comments)
-    assert isinstance(result, str) or result is None
+    assert isinstance(result, SQLResult)
 
     # Verify the operations were executed
     verify_result = adbc_sqlite_session.execute("SELECT value FROM test_table WHERE name = 'comment_test'")
