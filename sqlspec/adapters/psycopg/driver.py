@@ -89,8 +89,12 @@ class PsycopgSyncDriver(
                     break
 
         if statement.is_many:
-            sql, params = statement.compile(placeholder_style=target_style)
-            params = self._process_parameters(params)
+            sql, _ = statement.compile(placeholder_style=target_style)
+            # For execute_many, use the parameters passed via kwargs
+            params = kwargs.get("parameters")
+            if params is not None:
+                processed_params = [self._process_parameters(param_set) for param_set in params]
+                params = processed_params
             return self._execute_many(sql, params, connection=connection, **kwargs)
 
         sql, params = statement.compile(placeholder_style=target_style)
@@ -122,7 +126,12 @@ class PsycopgSyncDriver(
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
             cursor.executemany(sql, param_list or [])
-            result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": cursor.statusmessage or "OK"}
+            # psycopg's executemany might return -1 or 0 for rowcount
+            # In that case, use the length of param_list for DML operations
+            rows_affected = cursor.rowcount
+            if rows_affected <= 0 and param_list:
+                rows_affected = len(param_list)
+            result: DMLResultDict = {"rows_affected": rows_affected, "status_message": cursor.statusmessage or "OK"}
             return result
 
     def _execute_script(
@@ -450,8 +459,13 @@ class PsycopgAsyncDriver(
                     break
 
         if statement.is_many:
-            sql, params = statement.compile(placeholder_style=target_style)
-            params = self._process_parameters(params)
+            sql, _ = statement.compile(placeholder_style=target_style)
+            # For execute_many, use the parameters passed via kwargs
+            params = kwargs.get("parameters")
+            if params is not None:
+                # Process each parameter set individually
+                processed_params = [self._process_parameters(param_set) for param_set in params]
+                params = processed_params
             return await self._execute_many(sql, params, connection=connection, **kwargs)
 
         sql, params = statement.compile(placeholder_style=target_style)

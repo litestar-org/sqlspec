@@ -592,7 +592,7 @@ def test_psycopg_to_parquet(psycopg_session: PsycopgSyncDriver) -> None:
         try:
             rows_exported = psycopg_session.export_to_storage(statement, destination_uri=tmp.name, format="parquet")
             assert rows_exported == 2
-            table = pq.read_table(f"{tmp.name}.parquet")
+            table = pq.read_table(tmp.name)
             assert table.num_rows == 2
             assert set(table.column_names) == {"name", "value"}
             names = table.column("name").to_pylist()
