@@ -108,10 +108,11 @@ class PsycopgSyncDriver(
         conn = self._connection(connection)
         with conn.cursor() as cursor:
             cursor.execute(cast("Query", sql), parameters)
-            # Check if the statement returns rows
-            if self.returns_rows(statement.expression):
+            # Check if the statement returns rows by checking cursor.description
+            # This is more reliable than parsing when parsing is disabled
+            if cursor.description is not None:
                 fetched_data = cursor.fetchall()
-                column_names = [col.name for col in cursor.description or []]
+                column_names = [col.name for col in cursor.description]
                 return {"data": fetched_data, "column_names": column_names, "rows_affected": len(fetched_data)}
             return {"rows_affected": cursor.rowcount, "status_message": cursor.statusmessage or "OK"}
 
@@ -184,6 +185,11 @@ class PsycopgSyncDriver(
         operation_type = "UNKNOWN"
         if statement.expression:
             operation_type = str(statement.expression.key).upper()
+
+        # Handle case where we got a SelectResultDict but it was routed here due to parsing being disabled
+        if is_dict_with_field(result, "data") and is_dict_with_field(result, "column_names"):
+            # This is actually a SELECT result, wrap it properly
+            return self._wrap_select_result(statement, cast("SelectResultDict", result), **kwargs)
 
         if is_dict_with_field(result, "statements_executed"):
             return SQLResult[RowT](
