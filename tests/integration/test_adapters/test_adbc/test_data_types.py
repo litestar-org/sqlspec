@@ -225,7 +225,6 @@ def test_sqlite_blob_type(adbc_sqlite_types_session: AdbcDriver) -> None:
 
 @pytest.mark.xdist_group("postgres")
 @xfail_if_driver_missing
-@pytest.mark.xfail(reason="JSON and array type handling varies by ADBC driver version")
 def test_postgresql_advanced_types(adbc_postgresql_types_session: AdbcDriver) -> None:
     """Test JSON and array types with PostgreSQL."""
     # Insert JSON and array data

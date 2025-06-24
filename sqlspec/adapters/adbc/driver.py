@@ -57,8 +57,7 @@ class AdbcDriver(
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = False  # Not implemented yet
     supports_native_parquet_import: ClassVar[bool] = True
-    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK,)
-    __slots__ = ("default_parameter_style", "dialect")
+    __slots__ = ("default_parameter_style", "dialect", "supported_parameter_styles")
 
     def __init__(
         self,
@@ -69,6 +68,8 @@ class AdbcDriver(
         super().__init__(connection=connection, config=config, default_row_type=default_row_type)
         self.dialect: DialectType = self._get_dialect(connection)
         self.default_parameter_style = self._get_parameter_style_for_dialect(self.dialect)
+        # Override supported parameter styles based on actual dialect capabilities
+        self.supported_parameter_styles = self._get_supported_parameter_styles_for_dialect(self.dialect)
 
     def _coerce_boolean(self, value: Any) -> Any:
         """ADBC boolean handling varies by underlying driver."""
@@ -140,6 +141,23 @@ class AdbcDriver(
         return dialect_style_map.get(dialect, ParameterStyle.QMARK)
 
     @staticmethod
+    def _get_supported_parameter_styles_for_dialect(dialect: str) -> "tuple[ParameterStyle, ...]":
+        """Get the supported parameter styles for a given dialect.
+
+        Each ADBC driver supports different parameter styles based on the underlying database.
+        """
+        dialect_supported_styles_map = {
+            "postgres": (ParameterStyle.NUMERIC,),  # PostgreSQL only supports $1, $2, $3
+            "postgresql": (ParameterStyle.NUMERIC,),
+            "bigquery": (ParameterStyle.NAMED_AT,),  # BigQuery only supports @param
+            "sqlite": (ParameterStyle.QMARK, ParameterStyle.NAMED_COLON),  # SQLite supports ? and :param
+            "duckdb": (ParameterStyle.QMARK, ParameterStyle.NUMERIC),  # DuckDB supports ? and $1
+            "mysql": (ParameterStyle.POSITIONAL_PYFORMAT,),  # MySQL only supports %s
+            "snowflake": (ParameterStyle.QMARK, ParameterStyle.NUMERIC),  # Snowflake supports ? and :1
+        }
+        return dialect_supported_styles_map.get(dialect, (ParameterStyle.QMARK,))
+
+    @staticmethod
     @contextmanager
     def _get_cursor(connection: "AdbcConnection") -> Iterator["Cursor"]:
         cursor = connection.cursor()
@@ -160,6 +178,7 @@ class AdbcDriver(
         detected_styles = {p.style for p in statement.parameter_info}
         target_style = self.default_parameter_style
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+
         if unsupported_styles:
             target_style = self.default_parameter_style
         elif detected_styles:
@@ -167,6 +186,7 @@ class AdbcDriver(
                 if style in self.supported_parameter_styles:
                     target_style = style
                     break
+
         sql, params = statement.compile(placeholder_style=target_style)
         params = self._process_parameters(params)
         if statement.is_many:
@@ -185,12 +205,12 @@ class AdbcDriver(
 
             try:
                 cursor.execute(sql, parameters or [])
-            except Exception:
+            except Exception as e:
                 # Rollback transaction on error for PostgreSQL to avoid "current transaction is aborted" errors
                 if self.dialect == "postgres":
-                    cursor.execute("ROLLBACK")
-                else:
-                    raise
+                    with contextlib.suppress(Exception):
+                        cursor.execute("ROLLBACK")
+                raise e from e
 
             if self.returns_rows(statement.expression):
                 fetched_data = cursor.fetchall()
@@ -212,11 +232,12 @@ class AdbcDriver(
         with self._get_cursor(conn) as cursor:
             try:
                 cursor.executemany(sql, param_list or [])
-            except Exception:
+            except Exception as e:
                 if self.dialect == "postgres":
-                    cursor.execute("ROLLBACK")
-                else:
-                    raise
+                    with contextlib.suppress(Exception):
+                        cursor.execute("ROLLBACK")
+                # Always re-raise the original exception
+                raise e from e
 
             result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
             return result

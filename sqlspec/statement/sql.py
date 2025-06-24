@@ -437,7 +437,7 @@ class SQL:
         )
 
         normalized_sql = statement
-        placeholder_mapping = {}
+        placeholder_mapping: dict[str, Any] = {}
 
         if has_pyformat:
             # Normalize pyformat placeholders to named placeholders for SQLGlot
@@ -446,7 +446,6 @@ class SQL:
             # Store the original SQL before normalization
             self._original_sql = statement
             self._placeholder_mapping = placeholder_mapping
-            logger.debug("Normalized SQL from '%s' to '%s'", statement, normalized_sql)
 
         try:
             # Parse with sqlglot

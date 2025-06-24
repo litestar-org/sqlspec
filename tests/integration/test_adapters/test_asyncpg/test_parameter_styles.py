@@ -11,10 +11,11 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQLConfig
 
+
 @pytest.fixture(scope="function")
 async def asyncpg_params_session(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgDriver, None]":
     """Create an AsyncPG session for parameter style testing.
-    
+
     Optimized to avoid connection pool exhaustion.
     """
     config = AsyncpgConfig(
@@ -39,7 +40,7 @@ async def asyncpg_params_session(postgres_service: PostgresService) -> "AsyncGen
                 description TEXT
             );
             -- Insert all test data in one go
-            INSERT INTO test_params (name, value, description) VALUES 
+            INSERT INTO test_params (name, value, description) VALUES
                 ('test1', 100, 'First test'),
                 ('test2', 200, 'Second test'),
                 ('test3', 300, NULL),

@@ -18,7 +18,7 @@ from sqlspec.driver.mixins import (
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT, RowT
+from sqlspec.typing import DictRow, ModelDTOT, RowT, SQLParameterType
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import ensure_async_
 
@@ -95,14 +95,13 @@ class OracleSyncDriver(
     ) -> None:
         super().__init__(connection=connection, config=config, default_row_type=default_row_type)
 
-    @staticmethod
-    def _process_parameters(params: Any) -> Any:
+    def _process_parameters(self, parameters: "SQLParameterType") -> "SQLParameterType":
         """Process parameters to handle Oracle-specific requirements.
 
         - Extract values from TypedParameter objects
         - Convert tuples to lists (Oracle doesn't support tuples)
         """
-        return _process_oracle_parameters(params)
+        return _process_oracle_parameters(parameters)
 
     @contextmanager
     def _get_cursor(self, connection: Optional[OracleSyncConnection] = None) -> Generator[Cursor, None, None]:
@@ -204,7 +203,7 @@ class OracleSyncDriver(
                 # Already a flat list, likely from incorrect usage
                 param_list = [param_list]
             # Parameters have already been processed in _execute_statement
-            cursor.executemany(sql, param_list)  # type: ignore[arg-type]
+            cursor.executemany(sql, param_list)
             return {"rows_affected": cursor.rowcount, "status_message": "OK"}
 
     def _execute_script(
@@ -342,14 +341,13 @@ class OracleAsyncDriver(
     ) -> None:
         super().__init__(connection=connection, config=config, default_row_type=default_row_type)
 
-    @staticmethod
-    def _process_parameters(params: Any) -> Any:
+    def _process_parameters(self, parameters: "SQLParameterType") -> "SQLParameterType":
         """Process parameters to handle Oracle-specific requirements.
 
         - Extract values from TypedParameter objects
         - Convert tuples to lists (Oracle doesn't support tuples)
         """
-        return _process_oracle_parameters(params)
+        return _process_oracle_parameters(parameters)
 
     @asynccontextmanager
     async def _get_cursor(
@@ -462,7 +460,7 @@ class OracleAsyncDriver(
                 # Already a flat list, likely from incorrect usage
                 param_list = [param_list]
             # Parameters have already been processed in _execute_statement
-            await cursor.executemany(sql, param_list)  # type: ignore[arg-type]
+            await cursor.executemany(sql, param_list)
             result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
             return result
 
