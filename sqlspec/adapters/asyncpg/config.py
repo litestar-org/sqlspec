@@ -338,3 +338,37 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         if not self.pool_instance:
             self.pool_instance = await self.create_pool()
         return self.pool_instance
+
+    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+        """Get the signature namespace for AsyncPG types.
+
+        This provides all AsyncPG-specific types that Litestar needs to recognize
+        to avoid serialization attempts.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+        # Get base types from parent
+        namespace = super().get_signature_namespace()
+
+        # Add AsyncPG-specific types
+        try:
+            from asyncpg import Connection, Record
+            from asyncpg.connection import ConnectionMeta
+            from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
+
+            namespace.update(
+                {
+                    "Connection": Connection,
+                    "Pool": Pool,
+                    "PoolConnectionProxy": PoolConnectionProxy,
+                    "PoolConnectionProxyMeta": PoolConnectionProxyMeta,
+                    "ConnectionMeta": ConnectionMeta,
+                    "Record": Record,
+                    "AsyncpgConnection": type(AsyncpgConnection),  # The Union type alias
+                }
+            )
+        except ImportError:
+            logger.warning("Failed to import AsyncPG types for signature namespace")
+
+        return namespace

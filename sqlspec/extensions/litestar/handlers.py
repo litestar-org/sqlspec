@@ -233,7 +233,7 @@ def connection_provider_maker(
         finally:
             if entered_connection is not None:
                 await connection_cm.__aexit__(None, None, None)
-            delete_sqlspec_scope_state(scope, connection_key)  # Optional: clear from scope
+                delete_sqlspec_scope_state(scope, connection_key)  # Clear from scope
 
     return provide_connection
 
@@ -246,8 +246,14 @@ def session_provider_maker(
 
     conn_type_annotation = config.connection_type
 
+    # Import Dependency at function level to avoid circular imports
+    from litestar.params import Dependency
+
     db_conn_param = inspect.Parameter(
-        name=connection_dependency_key, kind=inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=conn_type_annotation
+        name=connection_dependency_key,
+        kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        annotation=conn_type_annotation,
+        default=Dependency(skip_validation=True),
     )
 
     provider_signature = inspect.Signature(
@@ -261,6 +267,6 @@ def session_provider_maker(
         provide_session.__annotations__ = {}
 
     provide_session.__annotations__[connection_dependency_key] = conn_type_annotation
-    provide_session.__annotations__["return"] = config.driver_type
+    provide_session.__annotations__["return"] = AsyncGenerator[config.driver_type, None]  # type: ignore[name-defined]
 
     return provide_session

@@ -184,18 +184,21 @@ class SQLFactory:
         builder_dialect = dialect or self.dialect
         if len(columns_or_sql) == 1 and isinstance(columns_or_sql[0], str):
             sql_candidate = columns_or_sql[0].strip()
-            # Validate type
-            detected = self.detect_sql_type(sql_candidate, dialect=builder_dialect)
-            if detected not in {"SELECT", "WITH"}:
-                msg = (
-                    f"sql.select() expects a SELECT or WITH statement, got {detected}. "
-                    f"Use sql.{detected.lower()}() if a dedicated builder exists, or ensure the SQL is SELECT/WITH."
-                )
-                raise SQLBuilderError(msg)
-            select_builder = SelectBuilder(dialect=builder_dialect)
-            if select_builder._expression is None:
-                select_builder.__post_init__()
-            return self._populate_select_from_sql(select_builder, sql_candidate)
+            # Check if it actually looks like SQL before parsing
+            if self._looks_like_sql(sql_candidate):
+                # Validate type
+                detected = self.detect_sql_type(sql_candidate, dialect=builder_dialect)
+                if detected not in {"SELECT", "WITH"}:
+                    msg = (
+                        f"sql.select() expects a SELECT or WITH statement, got {detected}. "
+                        f"Use sql.{detected.lower()}() if a dedicated builder exists, or ensure the SQL is SELECT/WITH."
+                    )
+                    raise SQLBuilderError(msg)
+                select_builder = SelectBuilder(dialect=builder_dialect)
+                if select_builder._expression is None:
+                    select_builder.__post_init__()
+                return self._populate_select_from_sql(select_builder, sql_candidate)
+            # Otherwise treat as column name and fall through to normal column handling
         select_builder = SelectBuilder(dialect=builder_dialect)
         if select_builder._expression is None:
             select_builder.__post_init__()
@@ -286,11 +289,18 @@ class SQLFactory:
         candidate_upper = candidate.strip().upper()
 
         # Check for SQL keywords at the beginning
-
         if expected_type:
             return candidate_upper.startswith(expected_type.upper())
 
-        return any(candidate_upper.startswith(starter) for starter in SQL_STARTERS)
+        # More sophisticated check for SQL vs column names
+        # Column names that start with SQL keywords are common (user_id, insert_date, etc.)
+        if any(candidate_upper.startswith(starter) for starter in SQL_STARTERS):
+            # Additional checks to distinguish real SQL from column names:
+            # 1. Real SQL typically has spaces (SELECT ... FROM, INSERT INTO, etc.)
+            # 2. Check for common SQL syntax patterns
+            return " " in candidate
+
+        return False
 
     def _populate_insert_from_sql(self, builder: "InsertBuilder", sql_string: str) -> "InsertBuilder":
         """Parse SQL string and populate INSERT builder using SQLGlot directly."""

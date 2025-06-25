@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from sqlglot import exp
+from typing_extensions import Self
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder.protocols import SelectBuilderProtocol
@@ -11,7 +12,7 @@ __all__ = ("AggregateFunctionsMixin",)
 class AggregateFunctionsMixin:
     """Mixin providing aggregate function methods for SQL builders."""
 
-    def count_(self, column: "Union[str, exp.Expression]" = "*", alias: Optional[str] = None) -> Any:
+    def count_(self, column: "Union[str, exp.Expression]" = "*", alias: Optional[str] = None) -> Self:
         """Add COUNT function to SELECT clause.
 
         Args:
@@ -29,7 +30,7 @@ class AggregateFunctionsMixin:
             count_expr = exp.Count(this=col_expr)
 
         select_expr = exp.alias_(count_expr, alias) if alias else count_expr
-        return builder.select(select_expr)
+        return cast("Self", builder.select(select_expr))
 
     def sum_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Any:
         """Add SUM function to SELECT clause.

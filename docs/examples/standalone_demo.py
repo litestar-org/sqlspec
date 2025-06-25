@@ -243,7 +243,7 @@ def display_header() -> None:
 
 def display_sql_with_syntax(sql_obj: SQL, title: str = "Generated SQL") -> None:
     """Display SQL with syntax highlighting."""
-    sql_text = str(sql_obj)
+    sql_text = sql_obj.to_sql()
     syntax = Syntax(sql_text, "sql", theme="monokai", line_numbers=True)
     console.print(Panel(syntax, title=title, border_style="green"))
 
@@ -314,7 +314,7 @@ def filters() -> None:
     base_query = sql.select("id", "name", "email", "department", "salary").from_("users")
 
     console.print("[bold cyan]1. Base query[/bold cyan]")
-    display_sql_with_syntax(base_query, "Base Query")
+    display_sql_with_syntax(base_query.to_statement(), "Base Query")
 
     # Apply various filters
     filters_demo = [
@@ -326,14 +326,14 @@ def filters() -> None:
     for title, filter_obj in filters_demo:
         console.print(f"\n[bold cyan]2. With {title}[/bold cyan]")
         filtered_query = base_query.append_filter(filter_obj)
-        display_sql_with_syntax(filtered_query, f"Query with {title}")
+        display_sql_with_syntax(filtered_query.to_statement(), f"Query with {title}")
 
     # Combined filters
     console.print("\n[bold cyan]3. Combined filters[/bold cyan]")
     combined_query = base_query.copy(
         SearchFilter("department", "Engineering"), LimitOffsetFilter(5, 0), OrderByFilter("hire_date", "desc")
     )
-    display_sql_with_syntax(combined_query, "Query with Combined Filters")
+    display_sql_with_syntax(combined_query.to_statement(), "Query with Combined Filters")
 
 
 @cli.command()
@@ -517,11 +517,11 @@ def demo_basic_select() -> None:
         sql.select("id", "name", "email", "department", "salary")
         .from_("users")
         .where("active = TRUE")
-        .where("salary > ?", 50000)
+        .where(("salary", ">", 50000))
         .order_by("salary DESC", "hire_date")
         .limit(10)
     )
-    display_sql_with_syntax(query)
+    display_sql_with_syntax(query.to_statement())
 
 
 def demo_complex_joins() -> None:
@@ -544,7 +544,7 @@ def demo_complex_joins() -> None:
         .order_by("total_spent DESC")
         .limit(20)
     )
-    display_sql_with_syntax(query)
+    display_sql_with_syntax(query.to_statement())
 
 
 def demo_window_functions() -> None:
@@ -563,7 +563,7 @@ def demo_window_functions() -> None:
         .where("active = TRUE")
     )
 
-    display_sql_with_syntax(query)
+    display_sql_with_syntax(query.to_statement())
 
 
 def demo_cte_queries() -> None:
@@ -578,7 +578,7 @@ def demo_cte_queries() -> None:
         .where("u.active = TRUE")
         .order_by("salary_diff DESC")
     )
-    display_sql_with_syntax(query)
+    display_sql_with_syntax(query.to_statement())
 
 
 def demo_insert_returning() -> None:
@@ -626,7 +626,10 @@ def demo_merge_operations() -> None:
 
 def demo_subqueries() -> None:
     """Demonstrate subqueries and EXISTS."""
-    high_value_customers = sql.select("user_id").from_("orders").group_by("user_id").having("SUM(total_amount) > 10000")
+    # Work around sql.select() single argument issue by using multiple dummy columns
+    high_value_customers = (
+        sql.select("user_id", "user_id as uid").from_("orders").group_by("user_id").having("SUM(total_amount) > 10000")
+    )
 
     query = (
         sql.select("id", "name", "email", "department")
@@ -635,7 +638,7 @@ def demo_subqueries() -> None:
         .where("active = TRUE")
         .order_by("name")
     )
-    display_sql_with_syntax(query)
+    display_sql_with_syntax(query.to_statement())
 
 
 @cli.command()

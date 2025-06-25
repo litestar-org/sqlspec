@@ -65,24 +65,42 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
 
         app_config.on_startup.append(store_sqlspec_in_state)
         # Register types for injection
-        app_config.signature_types.extend(
-            [SQLSpec, ConnectionT, PoolT, DriverT, DatabaseConfig, DatabaseConfigProtocol, SyncConfigT, AsyncConfigT]
-        )
+        app_config.signature_types.extend([
+            SQLSpec,
+            ConnectionT,
+            PoolT,
+            DriverT,
+            DatabaseConfig,
+            DatabaseConfigProtocol,
+            SyncConfigT,
+            AsyncConfigT,
+        ])
+
+        # Create signature namespace for connection types
+        signature_namespace = {}
 
         for c in self._plugin_configs:
             c.annotation = self.add_config(c.config)
             app_config.signature_types.append(c.annotation)
             app_config.signature_types.append(c.config.connection_type)  # type: ignore[union-attr]
             app_config.signature_types.append(c.config.driver_type)  # type: ignore[union-attr]
+
+            # Get signature namespace from the config
+            if hasattr(c.config, "get_signature_namespace"):
+                config_namespace = c.config.get_signature_namespace()  # type: ignore[attr-defined]
+                signature_namespace.update(config_namespace)
+
             app_config.before_send.append(c.before_send_handler)
             app_config.lifespan.append(c.lifespan_handler)  # pyright: ignore[reportUnknownMemberType]
-            app_config.dependencies.update(
-                {
-                    c.connection_key: Provide(c.connection_provider),
-                    c.pool_key: Provide(c.pool_provider),
-                    c.session_key: Provide(c.session_provider),
-                }
-            )
+            app_config.dependencies.update({
+                c.connection_key: Provide(c.connection_provider),
+                c.pool_key: Provide(c.pool_provider),
+                c.session_key: Provide(c.session_provider),
+            })
+
+        # Update app config with signature namespace
+        if signature_namespace:
+            app_config.signature_namespace.update(signature_namespace)
 
         return app_config
 

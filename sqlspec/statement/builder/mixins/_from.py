@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from sqlglot import exp
+from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_table_expression
@@ -15,7 +16,7 @@ __all__ = ("FromClauseMixin",)
 class FromClauseMixin:
     """Mixin providing FROM clause for SELECT builders."""
 
-    def from_(self, table: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Any:
+    def from_(self, table: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Self:
         """Add FROM clause.
 
         Args:
@@ -57,4 +58,4 @@ class FromClauseMixin:
         else:
             from_expr = table
         builder._expression = builder._expression.from_(from_expr, copy=False)
-        return builder
+        return cast("Self", builder)
