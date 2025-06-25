@@ -23,6 +23,7 @@ from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
 @get("/test", sync_to_thread=True)
 def simple_select(etl_session: DuckDBDriver) -> dict[str, str]:
     from sqlspec.statement.sql import SQL
+
     result = etl_session.execute(SQL("SELECT 'Hello, ETL world!' AS greeting"))
     greeting = result.get_first()
     return {"greeting": greeting["greeting"] if greeting is not None else "hi"}
@@ -31,6 +32,7 @@ def simple_select(etl_session: DuckDBDriver) -> dict[str, str]:
 @get("/")
 async def simple_sqlite(db_session: AiosqliteDriver) -> dict[str, str]:
     from sqlspec.statement.sql import SQL
+
     return await db_session.select_one(SQL("SELECT 'Hello, world!' AS greeting"))
 
 

@@ -13,7 +13,7 @@
 """SQLSpec Interactive Demo - Showcase of Advanced SQL Generation & Processing
 
 A comprehensive demonstration of SQLSpec's capabilities including:
-- Advanced SQL query construction patterns  
+- Advanced SQL query construction patterns
 - Filter composition and pipeline processing
 - Statement analysis and validation
 - Performance instrumentation and monitoring
@@ -583,14 +583,15 @@ def demo_cte_queries() -> None:
 
 def demo_insert_returning() -> None:
     """Demonstrate INSERT with RETURNING."""
-    query = SQL("""
+    query = SQL(
+        """
         INSERT INTO users (name, email, department, age, salary, hire_date)
         VALUES (?, ?, ?, ?, ?, ?)
         RETURNING id, name, email
-    """, parameters=(
-        "John Doe", "john@example.com", "Engineering", 30, 75000, datetime.now()
-    ))
-    
+    """,
+        parameters=("John Doe", "john@example.com", "Engineering", 30, 75000, datetime.now()),
+    )
+
     display_sql_with_syntax(query)
 
 
@@ -605,7 +606,7 @@ def demo_update_joins() -> None:
           AND u.department = 'Sales'
         RETURNING u.id, u.name, u.salary
     """)
-    
+
     display_sql_with_syntax(query)
 
 
@@ -619,7 +620,7 @@ def demo_merge_operations() -> None:
             name = EXCLUDED.name,
             salary = EXCLUDED.salary
     """)
-    
+
     display_sql_with_syntax(query)
 
 

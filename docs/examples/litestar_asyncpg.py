@@ -29,6 +29,7 @@ async def simple_asyncpg(
     db_session: AsyncpgDriver, filters: Annotated[list[FilterTypes], Dependency(skip_validation=True)]
 ) -> SQLResult[dict[str, Any]]:
     from sqlspec.statement.sql import SQL
+
     return await db_session.execute(SQL("SELECT greeting FROM (select 'Hello, world!' as greeting) as t"), *filters)
 
 

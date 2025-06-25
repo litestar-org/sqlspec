@@ -22,6 +22,7 @@ from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
 @get("/")
 async def simple_psycopg(db_session: PsycopgAsyncDriver) -> dict[str, str]:
     from sqlspec.statement.sql import SQL
+
     result = await db_session.execute(SQL("SELECT 'Hello, world!' AS greeting"))
     return result.get_first() or {"greeting": "No result found"}
 

@@ -136,7 +136,7 @@ def basic_loader_example() -> None:
 
         # Get the custom query
         health_sql = loader.get_sql("custom_health_check")
-        print(f"Custom query added: {str(health_sql)}\n")
+        print(f"Custom query added: {health_sql!s}\n")
 
         # Get file info for a query
         file_info = loader.get_file_for_query("get_user_by_id")
@@ -322,7 +322,7 @@ UPDATE records SET updated_at = NOW() WHERE id = :record_id;
 
         # Get SQL with parameters
         count_sql = loader.get_sql("count_records", table_name="users")
-        print(f"\nGenerated SQL: {str(count_sql)}")
+        print(f"\nGenerated SQL: {count_sql!s}")
         print(f"Parameters: {count_sql.parameters}")
 
 
