@@ -120,7 +120,9 @@ class ObjectStoreProtocol(Protocol):
         msg = "Async operations not implemented"
         raise NotImplementedError(msg)
 
-    async def write_text_async(self, path: "Union[str, Path]", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    async def write_text_async(
+        self, path: "Union[str, Path]", data: str, encoding: str = "utf-8", **kwargs: Any
+    ) -> None:
         """Async write text to an object."""
         msg = "Async operations not implemented"
         raise NotImplementedError(msg)

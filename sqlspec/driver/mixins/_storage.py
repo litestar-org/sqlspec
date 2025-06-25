@@ -414,7 +414,12 @@ class SyncStorageMixin(StorageMixinBase):
         return self._export_via_backend(sql_obj, backend, path, file_format, **kwargs)
 
     def import_from_storage(
-        self, source_uri: "Union[str, Path]", table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
+        self,
+        source_uri: "Union[str, Path]",
+        table_name: str,
+        format: "Optional[str]" = None,
+        mode: str = "create",
+        **options: Any,
     ) -> int:
         """Import data from storage with intelligent routing.
 
@@ -433,7 +438,12 @@ class SyncStorageMixin(StorageMixinBase):
         return self._import_from_storage(source_uri, table_name, format, mode, **options)
 
     def _import_from_storage(
-        self, source_uri: "Union[str, Path]", table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
+        self,
+        source_uri: "Union[str, Path]",
+        table_name: str,
+        format: "Optional[str]" = None,
+        mode: str = "create",
+        **options: Any,
     ) -> int:
         """Protected method for import operation implementation.
 
@@ -479,7 +489,9 @@ class SyncStorageMixin(StorageMixinBase):
         msg = "Driver should implement _read_parquet_native"
         raise NotImplementedError(msg)
 
-    def _write_parquet_native(self, data: Union[str, ArrowTable], destination_uri: "Union[str, Path]", **options: Any) -> None:
+    def _write_parquet_native(
+        self, data: Union[str, ArrowTable], destination_uri: "Union[str, Path]", **options: Any
+    ) -> None:
         """Database-specific native Parquet writing. Override in drivers."""
         msg = "Driver should implement _write_parquet_native"
         raise NotImplementedError(msg)
@@ -489,7 +501,9 @@ class SyncStorageMixin(StorageMixinBase):
         msg = "Driver should implement _export_native"
         raise NotImplementedError(msg)
 
-    def _import_native(self, source_uri: "Union[str, Path]", table_name: str, format: str, mode: str, **options: Any) -> int:
+    def _import_native(
+        self, source_uri: "Union[str, Path]", table_name: str, format: str, mode: str, **options: Any
+    ) -> int:
         """Database-specific native import. Override in drivers."""
         msg = "Driver should implement _import_native"
         raise NotImplementedError(msg)
@@ -840,7 +854,12 @@ class AsyncStorageMixin(StorageMixinBase):
         return await self._export_via_backend(query, backend, path, file_format, **options)
 
     async def import_from_storage(
-        self, source_uri: "Union[str, Path]", table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
+        self,
+        source_uri: "Union[str, Path]",
+        table_name: str,
+        format: "Optional[str]" = None,
+        mode: str = "create",
+        **options: Any,
     ) -> int:
         """Async import data from storage with intelligent routing.
 
@@ -859,7 +878,12 @@ class AsyncStorageMixin(StorageMixinBase):
         return await self._import_from_storage(source_uri, table_name, format, mode, **options)
 
     async def _import_from_storage(
-        self, source_uri: "Union[str, Path]", table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
+        self,
+        source_uri: "Union[str, Path]",
+        table_name: str,
+        format: "Optional[str]" = None,
+        mode: str = "create",
+        **options: Any,
     ) -> int:
         """Protected async method for import operation implementation.
 
@@ -891,7 +915,9 @@ class AsyncStorageMixin(StorageMixinBase):
         msg = "Driver should implement _export_native"
         raise NotImplementedError(msg)
 
-    async def _import_native(self, source_uri: "Union[str, Path]", table_name: str, format: str, mode: str, **options: Any) -> int:
+    async def _import_native(
+        self, source_uri: "Union[str, Path]", table_name: str, format: str, mode: str, **options: Any
+    ) -> int:
         """Async database-specific native import."""
         msg = "Driver should implement _import_native"
         raise NotImplementedError(msg)

@@ -387,7 +387,9 @@ def test_driver_concurrent_storage_operations(sqlite_driver_with_storage: Sqlite
         assert Path(file_path).stat().st_size > 0
 
 
-def test_driver_export_to_storage_pathlike_objects(sqlite_driver_with_storage: SqliteDriver, temp_directory: Path) -> None:
+def test_driver_export_to_storage_pathlike_objects(
+    sqlite_driver_with_storage: SqliteDriver, temp_directory: Path
+) -> None:
     """Test export_to_storage with pathlike objects (Path instances)."""
     # Test with Path object instead of string
     output_path = temp_directory / "pathlike_export.parquet"
@@ -395,7 +397,7 @@ def test_driver_export_to_storage_pathlike_objects(sqlite_driver_with_storage: S
     # Export data using Path object
     sqlite_driver_with_storage.export_to_storage(
         "SELECT * FROM storage_test WHERE active = 1 ORDER BY id",
-        destination_uri=output_path  # Pass Path object directly
+        destination_uri=output_path,  # Pass Path object directly
     )
 
     assert output_path.exists()
@@ -415,22 +417,21 @@ def test_driver_export_to_storage_pathlike_objects(sqlite_driver_with_storage: S
         sqlite_driver_with_storage.export_to_storage(
             "SELECT name, price FROM storage_test LIMIT 3",
             destination_uri=path_obj,  # Pass Path object
-            format=fmt
+            format=fmt,
         )
 
         assert path_obj.exists()
         assert path_obj.stat().st_size > 0
 
 
-def test_driver_import_from_storage_pathlike_objects(sqlite_driver_with_storage: SqliteDriver, temp_directory: Path) -> None:
+def test_driver_import_from_storage_pathlike_objects(
+    sqlite_driver_with_storage: SqliteDriver, temp_directory: Path
+) -> None:
     """Test import_from_storage with pathlike objects (Path instances)."""
     # First export some data to import back
     export_path = temp_directory / "pathlike_import.parquet"
 
-    sqlite_driver_with_storage.export_to_storage(
-        "SELECT * FROM storage_test",
-        destination_uri=export_path
-    )
+    sqlite_driver_with_storage.export_to_storage("SELECT * FROM storage_test", destination_uri=export_path)
 
     # Create new table for import
     sqlite_driver_with_storage.execute_script("""
@@ -448,7 +449,7 @@ def test_driver_import_from_storage_pathlike_objects(sqlite_driver_with_storage:
     # Import using Path object
     rows_imported = sqlite_driver_with_storage.import_from_storage(
         export_path,  # Pass Path object directly
-        "import_test"
+        "import_test",
     )
 
     assert rows_imported == 5  # All 5 test rows
@@ -461,9 +462,7 @@ def test_driver_import_from_storage_pathlike_objects(sqlite_driver_with_storage:
     # Test CSV import with Path object
     csv_path = temp_directory / "import_test.csv"
     sqlite_driver_with_storage.export_to_storage(
-        "SELECT name, category, value FROM storage_test",
-        destination_uri=csv_path,
-        format="csv"
+        "SELECT name, category, value FROM storage_test", destination_uri=csv_path, format="csv"
     )
 
     # Create another table for CSV import
@@ -478,7 +477,7 @@ def test_driver_import_from_storage_pathlike_objects(sqlite_driver_with_storage:
     rows_imported = sqlite_driver_with_storage.import_from_storage(
         csv_path,  # Pass Path object
         "csv_import_test",
-        format="csv"
+        format="csv",
     )
 
     assert rows_imported > 0

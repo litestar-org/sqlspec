@@ -215,6 +215,7 @@ class SqliteDriver(
 
             # Parse CSV content
             import io
+
             csv_file = io.StringIO(content)
             reader = csv.reader(csv_file, **options)
             header = next(reader)  # Skip header

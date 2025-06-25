@@ -220,6 +220,7 @@ class AiosqliteDriver(
                 content = await backend.read_text_async(file_path_str, encoding="utf-8")
                 # Parse CSV content
                 import io
+
                 csv_file = io.StringIO(content)
                 reader = csv.reader(csv_file, **options)
                 header = next(reader)  # Skip header
