@@ -640,7 +640,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             if conninfo:
                 # If conninfo is provided, use it directly
                 # Don't pass kwargs when using conninfo string
-                pool = AsyncConnectionPool(conninfo, **pool_params)
+                pool = AsyncConnectionPool(conninfo, open=False, **pool_params)
             else:
                 # Otherwise, pass connection parameters via kwargs
                 # Remove any non-connection parameters
@@ -648,7 +648,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
                 all_config.pop("row_factory", None)
                 # Remove pool-specific settings that may have been left
                 all_config.pop("kwargs", None)
-                pool = AsyncConnectionPool("", kwargs=all_config, **pool_params)
+                pool = AsyncConnectionPool("", kwargs=all_config, open=False, **pool_params)
 
             await pool.open()
             logger.info("Async Psycopg connection pool created successfully", extra={"adapter": "psycopg"})
