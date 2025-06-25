@@ -246,9 +246,10 @@ def test_psycopg_execute_many_with_returning(psycopg_batch_session: PsycopgSyncD
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_with_arrays(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with PostgreSQL array types on Psycopg."""
-    # Create table with array columns
+    # Drop and recreate table to ensure clean state
     psycopg_batch_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS test_arrays (
+        DROP TABLE IF EXISTS test_arrays;
+        CREATE TABLE test_arrays (
             id SERIAL PRIMARY KEY,
             name TEXT,
             tags TEXT[],
@@ -284,9 +285,10 @@ def test_psycopg_execute_many_with_json(psycopg_batch_session: PsycopgSyncDriver
     """Test execute_many with JSON data on Psycopg."""
     import json
 
-    # Create table with JSON column
+    # Drop and recreate table to ensure clean state
     psycopg_batch_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS test_json (
+        DROP TABLE IF EXISTS test_json;
+        CREATE TABLE test_json (
             id SERIAL PRIMARY KEY,
             name TEXT,
             metadata JSONB

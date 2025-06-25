@@ -265,9 +265,10 @@ async def test_psqlpy_arrow_with_postgresql_arrays(psqlpy_arrow_session: PsqlpyD
 @pytest.mark.xdist_group("postgres")
 async def test_psqlpy_arrow_with_json_operations(psqlpy_arrow_session: PsqlpyDriver) -> None:
     """Test Arrow functionality with PostgreSQL JSON operations."""
-    # Create table with JSON columns
-    await psqlpy_arrow_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS test_json (
+    # Drop table if exists and create fresh - execute separately due to psqlpy limitation
+    await psqlpy_arrow_session.execute("DROP TABLE IF EXISTS test_json")
+    await psqlpy_arrow_session.execute("""
+        CREATE TABLE test_json (
             id SERIAL PRIMARY KEY,
             metadata JSONB,
             settings JSON

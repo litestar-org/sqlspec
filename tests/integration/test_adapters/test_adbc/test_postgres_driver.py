@@ -70,7 +70,7 @@ def test_connection(postgres_service: PostgresService) -> None:
     )
 
     # Test connection creation
-    with config.create_connection() as conn:
+    with config.provide_connection() as conn:
         assert conn is not None
         # Test basic query
         with conn.cursor() as cur:

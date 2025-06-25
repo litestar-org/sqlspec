@@ -1,5 +1,6 @@
 """Test different parameter styles for Psycopg drivers."""
 
+import math
 from collections.abc import Generator
 from typing import Any
 
@@ -225,9 +226,10 @@ def test_psycopg_parameter_with_sql_object(psycopg_params_session: PsycopgSyncDr
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_data_types(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test different parameter data types with Psycopg."""
-    # Create table for different data types
+    # Drop and recreate table to ensure clean state
     psycopg_params_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS test_types (
+        DROP TABLE IF EXISTS test_types;
+        CREATE TABLE test_types (
             id SERIAL PRIMARY KEY,
             int_val INTEGER,
             real_val REAL,
@@ -238,7 +240,11 @@ def test_psycopg_parameter_data_types(psycopg_params_session: PsycopgSyncDriver)
     """)
 
     # Test different data types
-    test_data = [(42, 3.14, "hello", True, [1, 2, 3]), (-100, -2.5, "world", False, [4, 5, 6]), (0, 0.0, "", None, [])]
+    test_data = [
+        (42, math.pi, "hello", True, [1, 2, 3]),
+        (-100, -2.5, "world", False, [4, 5, 6]),
+        (0, 0.0, "", None, []),
+    ]
 
     for data in test_data:
         psycopg_params_session.execute(
@@ -258,7 +264,7 @@ def test_psycopg_parameter_data_types(psycopg_params_session: PsycopgSyncDriver)
     assert result.data[0]["text_val"] == "hello"
     assert result.data[0]["bool_val"] is True
     assert result.data[0]["array_val"] == [1, 2, 3]
-    assert abs(result.data[0]["real_val"] - 3.14) < 0.001  # Use approximate comparison for float
+    assert abs(result.data[0]["real_val"] - math.pi) < 0.001  # Use approximate comparison for float
 
 
 @pytest.mark.xdist_group("postgres")
