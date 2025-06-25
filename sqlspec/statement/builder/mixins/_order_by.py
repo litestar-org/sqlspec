@@ -43,4 +43,4 @@ class OrderByClauseMixin:
                 order_item = item
             current_expr = current_expr.order_by(order_item, copy=False)
         builder._expression = current_expr
-        return builder
+        return cast("Self", builder)

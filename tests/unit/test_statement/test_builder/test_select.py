@@ -64,7 +64,7 @@ def test_as_schema_with_dataclass() -> None:
         name: str
 
     builder = SelectBuilder().select("id", "name").from_("users")
-    new_builder = builder.as_schema(User)
+    new_builder = builder.as_schema(User)  # type: ignore[arg-type]
 
     assert getattr(new_builder, "_schema", None) is User
     assert new_builder is not builder
@@ -509,7 +509,7 @@ def test_complex_analytics_query() -> None:
         .when("e.salary > dept_avg.dept_avg_salary * 0.8", "Average Performer")
         .else_("Needs Improvement")
         .end()
-        .window("RANK()", partition_by="e.department", order_by="e.salary", alias="salary_rank")
+        .window("RANK()", partition_by="e.department", order_by="e.salary", alias="salary_rank")  # type: ignore[attr-defined]
         .from_("employees e")
         .left_join(f"({subquery.build().sql}) dept_avg", "e.department = dept_avg.department")
         .where_not_null("e.salary")

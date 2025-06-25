@@ -32,7 +32,7 @@ class SelectColumnsMixin:
             raise SQLBuilderError(msg)
         for column in columns:
             builder._expression = builder._expression.select(parse_column_expression(column), copy=False)
-        return builder
+        return cast("Self", builder)
 
     def distinct(self, *columns: Union[str, exp.Expression]) -> Self:
         """Add DISTINCT clause to SELECT.
@@ -57,4 +57,4 @@ class SelectColumnsMixin:
         else:
             distinct_columns = [parse_column_expression(column) for column in columns]
             builder._expression.set("distinct", exp.Distinct(expressions=distinct_columns))
-        return builder
+        return cast("Self", builder)

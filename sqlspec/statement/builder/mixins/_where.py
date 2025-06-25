@@ -16,7 +16,9 @@ __all__ = ("WhereClauseMixin",)
 class WhereClauseMixin:
     """Mixin providing WHERE clause methods for SELECT, UPDATE, and DELETE builders."""
 
-    def where(self, condition: Union[str, exp.Expression, exp.Condition, tuple[str, Any], tuple[str, str, Any]]) -> Self:
+    def where(
+        self, condition: Union[str, exp.Expression, exp.Condition, tuple[str, Any], tuple[str, str, Any]]
+    ) -> Self:
         """Add a WHERE clause to the statement.
 
         Args:
@@ -112,7 +114,7 @@ class WhereClauseMixin:
             )
         else:
             builder._expression = builder._expression.where(condition_expr, copy=False)
-        return builder
+        return cast("Self", builder)
 
     # The following methods are moved from the old WhereClauseMixin in _base.py
     def where_eq(self, column: "Union[str, exp.Column]", value: Any) -> "Self":

@@ -61,7 +61,7 @@ class JoinClauseMixin:
             msg = f"Unsupported join type: {join_type}"
             raise SQLBuilderError(msg)
         builder._expression = builder._expression.join(join_expr, copy=False)
-        return builder
+        return cast("Self", builder)
 
     def inner_join(
         self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression], alias: Optional[str] = None
@@ -107,4 +107,4 @@ class JoinClauseMixin:
             table_expr = table
         join_expr = exp.Join(this=table_expr, kind="CROSS")
         builder._expression = builder._expression.join(join_expr, copy=False)
-        return builder
+        return cast("Self", builder)
