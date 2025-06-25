@@ -8,7 +8,7 @@ The DuckDB database also demonstrates how to use the plugin loader and `secrets`
 """
 # /// script
 # dependencies = [
-#   "sqlspec[aiosqlite,duckdb] @ git+https://github.com/litestar-org/sqlspec.git@main",
+#   "sqlspec[aiosqlite,duckdb]",
 #   "litestar[standard]",
 # ]
 # ///

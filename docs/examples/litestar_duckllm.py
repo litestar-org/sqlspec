@@ -8,7 +8,7 @@ The `DuckDB` adapter is used to create a connection to the database.
 
 # /// script
 # dependencies = [
-#   "sqlspec[duckdb,performance] @ git+https://github.com/litestar-org/sqlspec.git@main",
+#   "sqlspec[duckdb,performance]",
 #   "litestar[standard]",
 # ]
 # ///

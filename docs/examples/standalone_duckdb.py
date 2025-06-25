@@ -5,7 +5,7 @@ This example demonstrates how to generate embeddings with Gemini using only Duck
 
 # /// script
 # dependencies = [
-#   "sqlspec[duckdb,performance] @ git+https://github.com/litestar-org/sqlspec.git@main",
+#   "sqlspec[duckdb,performance]",
 # ]
 # ///
 

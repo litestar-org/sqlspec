@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # dependencies = [
-#   "sqlspec[duckdb,performance] @ git+https://github.com/litestar-org/sqlspec.git@main",
+#   "sqlspec[duckdb,performance]",
 #   "rich>=13.0.0",
 #   "rich-click>=1.7.0",
 #   "faker>=24.0.0",
