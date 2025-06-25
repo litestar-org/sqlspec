@@ -8,7 +8,7 @@ The Psycopg database also demonstrates how to use the plugin loader and `secrets
 """
 # /// script
 # dependencies = [
-#   "sqlspec[psycopg]",
+#   "sqlspec[psycopg] @ git+https://github.com/litestar-org/sqlspec.git@main",
 #   "litestar[standard]",
 # ]
 # ///
@@ -21,7 +21,9 @@ from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
 
 @get("/")
 async def simple_psycopg(db_session: PsycopgAsyncDriver) -> dict[str, str]:
-    result = await db_session.execute("SELECT 'Hello, world!' AS greeting")
+    from sqlspec.statement.sql import SQL
+
+    result = await db_session.execute(SQL("SELECT 'Hello, world!' AS greeting"))
     return result.get_first() or {"greeting": "No result found"}
 
 

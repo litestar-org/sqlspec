@@ -30,7 +30,7 @@ def main() -> None:
     # Get and display a specific query
     print("Getting 'get_user_by_id' query:")
     user_query = loader.get_sql("get_user_by_id", user_id=123)
-    print(f"SQL: {user_query._sql}")
+    print(f"SQL: {user_query}")
     print(f"Parameters: {user_query.parameters}")
 
     print("\n" + "=" * 50 + "\n")
@@ -49,7 +49,7 @@ def main() -> None:
     # Use the custom query
     print("Using custom search query:")
     search_sql = loader.get_sql("custom_search", search_pattern="%john%")
-    print(f"SQL: {search_sql._sql}")
+    print(f"SQL: {search_sql}")
     print(f"Parameters: {search_sql.parameters}")
 
     print("\n" + "=" * 50 + "\n")

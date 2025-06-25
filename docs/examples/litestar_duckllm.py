@@ -8,7 +8,7 @@ The `DuckDB` adapter is used to create a connection to the database.
 
 # /// script
 # dependencies = [
-#   "sqlspec[duckdb,performance]",
+#   "sqlspec[duckdb,performance] @ git+https://github.com/litestar-org/sqlspec.git@main",
 #   "litestar[standard]",
 # ]
 # ///
@@ -16,8 +16,7 @@ The `DuckDB` adapter is used to create a connection to the database.
 from litestar import Litestar, post
 from msgspec import Struct
 
-from sqlspec.adapters.duckdb import DuckDBConfig
-from sqlspec.adapters.duckdb.driver import DuckDBDriver
+from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.extensions.litestar import SQLSpec
 
 
@@ -27,7 +26,7 @@ class ChatMessage(Struct):
 
 @post("/chat", sync_to_thread=True)
 def duckllm_chat(db_session: DuckDBDriver, data: ChatMessage) -> ChatMessage:
-    return db_session.select_one("SELECT open_prompt(?)", data.message, schema_type=ChatMessage)
+    return db_session.execute("SELECT open_prompt(?)", data.message, schema_type=ChatMessage).get_first()
 
 
 sqlspec = SQLSpec(

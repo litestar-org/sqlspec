@@ -8,7 +8,7 @@ The DuckDB database also demonstrates how to use the plugin loader and `secrets`
 """
 # /// script
 # dependencies = [
-#   "sqlspec[aiosqlite,duckdb]",
+#   "sqlspec[aiosqlite,duckdb] @ git+https://github.com/litestar-org/sqlspec.git@main",
 #   "litestar[standard]",
 # ]
 # ///
@@ -22,14 +22,18 @@ from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
 
 @get("/test", sync_to_thread=True)
 def simple_select(etl_session: DuckDBDriver) -> dict[str, str]:
-    result = etl_session.execute("SELECT 'Hello, ETL world!' AS greeting")
+    from sqlspec.statement.sql import SQL
+
+    result = etl_session.execute(SQL("SELECT 'Hello, ETL world!' AS greeting"))
     greeting = result.get_first()
     return {"greeting": greeting["greeting"] if greeting is not None else "hi"}
 
 
 @get("/")
 async def simple_sqlite(db_session: AiosqliteDriver) -> dict[str, str]:
-    return await db_session.select_one("SELECT 'Hello, world!' AS greeting")
+    from sqlspec.statement.sql import SQL
+
+    return await db_session.select_one(SQL("SELECT 'Hello, world!' AS greeting"))
 
 
 sqlspec = SQLSpec(

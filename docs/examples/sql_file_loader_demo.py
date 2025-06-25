@@ -4,7 +4,6 @@ This example demonstrates how to use the SQL file loader to manage
 SQL statements from files with aiosql-style named queries.
 """
 
-import asyncio
 import tempfile
 from pathlib import Path
 
@@ -130,14 +129,14 @@ def basic_loader_example() -> None:
         # Get SQL by query name
         user_sql = loader.get_sql("get_user_by_id", user_id=123)
         print(f"SQL object created with parameters: {user_sql.parameters}")
-        print(f"SQL content: {user_sql._sql[:50]}...\n")
+        print(f"SQL content: {str(user_sql)[:50]}...\n")
 
         # Add a query directly
         loader.add_named_sql("custom_health_check", "SELECT 'OK' as status, NOW() as timestamp")
 
         # Get the custom query
         health_sql = loader.get_sql("custom_health_check")
-        print(f"Custom query added: {health_sql._sql}\n")
+        print(f"Custom query added: {health_sql!s}\n")
 
         # Get file info for a query
         file_info = loader.get_file_for_query("get_user_by_id")
@@ -183,7 +182,7 @@ def caching_example() -> None:
         print(f"Queries after reload: {len(loader.list_queries())} queries loaded\n")
 
 
-async def database_integration_example() -> None:
+def database_integration_example() -> None:
     """Demonstrate using loaded SQL files with SQLSpec database connections."""
     print("=== Database Integration Example ===\n")
 
@@ -193,16 +192,17 @@ async def database_integration_example() -> None:
 
         # Initialize SQLSpec and register database
         sqlspec = SQLSpec()
-        sqlspec.register(SqliteConfig(database=":memory:", name="demo_db"))
+        config = SqliteConfig(database=":memory:")
+        sqlspec.add_config(config)
 
         # Initialize loader and load SQL files
         loader = SQLFileLoader()
         loader.load_sql(base_dir / "sql" / "users.sql")
 
         # Create tables
-        async with sqlspec.get_async_session("demo_db") as session:
+        with sqlspec.provide_session(type(config)) as session:
             # Create users table
-            await session.execute(
+            session.execute(
                 SQL("""
                 CREATE TABLE users (
                     id INTEGER PRIMARY KEY,
@@ -217,7 +217,7 @@ async def database_integration_example() -> None:
             )
 
             # Insert test data
-            await session.execute(
+            session.execute(
                 SQL("""
                 INSERT INTO users (username, email, is_active)
                 VALUES
@@ -230,17 +230,17 @@ async def database_integration_example() -> None:
             # Get and execute a query
             get_user_sql = loader.get_sql("get_user_by_id", user_id=1)
 
-            result = await session.execute(get_user_sql)
+            result = session.execute(get_user_sql)
             print("Get user by ID result:")
-            for row in result:
+            for row in result.data:
                 print(f"  - {row['username']} ({row['email']})")
 
             # Execute another query
             list_users_sql = loader.get_sql("list_active_users", limit=10, offset=0)
 
-            result = await session.execute(list_users_sql)
+            result = session.execute(list_users_sql)
             print("\nActive users:")
-            for row in result:
+            for row in result.data:
                 print(f"  - {row['username']} (last login: {row['last_login'] or 'Never'})")
 
 
@@ -322,7 +322,7 @@ UPDATE records SET updated_at = NOW() WHERE id = :record_id;
 
         # Get SQL with parameters
         count_sql = loader.get_sql("count_records", table_name="users")
-        print(f"\nGenerated SQL: {count_sql._sql}")
+        print(f"\nGenerated SQL: {count_sql!s}")
         print(f"Parameters: {count_sql.parameters}")
 
 
@@ -340,8 +340,8 @@ def main() -> None:
     storage_backend_example()
     print("\n" + "=" * 50 + "\n")
 
-    # Run async example
-    asyncio.run(database_integration_example())
+    # Run database integration example
+    database_integration_example()
 
     print("\nExamples completed!")
 

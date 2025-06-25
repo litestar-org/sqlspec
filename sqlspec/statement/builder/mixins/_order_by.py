@@ -1,6 +1,7 @@
-from typing import TYPE_CHECKING, Any, Union, cast
+from typing import TYPE_CHECKING, Union, cast
 
 from sqlglot import exp
+from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_order_expression
@@ -14,7 +15,7 @@ __all__ = ("OrderByClauseMixin",)
 class OrderByClauseMixin:
     """Mixin providing ORDER BY clause for SELECT builders."""
 
-    def order_by(self, *items: Union[str, exp.Ordered], desc: bool = False) -> Any:
+    def order_by(self, *items: Union[str, exp.Ordered], desc: bool = False) -> Self:
         """Add ORDER BY clause.
 
         Args:
@@ -42,4 +43,4 @@ class OrderByClauseMixin:
                 order_item = item
             current_expr = current_expr.order_by(order_item, copy=False)
         builder._expression = current_expr
-        return builder
+        return cast("Self", builder)

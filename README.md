@@ -4,18 +4,26 @@
 
 SQLSpec is an experimental Python library designed to streamline and modernize your SQL interactions across a variety of database systems. While still in its early stages, SQLSpec aims to provide a flexible, typed, and extensible interface for working with SQL in Python.
 
-**Note**: SQLSpec is currently under active development and the API is subject to change.  It is not yet ready for production use.  Contributions are welcome!
+**Note**: SQLSpec is currently under active development and the API is subject to change. It is not yet ready for production use. Contributions are welcome!
 
-## Core Features (Planned but subject to change, removal or redesign)
+## Core Features (Current and Planned)
+
+### Currently Implemented
 
 - **Consistent Database Session Interface**: Provides a consistent connectivity interface for interacting with one or more database systems, including SQLite, Postgres, DuckDB, MySQL, Oracle, SQL Server, Spanner, BigQuery, and more.
-- **Emphasis on RAW SQL and Minimal Abstractions and Performance**: SQLSpec is a library for working with SQL in Python.  It's goals are to offer minimal abstractions between the user and the database.  It does not aim to be an ORM library.
+- **Emphasis on RAW SQL and Minimal Abstractions**: SQLSpec is a library for working with SQL in Python. Its goals are to offer minimal abstractions between the user and the database. It does not aim to be an ORM library.
 - **Type-Safe Queries**: Quickly map SQL queries to typed objects using libraries such as Pydantic, Msgspec, Attrs, etc.
-- **Extensible Design**: Easily add support for new database dialects or extend existing functionality to meet your specific needs.  Easily add support for async and sync database drivers.
-- **Minimal Dependencies**: SQLSpec is designed to be lightweight and can run on it's own or with other libraries such as `litestar`, `fastapi`, `flask` and more.  (Contributions welcome!)
-- **Dynamic Query Manipulation**: Easily apply filters to pre-defined queries with a fluent, Pythonic API. Safely manipulate queries without the risk of SQL injection.
-- **Dialect Validation and Conversion**: Use `sqlglot` to validate your SQL against specific dialects and seamlessly convert between them.
+- **Extensible Design**: Easily add support for new database dialects or extend existing functionality to meet your specific needs. Easily add support for async and sync database drivers.
+- **Minimal Dependencies**: SQLSpec is designed to be lightweight and can run on its own or with other libraries such as `litestar`, `fastapi`, `flask` and more. (Contributions welcome!)
 - **Support for Async and Sync Database Drivers**: SQLSpec supports both async and sync database drivers, allowing you to choose the style that best fits your application.
+
+### Experimental Features (API will change rapidly)
+
+- **SQL Builder API**: Type-safe query builder with method chaining (experimental and subject to significant changes)
+- **Dynamic Query Manipulation**: Apply filters to pre-defined queries with a fluent API. Safely manipulate queries without SQL injection risk.
+- **Dialect Validation and Conversion**: Use `sqlglot` to validate your SQL against specific dialects and seamlessly convert between them.
+- **Storage Operations**: Direct export to Parquet, CSV, JSON with Arrow integration
+- **Instrumentation**: OpenTelemetry and Prometheus metrics support
 - **Basic Migration Management**: A mechanism to generate empty migration files where you can add your own SQL and intelligently track which migrations have been applied.
 
 ## What SQLSpec Is Not (Yet)
@@ -26,16 +34,60 @@ SQLSpec is a work in progress. While it offers a solid foundation for modern SQL
 
 We've talked about what SQLSpec is not, so let's look at what it can do.
 
-These are just a few of the examples that demonstrate SQLSpec's flexibility and each of the bundled adapters offer the same config and driver interfaces.
+These are just a few examples that demonstrate SQLSpec's flexibility. Each of the bundled adapters offers the same config and driver interfaces.
+
+### Basic Usage
+
+```python
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+from pydantic import BaseModel
+# Create SQLSpec instance and configure database
+sql = SQLSpec()
+config = sql.add_config(SqliteConfig(database=":memory:"))
+
+# Execute queries with automatic result mapping
+with sql.provide_session(config) as session:
+    # Simple query
+    result = session.execute("SELECT 'Hello, SQLSpec!' as message")
+    print(result.get_first())  # {'message': 'Hello, SQLSpec!'}
+```
+
+### SQL Builder Example (Experimental)
+
+**Warning**: The SQL Builder API is highly experimental and will change significantly.
+
+```python
+from sqlspec import sql
+
+# Build a simple query
+query = sql.select("id", "name", "email").from_("users").where("active = ?", True)
+print(query.build().sql)  # SELECT id, name, email FROM users WHERE active = ?
+
+# More complex example with joins
+query = (
+    sql.select("u.name", "COUNT(o.id) as order_count")
+    .from_("users u")
+    .left_join("orders o", "u.id = o.user_id")
+    .where("u.created_at > ?", "2024-01-01")
+    .group_by("u.name")
+    .having("COUNT(o.id) > ?", 5)
+    .order_by("order_count", desc=True)
+)
+
+# Execute the built query
+with sql.provide_session(config) as session:
+    results = session.execute(query.build())
+```
 
 ### DuckDB LLM
 
-This is a quick implementation using some of the built in Secret and Extension management features of SQLSpec's DuckDB integration.
+This is a quick implementation using some of the built-in Secret and Extension management features of SQLSpec's DuckDB integration.
 
-It allows you to communicate with any compatible OpenAPI conversations endpoint (such as Ollama).  This examples:
+It allows you to communicate with any compatible OpenAPI conversations endpoint (such as Ollama). This example:
 
 - auto installs the `open_prompt` DuckDB extensions
-- automatically creates the correct `open_prompt` comptaible secret required to use the extension
+- automatically creates the correct `open_prompt` compatible secret required to use the extension
 
 ```py
 # /// script
@@ -80,12 +132,12 @@ with sql.provide_session(etl_config) as session:
 
 ### DuckDB Gemini Embeddings
 
-In this example, we are again using DuckDB.  However, we are going to use the built in to call the Google Gemini embeddings service directly from the database.
+In this example, we are again using DuckDB. However, we are going to use the built-in to call the Google Gemini embeddings service directly from the database.
 
-This example will
+This example will:
 
 - auto installs the `http_client` and `vss` (vector similarity search) DuckDB extensions
-- when a connection is created, it ensures that the `generate_embeddings` macro exists in the DuckDB database.
+- when a connection is created, it ensures that the `generate_embeddings` macro exists in the DuckDB database
 - Execute a simple query to call the Google API
 
 ```py
@@ -131,8 +183,8 @@ etl_config = sql.add_config(
     )
 )
 with sql.provide_session(etl_config) as session:
-    result = session.select_one("SELECT generate_embedding('example text')")
-    print(result) # result is a dictionary when `schema_type` is omitted.
+    result = session.execute("SELECT generate_embedding('example text')")
+    print(result.get_first()) # result is a dictionary when `schema_type` is omitted.
 ```
 
 ### Basic Litestar Integration
@@ -147,11 +199,10 @@ In this example we are going to demonstrate how to create a basic configuration 
 # ]
 # ///
 
-from aiosqlite import Connection
 from litestar import Litestar, get
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
-from sqlspec.extensions.litestar import SQLSpec
+from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
 
 
 @get("/")
@@ -159,15 +210,18 @@ async def simple_sqlite(db_session: AiosqliteDriver) -> dict[str, str]:
     return await db_session.select_one("SELECT 'Hello, world!' AS greeting")
 
 
-sqlspec = SQLSpec(config=DatabaseConfig(
-    config=[AiosqliteConfig(), commit_mode="autocommit")],
+sqlspec = SQLSpec(
+    config=DatabaseConfig(
+        config=AiosqliteConfig(),
+        commit_mode="autocommit"
+    )
 )
 app = Litestar(route_handlers=[simple_sqlite], plugins=[sqlspec])
 ```
 
 ## Inspiration and Future Direction
 
-SQLSpec originally drew inspiration from features found in the `aiosql` library.  This is a great library for working with and executed SQL stored in files.  It's unclear how much of an overlap there will be between the two libraries, but it's possible that some features will be contributed back to `aiosql` where appropriate.
+SQLSpec originally drew inspiration from features found in the `aiosql` library. This is a great library for working with and executing SQL stored in files. It's unclear how much of an overlap there will be between the two libraries, but it's possible that some features will be contributed back to `aiosql` where appropriate.
 
 ## Current Focus: Universal Connectivity
 
@@ -207,9 +261,10 @@ This list is not final. If you have a driver you'd like to see added, please ope
         - `litestar/`: Litestar framework integration ✅
         - `fastapi/`: Future home of `fastapi` integration.
         - `flask/`: Future home of `flask` integration.
-        - `*/`: Future home of your favorite framework integration 🔌 ✨
+        - `*/`: Future home of your favorite framework integration
     - `base.py`: Contains base protocols for database configurations.
-    - `filters.py`: Contains the `Filter` class which is used to apply filters to pre-defined SQL queries.
+    - `statement/`: Contains the SQL statement system with builders, validation, and transformation.
+    - `storage/`: Contains unified storage operations for data import/export.
     - `utils/`: Contains utility functions used throughout the project.
     - `exceptions.py`: Contains custom exceptions for SQLSpec.
     - `typing.py`: Contains type hints, type guards and several facades for optional libraries that are not required for the core functionality of SQLSpec.

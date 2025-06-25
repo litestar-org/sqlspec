@@ -142,6 +142,40 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """Provide pool instance."""
         raise NotImplementedError
 
+    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+        """Get the signature namespace for this database configuration.
+
+        This method returns a dictionary of type names to types that should be
+        registered with Litestar's signature namespace to prevent serialization
+        attempts on database-specific types.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+        namespace: dict[str, type[Any]] = {}
+
+        # Add the driver and config types
+        if hasattr(self, "driver_type") and self.driver_type:
+            namespace[self.driver_type.__name__] = self.driver_type
+
+        namespace[self.__class__.__name__] = self.__class__
+
+        # Add connection type(s)
+        if hasattr(self, "connection_type") and self.connection_type:
+            connection_type = self.connection_type
+
+            # Handle Union types (like AsyncPG's Union[Connection, PoolConnectionProxy])
+            if hasattr(connection_type, "__args__"):
+                # It's a generic type, extract the actual types
+                for arg_type in connection_type.__args__:  # type: ignore[attr-defined]
+                    if arg_type and hasattr(arg_type, "__name__"):
+                        namespace[arg_type.__name__] = arg_type
+            elif hasattr(connection_type, "__name__"):
+                # Regular type
+                namespace[connection_type.__name__] = connection_type
+
+        return namespace
+
 
 @dataclass
 class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):

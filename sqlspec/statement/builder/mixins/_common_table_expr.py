@@ -41,15 +41,16 @@ class CommonTableExpressionMixin:
             raise SQLBuilderError(msg)
 
         cte_expr: Optional[exp.Expression] = None
-        if hasattr(query, "build"):
+        if hasattr(query, "to_statement"):
             # Query is a builder instance
-            built_query = query.build()  # pyright: ignore
-            cte_sql = built_query.sql
+            built_query = query.to_statement()  # pyright: ignore
+            cte_sql = built_query.to_sql()
             cte_expr = exp.maybe_parse(cte_sql, dialect=getattr(self, "dialect", None))
 
             # Merge parameters
             if hasattr(self, "add_parameter"):
-                for param_name, param_value in getattr(built_query, "parameters", {}).items():
+                parameters = getattr(built_query, "parameters", None) or {}
+                for param_name, param_value in parameters.items():
                     self.add_parameter(param_value, name=param_name)  # pyright: ignore
         elif isinstance(query, str):
             cte_expr = exp.maybe_parse(query, dialect=getattr(self, "dialect", None))
@@ -60,9 +61,13 @@ class CommonTableExpressionMixin:
             msg = f"Could not parse CTE query: {query}"
             raise SQLBuilderError(msg)
 
-        cte_alias_expr = exp.alias_(cte_expr, name)
+        # Create a proper CTE with table alias
         if columns:
-            cte_alias_expr = exp.alias_(cte_expr, name, table=columns)
+            # CTE with explicit column list: name(col1, col2, ...)
+            cte_alias_expr = exp.alias_(cte_expr, name, table=[exp.to_identifier(col) for col in columns])
+        else:
+            # Simple CTE alias: name
+            cte_alias_expr = exp.alias_(cte_expr, name)
 
         # Different handling for different expression types
         if hasattr(self._expression, "with_"):
@@ -72,9 +77,7 @@ class CommonTableExpressionMixin:
                 if recursive:
                     existing_with.set("recursive", recursive)
             else:
-                self._expression = self._expression.with_(  # pyright: ignore
-                    cte_alias_expr, as_=cte_alias_expr.alias, copy=False
-                )
+                self._expression = self._expression.with_(cte_alias_expr, as_=name, copy=False)  # pyright: ignore
                 if recursive:
                     with_clause = self._expression.find(exp.With)
                     if with_clause:

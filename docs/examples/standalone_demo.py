@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # dependencies = [
-#   "sqlspec[duckdb,performance] @ file://../..",
+#   "sqlspec[duckdb,performance] @ git+https://github.com/litestar-org/sqlspec.git@main",
 #   "rich>=13.0.0",
 #   "rich-click>=1.7.0",
 #   "faker>=24.0.0",
@@ -13,8 +13,7 @@
 """SQLSpec Interactive Demo - Showcase of Advanced SQL Generation & Processing
 
 A comprehensive demonstration of SQLSpec's capabilities including:
-- Advanced SQL builders with complex query patterns
-- AioSQL integration for file-based SQL management
+- Advanced SQL query construction patterns
 - Filter composition and pipeline processing
 - Statement analysis and validation
 - Performance instrumentation and monitoring
@@ -22,11 +21,9 @@ A comprehensive demonstration of SQLSpec's capabilities including:
 This demo uses rich-click for an interactive CLI experience.
 """
 
-import tempfile
 import time
 from datetime import datetime
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
 import rich_click as rclick
@@ -38,12 +35,8 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
+from sqlspec import sql
 from sqlspec.adapters.duckdb import DuckDBConfig
-
-# SQLSpec imports
-from sqlspec.base import sql
-from sqlspec.extensions.aiosql import AiosqlLoader
-from sqlspec.statement.builder import DeleteBuilder, InsertBuilder, MergeBuilder, SelectBuilder, UpdateBuilder
 from sqlspec.statement.filters import LimitOffsetFilter, OrderByFilter, SearchFilter
 from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -54,11 +47,9 @@ __all__ = (
     "Order",
     "Product",
     "User",
-    "aiosql",
     "analysis",
     "builders",
     "cli",
-    "create_aiosql_demo_files",
     "create_sample_database",
     "demo_basic_select",
     "demo_complex_joins",
@@ -125,7 +116,8 @@ def create_sample_database() -> Any:
 
     with config.provide_session() as driver:
         # Create comprehensive schema
-        driver.execute("""
+        driver.execute(
+            SQL("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY,
                 name VARCHAR,
@@ -137,8 +129,10 @@ def create_sample_database() -> Any:
                 active BOOLEAN DEFAULT TRUE
             )
         """)
+        )
 
-        driver.execute("""
+        driver.execute(
+            SQL("""
             CREATE TABLE IF NOT EXISTS products (
                 id INTEGER PRIMARY KEY,
                 name VARCHAR,
@@ -148,8 +142,10 @@ def create_sample_database() -> Any:
                 created_at TIMESTAMP
             )
         """)
+        )
 
-        driver.execute("""
+        driver.execute(
+            SQL("""
             CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER,
@@ -160,6 +156,7 @@ def create_sample_database() -> Any:
                 status VARCHAR
             )
         """)
+        )
 
         # Generate sample data
         departments = ["Engineering", "Sales", "Marketing", "HR", "Finance"]
@@ -169,37 +166,41 @@ def create_sample_database() -> Any:
         # Insert users
         for i in range(1, 51):
             driver.execute(
-                """
-                INSERT INTO users (id, name, email, department, age, salary, hire_date, active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    i,
-                    fake.name(),
-                    fake.unique.email(),
-                    fake.random_element(departments),
-                    fake.random_int(min=22, max=65),
-                    fake.random_int(min=40000, max=150000),
-                    fake.date_between(start_date="-3y", end_date="today"),
-                    fake.boolean(chance_of_getting_true=85),
-                ),
+                SQL(
+                    """
+                    INSERT INTO users (id, name, email, department, age, salary, hire_date, active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    parameters=(
+                        i,
+                        fake.name(),
+                        fake.unique.email(),
+                        fake.random_element(departments),
+                        fake.random_int(min=22, max=65),
+                        fake.random_int(min=40000, max=150000),
+                        fake.date_between(start_date="-3y", end_date="today"),
+                        fake.boolean(chance_of_getting_true=85),
+                    ),
+                )
             )
 
         # Insert products
         for i in range(1, 31):
             driver.execute(
-                """
-                INSERT INTO products (id, name, category, price, stock_quantity, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    i,
-                    fake.catch_phrase(),
-                    fake.random_element(categories),
-                    fake.random_int(min=10, max=1000),
-                    fake.random_int(min=0, max=100),
-                    fake.date_time_between(start_date="-2y", end_date="now"),
-                ),
+                SQL(
+                    """
+                    INSERT INTO products (id, name, category, price, stock_quantity, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                    parameters=(
+                        i,
+                        fake.catch_phrase(),
+                        fake.random_element(categories),
+                        fake.random_int(min=10, max=1000),
+                        fake.random_int(min=0, max=100),
+                        fake.date_time_between(start_date="-2y", end_date="now"),
+                    ),
+                )
             )
 
         # Insert orders
@@ -207,123 +208,24 @@ def create_sample_database() -> Any:
             quantity = fake.random_int(min=1, max=5)
             price = fake.random_int(min=10, max=500)
             driver.execute(
-                """
-                INSERT INTO orders (id, user_id, product_id, quantity, total_amount, order_date, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    i,
-                    fake.random_int(min=1, max=50),
-                    fake.random_int(min=1, max=30),
-                    quantity,
-                    quantity * price,
-                    fake.date_time_between(start_date="-1y", end_date="now"),
-                    fake.random_element(statuses),
-                ),
+                SQL(
+                    """
+                    INSERT INTO orders (id, user_id, product_id, quantity, total_amount, order_date, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                    parameters=(
+                        i,
+                        fake.random_int(min=1, max=50),
+                        fake.random_int(min=1, max=30),
+                        quantity,
+                        quantity * price,
+                        fake.date_time_between(start_date="-1y", end_date="now"),
+                        fake.random_element(statuses),
+                    ),
+                )
             )
 
     return config
-
-
-def create_aiosql_demo_files() -> Path:
-    """Create demo SQL files for AioSQL integration."""
-    temp_dir = Path(tempfile.mkdtemp())
-
-    # User queries
-    user_queries = """
--- name: get_users^
-SELECT id, name, email, department, age, salary, hire_date, active
-FROM users
-WHERE active = TRUE
-ORDER BY hire_date DESC
-
--- name: get_user_by_id$
-SELECT id, name, email, department, age, salary, hire_date, active
-FROM users
-WHERE id = :user_id AND active = TRUE
-
--- name: get_high_earners^
-SELECT id, name, email, department, salary
-FROM users
-WHERE salary > :min_salary
-  AND active = TRUE
-ORDER BY salary DESC
-
--- name: create_user<!
-INSERT INTO users (name, email, department, age, salary, hire_date, active)
-VALUES (:name, :email, :department, :age, :salary, :hire_date, :active)
-RETURNING id, name, email
-
--- name: department_summary^
-SELECT
-    department,
-    COUNT(*) as employee_count,
-    AVG(salary) as avg_salary,
-    MIN(salary) as min_salary,
-    MAX(salary) as max_salary
-FROM users
-WHERE active = TRUE
-GROUP BY department
-ORDER BY avg_salary DESC
-"""
-
-    # Analytics queries
-    analytics_queries = """
--- name: sales_by_month^
-SELECT
-    DATE_TRUNC('month', order_date) as month,
-    COUNT(*) as order_count,
-    SUM(total_amount) as total_revenue,
-    AVG(total_amount) as avg_order_value
-FROM orders
-WHERE status IN ('shipped', 'delivered')
-  AND order_date >= :start_date
-GROUP BY DATE_TRUNC('month', order_date)
-ORDER BY month
-
--- name: top_customers^
-SELECT
-    u.id,
-    u.name,
-    u.email,
-    COUNT(o.id) as order_count,
-    SUM(o.total_amount) as lifetime_value
-FROM users u
-JOIN orders o ON u.id = o.user_id
-WHERE o.status IN ('shipped', 'delivered')
-GROUP BY u.id, u.name, u.email
-HAVING COUNT(o.id) >= :min_orders
-ORDER BY lifetime_value DESC
-
--- name: product_performance^
-WITH monthly_sales AS (
-    SELECT
-        p.id,
-        p.name,
-        p.category,
-        DATE_TRUNC('month', o.order_date) as month,
-        SUM(o.quantity) as units_sold,
-        SUM(o.total_amount) as revenue
-    FROM products p
-    JOIN orders o ON p.id = o.product_id
-    WHERE o.status IN ('shipped', 'delivered')
-    GROUP BY p.id, p.name, p.category, DATE_TRUNC('month', o.order_date)
-)
-SELECT
-    name,
-    category,
-    SUM(units_sold) as total_units,
-    SUM(revenue) as total_revenue,
-    COUNT(DISTINCT month) as active_months
-FROM monthly_sales
-GROUP BY name, category
-ORDER BY total_revenue DESC
-"""
-
-    (temp_dir / "users.sql").write_text(user_queries)
-    (temp_dir / "analytics.sql").write_text(analytics_queries)
-
-    return temp_dir
 
 
 def display_header() -> None:
@@ -341,7 +243,7 @@ def display_header() -> None:
 
 def display_sql_with_syntax(sql_obj: SQL, title: str = "Generated SQL") -> None:
     """Display SQL with syntax highlighting."""
-    sql_text = str(sql_obj)
+    sql_text = sql_obj.to_sql()
     syntax = Syntax(sql_text, "sql", theme="monokai", line_numbers=True)
     console.print(Panel(syntax, title=title, border_style="green"))
 
@@ -399,73 +301,6 @@ def builders() -> None:
 
 
 @cli.command()
-def aiosql() -> None:
-    """Demonstrate AioSQL integration with file-based SQL management."""
-    console.print(
-        Panel(
-            "[bold yellow]AioSQL Integration Demo[/bold yellow]\nFile-based SQL with SQLSpec power",
-            border_style="yellow",
-        )
-    )
-
-    # Create demo files
-    sql_dir = create_aiosql_demo_files()
-
-    try:
-        # Load SQL files
-        with console.status("[bold green]Loading SQL files..."):
-            user_loader = AiosqlLoader(sql_dir / "users.sql")
-            analytics_loader = AiosqlLoader(sql_dir / "analytics.sql")
-
-        console.print(
-            f"[green]Loaded {len(user_loader)} user queries and {len(analytics_loader)} analytics queries[/green]"
-        )
-
-        # Demo 1: Basic query loading
-        console.print("\n[bold cyan]1. Loading and executing queries[/bold cyan]")
-        get_users = user_loader.get_sql("get_users")
-        display_sql_with_syntax(get_users, "Basic User Query")
-
-        # Demo 2: Query with parameters
-        console.print("\n[bold cyan]2. Parameterized queries[/bold cyan]")
-        high_earners = user_loader.get_sql("get_high_earners", {"min_salary": 75000})
-        display_sql_with_syntax(high_earners, "High Earners Query")
-
-        # Demo 3: Query with filters
-        console.print("\n[bold cyan]3. Queries with SQLSpec filters[/bold cyan]")
-        filtered_query = user_loader.get_sql(
-            "get_users", None, LimitOffsetFilter(10, 0), OrderByFilter("salary", "desc")
-        )
-        display_sql_with_syntax(filtered_query, "Filtered User Query")
-
-        # Demo 4: Complex analytics query
-        console.print("\n[bold cyan]4. Complex analytics with CTEs[/bold cyan]")
-        product_perf = analytics_loader.get_sql("product_performance")
-        display_sql_with_syntax(product_perf, "Product Performance Analysis")
-
-        # Demo 5: Operation type validation
-        console.print("\n[bold cyan]5. Operation type safety[/bold cyan]")
-        console.print("Available queries and their types:")
-
-        for loader_name, loader in [("users", user_loader), ("analytics", analytics_loader)]:
-            table = Table(title=f"{loader_name.title()} Queries")
-            table.add_column("Query Name", style="cyan")
-            table.add_column("Operation Type", style="green")
-
-            for query_name in loader.query_names:
-                op_type = loader.get_operation_type(query_name)
-                table.add_row(query_name, str(op_type))
-
-            console.print(table)
-
-    finally:
-        # Cleanup temp files
-        import shutil
-
-        shutil.rmtree(sql_dir)
-
-
-@cli.command()
 def filters() -> None:
     """Demonstrate filter composition and SQL transformation."""
     console.print(
@@ -479,7 +314,7 @@ def filters() -> None:
     base_query = sql.select("id", "name", "email", "department", "salary").from_("users")
 
     console.print("[bold cyan]1. Base query[/bold cyan]")
-    display_sql_with_syntax(base_query, "Base Query")
+    display_sql_with_syntax(base_query.to_statement(), "Base Query")
 
     # Apply various filters
     filters_demo = [
@@ -491,14 +326,14 @@ def filters() -> None:
     for title, filter_obj in filters_demo:
         console.print(f"\n[bold cyan]2. With {title}[/bold cyan]")
         filtered_query = base_query.append_filter(filter_obj)
-        display_sql_with_syntax(filtered_query, f"Query with {title}")
+        display_sql_with_syntax(filtered_query.to_statement(), f"Query with {title}")
 
     # Combined filters
     console.print("\n[bold cyan]3. Combined filters[/bold cyan]")
     combined_query = base_query.copy(
         SearchFilter("department", "Engineering"), LimitOffsetFilter(5, 0), OrderByFilter("hire_date", "desc")
     )
-    display_sql_with_syntax(combined_query, "Query with Combined Filters")
+    display_sql_with_syntax(combined_query.to_statement(), "Query with Combined Filters")
 
 
 @cli.command()
@@ -674,42 +509,6 @@ def performance() -> None:
 
     console.print(results_table)
 
-    # Show caching benefits
-    console.print("\n[bold cyan]Caching Performance[/bold cyan]")
-
-    # Demonstrate singleton caching with AiosqlLoader
-    temp_dir = create_aiosql_demo_files()
-
-    try:
-        # First load (parsing files)
-        start_time = time.time()
-        for _ in range(10):
-            loader = AiosqlLoader(temp_dir / "users.sql")
-            _ = len(loader.query_names)  # Access queries to trigger loading
-        first_run_time = time.time() - start_time
-
-        # Subsequent loads (using singleton cache)
-        start_time = time.time()
-        for _ in range(10):
-            cached_loader = AiosqlLoader(temp_dir / "users.sql")  # Same file, should use singleton
-            _ = len(cached_loader.query_names)
-        cached_run_time = time.time() - start_time
-    finally:
-        import shutil
-
-        shutil.rmtree(temp_dir)
-
-    cache_table = Table(title="Caching Benefits")
-    cache_table.add_column("Run Type", style="cyan")
-    cache_table.add_column("Time", style="green")
-    cache_table.add_column("Speedup", style="yellow")
-
-    speedup = first_run_time / max(cached_run_time, 0.001)  # Prevent division by zero
-    cache_table.add_row("File Parsing", f"{first_run_time:.3f}s", "-")
-    cache_table.add_row("Singleton Cache", f"{cached_run_time:.3f}s", f"{speedup:.1f}x faster")
-
-    console.print(cache_table)
-
 
 # Demo functions for builders
 def demo_basic_select() -> None:
@@ -718,11 +517,11 @@ def demo_basic_select() -> None:
         sql.select("id", "name", "email", "department", "salary")
         .from_("users")
         .where("active = TRUE")
-        .where("salary > ?", 50000)
+        .where(("salary", ">", 50000))
         .order_by("salary DESC", "hire_date")
         .limit(10)
     )
-    display_sql_with_syntax(query)
+    display_sql_with_syntax(query.to_statement())
 
 
 def demo_complex_joins() -> None:
@@ -745,7 +544,7 @@ def demo_complex_joins() -> None:
         .order_by("total_spent DESC")
         .limit(20)
     )
-    display_sql_with_syntax(query)
+    display_sql_with_syntax(query.to_statement())
 
 
 def demo_window_functions() -> None:
@@ -764,7 +563,7 @@ def demo_window_functions() -> None:
         .where("active = TRUE")
     )
 
-    display_sql_with_syntax(query)
+    display_sql_with_syntax(query.to_statement())
 
 
 def demo_cte_queries() -> None:
@@ -779,55 +578,58 @@ def demo_cte_queries() -> None:
         .where("u.active = TRUE")
         .order_by("salary_diff DESC")
     )
-    display_sql_with_syntax(query)
+    display_sql_with_syntax(query.to_statement())
 
 
 def demo_insert_returning() -> None:
     """Demonstrate INSERT with RETURNING."""
-    query = (
-        InsertBuilder()
-        .into("users")
-        .columns("name", "email", "department", "age", "salary", "hire_date")
-        .values("John Doe", "john@example.com", "Engineering", 30, 75000, datetime.now())
-        .returning("id", "name", "email")
+    query = SQL(
+        """
+        INSERT INTO users (name, email, department, age, salary, hire_date)
+        VALUES (?, ?, ?, ?, ?, ?)
+        RETURNING id, name, email
+    """,
+        parameters=("John Doe", "john@example.com", "Engineering", 30, 75000, datetime.now()),
     )
-    display_sql_with_syntax(query.to_statement())
+
+    display_sql_with_syntax(query)
 
 
 def demo_update_joins() -> None:
     """Demonstrate UPDATE with JOINs."""
-    query = (
-        UpdateBuilder()
-        .table("users", "u")
-        .set({"salary": "u.salary * 1.1"})
-        .join("orders o", "u.id = o.user_id", join_type="INNER")
-        .where("o.status = 'delivered'")
-        .where("u.department = 'Sales'")
-        .returning("id", "name", "salary")
-    )
-    display_sql_with_syntax(query.to_statement())
+    query = SQL("""
+        UPDATE users u
+        SET salary = u.salary * 1.1
+        FROM orders o
+        WHERE u.id = o.user_id
+          AND o.status = 'delivered'
+          AND u.department = 'Sales'
+        RETURNING u.id, u.name, u.salary
+    """)
+
+    display_sql_with_syntax(query)
 
 
 def demo_merge_operations() -> None:
     """Demonstrate MERGE/UPSERT operations."""
-    source_query = sql.select("id", "name", "email", "salary").from_("temp_users")
+    # DuckDB uses INSERT with ON CONFLICT for upsert
+    query = SQL("""
+        INSERT INTO users (id, name, email, salary)
+        SELECT id, name, email, salary FROM temp_users
+        ON CONFLICT (email) DO UPDATE SET
+            name = EXCLUDED.name,
+            salary = EXCLUDED.salary
+    """)
 
-    query = (
-        MergeBuilder()
-        .into("users")
-        .using(source_query, "src")
-        .on("users.email = src.email")
-        .when_matched_then_update({"name": "src.name", "salary": "src.salary"})
-        .when_not_matched_then_insert(
-            columns=["id", "name", "email", "salary"], values=["src.id", "src.name", "src.email", "src.salary"]
-        )
-    )
-    display_sql_with_syntax(query.to_statement())
+    display_sql_with_syntax(query)
 
 
 def demo_subqueries() -> None:
     """Demonstrate subqueries and EXISTS."""
-    high_value_customers = sql.select("user_id").from_("orders").group_by("user_id").having("SUM(total_amount) > 10000")
+    # Work around sql.select() single argument issue by using multiple dummy columns
+    high_value_customers = (
+        sql.select("user_id", "user_id as uid").from_("orders").group_by("user_id").having("SUM(total_amount) > 10000")
+    )
 
     query = (
         sql.select("id", "name", "email", "department")
@@ -836,7 +638,7 @@ def demo_subqueries() -> None:
         .where("active = TRUE")
         .order_by("name")
     )
-    display_sql_with_syntax(query)
+    display_sql_with_syntax(query.to_statement())
 
 
 @cli.command()
@@ -869,18 +671,14 @@ def interactive() -> None:
             elif user_input.startswith("sql."):
                 try:
                     # Safe eval of sql builder expressions
-                    if any(dangerous in user_input for dangerous in ["import", "exec", "eval", "__"]):
+                    if any(dangerous in user_input for dangerous in ("import", "exec", "eval", "__")):
                         console.print("[red]Invalid command[/red]")
                         continue
 
                     # Create a safe namespace for evaluation
                     safe_globals = {
                         "sql": sql,
-                        "SelectBuilder": SelectBuilder,
-                        "InsertBuilder": InsertBuilder,
-                        "UpdateBuilder": UpdateBuilder,
-                        "DeleteBuilder": DeleteBuilder,
-                        "MergeBuilder": MergeBuilder,
+                        "SQL": SQL,
                         "LimitOffsetFilter": LimitOffsetFilter,
                         "SearchFilter": SearchFilter,
                         "OrderByFilter": OrderByFilter,
@@ -942,10 +740,11 @@ def show_interactive_help() -> None:
 Start with [green]sql.[/green] to build queries:
 • [yellow]sql.select("*").from_("users")[/yellow]
 • [yellow]sql.insert("users").values(...)[/yellow]
-• [yellow]SelectBuilder().select("name").from_("users")[/yellow]
+• [yellow]SQL("SELECT * FROM users WHERE id = ?", parameters=[1])[/yellow]
 
-[bold cyan]Available Builders:[/bold cyan]
-• SelectBuilder, InsertBuilder, UpdateBuilder, DeleteBuilder, MergeBuilder
+[bold cyan]Available Objects:[/bold cyan]
+• sql - Query builder factory object
+• SQL - Raw SQL execution
 • Filters: LimitOffsetFilter, SearchFilter, OrderByFilter
 """
     console.print(Panel(help_text, title="Help", border_style="blue"))
@@ -957,7 +756,7 @@ def show_interactive_examples() -> None:
         "sql.select('*').from_('users').limit(5)",
         "sql.select('name', 'salary').from_('users').where('salary > 75000')",
         "sql.select('department', 'COUNT(*) as count').from_('users').group_by('department')",
-        "SelectBuilder().select('u.name', 'o.total_amount').from_('users u').inner_join('orders o', 'u.id = o.user_id')",
+        "sql.select('u.name', 'o.total_amount').from_('users u').inner_join('orders o', 'u.id = o.user_id')",
         "sql.select('*').from_('users').append_filter(LimitOffsetFilter(10, 0))",
     ]
 

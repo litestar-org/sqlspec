@@ -21,7 +21,7 @@ def sync_service_example() -> None:
     # Create SQLSpec instance with SQLite
     spec = SQLSpec()
     config = SqliteConfig(database=":memory:")
-    spec.register_config(config)
+    spec.add_config(config)
 
     # Get a driver and wrap it with service
     with spec.get_driver(SqliteConfig) as driver:
@@ -87,7 +87,7 @@ async def async_service_example() -> None:
     # Create SQLSpec instance with AIOSQLite
     spec = SQLSpec()
     config = AiosqliteConfig(database=":memory:")
-    conf = spec.register_config(config)
+    conf = spec.add_config(config)
 
     # Get an async driver and wrap it with service
     async with spec.get_session(conf) as driver:
