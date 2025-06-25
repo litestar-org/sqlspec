@@ -15,7 +15,7 @@ Then modify the DSN below to match your database configuration.
 """
 # /// script
 # dependencies = [
-#   "sqlspec[asyncpg,performance] @ git+https://github.com/litestar-org/sqlspec.git@main",
+#   "sqlspec[asyncpg,performance]",
 #   "litestar[standard]",
 # ]
 # ///

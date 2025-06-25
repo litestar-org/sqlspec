@@ -606,57 +606,50 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
     async def _create_pool(self) -> "AsyncConnectionPool":
         """Create the actual async connection pool."""
-        logger.info("Creating async Psycopg connection pool", extra={"adapter": "psycopg"})
 
-        try:
-            # Get all config (creates a new dict)
-            all_config = self.pool_config_dict.copy()
+        # Get all config (creates a new dict)
+        all_config = self.pool_config_dict.copy()
 
-            # Separate pool-specific parameters that AsyncConnectionPool accepts directly
-            pool_params = {
-                "min_size": all_config.pop("min_size", 4),
-                "max_size": all_config.pop("max_size", None),
-                "name": all_config.pop("name", None),
-                "timeout": all_config.pop("timeout", 30.0),
-                "max_waiting": all_config.pop("max_waiting", 0),
-                "max_lifetime": all_config.pop("max_lifetime", 3600.0),
-                "max_idle": all_config.pop("max_idle", 600.0),
-                "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
-                "num_workers": all_config.pop("num_workers", 3),
-            }
+        # Separate pool-specific parameters that AsyncConnectionPool accepts directly
+        pool_params = {
+            "min_size": all_config.pop("min_size", 4),
+            "max_size": all_config.pop("max_size", None),
+            "name": all_config.pop("name", None),
+            "timeout": all_config.pop("timeout", 30.0),
+            "max_waiting": all_config.pop("max_waiting", 0),
+            "max_lifetime": all_config.pop("max_lifetime", 3600.0),
+            "max_idle": all_config.pop("max_idle", 600.0),
+            "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
+            "num_workers": all_config.pop("num_workers", 3),
+        }
 
-            # Create a configure callback to set row_factory
-            async def configure_connection(conn: "PsycopgAsyncConnection") -> None:
-                # Set DictRow as the row factory
-                conn.row_factory = dict_row
+        # Create a configure callback to set row_factory
+        async def configure_connection(conn: "PsycopgAsyncConnection") -> None:
+            # Set DictRow as the row factory
+            conn.row_factory = dict_row
 
-            pool_params["configure"] = all_config.pop("configure", configure_connection)
+        pool_params["configure"] = all_config.pop("configure", configure_connection)
 
-            # Remove None values from pool_params
-            pool_params = {k: v for k, v in pool_params.items() if v is not None}
+        # Remove None values from pool_params
+        pool_params = {k: v for k, v in pool_params.items() if v is not None}
 
-            # Handle conninfo vs individual connection parameters
-            conninfo = all_config.pop("conninfo", None)
-            if conninfo:
-                # If conninfo is provided, use it directly
-                # Don't pass kwargs when using conninfo string
-                pool = AsyncConnectionPool(conninfo, **pool_params)
-            else:
-                # Otherwise, pass connection parameters via kwargs
-                # Remove any non-connection parameters
-                # row_factory is already popped out earlier
-                all_config.pop("row_factory", None)
-                # Remove pool-specific settings that may have been left
-                all_config.pop("kwargs", None)
-                pool = AsyncConnectionPool("", kwargs=all_config, **pool_params)
+        # Handle conninfo vs individual connection parameters
+        conninfo = all_config.pop("conninfo", None)
+        if conninfo:
+            # If conninfo is provided, use it directly
+            # Don't pass kwargs when using conninfo string
+            pool = AsyncConnectionPool(conninfo, open=False, **pool_params)
+        else:
+            # Otherwise, pass connection parameters via kwargs
+            # Remove any non-connection parameters
+            # row_factory is already popped out earlier
+            all_config.pop("row_factory", None)
+            # Remove pool-specific settings that may have been left
+            all_config.pop("kwargs", None)
+            pool = AsyncConnectionPool("", kwargs=all_config, open=False, **pool_params)
 
-            await pool.open()
-            logger.info("Async Psycopg connection pool created successfully", extra={"adapter": "psycopg"})
-        except Exception as e:
-            logger.exception(
-                "Failed to create async Psycopg connection pool", extra={"adapter": "psycopg", "error": str(e)}
-            )
-            raise
+        await pool.open()
+
         return pool
 
     async def _close_pool(self) -> None:
@@ -664,16 +657,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if not self.pool_instance:
             return
 
-        logger.info("Closing async Psycopg connection pool", extra={"adapter": "psycopg"})
-
-        try:
-            await self.pool_instance.close()
-            logger.info("Async Psycopg connection pool closed successfully", extra={"adapter": "psycopg"})
-        except Exception as e:
-            logger.exception(
-                "Failed to close async Psycopg connection pool", extra={"adapter": "psycopg", "error": str(e)}
-            )
-            raise
+        await self.pool_instance.close()
 
     async def create_connection(self) -> "PsycopgAsyncConnection":  # pyright: ignore
         """Create a single async connection (not from pool).

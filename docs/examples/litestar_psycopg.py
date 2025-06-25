@@ -8,7 +8,7 @@ The Psycopg database also demonstrates how to use the plugin loader and `secrets
 """
 # /// script
 # dependencies = [
-#   "sqlspec[psycopg] @ git+https://github.com/litestar-org/sqlspec.git@main",
+#   "sqlspec[psycopg]",
 #   "litestar[standard]",
 # ]
 # ///
