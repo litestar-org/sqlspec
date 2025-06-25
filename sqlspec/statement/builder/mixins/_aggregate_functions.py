@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Optional, Union, cast
 
 from sqlglot import exp
 from typing_extensions import Self
@@ -30,9 +30,9 @@ class AggregateFunctionsMixin:
             count_expr = exp.Count(this=col_expr)
 
         select_expr = exp.alias_(count_expr, alias) if alias else count_expr
-        return cast("Self", builder.select(select_expr))
+        return builder.select(select_expr)
 
-    def sum_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Any:
+    def sum_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
         """Add SUM function to SELECT clause.
 
         Args:
@@ -48,7 +48,7 @@ class AggregateFunctionsMixin:
         select_expr = exp.alias_(sum_expr, alias) if alias else sum_expr
         return builder.select(select_expr)
 
-    def avg_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Any:
+    def avg_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
         """Add AVG function to SELECT clause.
 
         Args:
@@ -64,7 +64,7 @@ class AggregateFunctionsMixin:
         select_expr = exp.alias_(avg_expr, alias) if alias else avg_expr
         return builder.select(select_expr)
 
-    def max_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Any:
+    def max_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
         """Add MAX function to SELECT clause.
 
         Args:
@@ -80,7 +80,7 @@ class AggregateFunctionsMixin:
         select_expr = exp.alias_(max_expr, alias) if alias else max_expr
         return builder.select(select_expr)
 
-    def min_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Any:
+    def min_(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
         """Add MIN function to SELECT clause.
 
         Args:
@@ -96,7 +96,7 @@ class AggregateFunctionsMixin:
         select_expr = exp.alias_(min_expr, alias) if alias else min_expr
         return builder.select(select_expr)
 
-    def array_agg(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Any:
+    def array_agg(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
         """Add ARRAY_AGG aggregate function to SELECT clause.
 
         Args:
@@ -112,7 +112,7 @@ class AggregateFunctionsMixin:
         select_expr = exp.alias_(array_agg_expr, alias) if alias else array_agg_expr
         return builder.select(select_expr)
 
-    def bool_and(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Any:
+    def bool_and(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
         """Add BOOL_AND aggregate function to SELECT clause (PostgreSQL, DuckDB, etc).
 
         Args:
@@ -131,7 +131,7 @@ class AggregateFunctionsMixin:
         select_expr = exp.alias_(bool_and_expr, alias) if alias else bool_and_expr
         return builder.select(select_expr)
 
-    def bool_or(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Any:
+    def bool_or(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
         """Add BOOL_OR aggregate function to SELECT clause (PostgreSQL, DuckDB, etc).
 
         Args:

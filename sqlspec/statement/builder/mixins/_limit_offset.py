@@ -1,6 +1,7 @@
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from sqlglot import exp
+from typing_extensions import Self
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder.protocols import BuilderProtocol
@@ -13,7 +14,7 @@ __all__ = ("LimitOffsetClauseMixin",)
 class LimitOffsetClauseMixin:
     """Mixin providing LIMIT and OFFSET clauses for SELECT builders."""
 
-    def limit(self, value: int) -> Any:
+    def limit(self, value: int) -> Self:
         """Add LIMIT clause.
 
         Args:
@@ -32,7 +33,7 @@ class LimitOffsetClauseMixin:
         builder._expression = builder._expression.limit(exp.Literal.number(value), copy=False)
         return builder
 
-    def offset(self, value: int) -> Any:
+    def offset(self, value: int) -> Self:
         """Add OFFSET clause.
 
         Args:

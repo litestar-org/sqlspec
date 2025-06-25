@@ -1,6 +1,7 @@
-from typing import TYPE_CHECKING, Any, Union, cast
+from typing import TYPE_CHECKING, Union, cast
 
 from sqlglot import exp
+from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_column_expression
@@ -14,7 +15,7 @@ __all__ = ("SelectColumnsMixin",)
 class SelectColumnsMixin:
     """Mixin providing SELECT column and DISTINCT clauses for SELECT builders."""
 
-    def select(self, *columns: Union[str, exp.Expression]) -> Any:
+    def select(self, *columns: Union[str, exp.Expression]) -> Self:
         """Add columns to SELECT clause.
 
         Raises:
@@ -33,7 +34,7 @@ class SelectColumnsMixin:
             builder._expression = builder._expression.select(parse_column_expression(column), copy=False)
         return builder
 
-    def distinct(self, *columns: Union[str, exp.Expression]) -> Any:
+    def distinct(self, *columns: Union[str, exp.Expression]) -> Self:
         """Add DISTINCT clause to SELECT.
 
         Args:

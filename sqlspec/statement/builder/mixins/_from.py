@@ -58,4 +58,4 @@ class FromClauseMixin:
         else:
             from_expr = table
         builder._expression = builder._expression.from_(from_expr, copy=False)
-        return cast("Self", builder)
+        return builder

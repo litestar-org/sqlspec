@@ -16,7 +16,7 @@ __all__ = ("WhereClauseMixin",)
 class WhereClauseMixin:
     """Mixin providing WHERE clause methods for SELECT, UPDATE, and DELETE builders."""
 
-    def where(self, condition: Union[str, exp.Expression, exp.Condition, tuple[str, Any], tuple[str, str, Any]]) -> Any:
+    def where(self, condition: Union[str, exp.Expression, exp.Condition, tuple[str, Any], tuple[str, str, Any]]) -> Self:
         """Add a WHERE clause to the statement.
 
         Args:
@@ -119,44 +119,44 @@ class WhereClauseMixin:
         _, param_name = self.add_parameter(value)  # type: ignore[attr-defined]
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.eq(exp.var(param_name))
-        return cast("Self", self.where(condition))
+        return self.where(condition)
 
     def where_neq(self, column: "Union[str, exp.Column]", value: Any) -> "Self":
         _, param_name = self.add_parameter(value)  # type: ignore[attr-defined]
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.neq(exp.var(param_name))
-        return cast("Self", self.where(condition))
+        return self.where(condition)
 
     def where_lt(self, column: "Union[str, exp.Column]", value: Any) -> "Self":
         _, param_name = self.add_parameter(value)  # type: ignore[attr-defined]
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = exp.LT(this=col_expr, expression=exp.var(param_name))
-        return cast("Self", self.where(condition))
+        return self.where(condition)
 
     def where_lte(self, column: "Union[str, exp.Column]", value: Any) -> "Self":
         _, param_name = self.add_parameter(value)  # type: ignore[attr-defined]
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = exp.LTE(this=col_expr, expression=exp.var(param_name))
-        return cast("Self", self.where(condition))
+        return self.where(condition)
 
     def where_gt(self, column: "Union[str, exp.Column]", value: Any) -> "Self":
         _, param_name = self.add_parameter(value)  # type: ignore[attr-defined]
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = exp.GT(this=col_expr, expression=exp.var(param_name))
-        return cast("Self", self.where(condition))
+        return self.where(condition)
 
     def where_gte(self, column: "Union[str, exp.Column]", value: Any) -> "Self":
         _, param_name = self.add_parameter(value)  # type: ignore[attr-defined]
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = exp.GTE(this=col_expr, expression=exp.var(param_name))
-        return cast("Self", self.where(condition))
+        return self.where(condition)
 
     def where_between(self, column: "Union[str, exp.Column]", low: Any, high: Any) -> "Self":
         _, low_param = self.add_parameter(low)  # type: ignore[attr-defined]
         _, high_param = self.add_parameter(high)  # type: ignore[attr-defined]
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.between(exp.var(low_param), exp.var(high_param))
-        return cast("Self", self.where(condition))
+        return self.where(condition)
 
     def where_like(self, column: "Union[str, exp.Column]", pattern: str, escape: Optional[str] = None) -> "Self":
         _, param_name = self.add_parameter(pattern)  # type: ignore[attr-defined]
@@ -166,29 +166,29 @@ class WhereClauseMixin:
         else:
             cond = col_expr.like(exp.var(param_name))
         condition: exp.Expression = cond
-        return cast("Self", self.where(condition))
+        return self.where(condition)
 
     def where_not_like(self, column: "Union[str, exp.Column]", pattern: str) -> "Self":
         _, param_name = self.add_parameter(pattern)  # type: ignore[attr-defined]
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.like(exp.var(param_name)).not_()
-        return cast("Self", self.where(condition))
+        return self.where(condition)
 
     def where_ilike(self, column: "Union[str, exp.Column]", pattern: str) -> "Self":
         _, param_name = self.add_parameter(pattern)  # type: ignore[attr-defined]
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.ilike(exp.var(param_name))
-        return cast("Self", self.where(condition))
+        return self.where(condition)
 
     def where_is_null(self, column: "Union[str, exp.Column]") -> "Self":
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.is_(exp.null())
-        return cast("Self", self.where(condition))
+        return self.where(condition)
 
     def where_is_not_null(self, column: "Union[str, exp.Column]") -> "Self":
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.is_(exp.null()).not_()
-        return cast("Self", self.where(condition))
+        return self.where(condition)
 
     def where_exists(self, subquery: "Union[str, Any]") -> "Self":
         sub_expr: exp.Expression
@@ -207,7 +207,7 @@ class WhereClauseMixin:
             raise SQLBuilderError(msg)
 
         exists_expr = exp.Exists(this=sub_expr)
-        return cast("Self", self.where(exists_expr))
+        return self.where(exists_expr)
 
     def where_not_exists(self, subquery: "Union[str, Any]") -> "Self":
         sub_expr: exp.Expression
@@ -226,7 +226,7 @@ class WhereClauseMixin:
             raise SQLBuilderError(msg)
 
         not_exists_expr = exp.Not(this=exp.Exists(this=sub_expr))
-        return cast("Self", self.where(not_exists_expr))
+        return self.where(not_exists_expr)
 
     def where_not_null(self, column: "Union[str, exp.Column]") -> "Self":
         """Alias for where_is_not_null for compatibility with test expectations."""
@@ -243,7 +243,7 @@ class WhereClauseMixin:
             else:
                 subquery_exp = values
             condition = col_expr.isin(subquery_exp)
-            return cast("Self", self.where(condition))
+            return self.where(condition)
         # Iterable of values
         if not hasattr(values, "__iter__") or isinstance(values, (str, bytes)):
             msg = "Unsupported type for 'values' in WHERE IN"
@@ -253,7 +253,7 @@ class WhereClauseMixin:
             _, param_name = self.add_parameter(v)  # type: ignore[attr-defined]
             params.append(exp.var(param_name))
         condition = col_expr.isin(*params)
-        return cast("Self", self.where(condition))
+        return self.where(condition)
 
     def where_not_in(self, column: "Union[str, exp.Column]", values: Any) -> "Self":
         """Add a WHERE ... NOT IN (...) clause. Supports subqueries and iterables."""
@@ -265,7 +265,7 @@ class WhereClauseMixin:
             else:
                 subquery_exp = values
             condition = exp.Not(this=col_expr.isin(subquery_exp))
-            return cast("Self", self.where(condition))
+            return self.where(condition)
         if not hasattr(values, "__iter__") or isinstance(values, (str, bytes)):
             msg = "Values for where_not_in must be a non-string iterable or subquery."
             raise SQLBuilderError(msg)
@@ -274,12 +274,12 @@ class WhereClauseMixin:
             _, param_name = self.add_parameter(v)  # type: ignore[attr-defined]
             params.append(exp.var(param_name))
         condition = exp.Not(this=col_expr.isin(*params))
-        return cast("Self", self.where(condition))
+        return self.where(condition)
 
     def where_null(self, column: "Union[str, exp.Column]") -> "Self":
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.is_(exp.null())
-        return cast("Self", self.where(condition))
+        return self.where(condition)
 
     def where_any(self, column: "Union[str, exp.Column]", values: Any) -> "Self":
         """Add a WHERE ... = ANY (...) clause. Supports subqueries and iterables.
@@ -299,7 +299,7 @@ class WhereClauseMixin:
             else:
                 subquery_exp = values
             condition = exp.EQ(this=col_expr, expression=exp.Any(this=subquery_exp))
-            return cast("Self", self.where(condition))
+            return self.where(condition)
         if isinstance(values, str):
             # Try to parse as subquery expression with enhanced parsing
             try:
@@ -308,7 +308,7 @@ class WhereClauseMixin:
                 if isinstance(parsed_expr, (exp.Select, exp.Union, exp.Subquery)):
                     subquery_exp = exp.paren(parsed_expr)
                     condition = exp.EQ(this=col_expr, expression=exp.Any(this=subquery_exp))
-                    return cast("Self", self.where(condition))
+                    return self.where(condition)
             except Exception:  # noqa: S110
                 # Subquery parsing failed for WHERE ANY
                 pass
@@ -324,7 +324,7 @@ class WhereClauseMixin:
             params.append(exp.var(param_name))
         tuple_expr = exp.Tuple(expressions=params)
         condition = exp.EQ(this=col_expr, expression=exp.Any(this=tuple_expr))
-        return cast("Self", self.where(condition))
+        return self.where(condition)
 
     def where_not_any(self, column: "Union[str, exp.Column]", values: Any) -> "Self":
         """Add a WHERE ... <> ANY (...) (or NOT = ANY) clause. Supports subqueries and iterables.
@@ -344,7 +344,7 @@ class WhereClauseMixin:
             else:
                 subquery_exp = values
             condition = exp.NEQ(this=col_expr, expression=exp.Any(this=subquery_exp))
-            return cast("Self", self.where(condition))
+            return self.where(condition)
         if isinstance(values, str):
             # Try to parse as subquery expression with enhanced parsing
             try:
@@ -353,7 +353,7 @@ class WhereClauseMixin:
                 if isinstance(parsed_expr, (exp.Select, exp.Union, exp.Subquery)):
                     subquery_exp = exp.paren(parsed_expr)
                     condition = exp.NEQ(this=col_expr, expression=exp.Any(this=subquery_exp))
-                    return cast("Self", self.where(condition))
+                    return self.where(condition)
             except Exception:  # noqa: S110
                 # Subquery parsing failed for WHERE NOT ANY
                 pass
@@ -369,4 +369,4 @@ class WhereClauseMixin:
             params.append(exp.var(param_name))
         tuple_expr = exp.Tuple(expressions=params)
         condition = exp.NEQ(this=col_expr, expression=exp.Any(this=tuple_expr))
-        return cast("Self", self.where(condition))
+        return self.where(condition)

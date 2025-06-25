@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from sqlglot import exp
+from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_table_expression
@@ -20,7 +21,7 @@ class JoinClauseMixin:
         on: Optional[Union[str, exp.Expression]] = None,
         alias: Optional[str] = None,
         join_type: str = "INNER",
-    ) -> Any:
+    ) -> Self:
         builder = cast("BuilderProtocol", self)
         if builder._expression is None:
             builder._expression = exp.Select()
@@ -64,25 +65,25 @@ class JoinClauseMixin:
 
     def inner_join(
         self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression], alias: Optional[str] = None
-    ) -> Any:
+    ) -> Self:
         return self.join(table, on, alias, "INNER")
 
     def left_join(
         self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression], alias: Optional[str] = None
-    ) -> Any:
+    ) -> Self:
         return self.join(table, on, alias, "LEFT")
 
     def right_join(
         self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression], alias: Optional[str] = None
-    ) -> Any:
+    ) -> Self:
         return self.join(table, on, alias, "RIGHT")
 
     def full_join(
         self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression], alias: Optional[str] = None
-    ) -> Any:
+    ) -> Self:
         return self.join(table, on, alias, "FULL")
 
-    def cross_join(self, table: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Any:
+    def cross_join(self, table: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Self:
         builder = cast("BuilderProtocol", self)
         if builder._expression is None:
             builder._expression = exp.Select()
